@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.ingest;
 
+import com.resurgent.tev.parser.db.Jsonb;
 import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
@@ -13,7 +14,9 @@ import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Application service behind {@code tev-parse ingest}: parses the input file and
@@ -27,6 +30,7 @@ public final class IngestService {
     /** Fingerprint of the embedded default configuration (no --config support yet). */
     private static final String CONFIG_HASH = "embedded-defaults";
 
+    private final CsvSniffer sniffer = new CsvSniffer();
     private final CsvAdapter csvAdapter = new CsvAdapter();
 
     public IngestSummary ingest(Path input, long mandateId, Path dbPath)
@@ -35,7 +39,8 @@ public final class IngestService {
             throw new IOException("input file not found: " + input);
         }
         String fileHash = sha256(input);
-        CsvSheet sheet = csvAdapter.parse(input);
+        CsvDialect dialect = sniffer.sniff(input);
+        CsvSheet sheet = csvAdapter.parse(input, dialect);
         int cellCount = sheet.rows().stream().mapToInt(List::size).sum();
 
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
@@ -45,8 +50,9 @@ public final class IngestService {
                 WorkspaceRepository repo = new WorkspaceRepository(connection);
                 String now = Timestamps.now();
                 String fileName = input.getFileName().toString();
+                String rawMetadata = rawMetadataJson(dialect);
                 long sourceFileId = repo.insertSourceFile(mandateId,
-                        fileName, fileHash, "fm_csv", now, PARSER_VERSION);
+                        fileName, fileHash, "fm_csv", now, PARSER_VERSION, rawMetadata);
 
                 int rowCount = sheet.rows().size();
                 String metricsJson = IngestSummary.metricsJson(
@@ -74,6 +80,15 @@ public final class IngestService {
                 throw e;
             }
         }
+    }
+
+    private static String rawMetadataJson(CsvDialect dialect) throws IOException {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("encoding", dialect.encoding());
+        map.put("delimiter", String.valueOf(dialect.delimiter()));
+        map.put("hasBom", dialect.hasBom());
+        map.put("detectedBy", dialect.detectedBy());
+        return Jsonb.toJson(map);
     }
 
     /** A1-style coordinate: 1-based row and column. */

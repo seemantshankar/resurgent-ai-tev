@@ -17,7 +17,11 @@ import java.sql.Statement;
 public final class WorkspaceDatabase implements AutoCloseable {
 
     /** Bundled migration scripts in apply order; version = index + 1. */
-    private static final String[] MIGRATIONS = {"db/migration/V1__initial_schema.sql"};
+    private static final String[] MIGRATIONS = {
+            "db/migration/V1__initial_schema.sql",
+            "db/migration/V2__source_file_raw_metadata.sql",
+            "db/migration/V3__sprint1_schema.sql"
+    };
 
     private final Connection connection;
 
