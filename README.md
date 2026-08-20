@@ -2,5 +2,4 @@
 
 Phase 1: spreadsheet parser and downstream automation for TEV financial models.
 
-See  for strategy, findings, and requirements.
-
+See `Project Docs/` for strategy, findings, and requirements.
