@@ -20,7 +20,8 @@ public final class WorkspaceDatabase implements AutoCloseable {
     private static final String[] MIGRATIONS = {
             "db/migration/V1__initial_schema.sql",
             "db/migration/V2__source_file_raw_metadata.sql",
-            "db/migration/V3__sprint1_schema.sql"
+            "db/migration/V3__sprint1_schema.sql",
+            "db/migration/V4__xlsx_cell_contract.sql"
     };
 
     private final Connection connection;

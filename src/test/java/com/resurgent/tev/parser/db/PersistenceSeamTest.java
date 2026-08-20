@@ -63,10 +63,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(3);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(4);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(3);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(4);
         }
     }
 

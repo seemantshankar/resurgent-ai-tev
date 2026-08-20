@@ -1,5 +1,7 @@
 package com.resurgent.tev.parser.db;
 
+import com.resurgent.tev.parser.ingest.NormalizedCell;
+import com.resurgent.tev.parser.ingest.ParsedQuantity;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -16,6 +18,18 @@ public final class WorkspaceRepository {
 
     public WorkspaceRepository(Connection connection) {
         this.connection = connection;
+    }
+
+    public Connection connection() {
+        return connection;
+    }
+
+    public void commit() throws SQLException {
+        connection.commit();
+    }
+
+    public void rollback() throws SQLException {
+        connection.rollback();
     }
 
     public long insertSourceFile(long mandateId, String fileName, String fileHash,
@@ -59,34 +73,64 @@ public final class WorkspaceRepository {
     }
 
     public long insertWorksheet(long parseRunId, String sheetName, int sheetIndex) throws SQLException {
+        return insertWorksheet(parseRunId, sheetName, sheetIndex, null);
+    }
+
+    public long insertWorksheet(long parseRunId, String sheetName, int sheetIndex,
+            String sheetState) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO worksheet (parse_run_id, sheet_name, sheet_index) VALUES (?, ?, ?)",
+                "INSERT INTO worksheet (parse_run_id, sheet_name, sheet_index, sheet_state)"
+                        + " VALUES (?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, parseRunId);
             ps.setString(2, sheetName);
             ps.setInt(3, sheetIndex);
+            ps.setString(4, sheetState);
             ps.executeUpdate();
             return generatedId(ps);
         }
     }
 
-    public void insertCell(long worksheetId, String coord, int rowNum, int colNum,
-            String rawValue, String rawType, String textValue) throws SQLException {
+    public void insertCell(long worksheetId, NormalizedCell cell) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO cell (worksheet_id, coord, row_num, col_num,"
-                        + " raw_value, raw_type, value_type, text_value, display_value)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                        + " raw_value, raw_type, value_type, text_value, display_value,"
+                        + " numeric_value, bool_value, date_value,"
+                        + " formula_text, formula_normalized, formula_state,"
+                        + " cached_value, cache_state, coerced_from_text, parsed_quantity,"
+                        + " is_error, error_type)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
             ps.setLong(1, worksheetId);
-            ps.setString(2, coord);
-            ps.setInt(3, rowNum);
-            ps.setInt(4, colNum);
-            ps.setString(5, rawValue);
-            ps.setString(6, rawType);
-            ps.setString(7, rawType);
-            ps.setString(8, textValue);
-            ps.setString(9, textValue);
+            ps.setString(2, cell.coord());
+            ps.setInt(3, cell.rowNum());
+            ps.setInt(4, cell.colNum());
+            ps.setString(5, cell.rawValue());
+            ps.setString(6, cell.rawType());
+            ps.setString(7, cell.valueType());
+            ps.setString(8, cell.textValue());
+            ps.setString(9, cell.displayValue());
+            ps.setString(10, cell.numericValue() == null ? null : cell.numericValue().toPlainString());
+            if (cell.boolValue() == null) {
+                ps.setNull(11, java.sql.Types.INTEGER);
+            } else {
+                ps.setBoolean(11, cell.boolValue());
+            }
+            ps.setString(12, cell.dateValue() == null ? null : cell.dateValue().toString());
+            ps.setString(13, cell.formulaText());
+            ps.setString(14, cell.formulaNormalized());
+            ps.setString(15, cell.formulaState());
+            ps.setString(16, cell.cachedValue());
+            ps.setString(17, cell.cacheState());
+            ps.setInt(18, cell.coercedFromText() ? 1 : 0);
+            ps.setString(19, quantityJson(cell.parsedQuantity()));
+            ps.setInt(20, cell.isError() ? 1 : 0);
+            ps.setString(21, cell.errorType());
             ps.executeUpdate();
         }
+    }
+
+    private static String quantityJson(ParsedQuantity quantity) {
+        return quantity == null ? null : quantity.toJson();
     }
 
     public long insertWorkbook(long sourceFileId, String applicationName, String applicationVersion,

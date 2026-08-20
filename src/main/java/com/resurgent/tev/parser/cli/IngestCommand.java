@@ -14,7 +14,7 @@ import picocli.CommandLine.Model.CommandSpec;
 @Command(name = "ingest", description = "Ingest a client FM file into a SQLite workspace database")
 public final class IngestCommand implements Callable<Integer> {
 
-    @Option(names = "--input", required = true, description = "Path to the client FM file (.csv for now)")
+    @Option(names = "--input", required = true, description = "Path to the client FM file (.csv, .xlsx, .xlsm)")
     Path input;
 
     @Option(names = "--mandate-id", required = true, description = "Mandate this file belongs to")
