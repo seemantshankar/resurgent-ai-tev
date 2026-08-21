@@ -2,6 +2,7 @@ package com.resurgent.tev.parser.db;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.nio.file.Path;
 import java.sql.ResultSet;
@@ -214,6 +215,51 @@ class PersistenceSeamTest {
             c.setAutoCommit(true);
 
             assertThat(repo.countSourceFiles()).isEqualTo(0);
+        }
+    }
+
+    @Test
+    void forcedFailureMidGraphInsert_rollsBackEntireGraph() throws Exception {
+        try (WorkspaceDatabase db = openDb("mid-graph-failure.db")) {
+            java.sql.Connection c = db.connection();
+            WorkspaceRepository repo = new WorkspaceRepository(c);
+
+            c.setAutoCommit(false);
+            try {
+                long sourceFileId = repo.insertSourceFile(1L, "f.xlsx", "h1", "fm_xlsx",
+                        Timestamps.now(), "0.1.0", null);
+                long parseRunId = repo.insertParseRun(sourceFileId, 1L, "0.1.0", "cfg",
+                        Timestamps.now(), null, "success", "{}");
+                long worksheetId = repo.insertWorksheet(parseRunId, "Sheet1", 0);
+
+                NormalizedCell goodCell = new NormalizedCell(
+                        "A1", 1, 1, "1", "number", "number", "1", "1",
+                        java.math.BigDecimal.ONE, null, null,
+                        null, null, null, null, null,
+                        false, null, false, null, null, null,
+                        false, false, null, "cell", false, false, false,
+                        null, null, null, null);
+                repo.insertCell(worksheetId, goodCell);
+
+                // Forces a genuine SQLException mid-graph via a raw statement, simulating
+                // an unexpected failure after some of the graph has already been written.
+                try (java.sql.PreparedStatement ps = c.prepareStatement(
+                        "INSERT INTO cell (worksheet_id, coord, row_num, col_num, raw_type,"
+                                + " value_type, bool_value) VALUES (?, 'A2', 1, 2, 'bool', 'bool', 2)")) {
+                    ps.setLong(1, worksheetId);
+                    ps.executeUpdate();
+                    fail("expected the bool_value CHECK constraint to reject value 2");
+                }
+            } catch (java.sql.SQLException e) {
+                c.rollback();
+            } finally {
+                c.setAutoCommit(true);
+            }
+
+            assertThat(repo.countSourceFiles()).isEqualTo(0);
+            assertThat(repo.countParseRuns()).isEqualTo(0);
+            assertThat(repo.countWorksheets()).isEqualTo(0);
+            assertThat(repo.countCells()).isEqualTo(0);
         }
     }
 }

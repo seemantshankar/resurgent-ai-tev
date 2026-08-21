@@ -168,10 +168,11 @@ public final class IngestService {
         int rowCount = sheet.rows().size();
         int cellCount = sheet.rows().stream().mapToInt(List::size).sum();
 
-        String metricsJson = IngestSummary.metricsJson(
-                fileName, fileHash, sheet.sheetName(), rowCount, cellCount);
+        // Placeholder row: worksheet/cell inserts below need a parse_run_id to hang off.
+        // The real status and metrics, once known, overwrite this via updateParseRunResult
+        // before commit, so nothing but this transaction ever observes the placeholder.
         long parseRunId = repo.insertParseRun(sourceFileId, mandateId, PARSER_VERSION,
-                config.configHash(), now, Timestamps.now(), "success", metricsJson);
+                config.configHash(), now, null, "success", "{}");
         long worksheetId = repo.insertWorksheet(parseRunId, sheet.sheetName(), 0);
 
         List<NormalizedCell> cells = new ArrayList<>();
@@ -185,12 +186,20 @@ public final class IngestService {
             rowNum++;
         }
         List<NormalizedCell> enriched = enricher.enrich(cells);
+        int cellsWritten = 0;
         for (NormalizedCell cell : enriched) {
             repo.insertCell(worksheetId, cell);
+            cellsWritten++;
         }
+
+        QaGateResult qa = QaGate.evaluate(cellCount, cellsWritten, 0, 0, 0);
+        String metricsJson = IngestMetrics.toJson(fileName, fileHash, sheet.sheetName(), rowCount,
+                cellCount, cellsWritten, coercedCount(enriched), errorCount(enriched),
+                0, 0, 0, qa);
+        repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
         repo.commit();
         return new IngestSummary(fileName, fileHash, sheet.sheetName(), rowCount,
-                cellCount, sourceFileId, parseRunId, dbPath);
+                cellCount, sourceFileId, parseRunId, dbPath, qa.status(), metricsJson);
     }
 
     private IngestSummary ingestXlsx(XlsxWorkbook workbook, long mandateId, Path dbPath,
@@ -201,10 +210,10 @@ public final class IngestService {
         int rowCount = sheets.stream().mapToInt(s -> maxPopulatedRowNum(s)).sum();
         int cellCount = sheets.stream().mapToInt(s -> s.cells().size()).sum();
 
-        String metricsJson = IngestSummary.metricsJson(
-                fileName, fileHash, primarySheetName(sheets), rowCount, cellCount);
+        // Placeholder row, overwritten with the real status/metrics via
+        // updateParseRunResult once the sheet loop below finishes (see ingestCsv).
         long parseRunId = repo.insertParseRun(sourceFileId, mandateId, PARSER_VERSION,
-                config.configHash(), now, Timestamps.now(), "success", metricsJson);
+                config.configHash(), now, null, "success", "{}");
 
         Set<String> referencedNames = collectReferencedDefinedNames(sheets);
         long workbookId = repo.insertWorkbook(sourceFileId,
@@ -223,6 +232,10 @@ public final class IngestService {
         }
 
         int sheetIndex = 0;
+        int cellsWritten = 0;
+        int cellsCoerced = 0;
+        int cellsError = 0;
+        ExternalRefStats refStats = new ExternalRefStats();
         for (XlsxSheet sheet : sheets) {
             long worksheetId = repo.insertWorksheet(parseRunId, sheet.sheetName(),
                     sheetIndex, sheet.sheetState(),
@@ -233,14 +246,43 @@ public final class IngestService {
             List<NormalizedCell> enriched = enricher.enrich(sheet.cells());
             for (NormalizedCell cell : enriched) {
                 NormalizedCell resolved = resolveExternalRefs(cell, sheet.sheetName(),
-                        parseRunId, linkIndexToId, repo, now);
+                        parseRunId, linkIndexToId, repo, now, refStats);
                 repo.insertCell(worksheetId, resolved);
+                cellsWritten++;
+                if (resolved.coercedFromText()) {
+                    cellsCoerced++;
+                }
+                if (resolved.isError()) {
+                    cellsError++;
+                }
             }
             sheetIndex++;
         }
+
+        QaGateResult qa = QaGate.evaluate(cellCount, cellsWritten,
+                refStats.total, refStats.resolved, refStats.queued);
+        String metricsJson = IngestMetrics.toJson(fileName, fileHash, primarySheetName(sheets),
+                rowCount, cellCount, cellsWritten, cellsCoerced, cellsError,
+                refStats.total, refStats.resolved, refStats.queued, qa);
+        repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
         repo.commit();
         return new IngestSummary(fileName, fileHash, primarySheetName(sheets), rowCount,
-                cellCount, sourceFileId, parseRunId, dbPath);
+                cellCount, sourceFileId, parseRunId, dbPath, qa.status(), metricsJson);
+    }
+
+    /** Mutable running totals for external-reference reconciliation across a workbook's sheets. */
+    private static final class ExternalRefStats {
+        int total;
+        int resolved;
+        int queued;
+    }
+
+    private static int coercedCount(List<NormalizedCell> cells) {
+        return (int) cells.stream().filter(NormalizedCell::coercedFromText).count();
+    }
+
+    private static int errorCount(List<NormalizedCell> cells) {
+        return (int) cells.stream().filter(NormalizedCell::isError).count();
     }
 
     private Set<String> collectReferencedDefinedNames(List<XlsxSheet> sheets) throws IOException {
@@ -260,7 +302,8 @@ public final class IngestService {
 
     private NormalizedCell resolveExternalRefs(NormalizedCell cell, String sheetName,
             long parseRunId, Map<Integer, Long> linkIndexToId,
-            WorkspaceRepository repo, String now) throws IOException, SQLException {
+            WorkspaceRepository repo, String now, ExternalRefStats stats)
+            throws IOException, SQLException {
         String formulaText = cell.formulaText();
         if (formulaText == null || formulaText.isBlank()) {
             return cell;
@@ -273,11 +316,16 @@ public final class IngestService {
             if (index == null) {
                 continue;
             }
+            stats.total++;
             Long linkId = linkIndexToId.get(index);
             if (linkId == null) {
                 queueUnresolvableExternalRef(parseRunId, ref, sheetName, cell.coord(), repo, now);
-            } else if (firstLinkId == null) {
-                firstLinkId = linkId;
+                stats.queued++;
+            } else {
+                stats.resolved++;
+                if (firstLinkId == null) {
+                    firstLinkId = linkId;
+                }
             }
         }
         return firstLinkId == null ? cell : cell.withExternalLinkId(firstLinkId);

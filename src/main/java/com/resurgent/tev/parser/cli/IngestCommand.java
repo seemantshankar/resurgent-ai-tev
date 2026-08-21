@@ -65,6 +65,11 @@ public final class IngestCommand implements Callable<Integer> {
                         summary.rowCount(), summary.dbPath(), summary.sourceFileId(),
                         summary.parseRunId(), summary.fileHash().substring(0, 12));
             }
+            if (!"success".equals(summary.status())) {
+                err.println("WARNING: parse run finished with status '" + summary.status()
+                        + "' — QA gates were not fully satisfied; see parse_run.metrics"
+                        + " for reasons (parse_run " + summary.parseRunId() + ").");
+            }
             if (report != null) {
                 summary.writeReport(report);
                 err.println("parse report written to " + report);

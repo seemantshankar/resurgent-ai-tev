@@ -319,5 +319,78 @@ class IngestServiceTest {
         }
     }
 
+    @Test
+    void identicalInput_producesByteIdenticalMetricsAcrossRuns() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Sheet1");
+            sheet.createRow(0).createCell(0).setCellValue(42.0);
+            sheet.createRow(1).createCell(1).setCellValue("text");
 
+            Path xlsx = writeWorkbook(workbook, "deterministic.xlsx");
+            Path dbA = tempDir.resolve("deterministic-a.db");
+            Path dbB = tempDir.resolve("deterministic-b.db");
+
+            IngestSummary a = new IngestService().ingest(xlsx, 1L, dbA);
+            IngestSummary b = new IngestService().ingest(xlsx, 1L, dbB);
+
+            assertThat(a.status()).isEqualTo("success");
+            assertThat(a.metricsJson()).isEqualTo(b.metricsJson());
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + dbA)) {
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT metrics, status FROM parse_run")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("metrics")).isEqualTo(a.metricsJson());
+                    assertThat(rs.getString("status")).isEqualTo("success");
+                }
+            }
+        }
+    }
+
+    @Test
+    void reportPayloadIsByteIdenticalToStoredMetrics() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Sheet1");
+            sheet.createRow(0).createCell(0).setCellValue(7.0);
+
+            Path xlsx = writeWorkbook(workbook, "report.xlsx");
+            Path db = tempDir.resolve("report.db");
+            Path report = tempDir.resolve("report.json");
+
+            IngestSummary summary = new IngestService().ingest(xlsx, 1L, db);
+            summary.writeReport(report);
+
+            String reportContent = Files.readString(report).strip();
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT metrics FROM parse_run")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(reportContent).isEqualTo(rs.getString("metrics"));
+                }
+            }
+        }
+    }
+
+    @Test
+    void externalRefReconciliation_countsResolvedAndQueuedRefs() throws Exception {
+        try (XSSFWorkbook external = new XSSFWorkbook();
+                XSSFWorkbook main = new XSSFWorkbook()) {
+            external.createSheet("Other");
+            Sheet sheet = main.createSheet("Sheet1");
+            main.linkExternalWorkbook("other.xlsx", external);
+            sheet.createRow(0).createCell(0).setCellFormula("[1]Other!A1");
+            sheet.getRow(0).createCell(1).setCellFormula("[99]Missing!A1");
+
+            Path xlsx = writeWorkbook(main, "mixed-refs.xlsx");
+            Path db = tempDir.resolve("mixed-refs.db");
+            IngestSummary summary = new IngestService().ingest(xlsx, 1L, db);
+
+            Map<String, Object> metrics = Jsonb.fromJson(summary.metricsJson(), Map.class);
+            assertThat(metrics).containsEntry("externalRefsTotal", 2);
+            assertThat(metrics).containsEntry("externalRefsResolved", 1);
+            assertThat(metrics).containsEntry("externalRefsQueued", 1);
+            assertThat(metrics).containsEntry("qaStatus", "success");
+            assertThat(summary.status()).isEqualTo("success");
+        }
+    }
 }

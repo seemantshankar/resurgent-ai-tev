@@ -97,6 +97,18 @@ public final class WorkspaceRepository {
         }
     }
 
+    public void updateParseRunResult(long parseRunId, String finishedAt, String status,
+            String metrics) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE parse_run SET finished_at = ?, status = ?, metrics = ? WHERE parse_run_id = ?")) {
+            ps.setString(1, finishedAt);
+            ps.setString(2, status);
+            ps.setString(3, metrics);
+            ps.setLong(4, parseRunId);
+            ps.executeUpdate();
+        }
+    }
+
     public long insertWorksheet(long parseRunId, String sheetName, int sheetIndex) throws SQLException {
         return insertWorksheet(parseRunId, sheetName, sheetIndex, null);
     }
