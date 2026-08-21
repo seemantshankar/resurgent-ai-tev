@@ -21,7 +21,9 @@ public final class WorkspaceDatabase implements AutoCloseable {
             "db/migration/V1__initial_schema.sql",
             "db/migration/V2__source_file_raw_metadata.sql",
             "db/migration/V3__sprint1_schema.sql",
-            "db/migration/V4__xlsx_cell_contract.sql"
+            "db/migration/V4__xlsx_cell_contract.sql",
+            "db/migration/V5__cell_header_labels.sql",
+            "db/migration/V6__structural_and_external_refs.sql"
     };
 
     private final Connection connection;

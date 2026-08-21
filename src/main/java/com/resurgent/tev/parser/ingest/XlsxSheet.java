@@ -6,5 +6,7 @@ import java.util.List;
  * One worksheet from an XLSX/XLSM workbook after extraction and normalization.
  */
 public record XlsxSheet(String sheetName, int sheetIndex, String sheetState,
-        List<NormalizedCell> cells) {
+        List<NormalizedCell> cells,
+        Integer bboxMinRow, Integer bboxMinCol, Integer bboxMaxRow, Integer bboxMaxCol,
+        String dimensionsDeclared, Integer realContentRows, Integer declaredMerged) {
 }

@@ -8,6 +8,8 @@ import java.sql.ResultSet;
 import java.util.List;
 import java.util.Map;
 
+import com.resurgent.tev.parser.ingest.NormalizedCell;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -63,10 +65,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(4);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(6);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(4);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(6);
         }
     }
 
@@ -103,8 +105,8 @@ class PersistenceSeamTest {
                     Jsonb.toJson(sheetNames), "[]", Jsonb.toJson(props), true,
                     Timestamps.now(), Timestamps.now());
 
-            long linkId = repo.insertExternalLink(workbookId, "external", "/path/to/file.xlsx",
-                    "active", Timestamps.now());
+            long linkId = repo.insertExternalLink(workbookId, "external", 1,
+                    "/path/to/file.xlsx", "active", Timestamps.now());
             long provenanceId = repo.insertProvenance("cell", 1L, sourceFileId, parseRunId,
                     "Sheet1!A1", "100", 0.95, false, "primary value");
             long auditLogId = repo.insertAuditLog(parseRunId, "parse_started", Timestamps.now(),
@@ -137,6 +139,38 @@ class PersistenceSeamTest {
             assertThat(repo.countAuditLogs()).isEqualTo(1);
             assertThat(repo.countReviewQueue()).isEqualTo(1);
             assertThat(repo.countIngestRejections()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void cellHeaderLabelsRoundTrip() throws Exception {
+        try (WorkspaceDatabase db = openDb("labels.db")) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            long sourceFileId = repo.insertSourceFile(1L, "labels.xlsx", "hash", "fm_xlsx",
+                    Timestamps.now(), "0.1.0", null);
+            long parseRunId = repo.insertParseRun(sourceFileId, 1L, "0.1.0", "cfg",
+                    Timestamps.now(), Timestamps.now(), "success", null);
+            long worksheetId = repo.insertWorksheet(parseRunId, "Sheet1", 0, "visible");
+
+            NormalizedCell cell = new NormalizedCell(
+                    "B2", 2, 2,
+                    "100",
+                    "number", "number",
+                    "100", "100",
+                    java.math.BigDecimal.valueOf(100), null, null,
+                    null, null, null, null, null,
+                    false, null, false, null,
+                    "Revenue", "Year1",
+                    false, false, null, "cell", false, false, false,
+                    null, null, null, null);
+            repo.insertCell(worksheetId, cell);
+
+            try (ResultSet rs = db.connection().createStatement().executeQuery(
+                    "SELECT row_label, col_label FROM cell WHERE coord = 'B2'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("row_label")).isEqualTo("Revenue");
+                assertThat(rs.getString("col_label")).isEqualTo("Year1");
+            }
         }
     }
 

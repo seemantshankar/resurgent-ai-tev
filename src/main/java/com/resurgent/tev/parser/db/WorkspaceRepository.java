@@ -78,16 +78,42 @@ public final class WorkspaceRepository {
 
     public long insertWorksheet(long parseRunId, String sheetName, int sheetIndex,
             String sheetState) throws SQLException {
+        return insertWorksheet(parseRunId, sheetName, sheetIndex, sheetState,
+                null, null, null, null, null, null, null);
+    }
+
+    public long insertWorksheet(long parseRunId, String sheetName, int sheetIndex,
+            String sheetState, Integer bboxMinRow, Integer bboxMinCol,
+            Integer bboxMaxRow, Integer bboxMaxCol, String dimensionsDeclared,
+            Integer realContentRows, Integer declaredMerged) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO worksheet (parse_run_id, sheet_name, sheet_index, sheet_state)"
-                        + " VALUES (?, ?, ?, ?)",
+                "INSERT INTO worksheet (parse_run_id, sheet_name, sheet_index, sheet_state,"
+                        + " bbox_min_row, bbox_min_col, bbox_max_row, bbox_max_col,"
+                        + " dimensions_declared, real_content_rows, declared_merged)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, parseRunId);
             ps.setString(2, sheetName);
             ps.setInt(3, sheetIndex);
             ps.setString(4, sheetState);
+            setInteger(ps, 5, bboxMinRow);
+            setInteger(ps, 6, bboxMinCol);
+            setInteger(ps, 7, bboxMaxRow);
+            setInteger(ps, 8, bboxMaxCol);
+            ps.setString(9, dimensionsDeclared);
+            setInteger(ps, 10, realContentRows);
+            setInteger(ps, 11, declaredMerged);
             ps.executeUpdate();
             return generatedId(ps);
+        }
+    }
+
+    private static void setInteger(PreparedStatement ps, int index, Integer value)
+            throws SQLException {
+        if (value == null) {
+            ps.setNull(index, java.sql.Types.INTEGER);
+        } else {
+            ps.setInt(index, value);
         }
     }
 
@@ -98,8 +124,12 @@ public final class WorkspaceRepository {
                         + " numeric_value, bool_value, date_value,"
                         + " formula_text, formula_normalized, formula_state,"
                         + " cached_value, cache_state, coerced_from_text, parsed_quantity,"
-                        + " is_error, error_type)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                        + " is_error, error_type, row_label, col_label,"
+                        + " is_merged_anchor, is_merged_participant, merged_range, value_source,"
+                        + " row_hidden, col_hidden, sheet_hidden,"
+                        + " external_ref, external_link_id, sheet_refs, defined_name_refs)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
+                        + " ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
             ps.setLong(1, worksheetId);
             ps.setString(2, cell.coord());
             ps.setInt(3, cell.rowNum());
@@ -125,6 +155,23 @@ public final class WorkspaceRepository {
             ps.setString(19, quantityJson(cell.parsedQuantity()));
             ps.setInt(20, cell.isError() ? 1 : 0);
             ps.setString(21, cell.errorType());
+            ps.setString(22, cell.rowLabel());
+            ps.setString(23, cell.colLabel());
+            ps.setInt(24, cell.isMergedAnchor() ? 1 : 0);
+            ps.setInt(25, cell.isMergedParticipant() ? 1 : 0);
+            ps.setString(26, cell.mergedRange());
+            ps.setString(27, cell.valueSource());
+            ps.setInt(28, cell.rowHidden() ? 1 : 0);
+            ps.setInt(29, cell.colHidden() ? 1 : 0);
+            ps.setInt(30, cell.sheetHidden() ? 1 : 0);
+            ps.setString(31, cell.externalRef());
+            if (cell.externalLinkId() == null) {
+                ps.setNull(32, java.sql.Types.INTEGER);
+            } else {
+                ps.setLong(32, cell.externalLinkId());
+            }
+            ps.setString(33, cell.sheetRefs());
+            ps.setString(34, cell.definedNameRefs());
             ps.executeUpdate();
         }
     }
@@ -156,17 +203,18 @@ public final class WorkspaceRepository {
         }
     }
 
-    public long insertExternalLink(long workbookId, String linkType, String targetPath,
-            String status, String checkedAt) throws SQLException {
+    public long insertExternalLink(long workbookId, String linkType, Integer linkIndex,
+            String targetPath, String status, String checkedAt) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO external_link (workbook_id, link_type, target_path, status, checked_at)"
-                        + " VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO external_link (workbook_id, link_type, link_index, target_path, status, checked_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, workbookId);
             ps.setString(2, linkType);
-            ps.setString(3, targetPath);
-            ps.setString(4, status);
-            ps.setString(5, checkedAt);
+            setInteger(ps, 3, linkIndex);
+            ps.setString(4, targetPath);
+            ps.setString(5, status);
+            ps.setString(6, checkedAt);
             ps.executeUpdate();
             return generatedId(ps);
         }
