@@ -154,7 +154,7 @@ public final class WorkspaceRepository {
         }
     }
 
-    public void insertCell(long worksheetId, NormalizedCell cell) throws SQLException {
+    public long insertCell(long worksheetId, NormalizedCell cell) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO cell (worksheet_id, coord, row_num, col_num,"
                         + " raw_value, raw_type, value_type, text_value, display_value,"
@@ -166,7 +166,8 @@ public final class WorkspaceRepository {
                         + " row_hidden, col_hidden, sheet_hidden,"
                         + " external_ref, external_link_id, sheet_refs, defined_name_refs)"
                         + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-                        + " ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                        + " ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, worksheetId);
             ps.setString(2, cell.coord());
             ps.setInt(3, cell.rowNum());
@@ -210,6 +211,7 @@ public final class WorkspaceRepository {
             ps.setString(33, cell.sheetRefs());
             ps.setString(34, cell.definedNameRefs());
             ps.executeUpdate();
+            return generatedId(ps);
         }
     }
 

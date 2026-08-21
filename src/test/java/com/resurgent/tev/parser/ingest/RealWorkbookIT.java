@@ -96,6 +96,41 @@ class RealWorkbookIT {
     }
 
     @Test
+    void everyRetainedCellHasProvenanceAndTheParseRunIsAudited() throws Exception {
+        // Ticket 13: provenance/audit_log must be populated by the real ingest
+        // path, not merely round-trip in isolation (PersistenceSeamTest already
+        // covers that). Story 29/30 require every retained cell traceable back
+        // to its (document, sheet, coordinate) and the run itself timestamped.
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            long cellCount = scalarLong(c, "SELECT COUNT(*) FROM cell");
+            long provenanceCount = scalarLong(c,
+                    "SELECT COUNT(*) FROM provenance WHERE entity_type = 'cell'");
+            assertThat(provenanceCount).isEqualTo(cellCount);
+
+            // Every provenance row resolves to a real cell via entity_id, joined
+            // through its worksheet, with a location matching 'sheet!coord'.
+            assertThat(scalarLong(c,
+                    "SELECT COUNT(*) FROM provenance p"
+                            + " JOIN cell c ON p.entity_id = c.cell_id"
+                            + " JOIN worksheet w ON c.worksheet_id = w.worksheet_id"
+                            + " WHERE p.entity_type = 'cell'"
+                            + " AND p.location = w.sheet_name || '!' || c.coord"
+                            + " AND p.source_file_id = " + summary.sourceFileId()
+                            + " AND p.parse_run_id = " + summary.parseRunId()))
+                    .isEqualTo(cellCount);
+
+            assertThat(scalarLong(c, "SELECT COUNT(*) FROM audit_log"
+                    + " WHERE parse_run_id = " + summary.parseRunId()
+                    + " AND event_type = 'parse_run_started'"))
+                    .isEqualTo(1);
+            assertThat(scalarLong(c, "SELECT COUNT(*) FROM audit_log"
+                    + " WHERE parse_run_id = " + summary.parseRunId()
+                    + " AND event_type = 'parse_run_completed'"))
+                    .isEqualTo(1);
+        }
+    }
+
+    @Test
     void hiddenSheetsAreLoadedIntoTheGraph() throws Exception {
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
             assertThat(scalarLong(c, "SELECT COUNT(*) FROM worksheet WHERE sheet_state = 'hidden'"))

@@ -372,6 +372,49 @@ class IngestServiceTest {
     }
 
     @Test
+    void provenanceAndAuditLogArePopulatedOnSuccessfulIngest() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Sheet1");
+            Row row = sheet.createRow(0);
+            row.createCell(0).setCellValue(42.0);
+            row.createCell(1).setCellValue("text");
+
+            Path xlsx = writeWorkbook(workbook, "provenance.xlsx");
+            Path db = tempDir.resolve("provenance.db");
+            IngestSummary summary = new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                long cellCount = count(c, "cell");
+                assertThat(count(c, "provenance")).isEqualTo(cellCount);
+                assertThat(count(c, "audit_log")).isGreaterThan(0);
+
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT p.entity_type, p.location, p.source_file_id, p.parse_run_id"
+                                + " FROM provenance p JOIN cell c ON p.entity_id = c.cell_id"
+                                + " WHERE c.coord = 'A1'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("entity_type")).isEqualTo("cell");
+                    assertThat(rs.getString("location")).isEqualTo("Sheet1!A1");
+                    assertThat(rs.getLong("source_file_id")).isEqualTo(summary.sourceFileId());
+                    assertThat(rs.getLong("parse_run_id")).isEqualTo(summary.parseRunId());
+                }
+
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT event_type, severity FROM audit_log"
+                                + " WHERE parse_run_id = " + summary.parseRunId()
+                                + " ORDER BY audit_log_id")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("event_type")).isEqualTo("parse_run_started");
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("event_type")).isEqualTo("parse_run_completed");
+                    assertThat(rs.getString("severity")).isEqualTo("info");
+                    assertThat(rs.next()).isFalse();
+                }
+            }
+        }
+    }
+
+    @Test
     void externalRefReconciliation_countsResolvedAndQueuedRefs() throws Exception {
         try (XSSFWorkbook external = new XSSFWorkbook();
                 XSSFWorkbook main = new XSSFWorkbook()) {

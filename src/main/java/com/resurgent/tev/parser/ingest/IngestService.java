@@ -173,6 +173,8 @@ public final class IngestService {
         // before commit, so nothing but this transaction ever observes the placeholder.
         long parseRunId = repo.insertParseRun(sourceFileId, mandateId, PARSER_VERSION,
                 config.configHash(), now, null, "success", "{}");
+        repo.insertAuditLog(parseRunId, "parse_run_started", now,
+                Jsonb.toJson(Map.of("fileName", fileName, "fileHash", fileHash)), "info");
         long worksheetId = repo.insertWorksheet(parseRunId, sheet.sheetName(), 0);
 
         List<NormalizedCell> cells = new ArrayList<>();
@@ -188,7 +190,8 @@ public final class IngestService {
         List<NormalizedCell> enriched = enricher.enrich(cells);
         int cellsWritten = 0;
         for (NormalizedCell cell : enriched) {
-            repo.insertCell(worksheetId, cell);
+            long cellId = repo.insertCell(worksheetId, cell);
+            recordCellProvenance(repo, cellId, sourceFileId, parseRunId, sheet.sheetName(), cell);
             cellsWritten++;
         }
 
@@ -197,6 +200,9 @@ public final class IngestService {
                 cellCount, cellsWritten, coercedCount(enriched), errorCount(enriched),
                 0, 0, 0, qa);
         repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
+        repo.insertAuditLog(parseRunId, "parse_run_completed", Timestamps.now(),
+                Jsonb.toJson(Map.of("status", qa.status(), "cellsWritten", cellsWritten)),
+                auditSeverity(qa.status()));
         repo.commit();
         return new IngestSummary(fileName, fileHash, sheet.sheetName(), rowCount,
                 cellCount, sourceFileId, parseRunId, dbPath, qa.status(), metricsJson);
@@ -214,6 +220,8 @@ public final class IngestService {
         // updateParseRunResult once the sheet loop below finishes (see ingestCsv).
         long parseRunId = repo.insertParseRun(sourceFileId, mandateId, PARSER_VERSION,
                 config.configHash(), now, null, "success", "{}");
+        repo.insertAuditLog(parseRunId, "parse_run_started", now,
+                Jsonb.toJson(Map.of("fileName", fileName, "fileHash", fileHash)), "info");
 
         Set<String> referencedNames = collectReferencedDefinedNames(sheets);
         long workbookId = repo.insertWorkbook(sourceFileId,
@@ -247,7 +255,8 @@ public final class IngestService {
             for (NormalizedCell cell : enriched) {
                 NormalizedCell resolved = resolveExternalRefs(cell, sheet.sheetName(),
                         parseRunId, linkIndexToId, repo, now, refStats);
-                repo.insertCell(worksheetId, resolved);
+                long cellId = repo.insertCell(worksheetId, resolved);
+                recordCellProvenance(repo, cellId, sourceFileId, parseRunId, sheet.sheetName(), resolved);
                 cellsWritten++;
                 if (resolved.coercedFromText()) {
                     cellsCoerced++;
@@ -265,9 +274,27 @@ public final class IngestService {
                 rowCount, cellCount, cellsWritten, cellsCoerced, cellsError,
                 refStats.total, refStats.resolved, refStats.queued, qa);
         repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
+        repo.insertAuditLog(parseRunId, "parse_run_completed", Timestamps.now(),
+                Jsonb.toJson(Map.of("status", qa.status(), "cellsWritten", cellsWritten)),
+                auditSeverity(qa.status()));
         repo.commit();
         return new IngestSummary(fileName, fileHash, primarySheetName(sheets), rowCount,
                 cellCount, sourceFileId, parseRunId, dbPath, qa.status(), metricsJson);
+    }
+
+    private static void recordCellProvenance(WorkspaceRepository repo, long cellId,
+            long sourceFileId, long parseRunId, String sheetName, NormalizedCell cell)
+            throws SQLException {
+        repo.insertProvenance("cell", cellId, sourceFileId, parseRunId,
+                sheetName + "!" + cell.coord(), cell.rawValue(), 1.0, false, null);
+    }
+
+    private static String auditSeverity(String qaStatus) {
+        return switch (qaStatus) {
+            case "success" -> "info";
+            case "partial" -> "warning";
+            default -> "error";
+        };
     }
 
     /** Mutable running totals for external-reference reconciliation across a workbook's sheets. */
