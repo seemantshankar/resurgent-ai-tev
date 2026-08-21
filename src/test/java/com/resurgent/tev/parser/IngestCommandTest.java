@@ -149,4 +149,110 @@ class IngestCommandTest {
         assertThat(result.stderr()).contains("nope.csv");
         assertThat(result.stdout()).isEmpty();
     }
+
+    private Path writeConfig(String name, String content) throws Exception {
+        Path config = tempDir.resolve(name);
+        Files.writeString(config, content);
+        return config;
+    }
+
+    @Test
+    void unknownConfigKey_exits2WithDiagnostic() throws Exception {
+        Path csv = writeCsv("simple.csv", "a,b\n1,2\n");
+        Path db = tempDir.resolve("ws.db");
+        Path config = writeConfig("bad.json", "{\"unknownKey\": true}");
+
+        RunResult result = run("ingest", "--input", csv.toString(),
+                "--mandate-id", "1", "--db", db.toString(), "--config", config.toString());
+
+        assertThat(result.exitCode()).isEqualTo(2);
+        assertThat(result.stderr()).contains("unknown config key: unknownKey");
+        assertThat(result.stdout()).isEmpty();
+    }
+
+    @Test
+    void configDisablingSecurityProtection_exits2() throws Exception {
+        Path csv = writeCsv("simple.csv", "a,b\n1,2\n");
+        Path db = tempDir.resolve("ws.db");
+        Path config = writeConfig("insecure.json", "{\"rejectPasswordProtected\": false}");
+
+        RunResult result = run("ingest", "--input", csv.toString(),
+                "--mandate-id", "1", "--db", db.toString(), "--config", config.toString());
+
+        assertThat(result.exitCode()).isEqualTo(2);
+        assertThat(result.stderr()).contains("security protection cannot be disabled");
+        assertThat(result.stdout()).isEmpty();
+    }
+
+    @Test
+    void configExceedingHardCeiling_exits2() throws Exception {
+        Path csv = writeCsv("simple.csv", "a,b\n1,2\n");
+        Path db = tempDir.resolve("ws.db");
+        Path config = writeConfig("toobig.json", "{\"maxFileSizeBytes\": 9999999999999}");
+
+        RunResult result = run("ingest", "--input", csv.toString(),
+                "--mandate-id", "1", "--db", db.toString(), "--config", config.toString());
+
+        assertThat(result.exitCode()).isEqualTo(2);
+        assertThat(result.stderr()).contains("exceeds hard ceiling");
+        assertThat(result.stdout()).isEmpty();
+    }
+
+    @Test
+    void xlsWithFlagOff_exits3AndWritesIngestRejection() throws Exception {
+        Path xls = tempDir.resolve("legacy.xls");
+        Files.write(xls, new byte[] {0x50}); // content is irrelevant; extension drives rejection
+        Path db = tempDir.resolve("ws.db");
+
+        RunResult result = run("ingest", "--input", xls.toString(),
+                "--mandate-id", "1", "--db", db.toString());
+
+        assertThat(result.exitCode()).isEqualTo(3);
+        assertThat(result.stderr()).contains("xls intake is disabled");
+        assertThat(result.stdout()).isEmpty();
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            assertThat(count(c, "ingest_rejection")).isEqualTo(1);
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT reason, detail FROM ingest_rejection")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("reason")).isEqualTo("xls_disabled");
+                assertThat(rs.getString("detail")).contains("xls_disabled");
+            }
+        }
+    }
+
+    @Test
+    void deterministicConfigHash_matchesForDefaultsAndDiffersOnOverride() throws Exception {
+        Path csv = writeCsv("simple.csv", "a,b\n1,2\n");
+        Path dbDefault = tempDir.resolve("ws-default.db");
+        Path dbOverride = tempDir.resolve("ws-override.db");
+        Path config = writeConfig("larger.json", "{\"maxSheetCount\": 60}");
+
+        RunResult defaultResult = run("ingest", "--input", csv.toString(),
+                "--mandate-id", "1", "--db", dbDefault.toString());
+        RunResult overrideResult = run("ingest", "--input", csv.toString(),
+                "--mandate-id", "1", "--db", dbOverride.toString(),
+                "--config", config.toString());
+
+        assertThat(defaultResult.exitCode()).isZero();
+        assertThat(overrideResult.exitCode()).isZero();
+        try (Connection c1 = DriverManager.getConnection("jdbc:sqlite:" + dbDefault);
+                Connection c2 = DriverManager.getConnection("jdbc:sqlite:" + dbOverride)) {
+            String hashDefault;
+            String hashOverride;
+            try (ResultSet rs = c1.createStatement().executeQuery(
+                    "SELECT config_hash FROM parse_run")) {
+                assertThat(rs.next()).isTrue();
+                hashDefault = rs.getString(1);
+            }
+            try (ResultSet rs = c2.createStatement().executeQuery(
+                    "SELECT config_hash FROM parse_run")) {
+                assertThat(rs.next()).isTrue();
+                hashOverride = rs.getString(1);
+            }
+            assertThat(hashDefault).isNotBlank();
+            assertThat(hashOverride).isNotBlank();
+            assertThat(hashDefault).isNotEqualTo(hashOverride);
+        }
+    }
 }

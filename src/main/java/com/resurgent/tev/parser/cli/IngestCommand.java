@@ -1,20 +1,24 @@
 package com.resurgent.tev.parser.cli;
 
+import com.resurgent.tev.parser.config.ConfigLoader;
+import com.resurgent.tev.parser.config.ConfigValidationException;
+import com.resurgent.tev.parser.config.ParserConfig;
+import com.resurgent.tev.parser.ingest.IngestRejectionException;
 import com.resurgent.tev.parser.ingest.IngestService;
 import com.resurgent.tev.parser.ingest.IngestSummary;
 import java.io.PrintWriter;
 import java.nio.file.Path;
 import java.util.concurrent.Callable;
 import picocli.CommandLine.Command;
+import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Spec;
-import picocli.CommandLine.Model.CommandSpec;
 
 /** {@code tev-parse ingest}: lands a client FM file in a SQLite workspace database. */
 @Command(name = "ingest", description = "Ingest a client FM file into a SQLite workspace database")
 public final class IngestCommand implements Callable<Integer> {
 
-    @Option(names = "--input", required = true, description = "Path to the client FM file (.csv, .xlsx, .xlsm)")
+    @Option(names = "--input", required = true, description = "Path to the client FM file (.csv, .xlsx, .xlsm, .xls)")
     Path input;
 
     @Option(names = "--mandate-id", required = true, description = "Mandate this file belongs to")
@@ -36,11 +40,18 @@ public final class IngestCommand implements Callable<Integer> {
     public Integer call() {
         PrintWriter out = spec.commandLine().getOut();
         PrintWriter err = spec.commandLine().getErr();
-        if (config != null) {
-            err.println("note: --config is accepted but not yet applied; embedded defaults are in effect");
+        ParserConfig parserConfig;
+        try {
+            parserConfig = ConfigLoader.load(config);
+        } catch (ConfigValidationException e) {
+            err.println("invalid config: " + e.getMessage());
+            return 2;
+        } catch (Exception e) {
+            err.println("config load failed: " + e.getMessage());
+            return 2;
         }
         try {
-            IngestSummary summary = new IngestService().ingest(input, mandateId, db);
+            IngestSummary summary = new IngestService().ingest(input, mandateId, db, parserConfig);
             out.printf("Ingested %s into worksheet '%s': %d cells from %d rows written to %s"
                     + " (source_file %d, parse_run %d, sha256 %s).%n",
                     summary.fileName(), summary.worksheetName(), summary.cellCount(),
@@ -51,6 +62,12 @@ public final class IngestCommand implements Callable<Integer> {
                 err.println("parse report written to " + report);
             }
             return 0;
+        } catch (IngestRejectionException e) {
+            err.println("ingest rejected: " + e.getMessage());
+            return 3;
+        } catch (ConfigValidationException e) {
+            err.println("invalid config: " + e.getMessage());
+            return 2;
         } catch (Exception e) {
             err.println("ingest failed: " + e.getMessage());
             return 1;

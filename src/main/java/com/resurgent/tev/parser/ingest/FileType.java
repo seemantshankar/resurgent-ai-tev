@@ -8,6 +8,7 @@ import java.nio.file.Path;
  */
 public enum FileType {
     FM_XLSX("fm_xlsx"),
+    FM_XLS("fm_xls"),
     FM_CSV("fm_csv");
 
     private final String value;
@@ -24,6 +25,7 @@ public enum FileType {
      * Determine the file type from the path's extension.
      *
      * @return {@link #FM_XLSX} for {@code .xlsx} / {@code .xlsm};
+     *         {@link #FM_XLS} for {@code .xls};
      *         {@link #FM_CSV} for {@code .csv} / {@code .tsv}
      * @throws IllegalArgumentException for unsupported extensions
      */
@@ -31,6 +33,9 @@ public enum FileType {
         String lower = path.getFileName().toString().toLowerCase();
         if (lower.endsWith(".xlsx") || lower.endsWith(".xlsm")) {
             return FM_XLSX;
+        }
+        if (lower.endsWith(".xls")) {
+            return FM_XLS;
         }
         if (lower.endsWith(".csv") || lower.endsWith(".tsv")) {
             return FM_CSV;

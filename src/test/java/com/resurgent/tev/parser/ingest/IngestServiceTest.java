@@ -2,14 +2,19 @@ package com.resurgent.tev.parser.ingest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.resurgent.tev.parser.config.ConfigLoader;
+import com.resurgent.tev.parser.config.ParserConfig;
 import com.resurgent.tev.parser.db.Jsonb;
 import java.io.FileOutputStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.util.List;
 import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import org.apache.poi.ss.usermodel.Name;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -147,6 +152,61 @@ class IngestServiceTest {
                 List<String> referencedNames = Jsonb.fromJson(workbookNames,
                         new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
                 assertThat(referencedNames).containsExactly("ReferencedName");
+            }
+        }
+    }
+
+    @Test
+    void xlsDisabled_rejectsWithXlsDisabledReasonAndPersistsRow() throws Exception {
+        Path xls = tempDir.resolve("legacy.xls");
+        Files.write(xls, new byte[] {0x50});
+        Path db = tempDir.resolve("xls-reject.db");
+
+        assertThatThrownBy(() -> new IngestService().ingest(xls, 7L, db))
+                .isInstanceOf(IngestRejectionException.class)
+                .satisfies(e -> {
+                    IngestRejectionException r = (IngestRejectionException) e;
+                    assertThat(r.reason()).isEqualTo(RejectionReason.XLS_DISABLED);
+                    assertThat(r.reasonCode()).isEqualTo("xls_disabled");
+                });
+
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            assertThat(count(c, "source_file")).isEqualTo(0);
+            assertThat(count(c, "ingest_rejection")).isEqualTo(1);
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT mandate_id, file_name, reason, detail FROM ingest_rejection")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getLong("mandate_id")).isEqualTo(7L);
+                assertThat(rs.getString("file_name")).isEqualTo("legacy.xls");
+                assertThat(rs.getString("reason")).isEqualTo("xls_disabled");
+                assertThat(rs.getString("detail")).contains("configuredLimit")
+                        .contains("observedValue");
+            }
+        }
+    }
+
+    @Test
+    void fileExceedingConfiguredLimit_rejectsAndPersistsRow() throws Exception {
+        Path csv = tempDir.resolve("big.csv");
+        Files.writeString(csv, "too large for one-byte limit");
+        Path db = tempDir.resolve("size-reject.db");
+        ParserConfig config = ConfigLoader.load("{\"maxFileSizeBytes\": 1}");
+
+        assertThatThrownBy(() -> new IngestService().ingest(csv, 9L, db, config))
+                .isInstanceOf(IngestRejectionException.class)
+                .satisfies(e -> {
+                    IngestRejectionException r = (IngestRejectionException) e;
+                    assertThat(r.reason()).isEqualTo(RejectionReason.FILE_TOO_LARGE);
+                    assertThat(r.configuredLimit()).isEqualTo(1L);
+                });
+
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            assertThat(count(c, "source_file")).isEqualTo(0);
+            assertThat(count(c, "ingest_rejection")).isEqualTo(1);
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT reason FROM ingest_rejection")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("reason")).isEqualTo("file_too_large");
             }
         }
     }

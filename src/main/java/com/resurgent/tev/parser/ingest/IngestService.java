@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.ingest;
 
+import com.resurgent.tev.parser.config.ParserConfig;
 import com.resurgent.tev.parser.db.Jsonb;
 import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
@@ -33,9 +34,6 @@ public final class IngestService {
 
     private static final String PARSER_VERSION = "0.1.0-SNAPSHOT";
 
-    /** Fingerprint of the embedded default configuration (no --config support yet). */
-    private static final String CONFIG_HASH = "embedded-defaults";
-
     private static final Pattern EXTERNAL_LINK_INDEX_PATTERN = Pattern.compile("^\\[(\\d+)\\]");
 
     private final CsvSniffer sniffer = new CsvSniffer();
@@ -43,15 +41,23 @@ public final class IngestService {
     private final XlsxAdapter xlsxAdapter = new XlsxAdapter();
     private final CellContextEnricher enricher = new CellContextEnricher();
 
+    /** Convenience overload that uses embedded defaults. */
     public IngestSummary ingest(Path input, long mandateId, Path dbPath)
+            throws IOException, SQLException {
+        return ingest(input, mandateId, dbPath, ParserConfig.embeddedDefaults());
+    }
+
+    public IngestSummary ingest(Path input, long mandateId, Path dbPath, ParserConfig config)
             throws IOException, SQLException {
         if (!Files.isRegularFile(input)) {
             throw new IOException("input file not found: " + input);
         }
         String fileName = input.getFileName().toString();
-        FileType fileType = FileType.fromPath(input);
         String fileHash = sha256(input);
 
+        rejectIfPolicyViolation(input, mandateId, dbPath, fileName, fileHash, config);
+
+        FileType fileType = FileType.fromPath(input);
         XlsxWorkbook xlsxWorkbook = null;
         if (fileType == FileType.FM_XLSX) {
             xlsxWorkbook = xlsxAdapter.parseWorkbook(input);
@@ -69,20 +75,80 @@ public final class IngestService {
 
                 return switch (fileType) {
                     case FM_XLSX -> ingestXlsx(xlsxWorkbook, mandateId, dbPath,
-                            fileName, fileHash, sourceFileId, repo, now);
+                            fileName, fileHash, sourceFileId, repo, now, config);
+                    case FM_XLS -> throw new IllegalStateException(
+                            "xls parsing is not yet implemented; keep xlsEnabled false");
                     case FM_CSV -> ingestCsv(input, mandateId, dbPath,
-                            fileName, fileHash, sourceFileId, repo, now);
+                            fileName, fileHash, sourceFileId, repo, now, config);
                 };
+            } catch (IngestRejectionException e) {
+                connection.rollback();
+                throw e;
             } catch (Exception e) {
                 connection.rollback();
                 throw e;
+            }
+        } catch (IngestRejectionException e) {
+            persistRejection(dbPath, mandateId, fileName, fileHash, e);
+            throw e;
+        }
+    }
+
+    private void rejectIfPolicyViolation(Path input, long mandateId, Path dbPath,
+            String fileName, String fileHash, ParserConfig config) throws IOException, SQLException {
+        long fileSize = Files.size(input);
+        if (fileSize > config.maxFileSizeBytes()) {
+            IngestRejectionException rejection = new IngestRejectionException(
+                    RejectionReason.FILE_TOO_LARGE,
+                    config.maxFileSizeBytes(), fileSize,
+                    "file size " + fileSize + " bytes exceeds configured limit "
+                            + config.maxFileSizeBytes() + " bytes");
+            persistRejection(dbPath, mandateId, fileName, fileHash, rejection);
+            throw rejection;
+        }
+
+        FileType fileType = FileType.fromPath(input);
+        if (fileType == FileType.FM_XLS && !config.xlsEnabled()) {
+            IngestRejectionException rejection = new IngestRejectionException(
+                    RejectionReason.XLS_DISABLED,
+                    false, true,
+                    ".xls intake is disabled by default; set xlsEnabled to true to enable");
+            persistRejection(dbPath, mandateId, fileName, fileHash, rejection);
+            throw rejection;
+        }
+    }
+
+    private void persistRejection(Path dbPath, long mandateId, String fileName,
+            String fileHash, IngestRejectionException rejection) throws SQLException {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            Connection connection = db.connection();
+            connection.setAutoCommit(false);
+            try {
+                WorkspaceRepository repo = new WorkspaceRepository(connection);
+                String detail;
+                try {
+                    detail = Jsonb.toJson(Map.of(
+                            "reasonCode", rejection.reasonCode(),
+                            "configuredLimit", rejection.configuredLimit(),
+                            "observedValue", rejection.observedValue()));
+                } catch (IOException ex) {
+                    detail = "{}";
+                }
+                repo.insertIngestRejection(null, mandateId, fileName, fileHash,
+                        rejection.reasonCode(), detail, Timestamps.now());
+                repo.commit();
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
+            } finally {
+                connection.setAutoCommit(true);
             }
         }
     }
 
     private IngestSummary ingestCsv(Path input, long mandateId, Path dbPath,
             String fileName, String fileHash, long sourceFileId,
-            WorkspaceRepository repo, String now) throws IOException, SQLException {
+            WorkspaceRepository repo, String now, ParserConfig config) throws IOException, SQLException {
         CsvDialect dialect = sniffer.sniff(input);
         CsvSheet sheet = csvAdapter.parse(input, dialect);
         int rowCount = sheet.rows().size();
@@ -91,7 +157,7 @@ public final class IngestService {
         String metricsJson = IngestSummary.metricsJson(
                 fileName, fileHash, sheet.sheetName(), rowCount, cellCount);
         long parseRunId = repo.insertParseRun(sourceFileId, mandateId, PARSER_VERSION,
-                CONFIG_HASH, now, Timestamps.now(), "success", metricsJson);
+                config.configHash(), now, Timestamps.now(), "success", metricsJson);
         long worksheetId = repo.insertWorksheet(parseRunId, sheet.sheetName(), 0);
 
         List<NormalizedCell> cells = new ArrayList<>();
@@ -115,7 +181,7 @@ public final class IngestService {
 
     private IngestSummary ingestXlsx(XlsxWorkbook workbook, long mandateId, Path dbPath,
             String fileName, String fileHash, long sourceFileId,
-            WorkspaceRepository repo, String now) throws IOException, SQLException {
+            WorkspaceRepository repo, String now, ParserConfig config) throws IOException, SQLException {
         List<XlsxSheet> sheets = workbook.sheets();
         WorkbookMetadata metadata = workbook.metadata();
         int rowCount = sheets.stream().mapToInt(s -> maxPopulatedRowNum(s)).sum();
@@ -124,7 +190,7 @@ public final class IngestService {
         String metricsJson = IngestSummary.metricsJson(
                 fileName, fileHash, primarySheetName(sheets), rowCount, cellCount);
         long parseRunId = repo.insertParseRun(sourceFileId, mandateId, PARSER_VERSION,
-                CONFIG_HASH, now, Timestamps.now(), "success", metricsJson);
+                config.configHash(), now, Timestamps.now(), "success", metricsJson);
 
         Set<String> referencedNames = collectReferencedDefinedNames(sheets);
         long workbookId = repo.insertWorkbook(sourceFileId,
@@ -262,6 +328,9 @@ public final class IngestService {
                 map.put("isProtected", metadata.isProtected());
             }
             return Jsonb.toJson(map);
+        }
+        if (fileType == FileType.FM_XLS) {
+            return Jsonb.toJson(Map.of("format", "xls"));
         }
         CsvDialect dialect = sniffer.sniff(input);
         Map<String, Object> map = new LinkedHashMap<>();
