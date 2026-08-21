@@ -67,6 +67,18 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.5.2</version>
+        <configuration>
+          <!-- *IT.java (e.g. RealWorkbookIT) is normally reserved for
+               maven-failsafe-plugin's integration-test phase, but this
+               project has no failsafe binding; running it here keeps it
+               part of the ordinary `mvn test` build. It self-skips via
+               assumeTrue when fixtures/private/ isn't provisioned, so
+               including it costs nothing on a fresh clone or public CI. -->
+          <includes>
+            <include>**/*Test.java</include>
+            <include>**/*IT.java</include>
+          </includes>
+        </configuration>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

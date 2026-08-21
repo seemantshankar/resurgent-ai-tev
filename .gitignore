@@ -1,4 +1,5 @@
 .DS_Store
 target/
 *.db
-fixtures/private/
+fixtures/private/*
+!fixtures/private/README.md
