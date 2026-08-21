@@ -184,6 +184,18 @@ class IngestServiceTest {
                 assertThat(rs.getString("detail")).contains("configuredLimit")
                         .contains("observedValue");
             }
+
+            assertThat(count(c, "audit_log")).isEqualTo(1);
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT parse_run_id, event_type, severity, payload FROM audit_log")) {
+                assertThat(rs.next()).isTrue();
+                rs.getLong("parse_run_id");
+                assertThat(rs.wasNull()).isTrue();
+                assertThat(rs.getString("event_type")).isEqualTo("ingest_rejected");
+                assertThat(rs.getString("severity")).isEqualTo("warning");
+                assertThat(rs.getString("payload")).contains("xls_disabled")
+                        .contains("legacy.xls");
+            }
         }
     }
 

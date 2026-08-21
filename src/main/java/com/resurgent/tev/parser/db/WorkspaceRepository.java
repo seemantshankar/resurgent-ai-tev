@@ -285,13 +285,17 @@ public final class WorkspaceRepository {
         }
     }
 
-    public long insertAuditLog(long parseRunId, String eventType, String eventAt,
+    public long insertAuditLog(Long parseRunId, String eventType, String eventAt,
             String payload, String severity) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO audit_log (parse_run_id, event_type, event_at, payload, severity)"
                         + " VALUES (?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
-            ps.setLong(1, parseRunId);
+            if (parseRunId == null) {
+                ps.setNull(1, java.sql.Types.INTEGER);
+            } else {
+                ps.setLong(1, parseRunId);
+            }
             ps.setString(2, eventType);
             ps.setString(3, eventAt);
             ps.setString(4, payload);

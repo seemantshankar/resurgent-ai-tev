@@ -139,6 +139,7 @@ public final class IngestService {
             connection.setAutoCommit(false);
             try {
                 WorkspaceRepository repo = new WorkspaceRepository(connection);
+                String now = Timestamps.now();
                 String detail;
                 try {
                     detail = Jsonb.toJson(Map.of(
@@ -149,7 +150,18 @@ public final class IngestService {
                     detail = "{}";
                 }
                 repo.insertIngestRejection(null, mandateId, fileName, fileHash,
-                        rejection.reasonCode(), detail, Timestamps.now());
+                        rejection.reasonCode(), detail, now);
+                String auditPayload;
+                try {
+                    auditPayload = Jsonb.toJson(Map.of(
+                            "reasonCode", rejection.reasonCode(),
+                            "mandateId", mandateId,
+                            "fileName", fileName,
+                            "fileHash", fileHash));
+                } catch (IOException ex) {
+                    auditPayload = "{}";
+                }
+                repo.insertAuditLog(null, "ingest_rejected", now, auditPayload, "warning");
                 repo.commit();
             } catch (SQLException e) {
                 connection.rollback();

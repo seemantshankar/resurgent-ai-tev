@@ -68,10 +68,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(6);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(7);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(6);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(7);
         }
     }
 
@@ -148,6 +148,26 @@ class PersistenceSeamTest {
             assertThat(repo.countAuditLogs()).isEqualTo(1);
             assertThat(repo.countReviewQueue()).isEqualTo(1);
             assertThat(repo.countIngestRejections()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void auditLogAcceptsNullParseRunForPreParseRunRejections() throws Exception {
+        try (WorkspaceDatabase db = openDb("audit-null-parse-run.db")) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+
+            long auditLogId = repo.insertAuditLog(null, "ingest_rejected", Timestamps.now(),
+                    Jsonb.toJson(Map.of("reasonCode", "file_too_large")), "warning");
+
+            try (ResultSet rs = db.connection().createStatement().executeQuery(
+                    "SELECT parse_run_id, event_type, severity FROM audit_log"
+                            + " WHERE audit_log_id = " + auditLogId)) {
+                assertThat(rs.next()).isTrue();
+                rs.getLong("parse_run_id");
+                assertThat(rs.wasNull()).isTrue();
+                assertThat(rs.getString("event_type")).isEqualTo("ingest_rejected");
+                assertThat(rs.getString("severity")).isEqualTo("warning");
+            }
         }
     }
 
