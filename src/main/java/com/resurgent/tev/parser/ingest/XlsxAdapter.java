@@ -2,11 +2,9 @@ package com.resurgent.tev.parser.ingest;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
@@ -14,20 +12,16 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import org.apache.poi.ooxml.POIXMLProperties;
-import org.apache.poi.ss.formula.eval.ErrorEval;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
-import org.apache.poi.ss.usermodel.DateUtil;
-import org.apache.poi.ss.usermodel.Name;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
+import org.apache.poi.ss.util.CellAddress;
 import org.apache.poi.ss.util.CellRangeAddress;
-import org.apache.poi.ss.util.CellReference;
 import org.apache.poi.xssf.usermodel.XSSFCell;
 import org.apache.poi.xssf.usermodel.XSSFSheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -82,7 +76,7 @@ public final class XlsxAdapter {
             for (int i = 0; i < sheetCount; i++) {
                 Sheet formulaSheet = formulaBook.getSheetAt(i);
                 Sheet valueSheet = valueBook.getSheetAt(i);
-                String state = sheetState(formulaBook, i);
+                String state = CellGeometry.sheetState(formulaBook, i);
                 sheets.add(parseSheet(formulaSheet, valueSheet, i, state, cacheFresh, definedNames));
             }
             return new XlsxWorkbook(sheets, metadata);
@@ -183,16 +177,6 @@ public final class XlsxAdapter {
         return WorkbookFactory.create(new ByteArrayInputStream(bytes));
     }
 
-    private static String sheetState(Workbook workbook, int index) {
-        if (workbook.isSheetVeryHidden(index)) {
-            return "veryHidden";
-        }
-        if (workbook.isSheetHidden(index)) {
-            return "hidden";
-        }
-        return "visible";
-    }
-
     private static XlsxSheet parseSheet(Sheet formulaSheet, Sheet valueSheet,
             int index, String state, boolean cacheFresh, Map<String, String> definedNames) {
         boolean sheetHidden = !"visible".equals(state);
@@ -204,7 +188,7 @@ public final class XlsxAdapter {
         for (CellRangeAddress region : mergedRegions) {
             for (int r = region.getFirstRow(); r <= region.getLastRow(); r++) {
                 for (int c = region.getFirstColumn(); c <= region.getLastColumn(); c++) {
-                    regionByCoord.put(coord(r, c), region);
+                    regionByCoord.put(CellGeometry.coord(r, c), region);
                 }
             }
         }
@@ -253,12 +237,12 @@ public final class XlsxAdapter {
                 handled.add(cell.coord());
                 continue;
             }
-            String anchorCoord = coord(region.getFirstRow(), region.getFirstColumn());
+            String anchorCoord = CellGeometry.coord(region.getFirstRow(), region.getFirstColumn());
             if (cell.coord().equals(anchorCoord)) {
-                cells.add(markAnchor(cell, region));
+                cells.add(NormalizedCellFactory.markAnchor(cell, region));
             } else {
                 NormalizedCell anchor = baseByCoord.get(anchorCoord);
-                cells.add(createParticipant(anchor, region, cell.rowNum(), cell.colNum(),
+                cells.add(NormalizedCellFactory.createParticipant(anchor, region, cell.rowNum(), cell.colNum(),
                         cell.coord(), cell.rowHidden(), cell.colHidden(), cell.sheetHidden()));
             }
             handled.add(cell.coord());
@@ -266,29 +250,30 @@ public final class XlsxAdapter {
 
         // Emit participants for blank cells that fall inside a merged region.
         for (CellRangeAddress region : mergedRegions) {
-            String anchorCoord = coord(region.getFirstRow(), region.getFirstColumn());
+            String anchorCoord = CellGeometry.coord(region.getFirstRow(), region.getFirstColumn());
             NormalizedCell anchor = baseByCoord.get(anchorCoord);
             for (int r = region.getFirstRow(); r <= region.getLastRow(); r++) {
                 for (int c = region.getFirstColumn(); c <= region.getLastColumn(); c++) {
-                    String coord = coord(r, c);
+                    String coord = CellGeometry.coord(r, c);
                     if (handled.contains(coord)) {
                         continue;
                     }
-                    boolean rowHidden = isRowHidden(formulaSheet, r);
+                    boolean rowHidden = CellGeometry.isRowHidden(formulaSheet, r);
                     boolean colHidden = formulaSheet.isColumnHidden(c);
-                    cells.add(createParticipant(anchor, region, r + 1, c + 1, coord,
+                    cells.add(NormalizedCellFactory.createParticipant(anchor, region, r + 1, c + 1, coord,
                             rowHidden, colHidden, sheetHidden));
                     handled.add(coord);
                 }
             }
         }
 
-        Bbox bbox = computeBbox(formulaSheet, baseCells, mergedRegions);
-        int realContentRows = countContentRows(cells);
+        SheetBbox.Bbox bbox = SheetBbox.computeBbox(formulaSheet, baseCells, mergedRegions,
+                commentAddresses(formulaSheet));
+        int realContentRows = SheetBbox.countContentRows(cells);
         String dimensionsDeclared = dimensionsDeclared(formulaSheet);
 
         return new XlsxSheet(formulaSheet.getSheetName(), index, state, cells,
-                bbox.minRow, bbox.minCol, bbox.maxRow, bbox.maxCol,
+                bbox.minRow(), bbox.minCol(), bbox.maxRow(), bbox.maxCol(),
                 dimensionsDeclared, realContentRows, mergedRegions.size());
     }
 
@@ -297,7 +282,7 @@ public final class XlsxAdapter {
             boolean cacheFresh, Map<String, String> definedNames) {
         int rowNum = formulaCell.getRowIndex() + 1;
         int colNum = formulaCell.getColumnIndex() + 1;
-        String coord = CellReference.convertNumToColString(formulaCell.getColumnIndex()) + rowNum;
+        String coord = CellGeometry.coord(formulaCell.getRowIndex(), formulaCell.getColumnIndex());
 
         CellType formulaType = formulaCell.getCellType();
         if (formulaType == CellType.BLANK) {
@@ -305,246 +290,15 @@ public final class XlsxAdapter {
         }
 
         if (formulaType == CellType.FORMULA) {
-            return normalizeFormulaCell(formulaCell, valueCell, coord, rowNum, colNum,
-                    rowHidden, colHidden, sheetHidden, cacheFresh, definedNames);
+            boolean hasCachedValue = valueCell instanceof XSSFCell xssfCell
+                    && xssfCell.getCTCell().isSetV();
+            return FormulaCellNormalizer.normalizeFormulaCell(formulaCell.getCellFormula(), valueCell,
+                    coord, rowNum, colNum, rowHidden, colHidden, sheetHidden,
+                    cacheFresh, definedNames, hasCachedValue);
         }
 
-        return normalizeLiteralCell(valueCell, coord, rowNum, colNum,
+        return LiteralCellNormalizer.normalizeLiteralCell(valueCell, coord, rowNum, colNum,
                 rowHidden, colHidden, sheetHidden);
-    }
-
-    private static NormalizedCell normalizeLiteralCell(Cell cell, String coord,
-            int rowNum, int colNum, boolean rowHidden, boolean colHidden, boolean sheetHidden) {
-        if (cell == null) {
-            return null;
-        }
-        CellType type = cell.getCellType();
-        if (type == CellType.BLANK) {
-            return null;
-        }
-
-        String rawValue;
-        CellValue value;
-
-        switch (type) {
-            case NUMERIC -> {
-                rawValue = Double.toString(cell.getNumericCellValue());
-                if (DateUtil.isCellDateFormatted(cell)) {
-                    value = CellNormalizer.normalizeDate(cell.getLocalDateTimeCellValue());
-                } else {
-                    value = numericValue(rawValue);
-                }
-            }
-            case STRING -> {
-                rawValue = cell.getStringCellValue();
-                value = CellNormalizer.normalize(rawValue);
-            }
-            case BOOLEAN -> {
-                rawValue = cell.getBooleanCellValue() ? "TRUE" : "FALSE";
-                value = CellNormalizer.normalize(rawValue);
-            }
-            case ERROR -> {
-                rawValue = errorLiteral(cell.getErrorCellValue());
-                value = CellNormalizer.normalize(rawValue);
-            }
-            default -> {
-                return null;
-            }
-        }
-
-        return buildCell(coord, rowNum, colNum, rawValue, value,
-                null, null, null, null, null,
-                rowHidden, colHidden, sheetHidden,
-                null, null, null);
-    }
-
-    private static NormalizedCell normalizeFormulaCell(Cell formulaCell, Cell valueCell,
-            String coord, int rowNum, int colNum,
-            boolean rowHidden, boolean colHidden, boolean sheetHidden,
-            boolean cacheFresh, Map<String, String> definedNames) {
-        String formulaText = formulaCell.getCellFormula();
-        String formulaNormalized = FormulaNormalizer.normalize(formulaText);
-
-        FormulaReferences refs = FormulaReferenceExtractor.extract(formulaText, definedNames.keySet());
-        String externalRef = firstOrNull(refs.externalRefs());
-        String sheetRefs = jsonOrNull(refs.sheetRefs());
-        String definedNameRefs = jsonOrNull(refs.definedNameRefs());
-
-        boolean hasCachedValue = valueCell instanceof XSSFCell xssfCell
-                && xssfCell.getCTCell().isSetV();
-        CellType cachedType = hasCachedValue
-                ? valueCell.getCachedFormulaResultType()
-                : CellType.BLANK;
-        String cachedValue;
-        CellValue cached;
-        String cacheState;
-
-        if (!hasCachedValue) {
-            cachedValue = null;
-            cached = CellValue.empty();
-            cacheState = "missing";
-        } else if (cachedType == CellType.BLANK) {
-            cachedValue = "";
-            cached = CellValue.empty();
-            cacheState = cacheFresh ? "fresh" : "stale";
-        } else {
-            cachedValue = cachedValueString(valueCell, cachedType);
-            cached = cachedType == CellType.ERROR
-                    ? CellNormalizer.normalize(cachedValue)
-                    : normalizeCachedValue(valueCell, cachedType, cachedValue);
-            cacheState = cacheFresh ? "fresh" : "stale";
-        }
-
-        String valueType = cached.valueType().equals("empty") ? "formula" : cached.valueType();
-        CellValue value = new CellValue(
-                "formula", valueType,
-                cached.textValue(), cached.displayValue(),
-                cached.numericValue(), cached.boolValue(), cached.dateValue(),
-                cached.coercedFromText(), cached.parsedQuantity(),
-                cached.isError(), cached.errorType());
-
-        return buildCell(coord, rowNum, colNum, "=" + formulaText, value,
-                formulaText, formulaNormalized, "ok", cachedValue, cacheState,
-                rowHidden, colHidden, sheetHidden,
-                externalRef, sheetRefs, definedNameRefs);
-    }
-
-    private static CellValue normalizeCachedValue(Cell cell, CellType cachedType, String cachedValue) {
-        if (cachedValue == null) {
-            return CellValue.empty();
-        }
-        if (cachedType == CellType.NUMERIC) {
-            if (DateUtil.isCellDateFormatted(cell)) {
-                return CellNormalizer.normalizeDate(cell.getLocalDateTimeCellValue());
-            }
-            return numericValue(cachedValue);
-        }
-        return CellNormalizer.normalize(cachedValue);
-    }
-
-    private static CellValue numericValue(String rawValue) {
-        return new CellValue(
-                "number", "number", rawValue, rawValue,
-                new java.math.BigDecimal(rawValue), null, null,
-                false, null, false, null);
-    }
-
-    private static String cachedValueString(Cell cell, CellType cachedType) {
-        return switch (cachedType) {
-            case NUMERIC -> Double.toString(cell.getNumericCellValue());
-            case STRING -> cell.getStringCellValue();
-            case BOOLEAN -> cell.getBooleanCellValue() ? "TRUE" : "FALSE";
-            case ERROR -> errorLiteral(cell.getErrorCellValue());
-            default -> null;
-        };
-    }
-
-    private static String errorLiteral(byte errorCode) {
-        return ErrorEval.getText(errorCode);
-    }
-
-    private static String firstOrNull(List<String> values) {
-        return values == null || values.isEmpty() ? null : values.get(0);
-    }
-
-    private static String jsonOrNull(List<String> values) {
-        if (values == null || values.isEmpty()) {
-            return null;
-        }
-        try {
-            return com.resurgent.tev.parser.db.Jsonb.toJson(values);
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new IllegalStateException("failed to serialize reference list: " + values, e);
-        }
-    }
-
-    private static NormalizedCell buildCell(String coord, int rowNum, int colNum,
-            String rawValue, CellValue value, String formulaText,
-            String formulaNormalized, String formulaState, String cachedValue,
-            String cacheState, boolean rowHidden, boolean colHidden, boolean sheetHidden,
-            String externalRef, String sheetRefs, String definedNameRefs) {
-        return new NormalizedCell(
-                coord, rowNum, colNum,
-                rawValue,
-                value.rawType(),
-                value.valueType(),
-                value.textValue(),
-                value.displayValue(),
-                value.numericValue(),
-                value.boolValue(),
-                value.dateValue(),
-                formulaText,
-                formulaNormalized,
-                formulaState,
-                cachedValue,
-                cacheState,
-                value.coercedFromText(),
-                value.parsedQuantity(),
-                value.isError(),
-                value.errorType(),
-                null, null,
-                false, false, null, "cell",
-                rowHidden, colHidden, sheetHidden,
-                externalRef, null, sheetRefs, definedNameRefs);
-    }
-
-    private static NormalizedCell markAnchor(NormalizedCell cell, CellRangeAddress region) {
-        String range = region.formatAsString();
-        return new NormalizedCell(
-                cell.coord(), cell.rowNum(), cell.colNum(),
-                cell.rawValue(),
-                cell.rawType(),
-                cell.valueType(),
-                cell.textValue(),
-                cell.displayValue(),
-                cell.numericValue(),
-                cell.boolValue(),
-                cell.dateValue(),
-                cell.formulaText(),
-                cell.formulaNormalized(),
-                cell.formulaState(),
-                cell.cachedValue(),
-                cell.cacheState(),
-                cell.coercedFromText(),
-                cell.parsedQuantity(),
-                cell.isError(),
-                cell.errorType(),
-                cell.rowLabel(),
-                cell.colLabel(),
-                true, false, range, "cell",
-                cell.rowHidden(), cell.colHidden(), cell.sheetHidden(),
-                cell.externalRef(), cell.externalLinkId(), cell.sheetRefs(), cell.definedNameRefs());
-    }
-
-    private static NormalizedCell createParticipant(NormalizedCell anchor, CellRangeAddress region,
-            int rowNum, int colNum, String coord,
-            boolean rowHidden, boolean colHidden, boolean sheetHidden) {
-        String displayValue = anchor == null ? null : anchor.displayValue();
-        String range = region.formatAsString();
-        return new NormalizedCell(
-                coord, rowNum, colNum,
-                null,
-                "empty",
-                "empty",
-                null,
-                displayValue,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                false,
-                null,
-                false,
-                null,
-                null,
-                null,
-                false, true, range, "merged_anchor",
-                rowHidden, colHidden, sheetHidden,
-                null, null, null, null);
     }
 
     private static String dimensionsDeclared(Sheet formulaSheet) {
@@ -556,90 +310,14 @@ public final class XlsxAdapter {
         return null;
     }
 
-    private static boolean isRowHidden(Sheet sheet, int rowIndex) {
-        Row row = sheet.getRow(rowIndex);
-        return row != null && row.getZeroHeight();
-    }
-
-    private static String coord(int rowIndex, int colIndex) {
-        return CellReference.convertNumToColString(colIndex) + (rowIndex + 1);
-    }
-
-    private static Bbox computeBbox(Sheet sheet, List<NormalizedCell> baseCells,
-            List<CellRangeAddress> mergedRegions) {
-        Integer minRow = null;
-        Integer minCol = null;
-        Integer maxRow = null;
-        Integer maxCol = null;
-        for (NormalizedCell cell : baseCells) {
-            minRow = min(minRow, cell.rowNum());
-            minCol = min(minCol, cell.colNum());
-            maxRow = max(maxRow, cell.rowNum());
-            maxCol = max(maxCol, cell.colNum());
-        }
-        for (CellRangeAddress region : mergedRegions) {
-            minRow = min(minRow, region.getFirstRow() + 1);
-            minCol = min(minCol, region.getFirstColumn() + 1);
-            maxRow = max(maxRow, region.getLastRow() + 1);
-            maxCol = max(maxCol, region.getLastColumn() + 1);
-        }
-        for (org.apache.poi.ss.util.CellAddress address : commentAddresses(sheet)) {
-            minRow = min(minRow, address.getRow() + 1);
-            minCol = min(minCol, address.getColumn() + 1);
-            maxRow = max(maxRow, address.getRow() + 1);
-            maxCol = max(maxCol, address.getColumn() + 1);
-        }
-        for (CellReference ref : sameSheetPrecedents(sheet.getSheetName(), baseCells)) {
-            minRow = min(minRow, ref.getRow() + 1);
-            minCol = min(minCol, ref.getCol() + 1);
-            maxRow = max(maxRow, ref.getRow() + 1);
-            maxCol = max(maxCol, ref.getCol() + 1);
-        }
-        return new Bbox(minRow, minCol, maxRow, maxCol);
-    }
-
-    private static List<org.apache.poi.ss.util.CellAddress> commentAddresses(Sheet sheet) {
-        List<org.apache.poi.ss.util.CellAddress> addresses = new ArrayList<>();
+    private static List<CellAddress> commentAddresses(Sheet sheet) {
+        List<CellAddress> addresses = new ArrayList<>();
         if (sheet instanceof XSSFSheet xssfSheet) {
-            Map<org.apache.poi.ss.util.CellAddress, ?> comments = xssfSheet.getCellComments();
+            Map<CellAddress, ?> comments = xssfSheet.getCellComments();
             if (comments != null) {
                 addresses.addAll(comments.keySet());
             }
         }
         return addresses;
-    }
-
-    private static List<CellReference> sameSheetPrecedents(String sheetName,
-            List<NormalizedCell> baseCells) {
-        List<CellReference> refs = new ArrayList<>();
-        for (NormalizedCell cell : baseCells) {
-            if (cell.formulaText() == null || cell.formulaText().isBlank()) {
-                continue;
-            }
-            refs.addAll(FormulaReferenceExtractor.extractLocalRefs(
-                    cell.formulaText(), sheetName));
-        }
-        return refs;
-    }
-
-    private static Integer min(Integer current, int candidate) {
-        return current == null ? candidate : Math.min(current, candidate);
-    }
-
-    private static Integer max(Integer current, int candidate) {
-        return current == null ? candidate : Math.max(current, candidate);
-    }
-
-    private static int countContentRows(List<NormalizedCell> cells) {
-        Set<Integer> rows = new HashSet<>();
-        for (NormalizedCell cell : cells) {
-            if ("cell".equals(cell.valueSource())) {
-                rows.add(cell.rowNum());
-            }
-        }
-        return rows.size();
-    }
-
-    private record Bbox(Integer minRow, Integer minCol, Integer maxRow, Integer maxCol) {
     }
 }

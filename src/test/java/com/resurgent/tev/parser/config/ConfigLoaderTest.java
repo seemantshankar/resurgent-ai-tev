@@ -56,6 +56,6 @@ class ConfigLoaderTest {
     void wrongType_rejected() {
         assertThatThrownBy(() -> ConfigLoader.load("{\"maxFileSizeBytes\": \"large\"}"))
                 .isInstanceOf(ConfigValidationException.class)
-                .hasMessageContaining("maxFileSizeBytes must be a number");
+                .hasMessageContaining("maxFileSizeBytes has invalid type");
     }
 }

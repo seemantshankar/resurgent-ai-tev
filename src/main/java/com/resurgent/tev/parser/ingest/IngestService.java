@@ -5,6 +5,7 @@ import com.resurgent.tev.parser.db.Jsonb;
 import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
+import com.resurgent.tev.parser.ingest.safety.SafetyEnforcer;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -39,7 +40,9 @@ public final class IngestService {
     private final CsvSniffer sniffer = new CsvSniffer();
     private final CsvAdapter csvAdapter = new CsvAdapter();
     private final XlsxAdapter xlsxAdapter = new XlsxAdapter();
+    private final XlsAdapter xlsAdapter = new XlsAdapter();
     private final CellContextEnricher enricher = new CellContextEnricher();
+    private final SafetyEnforcer safetyEnforcer = new SafetyEnforcer();
 
     /** Convenience overload that uses embedded defaults. */
     public IngestSummary ingest(Path input, long mandateId, Path dbPath)
@@ -55,35 +58,45 @@ public final class IngestService {
         String fileName = input.getFileName().toString();
         String fileHash = sha256(input);
 
-        rejectIfPolicyViolation(input, mandateId, dbPath, fileName, fileHash, config);
-
-        FileType fileType = FileType.fromPath(input);
-        XlsxWorkbook xlsxWorkbook = null;
-        if (fileType == FileType.FM_XLSX) {
-            xlsxWorkbook = xlsxAdapter.parseWorkbook(input);
-        }
-        String rawMetadata = rawMetadataJson(input, fileType, xlsxWorkbook);
+        FileType fileType = rejectIfPolicyViolation(input, mandateId, dbPath,
+                fileName, fileHash, config);
 
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            safetyEnforcer.check(input, fileType, config);
+
             Connection connection = db.connection();
             connection.setAutoCommit(false);
             try {
                 WorkspaceRepository repo = new WorkspaceRepository(connection);
                 String now = Timestamps.now();
-                long sourceFileId = repo.insertSourceFile(mandateId,
-                        fileName, fileHash, fileType.value(), now, PARSER_VERSION, rawMetadata);
+
+                Long existingRunId = ParseRunIdentity.findExistingParseRunId(
+                        mandateId, fileHash, PARSER_VERSION, config.configHash(), repo);
+                if (existingRunId != null) {
+                    Long existingSourceFileId = repo.findSourceFileId(mandateId, fileHash);
+                    connection.commit();
+                    String metricsJson = repo.selectParseRunMetrics(existingRunId);
+                    return IngestSummary.fromExistingRun(
+                            fileName, fileHash, existingSourceFileId, existingRunId, dbPath, metricsJson);
+                }
+
+                XlsxWorkbook xlsxWorkbook = null;
+                if (fileType == FileType.FM_XLSX) {
+                    xlsxWorkbook = xlsxAdapter.parseWorkbook(input);
+                } else if (fileType == FileType.FM_XLS) {
+                    xlsxWorkbook = xlsAdapter.parseWorkbook(input);
+                }
+                String rawMetadata = rawMetadataJson(input, fileType, xlsxWorkbook);
+
+                long sourceFileId = ParseRunIdentity.ensureSourceFile(mandateId, fileName,
+                        fileHash, fileType.value(), PARSER_VERSION, rawMetadata, now, repo);
 
                 return switch (fileType) {
-                    case FM_XLSX -> ingestXlsx(xlsxWorkbook, mandateId, dbPath,
+                    case FM_XLSX, FM_XLS -> ingestXlsx(xlsxWorkbook, mandateId, dbPath,
                             fileName, fileHash, sourceFileId, repo, now, config);
-                    case FM_XLS -> throw new IllegalStateException(
-                            "xls parsing is not yet implemented; keep xlsEnabled false");
                     case FM_CSV -> ingestCsv(input, mandateId, dbPath,
                             fileName, fileHash, sourceFileId, repo, now, config);
                 };
-            } catch (IngestRejectionException e) {
-                connection.rollback();
-                throw e;
             } catch (Exception e) {
                 connection.rollback();
                 throw e;
@@ -94,7 +107,7 @@ public final class IngestService {
         }
     }
 
-    private void rejectIfPolicyViolation(Path input, long mandateId, Path dbPath,
+    private FileType rejectIfPolicyViolation(Path input, long mandateId, Path dbPath,
             String fileName, String fileHash, ParserConfig config) throws IOException, SQLException {
         long fileSize = Files.size(input);
         if (fileSize > config.maxFileSizeBytes()) {
@@ -111,11 +124,12 @@ public final class IngestService {
         if (fileType == FileType.FM_XLS && !config.xlsEnabled()) {
             IngestRejectionException rejection = new IngestRejectionException(
                     RejectionReason.XLS_DISABLED,
-                    false, true,
+                    config.xlsEnabled(), fileType.value(),
                     ".xls intake is disabled by default; set xlsEnabled to true to enable");
             persistRejection(dbPath, mandateId, fileName, fileHash, rejection);
             throw rejection;
         }
+        return fileType;
     }
 
     private void persistRejection(Path dbPath, long mandateId, String fileName,
@@ -315,9 +329,9 @@ public final class IngestService {
 
     private String rawMetadataJson(Path input, FileType fileType, XlsxWorkbook workbook)
             throws IOException {
-        if (fileType == FileType.FM_XLSX) {
+        if (fileType == FileType.FM_XLSX || fileType == FileType.FM_XLS) {
             Map<String, Object> map = new LinkedHashMap<>();
-            map.put("format", "xlsx");
+            map.put("format", fileType == FileType.FM_XLSX ? "xlsx" : "xls");
             if (workbook != null) {
                 WorkbookMetadata metadata = workbook.metadata();
                 map.put("sheetCount", metadata.sheetCount());
@@ -328,9 +342,6 @@ public final class IngestService {
                 map.put("isProtected", metadata.isProtected());
             }
             return Jsonb.toJson(map);
-        }
-        if (fileType == FileType.FM_XLS) {
-            return Jsonb.toJson(Map.of("format", "xls"));
         }
         CsvDialect dialect = sniffer.sniff(input);
         Map<String, Object> map = new LinkedHashMap<>();

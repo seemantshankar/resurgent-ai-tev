@@ -32,6 +32,17 @@ public final class WorkspaceRepository {
         connection.rollback();
     }
 
+    public Long findSourceFileId(long mandateId, String fileHash) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT source_file_id FROM source_file WHERE mandate_id = ? AND file_hash = ?")) {
+            ps.setLong(1, mandateId);
+            ps.setString(2, fileHash);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : null;
+            }
+        }
+    }
+
     public long insertSourceFile(long mandateId, String fileName, String fileHash,
             String fileType, String ingestedAt, String parserVersion, String rawMetadata)
             throws SQLException {
@@ -48,6 +59,20 @@ public final class WorkspaceRepository {
             ps.setString(7, rawMetadata);
             ps.executeUpdate();
             return generatedId(ps);
+        }
+    }
+
+    public Long findParseRunId(long sourceFileId, String parserVersion, String configHash)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT parse_run_id FROM parse_run WHERE source_file_id = ? AND parser_version = ?"
+                        + " AND config_hash = ?")) {
+            ps.setLong(1, sourceFileId);
+            ps.setString(2, parserVersion);
+            ps.setString(3, configHash);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : null;
+            }
         }
     }
 

@@ -2,6 +2,7 @@ package com.resurgent.tev.parser;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.FileOutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
@@ -11,6 +12,10 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 
+import org.apache.poi.hssf.usermodel.HSSFWorkbook;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -48,6 +53,34 @@ class IngestCommandTest {
         Path file = tempDir.resolve(name);
         Files.write(file, content);
         return file;
+    }
+
+    private Path writeXlsx(String name) throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Sheet1");
+            Row row = sheet.createRow(0);
+            row.createCell(0).setCellValue("a");
+            row.createCell(1).setCellValue(1.0);
+            Path file = tempDir.resolve(name);
+            try (FileOutputStream out = new FileOutputStream(file.toFile())) {
+                workbook.write(out);
+            }
+            return file;
+        }
+    }
+
+    private Path writeXls(String name) throws Exception {
+        try (HSSFWorkbook workbook = new HSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Legacy");
+            Row row = sheet.createRow(0);
+            row.createCell(0).setCellValue("a");
+            row.createCell(1).setCellValue(1.0);
+            Path file = tempDir.resolve(name);
+            try (FileOutputStream out = new FileOutputStream(file.toFile())) {
+                workbook.write(out);
+            }
+            return file;
+        }
     }
 
     private long count(Connection c, String table) throws Exception {
@@ -156,46 +189,36 @@ class IngestCommandTest {
         return config;
     }
 
-    @Test
-    void unknownConfigKey_exits2WithDiagnostic() throws Exception {
+    private void assertConfigRejection(String configName, String configJson,
+            String expectedDiagnostic) throws Exception {
         Path csv = writeCsv("simple.csv", "a,b\n1,2\n");
-        Path db = tempDir.resolve("ws.db");
-        Path config = writeConfig("bad.json", "{\"unknownKey\": true}");
+        Path db = tempDir.resolve(configName + ".db");
+        Path config = writeConfig(configName + ".json", configJson);
 
         RunResult result = run("ingest", "--input", csv.toString(),
                 "--mandate-id", "1", "--db", db.toString(), "--config", config.toString());
 
         assertThat(result.exitCode()).isEqualTo(2);
-        assertThat(result.stderr()).contains("unknown config key: unknownKey");
+        assertThat(result.stderr()).contains(expectedDiagnostic);
         assertThat(result.stdout()).isEmpty();
+    }
+
+    @Test
+    void unknownConfigKey_exits2WithDiagnostic() throws Exception {
+        assertConfigRejection("bad", "{\"unknownKey\": true}",
+                "unknown config key: unknownKey");
     }
 
     @Test
     void configDisablingSecurityProtection_exits2() throws Exception {
-        Path csv = writeCsv("simple.csv", "a,b\n1,2\n");
-        Path db = tempDir.resolve("ws.db");
-        Path config = writeConfig("insecure.json", "{\"rejectPasswordProtected\": false}");
-
-        RunResult result = run("ingest", "--input", csv.toString(),
-                "--mandate-id", "1", "--db", db.toString(), "--config", config.toString());
-
-        assertThat(result.exitCode()).isEqualTo(2);
-        assertThat(result.stderr()).contains("security protection cannot be disabled");
-        assertThat(result.stdout()).isEmpty();
+        assertConfigRejection("insecure", "{\"rejectPasswordProtected\": false}",
+                "security protection cannot be disabled");
     }
 
     @Test
     void configExceedingHardCeiling_exits2() throws Exception {
-        Path csv = writeCsv("simple.csv", "a,b\n1,2\n");
-        Path db = tempDir.resolve("ws.db");
-        Path config = writeConfig("toobig.json", "{\"maxFileSizeBytes\": 9999999999999}");
-
-        RunResult result = run("ingest", "--input", csv.toString(),
-                "--mandate-id", "1", "--db", db.toString(), "--config", config.toString());
-
-        assertThat(result.exitCode()).isEqualTo(2);
-        assertThat(result.stderr()).contains("exceeds hard ceiling");
-        assertThat(result.stdout()).isEmpty();
+        assertConfigRejection("toobig", "{\"maxFileSizeBytes\": 9999999999999}",
+                "exceeds hard ceiling");
     }
 
     @Test
@@ -253,6 +276,46 @@ class IngestCommandTest {
             assertThat(hashDefault).isNotBlank();
             assertThat(hashOverride).isNotBlank();
             assertThat(hashDefault).isNotEqualTo(hashOverride);
+        }
+    }
+
+    @Test
+    void xlsWithFlagOn_ingestsLegacyWorkbook() throws Exception {
+        Path xls = writeXls("legacy.xls");
+        Path db = tempDir.resolve("xls-on.db");
+        Path config = writeConfig("xls-on.json", "{\"xlsEnabled\": true}");
+
+        RunResult result = run("ingest", "--input", xls.toString(),
+                "--mandate-id", "1", "--db", db.toString(),
+                "--config", config.toString());
+
+        assertThat(result.exitCode()).isZero();
+        assertThat(result.stdout()).contains("legacy.xls").contains("2 cells");
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            assertThat(count(c, "source_file")).isEqualTo(1);
+            assertThat(count(c, "parse_run")).isEqualTo(1);
+            assertThat(count(c, "worksheet")).isEqualTo(1);
+            assertThat(count(c, "cell")).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void idempotentReingest_reportsExistingRun() throws Exception {
+        Path xlsx = writeXlsx("dup.xlsx");
+        Path db = tempDir.resolve("dup.db");
+
+        RunResult first = run("ingest", "--input", xlsx.toString(),
+                "--mandate-id", "1", "--db", db.toString());
+        RunResult second = run("ingest", "--input", xlsx.toString(),
+                "--mandate-id", "1", "--db", db.toString());
+
+        assertThat(first.exitCode()).isZero();
+        assertThat(first.stdout()).contains("Ingested");
+        assertThat(second.exitCode()).isZero();
+        assertThat(second.stdout()).contains("Reused existing parse run");
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            assertThat(count(c, "source_file")).isEqualTo(1);
+            assertThat(count(c, "parse_run")).isEqualTo(1);
         }
     }
 }

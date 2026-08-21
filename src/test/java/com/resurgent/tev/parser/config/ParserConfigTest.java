@@ -11,10 +11,11 @@ class ParserConfigTest {
         ParserConfig config = ParserConfig.embeddedDefaults();
 
         assertThat(config.maxFileSizeBytes()).isEqualTo(100L * 1024 * 1024);
-        assertThat(config.maxSheetCount()).isEqualTo(50);
-        assertThat(config.maxRowCount()).isEqualTo(1_048_576);
+        assertThat(config.maxSheetCount()).isEqualTo(200);
+        assertThat(config.maxRowCount()).isEqualTo(1_000_000);
         assertThat(config.maxColumnCount()).isEqualTo(16_384);
-        assertThat(config.maxCellCount()).isEqualTo(10_000_000L);
+        assertThat(config.maxCellCount()).isEqualTo(5_000_000L);
+        assertThat(config.maxZipExpansionRatio()).isEqualTo(100);
         assertThat(config.xlsEnabled()).isFalse();
         assertThat(config.rejectPasswordProtected()).isTrue();
         assertThat(config.rejectActiveXOleDde()).isTrue();
@@ -37,6 +38,7 @@ class ParserConfigTest {
                 defaults.maxRowCount(),
                 defaults.maxColumnCount(),
                 defaults.maxCellCount(),
+                defaults.maxZipExpansionRatio(),
                 defaults.xlsEnabled(),
                 defaults.rejectPasswordProtected(),
                 defaults.rejectActiveXOleDde());

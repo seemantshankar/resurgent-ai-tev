@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.file.Path;
 import java.sql.ResultSet;
+import com.fasterxml.jackson.core.type.TypeReference;
+
 import java.util.List;
 import java.util.Map;
 
@@ -76,7 +78,8 @@ class PersistenceSeamTest {
     void jsonbParsesAndSerializes() throws Exception {
         Map<String, Object> value = Map.of("sheets", List.of("Sheet1", "Sheet2"), "count", 2);
         String json = Jsonb.toJson(value);
-        assertThat(Jsonb.fromJson(json, java.util.HashMap.class)).containsKey("sheets");
+        assertThat(Jsonb.fromJson(json, new TypeReference<Map<String, Object>>() {}))
+                .containsKey("sheets");
         assertThatThrownBy(() -> Jsonb.fromJson("{not json", Object.class))
                 .isInstanceOf(Exception.class);
     }
@@ -121,16 +124,21 @@ class PersistenceSeamTest {
             assertThat(Jsonb.fromJson(repo.selectWorkbookSheetNames(workbookId),
                     new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {}))
                     .isEqualTo(sheetNames);
-            assertThat(Jsonb.fromJson(repo.selectWorkbookProperties(workbookId), Map.class))
+            assertThat(Jsonb.fromJson(repo.selectWorkbookProperties(workbookId),
+                    new TypeReference<Map<String, Object>>() {}))
                     .containsEntry("application", "Excel");
             assertThat(repo.selectWorkbookIsProtected(workbookId)).isTrue();
-            assertThat(Jsonb.fromJson(repo.selectAuditLogPayload(auditLogId), Map.class))
+            assertThat(Jsonb.fromJson(repo.selectAuditLogPayload(auditLogId),
+                    new TypeReference<Map<String, Object>>() {}))
                     .containsEntry("stage", "init");
-            assertThat(Jsonb.fromJson(repo.selectReviewQueueDetail(reviewId), Map.class))
+            assertThat(Jsonb.fromJson(repo.selectReviewQueueDetail(reviewId),
+                    new TypeReference<Map<String, Object>>() {}))
                     .containsEntry("cell", "A1");
-            assertThat(Jsonb.fromJson(repo.selectIngestRejectionDetail(rejectionId), Map.class))
+            assertThat(Jsonb.fromJson(repo.selectIngestRejectionDetail(rejectionId),
+                    new TypeReference<Map<String, Object>>() {}))
                     .containsEntry("detected", "UTF-16");
-            assertThat(Jsonb.fromJson(repo.selectParseRunMetrics(parseRunId), Map.class))
+            assertThat(Jsonb.fromJson(repo.selectParseRunMetrics(parseRunId),
+                    new TypeReference<Map<String, Object>>() {}))
                     .containsEntry("cells", 9);
 
             assertThat(repo.countWorkbooks()).isEqualTo(1);

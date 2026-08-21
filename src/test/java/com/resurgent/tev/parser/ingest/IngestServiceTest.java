@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.resurgent.tev.parser.config.ConfigLoader;
 import com.resurgent.tev.parser.config.ParserConfig;
 import com.resurgent.tev.parser.db.Jsonb;
+import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import java.io.FileOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -15,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.usermodel.Name;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -210,4 +212,112 @@ class IngestServiceTest {
             }
         }
     }
+
+    @Test
+    void dimensionalCap_rejectsThroughSafetyEnforcer() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            workbook.createSheet("A");
+            workbook.createSheet("B");
+            workbook.createSheet("C");
+
+            Path xlsx = writeWorkbook(workbook, "too-many-sheets.xlsx");
+            Path db = tempDir.resolve("safety.db");
+            ParserConfig config = ConfigLoader.load("{\"maxSheetCount\": 2}");
+
+            assertThatThrownBy(() -> new IngestService().ingest(xlsx, 13L, db, config))
+                    .isInstanceOf(IngestRejectionException.class)
+                    .satisfies(e -> {
+                        IngestRejectionException r = (IngestRejectionException) e;
+                        assertThat(r.reason()).isEqualTo(RejectionReason.SHEET_COUNT_EXCEEDED);
+                        assertThat(r.configuredLimit()).isEqualTo(2);
+                        assertThat(r.observedValue()).isEqualTo(3);
+                    });
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                assertThat(count(c, "source_file")).isEqualTo(0);
+                assertThat(count(c, "ingest_rejection")).isEqualTo(1);
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT mandate_id, file_name, reason FROM ingest_rejection")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getLong("mandate_id")).isEqualTo(13L);
+                    assertThat(rs.getString("file_name")).isEqualTo("too-many-sheets.xlsx");
+                    assertThat(rs.getString("reason")).isEqualTo("sheet_count_exceeded");
+                }
+            }
+        }
+    }
+
+    @Test
+    void xlsEnabled_ingestsLegacyWorkbook() throws Exception {
+        try (HSSFWorkbook workbook = new HSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Legacy");
+            Row row = sheet.createRow(0);
+            row.createCell(0).setCellValue("Name");
+            row.createCell(1).setCellValue(123.0);
+
+            Path xls = tempDir.resolve("legacy.xls");
+            try (FileOutputStream out = new FileOutputStream(xls.toFile())) {
+                workbook.write(out);
+            }
+
+            Path db = tempDir.resolve("xls.db");
+            ParserConfig config = ConfigLoader.load("{\"xlsEnabled\": true}");
+            IngestSummary summary = new IngestService().ingest(xls, 11L, db, config);
+
+            assertThat(summary.existingRun()).isFalse();
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                assertThat(count(c, "source_file")).isEqualTo(1);
+                assertThat(count(c, "parse_run")).isEqualTo(1);
+                assertThat(count(c, "worksheet")).isEqualTo(1);
+                assertThat(count(c, "cell")).isEqualTo(2);
+                assertThat(count(c, "ingest_rejection")).isEqualTo(0);
+
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT formula_state FROM cell WHERE coord = 'B1'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString(1)).satisfiesAnyOf(
+                            s -> assertThat(s).isNull(),
+                            s -> assertThat(s).isEqualTo("unavailable"));
+                }
+
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT raw_metadata FROM source_file")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString(1))
+                            .contains("\"format\":\"xls\"")
+                            .contains("\"sheetNames\"");
+                }
+            }
+        }
+    }
+
+    @Test
+    void idempotentReingest_returnsExistingRunWithoutDuplicateGraph() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Sheet1");
+            sheet.createRow(0).createCell(0).setCellValue(42.0);
+
+            Path xlsx = writeWorkbook(workbook, "idempotent.xlsx");
+            Path db = tempDir.resolve("idempotent.db");
+            byte[] bytesBeforeIngest = Files.readAllBytes(xlsx);
+
+            IngestSummary first = new IngestService().ingest(xlsx, 12L, db);
+            assertThat(first.existingRun()).isFalse();
+            assertThat(Files.readAllBytes(xlsx)).isEqualTo(bytesBeforeIngest);
+
+            IngestSummary second = new IngestService().ingest(xlsx, 12L, db);
+            assertThat(second.existingRun()).isTrue();
+            assertThat(second.parseRunId()).isEqualTo(first.parseRunId());
+            assertThat(second.sourceFileId()).isEqualTo(first.sourceFileId());
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                assertThat(count(c, "source_file")).isEqualTo(1);
+                assertThat(count(c, "parse_run")).isEqualTo(1);
+                assertThat(count(c, "worksheet")).isEqualTo(1);
+                assertThat(count(c, "cell")).isEqualTo(1);
+            }
+        }
+    }
+
+
 }

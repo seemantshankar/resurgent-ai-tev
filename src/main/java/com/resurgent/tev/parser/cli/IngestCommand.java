@@ -52,11 +52,19 @@ public final class IngestCommand implements Callable<Integer> {
         }
         try {
             IngestSummary summary = new IngestService().ingest(input, mandateId, db, parserConfig);
-            out.printf("Ingested %s into worksheet '%s': %d cells from %d rows written to %s"
-                    + " (source_file %d, parse_run %d, sha256 %s).%n",
-                    summary.fileName(), summary.worksheetName(), summary.cellCount(),
-                    summary.rowCount(), summary.dbPath(), summary.sourceFileId(),
-                    summary.parseRunId(), summary.fileHash().substring(0, 12));
+            if (summary.existingRun()) {
+                out.printf("Reused existing parse run for %s (worksheet '%s': %d cells from"
+                        + " %d rows; source_file %d, parse_run %d, sha256 %s).%n",
+                        summary.fileName(), summary.worksheetName(), summary.cellCount(),
+                        summary.rowCount(), summary.sourceFileId(), summary.parseRunId(),
+                        summary.fileHash().substring(0, 12));
+            } else {
+                out.printf("Ingested %s into worksheet '%s': %d cells from %d rows written to %s"
+                        + " (source_file %d, parse_run %d, sha256 %s).%n",
+                        summary.fileName(), summary.worksheetName(), summary.cellCount(),
+                        summary.rowCount(), summary.dbPath(), summary.sourceFileId(),
+                        summary.parseRunId(), summary.fileHash().substring(0, 12));
+            }
             if (report != null) {
                 summary.writeReport(report);
                 err.println("parse report written to " + report);

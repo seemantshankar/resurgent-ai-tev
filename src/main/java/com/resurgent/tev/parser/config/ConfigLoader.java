@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * Loads and validates an optional user config file over embedded defaults.
@@ -23,6 +24,7 @@ public final class ConfigLoader {
             "maxRowCount",
             "maxColumnCount",
             "maxCellCount",
+            "maxZipExpansionRatio",
             "xlsEnabled",
             "rejectPasswordProtected",
             "rejectActiveXOleDde");
@@ -56,20 +58,28 @@ public final class ConfigLoader {
 
         ParserConfig defaults = ParserConfig.embeddedDefaults();
 
-        long maxFileSizeBytes = longValue(user, "maxFileSizeBytes", defaults.maxFileSizeBytes());
-        int maxSheetCount = intValue(user, "maxSheetCount", defaults.maxSheetCount());
-        int maxRowCount = intValue(user, "maxRowCount", defaults.maxRowCount());
-        int maxColumnCount = intValue(user, "maxColumnCount", defaults.maxColumnCount());
-        long maxCellCount = longValue(user, "maxCellCount", defaults.maxCellCount());
-        boolean xlsEnabled = boolValue(user, "xlsEnabled", defaults.xlsEnabled());
-        boolean rejectPasswordProtected = boolValue(user, "rejectPasswordProtected",
-                defaults.rejectPasswordProtected());
-        boolean rejectActiveXOleDde = boolValue(user, "rejectActiveXOleDde",
-                defaults.rejectActiveXOleDde());
+        long maxFileSizeBytes = value(user, "maxFileSizeBytes", defaults.maxFileSizeBytes(),
+                v -> ((Number) v).longValue());
+        int maxSheetCount = value(user, "maxSheetCount", defaults.maxSheetCount(),
+                v -> ((Number) v).intValue());
+        int maxRowCount = value(user, "maxRowCount", defaults.maxRowCount(),
+                v -> ((Number) v).intValue());
+        int maxColumnCount = value(user, "maxColumnCount", defaults.maxColumnCount(),
+                v -> ((Number) v).intValue());
+        long maxCellCount = value(user, "maxCellCount", defaults.maxCellCount(),
+                v -> ((Number) v).longValue());
+        int maxZipExpansionRatio = value(user, "maxZipExpansionRatio", defaults.maxZipExpansionRatio(),
+                v -> ((Number) v).intValue());
+        boolean xlsEnabled = value(user, "xlsEnabled", defaults.xlsEnabled(),
+                v -> (Boolean) v);
+        boolean rejectPasswordProtected = value(user, "rejectPasswordProtected",
+                defaults.rejectPasswordProtected(), v -> (Boolean) v);
+        boolean rejectActiveXOleDde = value(user, "rejectActiveXOleDde",
+                defaults.rejectActiveXOleDde(), v -> (Boolean) v);
 
         ParserConfig effective = new ParserConfig(
                 maxFileSizeBytes, maxSheetCount, maxRowCount, maxColumnCount, maxCellCount,
-                xlsEnabled, rejectPasswordProtected, rejectActiveXOleDde);
+                maxZipExpansionRatio, xlsEnabled, rejectPasswordProtected, rejectActiveXOleDde);
 
         validate(effective);
         return effective;
@@ -86,6 +96,8 @@ public final class ConfigLoader {
                 ParserConfig.MAX_COLUMN_COUNT_CEILING);
         assertNotAboveCeiling("maxCellCount", config.maxCellCount(),
                 ParserConfig.MAX_CELL_COUNT_CEILING);
+        assertNotAboveCeiling("maxZipExpansionRatio", config.maxZipExpansionRatio(),
+                ParserConfig.MAX_ZIP_EXPANSION_RATIO_CEILING);
 
         assertSecurityProtectionEnabled(ParserConfig.PROTECTION_PASSWORD_PROTECTED,
                 config.rejectPasswordProtected());
@@ -106,36 +118,16 @@ public final class ConfigLoader {
         }
     }
 
-    private static long longValue(Map<String, Object> map, String key, long defaultValue) {
+    private static <T> T value(Map<String, Object> map, String key, T defaultValue,
+            Function<Object, T> converter) {
         Object value = map.get(key);
         if (value == null) {
             return defaultValue;
         }
-        if (value instanceof Number n) {
-            return n.longValue();
+        try {
+            return converter.apply(value);
+        } catch (ClassCastException | NullPointerException e) {
+            throw new ConfigValidationException(key + " has invalid type");
         }
-        throw new ConfigValidationException(key + " must be a number");
-    }
-
-    private static int intValue(Map<String, Object> map, String key, int defaultValue) {
-        Object value = map.get(key);
-        if (value == null) {
-            return defaultValue;
-        }
-        if (value instanceof Number n) {
-            return n.intValue();
-        }
-        throw new ConfigValidationException(key + " must be a number");
-    }
-
-    private static boolean boolValue(Map<String, Object> map, String key, boolean defaultValue) {
-        Object value = map.get(key);
-        if (value == null) {
-            return defaultValue;
-        }
-        if (value instanceof Boolean b) {
-            return b;
-        }
-        throw new ConfigValidationException(key + " must be a boolean");
     }
 }
