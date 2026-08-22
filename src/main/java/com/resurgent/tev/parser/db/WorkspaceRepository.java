@@ -283,6 +283,19 @@ public final class WorkspaceRepository {
         }
     }
 
+    public void updateWorkbookCycleMetadata(long workbookId, boolean calcIsCircular,
+            int calcCircularGroupCount, int calcMaxCycleLength) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE workbook SET calc_is_circular = ?, calc_circular_group_count = ?,"
+                        + " calc_max_cycle_length = ? WHERE workbook_id = ?")) {
+            ps.setInt(1, calcIsCircular ? 1 : 0);
+            ps.setInt(2, calcCircularGroupCount);
+            ps.setInt(3, calcMaxCycleLength);
+            ps.setLong(4, workbookId);
+            ps.executeUpdate();
+        }
+    }
+
     private static String quantityJson(ParsedQuantity quantity) {
         return quantity == null ? null : quantity.toJson();
     }
@@ -530,6 +543,26 @@ public final class WorkspaceRepository {
 
     public long countIngestRejections() throws SQLException {
         return count("SELECT COUNT(*) FROM ingest_rejection");
+    }
+
+    public ResultSet findCellReferencesByParseRun(long parseRunId) throws SQLException {
+        PreparedStatement ps = connection.prepareStatement(
+                "SELECT cr.from_cell_id, cr.resolved_cell_id FROM cell_reference cr"
+                        + " JOIN cell c ON cr.from_cell_id = c.cell_id"
+                        + " JOIN worksheet w ON c.worksheet_id = w.worksheet_id"
+                        + " WHERE w.parse_run_id = ? AND cr.resolved_cell_id IS NOT NULL");
+        ps.setLong(1, parseRunId);
+        return ps.executeQuery();
+    }
+
+    public void updateCellCircularStatus(long cellId, boolean isCircular, long circularGroupId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cell SET is_circular = ?, circular_group_id = ? WHERE cell_id = ?")) {
+            ps.setInt(1, isCircular ? 1 : 0);
+            ps.setLong(2, circularGroupId);
+            ps.setLong(3, cellId);
+            ps.executeUpdate();
+        }
     }
 
     private long count(String sql) throws SQLException {

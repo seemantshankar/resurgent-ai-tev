@@ -106,6 +106,9 @@ ALTER TABLE workbook ADD COLUMN calc_chain_present INTEGER CHECK (calc_chain_pre
 ALTER TABLE workbook ADD COLUMN iterative_calc INTEGER CHECK (iterative_calc IN (0, 1));
 ALTER TABLE workbook ADD COLUMN iterative_count INTEGER;
 ALTER TABLE workbook ADD COLUMN error_cell_count INTEGER;
+ALTER TABLE workbook ADD COLUMN calc_is_circular INTEGER NOT NULL DEFAULT 0 CHECK (calc_is_circular IN (0, 1));
+ALTER TABLE workbook ADD COLUMN calc_circular_group_count INTEGER;
+ALTER TABLE workbook ADD COLUMN calc_max_cycle_length INTEGER;
 
 -- Indexes
 CREATE INDEX idx_cell_ws_coord ON cell (worksheet_id, coord);
