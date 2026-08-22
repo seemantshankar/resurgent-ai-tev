@@ -11,14 +11,19 @@ public final class ConstantFormulaEvaluator {
 
     public record EvalResult(
             BigDecimal numericValue,
-            Boolean boolValue,
-            String textValue,
             boolean isError,
             String errorType
     ) {}
 
     private ConstantFormulaEvaluator() {}
 
+    /**
+     * Evaluates a constant formula (numeric-literal arithmetic only, no references —
+     * §9). Returns {@code null} when no evaluation was possible or applicable at all:
+     * not a constant formula (has reference tokens), blank, or unparseable — as opposed
+     * to "evaluated to null". A genuine error literal or div-by-zero instead returns an
+     * actual {@code EvalResult} with {@code isError=true}.
+     */
     public static EvalResult evaluate(String formulaText, List<FormulaToken> refTokens) {
         if (refTokens != null && !refTokens.isEmpty()) {
             return null; // Not a constant formula
@@ -30,14 +35,14 @@ public final class ConstantFormulaEvaluator {
         String clean = formulaText.startsWith("=") ? formulaText.substring(1).trim() : formulaText.trim();
 
         if (isErrorLiteral(clean)) {
-            return new EvalResult(null, null, null, true, clean.toUpperCase());
+            return new EvalResult(null, true, clean.toUpperCase());
         }
 
         try {
             double value = new ExpressionParser(clean).parse();
-            return new EvalResult(BigDecimal.valueOf(value).setScale(8, RoundingMode.HALF_UP).stripTrailingZeros(), null, null, false, null);
+            return new EvalResult(BigDecimal.valueOf(value).setScale(8, RoundingMode.HALF_UP).stripTrailingZeros(), false, null);
         } catch (ArithmeticException e) {
-            return new EvalResult(null, null, null, true, "#DIV/0!");
+            return new EvalResult(null, true, "#DIV/0!");
         } catch (Exception e) {
             return null;
         }

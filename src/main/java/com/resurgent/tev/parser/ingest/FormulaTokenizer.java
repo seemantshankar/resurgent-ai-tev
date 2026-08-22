@@ -145,17 +145,31 @@ public final class FormulaTokenizer {
                 targetRow - formulaRow, targetCol - formulaCol, false, false);
     }
 
+    /** Shared by local and 3D range builders: is this Excel's shorthand for a whole column/row? */
+    private static boolean isWholeColumn(int firstRow, int lastRow) {
+        return firstRow == 1 && lastRow >= 65536;
+    }
+
+    private static boolean isWholeRow(int firstCol, int lastCol) {
+        return firstCol == 1 && lastCol >= 256;
+    }
+
+    /** Shared by local and 3D range builders: "firstCell:lastCell" from 1-based row/col bounds. */
+    private static String rangeString(int firstRow, int firstCol, int lastRow, int lastCol) {
+        String firstCell = CellReference.convertNumToColString(firstCol - 1) + firstRow;
+        String lastCell = CellReference.convertNumToColString(lastCol - 1) + lastRow;
+        return firstCell + ":" + lastCell;
+    }
+
     private static FormulaToken buildLocalRangeToken(int index, AreaPtg area, int formulaRow, int formulaCol) {
         int firstRow = area.getFirstRow() + 1;
         int lastRow = area.getLastRow() + 1;
         int firstCol = area.getFirstColumn() + 1;
         int lastCol = area.getLastColumn() + 1;
-        boolean isWholeCol = (firstRow == 1 && lastRow >= 65536);
-        boolean isWholeRow = (firstCol == 1 && lastCol >= 256);
+        boolean isWholeCol = isWholeColumn(firstRow, lastRow);
+        boolean isWholeRow = isWholeRow(firstCol, lastCol);
 
-        String firstCell = CellReference.convertNumToColString(area.getFirstColumn()) + firstRow;
-        String lastCell = CellReference.convertNumToColString(area.getLastColumn()) + lastRow;
-        String range = firstCell + ":" + lastCell;
+        String range = rangeString(firstRow, firstCol, lastRow, lastCol);
 
         boolean absRow = !area.isFirstRowRelative();
         boolean absCol = !area.isFirstColRelative();
@@ -176,11 +190,9 @@ public final class FormulaTokenizer {
 
     private static FormulaToken build3DRangeToken(int index, String sheetName, int firstRow, int lastRow,
             int firstCol, int lastCol, boolean absRow, boolean absCol, int formulaRow, int formulaCol) {
-        boolean isWholeCol = (firstRow == 1 && lastRow >= 65536);
-        boolean isWholeRow = (firstCol == 1 && lastCol >= 256);
-        String firstCell = CellReference.convertNumToColString(firstCol - 1) + firstRow;
-        String lastCell = CellReference.convertNumToColString(lastCol - 1) + lastRow;
-        String range = firstCell + ":" + lastCell;
+        boolean isWholeCol = isWholeColumn(firstRow, lastRow);
+        boolean isWholeRow = isWholeRow(firstCol, lastCol);
+        String range = rangeString(firstRow, firstCol, lastRow, lastCol);
         String rawToken = (sheetName != null ? "'" + sheetName + "'!" : "") + range;
         String kind = sheetName != null && sheetName.startsWith("[") ? "external" : "cross_sheet_range";
         return new FormulaToken(index, rawToken, kind, sheetName, range, absRow, absCol,

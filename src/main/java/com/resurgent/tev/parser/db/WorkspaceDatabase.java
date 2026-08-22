@@ -25,7 +25,8 @@ public final class WorkspaceDatabase implements AutoCloseable {
             "db/migration/V5__cell_header_labels.sql",
             "db/migration/V6__structural_and_external_refs.sql",
             "db/migration/V7__audit_log_nullable_parse_run.sql",
-            "db/migration/V8__sprint2_schema.sql"
+            "db/migration/V8__sprint2_schema.sql",
+            "db/migration/V9__error_barriers.sql"
     };
 
     private final Connection connection;
@@ -84,26 +85,46 @@ public final class WorkspaceDatabase implements AutoCloseable {
     private static void apply(Connection connection, int version, String resource) throws SQLException {
         String sql = readResource(resource);
         boolean autoCommit = connection.getAutoCommit();
-        connection.setAutoCommit(false);
+        // SQLite's documented ALTER TABLE procedure: foreign_keys must be toggled OFF
+        // outside of any transaction (it is a silent no-op inside one), the migration
+        // runs inside the transaction as usual, and a foreign_key_check is run just
+        // before commit to surface any dangling references loudly instead of silently.
         try (Statement s = connection.createStatement()) {
-            for (String statement : sql.split(";\\s*\\R")) {
-                String trimmed = statement.replaceAll("(?m)^--.*$", "").trim();
-                if (!trimmed.isEmpty()) {
-                    s.execute(trimmed);
+            s.execute("PRAGMA foreign_keys = OFF");
+        }
+        try {
+            connection.setAutoCommit(false);
+            try (Statement s = connection.createStatement()) {
+                for (String statement : sql.split(";\\s*\\R")) {
+                    String trimmed = statement.replaceAll("(?m)^--.*$", "").trim();
+                    if (!trimmed.isEmpty()) {
+                        s.execute(trimmed);
+                    }
                 }
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "INSERT INTO schema_migration (version, applied_at) VALUES (?, ?)")) {
+                    ps.setInt(1, version);
+                    ps.setString(2, Timestamps.now());
+                    ps.executeUpdate();
+                }
+                try (Statement checkStmt = connection.createStatement();
+                        ResultSet rs = checkStmt.executeQuery("PRAGMA foreign_key_check")) {
+                    if (rs.next()) {
+                        throw new SQLException("migration " + resource
+                                + " left dangling foreign keys (PRAGMA foreign_key_check found violations)");
+                    }
+                }
+                connection.commit();
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
+            } finally {
+                connection.setAutoCommit(autoCommit);
             }
-            try (PreparedStatement ps = connection.prepareStatement(
-                    "INSERT INTO schema_migration (version, applied_at) VALUES (?, ?)")) {
-                ps.setInt(1, version);
-                ps.setString(2, Timestamps.now());
-                ps.executeUpdate();
-            }
-            connection.commit();
-        } catch (SQLException e) {
-            connection.rollback();
-            throw e;
         } finally {
-            connection.setAutoCommit(autoCommit);
+            try (Statement s = connection.createStatement()) {
+                s.execute("PRAGMA foreign_keys = ON");
+            }
         }
     }
 

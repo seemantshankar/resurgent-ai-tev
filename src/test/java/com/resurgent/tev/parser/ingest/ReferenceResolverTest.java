@@ -7,6 +7,7 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
@@ -51,11 +52,14 @@ class ReferenceResolverTest {
             FormulaToken token = new FormulaToken(0, "[15]P  L !F35", "external", "P  L ", "F35", false, false, 16, -3, false, false);
 
             Map<String, Long> sheetNameToId = Map.of("Sheet1", ws1, "P  L ", ws2);
+            Map<Long, String> worksheetIdToSheetName = Map.of(ws1, "Sheet1", ws2, "P  L ");
             Map<Integer, Long> externalLinkMap = Map.of(15, extLinkId);
             Map<String, Map<String, Long>> cellCoordMap = Map.of("P  L ", Map.of("F35", targetCellId));
+            ReferenceResolutionContext ctx = new ReferenceResolutionContext(sheetNameToId,
+                    worksheetIdToSheetName, externalLinkMap, cellCoordMap, Set.of(), parseRunId, Timestamps.now());
 
             ReferenceResolver resolver = new ReferenceResolver(repo);
-            resolver.resolveAndPersist(sourceCellId, List.of(token), parseRunId, sheetNameToId, externalLinkMap, cellCoordMap, Timestamps.now());
+            resolver.resolveAndPersist(sourceCellId, ws1, List.of(token), ctx, new ReferenceStats());
 
             try (ResultSet rs = c.createStatement().executeQuery(
                     "SELECT from_cell_id, ref_kind, target_sheet_name, target_worksheet_id, resolved_cell_id, external_link_id, unresolved_reason FROM cell_reference")) {
@@ -88,8 +92,10 @@ class ReferenceResolverTest {
 
             FormulaToken token = new FormulaToken(0, "MissingSheet!A1", "cross_sheet_cell", "MissingSheet", "A1", false, false, 0, 0, false, false);
 
+            ReferenceResolutionContext ctx = new ReferenceResolutionContext(Map.of("Sheet1", ws1),
+                    Map.of(ws1, "Sheet1"), Map.of(), Map.of(), Set.of(), parseRunId, Timestamps.now());
             ReferenceResolver resolver = new ReferenceResolver(repo);
-            resolver.resolveAndPersist(cellId, List.of(token), parseRunId, Map.of("Sheet1", ws1), Map.of(), Map.of(), Timestamps.now());
+            resolver.resolveAndPersist(cellId, ws1, List.of(token), ctx, new ReferenceStats());
 
             try (ResultSet rs = c.createStatement().executeQuery(
                     "SELECT unresolved_reason FROM cell_reference")) {
@@ -98,6 +104,40 @@ class ReferenceResolverTest {
             }
 
             assertThat(repo.countReviewQueue()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void knownDefinedNameIsNotFlaggedUnresolved() throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(tempDir.resolve("known-name.db"))) {
+            Connection c = db.connection();
+            WorkspaceRepository repo = new WorkspaceRepository(c);
+
+            long sourceFileId = repo.insertSourceFile(1L, "name.xlsx", "hash16", "fm_xlsx", Timestamps.now(), "0.1.0", null);
+            long parseRunId = repo.insertParseRun(sourceFileId, 1L, "0.1.0", "cfg", Timestamps.now(), null, "success", "{}");
+            long ws1 = repo.insertWorksheet(parseRunId, "Sheet1", 0);
+
+            NormalizedCell cell = new NormalizedCell(
+                    "A1", 1, 1, "=TaxRate", "formula", "number", null, null,
+                    null, null, null, "TaxRate", "TaxRate", "ok", null, "missing",
+                    false, null, false, null, null, null, false, false, null, "cell", false, false, false);
+            long cellId = repo.insertCell(ws1, cell);
+
+            FormulaToken token = new FormulaToken(0, "TaxRate", "defined_name", null, "TaxRate", false, false, null, null, false, false);
+
+            ReferenceResolutionContext ctx = new ReferenceResolutionContext(Map.of("Sheet1", ws1),
+                    Map.of(ws1, "Sheet1"), Map.of(), Map.of(), Set.of("TaxRate"), parseRunId, Timestamps.now());
+            ReferenceResolver resolver = new ReferenceResolver(repo);
+            ReferenceStats stats = new ReferenceStats();
+            resolver.resolveAndPersist(cellId, ws1, List.of(token), ctx, stats);
+
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT unresolved_reason FROM cell_reference")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("unresolved_reason")).isNull();
+            }
+            assertThat(repo.countReviewQueue()).isZero();
+            assertThat(stats.unresolved()).isZero();
         }
     }
 }

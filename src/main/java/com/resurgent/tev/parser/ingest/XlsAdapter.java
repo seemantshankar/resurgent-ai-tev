@@ -127,9 +127,12 @@ public final class XlsAdapter {
             }
         }
 
+        // .xls (HSSF) does not expose calcPr-equivalent calculation metadata via POI;
+        // these fields are left null/false and only populated for XLSX inputs.
         return new WorkbookMetadata(
                 null, null, sheetCount, sheetNames,
-                definedNames, properties, isProtected, createdAt, modifiedAt, externalLinks);
+                definedNames, properties, isProtected, createdAt, modifiedAt, externalLinks,
+                null, null, null, false, null);
     }
 
     private static void putIfPresent(Map<String, Object> map, String key, String value) {

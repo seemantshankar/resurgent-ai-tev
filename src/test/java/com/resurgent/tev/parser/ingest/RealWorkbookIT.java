@@ -163,6 +163,22 @@ class RealWorkbookIT {
                 assertThat(rs.next()).isTrue();
                 assertThat(rs.getString("formula_text")).contains("[15]Manpower!F35");
             }
+
+            // B5: the formula_text check above only proves the raw token survived intact;
+            // it does not prove the reference actually resolved. Post-V8, reference
+            // resolution lives in cell_reference (one row per ref token), joined to the
+            // external_link it resolved to -- assert that join actually holds a row.
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT cr.raw_token, l.link_index"
+                            + " FROM cell c"
+                            + " JOIN worksheet w ON c.worksheet_id = w.worksheet_id"
+                            + " JOIN cell_reference cr ON cr.from_cell_id = c.cell_id"
+                            + " JOIN external_link l ON cr.external_link_id = l.external_link_id"
+                            + " WHERE w.sheet_name = 'CAPITAL COST' AND c.coord = 'I19'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("raw_token")).contains("[15]Manpower!F35");
+                assertThat(rs.getLong("link_index")).isEqualTo(15);
+            }
         }
     }
 
