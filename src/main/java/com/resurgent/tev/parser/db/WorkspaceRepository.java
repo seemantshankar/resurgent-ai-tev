@@ -7,6 +7,8 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Thin hand-written repository for the workspace schema (ADR 0002): plain JDBC,
@@ -561,6 +563,30 @@ public final class WorkspaceRepository {
             ps.setInt(1, isCircular ? 1 : 0);
             ps.setLong(2, circularGroupId);
             ps.setLong(3, cellId);
+            ps.executeUpdate();
+        }
+    }
+
+    public Set<Long> findErrorCellIdsByParseRun(long parseRunId) throws SQLException {
+        Set<Long> ids = new HashSet<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT c.cell_id FROM cell c JOIN worksheet w ON c.worksheet_id = w.worksheet_id"
+                        + " WHERE w.parse_run_id = ? AND (c.is_error = 1 OR c.value_type = 'error')")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    ids.add(rs.getLong(1));
+                }
+            }
+        }
+        return ids;
+    }
+
+    public void updateCellErrorRoot(long cellId, long errorRootCellId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cell SET error_root_cell_id = ? WHERE cell_id = ?")) {
+            ps.setLong(1, errorRootCellId);
+            ps.setLong(2, cellId);
             ps.executeUpdate();
         }
     }
