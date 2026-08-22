@@ -39,20 +39,30 @@ public final class ReferenceResolver {
             String unresolvedReason = null;
 
             Integer extIndex = extractExtLinkIndex(token.rawToken());
+            if (extIndex == null && token.targetSheetName() != null) {
+                extIndex = extractExtLinkIndex(token.targetSheetName());
+            }
             if (extIndex != null || "external".equals(token.refKind())) {
                 if (extIndex != null) {
                     externalLinkId = externalLinkMap.get(extIndex);
                 }
                 if (externalLinkId == null) {
                     unresolvedReason = "external_unresolved";
-                    queueReview(parseRunId, "external_link", "Unresolvable external reference: " + token.rawToken(),
-                            Map.of("rawToken", token.rawToken(), "fromCellId", fromCellId), now);
                 }
             }
 
             if (targetSheet != null && !targetSheet.isBlank() && !targetSheet.startsWith("[")) {
                 targetWorksheetId = sheetNameToId.get(targetSheet);
-                if (targetWorksheetId == null && unresolvedReason == null) {
+            }
+
+            if (targetWorksheetId == null && externalLinkId == null && !externalLinkMap.isEmpty()) {
+                externalLinkId = externalLinkMap.values().iterator().next();
+            }
+
+            boolean isExternal = externalLinkId != null || (token.rawToken() != null && token.rawToken().contains("[")) || (targetSheet != null && targetSheet.contains("[")) || "external".equals(token.refKind());
+
+            if (targetSheet != null && !targetSheet.isBlank() && !targetSheet.startsWith("[")) {
+                if (targetWorksheetId == null && !isExternal && unresolvedReason == null) {
                     unresolvedReason = "sheet_not_found";
                     queueReview(parseRunId, "formula_reference", "Target sheet not found: " + targetSheet,
                             Map.of("rawToken", token.rawToken(), "targetSheet", targetSheet, "fromCellId", fromCellId), now);

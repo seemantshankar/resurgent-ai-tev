@@ -7,6 +7,7 @@ import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import com.resurgent.tev.parser.ingest.safety.SafetyEnforcer;
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -256,6 +257,11 @@ public final class IngestService {
         int cellsCoerced = 0;
         int cellsError = 0;
         ExternalRefStats refStats = new ExternalRefStats();
+
+        Map<String, Long> sheetNameToId = new HashMap<>();
+        Map<String, Map<String, Long>> cellCoordMap = new HashMap<>();
+        List<PendingCellTokens> pendingTokensList = new ArrayList<>();
+
         for (XlsxSheet sheet : sheets) {
             long worksheetId = repo.insertWorksheet(parseRunId, sheet.sheetName(),
                     sheetIndex, sheet.sheetState(),
@@ -263,12 +269,62 @@ public final class IngestService {
                     sheet.bboxMaxRow(), sheet.bboxMaxCol(),
                     sheet.dimensionsDeclared(), sheet.realContentRows(),
                     sheet.declaredMerged());
+            sheetNameToId.put(sheet.sheetName(), worksheetId);
+            Map<String, Long> coordMap = new HashMap<>();
+            cellCoordMap.put(sheet.sheetName(), coordMap);
+
             List<NormalizedCell> enriched = enricher.enrich(sheet.cells());
             for (NormalizedCell cell : enriched) {
-                NormalizedCell resolved = resolveExternalRefs(cell, sheet.sheetName(),
+                NormalizedCell cellToInsert = cell;
+                FormulaTokenizerResult tokRes = null;
+                String skeleton = null;
+                if (cell.formulaText() != null && !cell.formulaText().isBlank()) {
+                    tokRes = FormulaTokenizer.tokenize(cell.formulaText(), cell.rowNum(), cell.colNum(), metadata.definedNames());
+                    skeleton = FormulaSkeletonGenerator.generate(cell.formulaText(), tokRes.tokens());
+
+                    BigDecimal evaluatedNumeric = cell.numericValue();
+                    boolean isErr = cell.isError();
+                    String errType = cell.errorType();
+
+                    if (tokRes.tokens().isEmpty()) {
+                        ConstantFormulaEvaluator.EvalResult evalRes = ConstantFormulaEvaluator.evaluate(cell.formulaText(), tokRes.tokens());
+                        if (evalRes != null) {
+                            if (evalRes.numericValue() != null) {
+                                evaluatedNumeric = evalRes.numericValue();
+                            }
+                            if (evalRes.isError()) {
+                                isErr = true;
+                                errType = evalRes.errorType();
+                            }
+                        }
+                    }
+
+                    cellToInsert = new NormalizedCell(
+                            cell.coord(), cell.rowNum(), cell.colNum(),
+                            cell.rawValue(), cell.rawType(), cell.valueType(),
+                            cell.textValue(), cell.displayValue(), evaluatedNumeric,
+                            cell.boolValue(), cell.dateValue(), cell.formulaText(),
+                            cell.formulaNormalized(), tokRes.formulaState(),
+                            cell.cachedValue(), cell.cacheState(), cell.coercedFromText(),
+                            cell.parsedQuantity(), isErr, errType,
+                            cell.rowLabel(), cell.colLabel(), cell.isMergedAnchor(),
+                            cell.isMergedParticipant(), cell.mergedRange(), cell.valueSource(),
+                            cell.rowHidden(), cell.colHidden(), cell.sheetHidden());
+                }
+
+                NormalizedCell resolved = resolveExternalRefs(cellToInsert, sheet.sheetName(),
                         parseRunId, linkIndexToId, repo, now, refStats);
                 long cellId = repo.insertCell(worksheetId, resolved);
+                coordMap.put(resolved.coord(), cellId);
                 recordCellProvenance(repo, cellId, sourceFileId, parseRunId, sheet.sheetName(), resolved);
+
+                if (skeleton != null) {
+                    repo.updateCellSkeleton(cellId, skeleton);
+                }
+                if (tokRes != null && !tokRes.tokens().isEmpty()) {
+                    pendingTokensList.add(new PendingCellTokens(cellId, tokRes.tokens()));
+                }
+
                 cellsWritten++;
                 if (resolved.coercedFromText()) {
                     cellsCoerced++;
@@ -279,6 +335,20 @@ public final class IngestService {
             }
             sheetIndex++;
         }
+
+        // Pass 2: Resolve reference tokens and persist cell_reference rows
+        ReferenceResolver resolver = new ReferenceResolver(repo);
+        for (PendingCellTokens pct : pendingTokensList) {
+            resolver.resolveAndPersist(pct.cellId, pct.tokens, parseRunId, sheetNameToId, linkIndexToId, cellCoordMap, now);
+        }
+
+        // Pass 3: Graph construction and Tarjan SCC cycle detection
+        DependencyGraphEngine graphEngine = new DependencyGraphEngine(repo);
+        graphEngine.processWorkbookGraph(workbookId, parseRunId);
+
+        // Pass 4: Error cascade tracing and root error barriers
+        ErrorCascadeEngine errorEngine = new ErrorCascadeEngine(repo);
+        errorEngine.processErrorCascades(parseRunId);
 
         QaGateResult qa = QaGate.evaluate(cellCount, cellsWritten,
                 refStats.total, refStats.resolved, refStats.queued);
@@ -315,6 +385,8 @@ public final class IngestService {
         int resolved;
         int queued;
     }
+
+    private record PendingCellTokens(long cellId, List<FormulaToken> tokens) {}
 
     private static int coercedCount(List<NormalizedCell> cells) {
         return (int) cells.stream().filter(NormalizedCell::coercedFromText).count();
@@ -355,6 +427,7 @@ public final class IngestService {
             if (index == null) {
                 continue;
             }
+            stats.total++;
             Long linkId = linkIndexToId.get(index);
             if (linkId == null) {
                 queueUnresolvableExternalRef(parseRunId, ref, sheetName, cell.coord(), repo, now);

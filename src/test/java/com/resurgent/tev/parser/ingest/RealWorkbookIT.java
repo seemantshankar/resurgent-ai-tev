@@ -272,4 +272,18 @@ class RealWorkbookIT {
             assertThat(scalarLong(c, "SELECT COUNT(*) FROM cell")).isEqualTo(cellCountBefore);
         }
     }
+
+    @Test
+    void referenceGraphAndFormulaSkeletonsArePopulated() throws Exception {
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            assertThat(scalarLong(c, "SELECT COUNT(*) FROM cell_reference")).isGreaterThan(0);
+            assertThat(scalarLong(c, "SELECT COUNT(*) FROM cell WHERE formula_skeleton IS NOT NULL")).isGreaterThan(0);
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT calc_is_circular, calc_circular_group_count FROM workbook")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getObject("calc_is_circular")).isNotNull();
+                assertThat(rs.getInt("calc_circular_group_count")).isGreaterThanOrEqualTo(0);
+            }
+        }
+    }
 }

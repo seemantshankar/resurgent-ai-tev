@@ -59,20 +59,20 @@ public final class FormulaTokenizer {
                 } else if (ptg instanceof AreaPtg area) {
                     tokens.add(buildLocalRangeToken(tokenIndex++, area, formulaRow, formulaCol));
                 } else if (ptg instanceof Ref3DPtg ref3d) {
-                    String sheetName = safeGetSheetName(fpw, ref3d.getExternSheetIndex());
+                    String sheetName = restoreExternalSheetPrefix(safeGetSheetName(fpw, ref3d.getExternSheetIndex()), cleanFormula);
                     tokens.add(build3DCellToken(tokenIndex++, sheetName, ref3d.getRow() + 1, ref3d.getColumn() + 1,
                             !ref3d.isRowRelative(), !ref3d.isColRelative(), formulaRow, formulaCol));
                 } else if (ptg instanceof Ref3DPxg ref3dpxg) {
-                    String sheetName = ref3dpxg.getSheetName();
+                    String sheetName = restoreExternalSheetPrefix(ref3dpxg.getSheetName(), cleanFormula);
                     tokens.add(build3DCellToken(tokenIndex++, sheetName, ref3dpxg.getRow() + 1, ref3dpxg.getColumn() + 1,
                             !ref3dpxg.isRowRelative(), !ref3dpxg.isColRelative(), formulaRow, formulaCol));
                 } else if (ptg instanceof Area3DPtg area3d) {
-                    String sheetName = safeGetSheetName(fpw, area3d.getExternSheetIndex());
+                    String sheetName = restoreExternalSheetPrefix(safeGetSheetName(fpw, area3d.getExternSheetIndex()), cleanFormula);
                     tokens.add(build3DRangeToken(tokenIndex++, sheetName, area3d.getFirstRow() + 1, area3d.getLastRow() + 1,
                             area3d.getFirstColumn() + 1, area3d.getLastColumn() + 1,
                             !area3d.isFirstRowRelative(), !area3d.isFirstColRelative(), formulaRow, formulaCol));
                 } else if (ptg instanceof Area3DPxg area3dpxg) {
-                    String sheetName = area3dpxg.getSheetName();
+                    String sheetName = restoreExternalSheetPrefix(area3dpxg.getSheetName(), cleanFormula);
                     tokens.add(build3DRangeToken(tokenIndex++, sheetName, area3dpxg.getFirstRow() + 1, area3dpxg.getLastRow() + 1,
                             area3dpxg.getFirstColumn() + 1, area3dpxg.getLastColumn() + 1,
                             !area3dpxg.isFirstRowRelative(), !area3dpxg.isFirstColRelative(), formulaRow, formulaCol));
@@ -103,15 +103,31 @@ public final class FormulaTokenizer {
         }
     }
 
+    private static String restoreExternalSheetPrefix(String sheetName, String formulaText) {
+        if (sheetName == null || sheetName.startsWith("[")) {
+            return sheetName;
+        }
+        Matcher m = Pattern.compile("\\[(\\d+)\\]" + Pattern.quote(sheetName)).matcher(formulaText);
+        if (m.find()) {
+            return "[" + m.group(1) + "]" + sheetName;
+        }
+        return sheetName;
+    }
+
     private static void registerSheetNames(String formulaText, XSSFWorkbook wb) {
-        Pattern pattern = Pattern.compile("'([^']+)'!|([A-Za-z0-9_]+)!");
+        Pattern pattern = Pattern.compile("(\\[\\d+\\][^'!]+|'\\s*\\[\\d+\\][^']+'|'[^']+'|[A-Za-z0-9_]+)!");
         Matcher matcher = pattern.matcher(formulaText);
         while (matcher.find()) {
-            String sheet = matcher.group(1) != null ? matcher.group(1) : matcher.group(2);
-            if (sheet != null && !sheet.startsWith("[") && wb.getSheet(sheet) == null) {
-                try {
-                    wb.createSheet(sheet);
-                } catch (Exception ignored) {
+            String sheet = matcher.group(1);
+            if (sheet != null) {
+                if (sheet.startsWith("'") && sheet.endsWith("'")) {
+                    sheet = sheet.substring(1, sheet.length() - 1);
+                }
+                if (wb.getSheet(sheet) == null) {
+                    try {
+                        wb.createSheet(sheet);
+                    } catch (Exception ignored) {
+                    }
                 }
             }
         }

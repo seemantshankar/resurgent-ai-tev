@@ -591,6 +591,15 @@ public final class WorkspaceRepository {
         }
     }
 
+    public void updateCellSkeleton(long cellId, String formulaSkeleton) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cell SET formula_skeleton = ? WHERE cell_id = ?")) {
+            ps.setString(1, formulaSkeleton);
+            ps.setLong(2, cellId);
+            ps.executeUpdate();
+        }
+    }
+
     private long count(String sql) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(sql);
                 ResultSet rs = ps.executeQuery()) {
