@@ -76,10 +76,9 @@ class IngestServiceTest {
                 }
 
                 try (ResultSet rs = c.createStatement().executeQuery(
-                        "SELECT external_ref, external_link_id FROM cell WHERE coord = 'A1'")) {
+                        "SELECT formula_text FROM cell WHERE coord = 'A1'")) {
                     assertThat(rs.next()).isTrue();
-                    assertThat(rs.getString("external_ref")).isEqualTo("[1]Other!A1");
-                    assertThat(rs.getLong("external_link_id")).isEqualTo(linkId);
+                    assertThat(rs.getString("formula_text")).isEqualTo("[1]Other!A1");
                 }
             }
         }

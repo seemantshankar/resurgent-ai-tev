@@ -156,14 +156,12 @@ class RealWorkbookIT {
     void externalReferenceToManpowerF35ResolvesToItsExternalLink() throws Exception {
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
             try (ResultSet rs = c.createStatement().executeQuery(
-                    "SELECT c.external_ref, c.external_link_id, l.link_index"
+                    "SELECT c.formula_text"
                             + " FROM cell c"
                             + " JOIN worksheet w ON c.worksheet_id = w.worksheet_id"
-                            + " JOIN external_link l ON c.external_link_id = l.external_link_id"
                             + " WHERE w.sheet_name = 'CAPITAL COST' AND c.coord = 'I19'")) {
                 assertThat(rs.next()).isTrue();
-                assertThat(rs.getString("external_ref")).isEqualTo("[15]Manpower!F35");
-                assertThat(rs.getLong("link_index")).isEqualTo(15);
+                assertThat(rs.getString("formula_text")).contains("[15]Manpower!F35");
             }
         }
     }

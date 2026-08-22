@@ -17,6 +17,12 @@
 - **Error descendant**: A cell whose evaluation chain passes through an error root but is not itself an error.
 - **Cache state**: The freshness of a formula cell’s cached value: `fresh`, `stale`, `missing`, or `not_formula`.
 - **Formula skeleton**: An abstract, position-insensitive representation of a formula pattern used for coherence scoring.
+- **Region-free skeleton**: A formula skeleton computed without knowledge of regions, in which every absolute reference is the generic token `$ABS$`. It is a pure function of the parsed formula. Refining `$ABS$` into `$H$` (a header or assumption reference) requires regions and happens later.
+- **Reference edge**: One reference token inside a formula, recorded as its own row linking the formula cell to what it points at. Ranges are recorded as a single edge, unexpanded; a reference to a blank coordinate resolves to nothing rather than bringing a cell into existence.
+- **Unresolved reason**: Why a reference edge points at nothing — the sheet is absent, the external workbook index has no matching link, or the defined name is unknown. Distinct from a reference that resolves to a blank coordinate, which is not a failure.
+- **Error barrier**: A function that consumes an error instead of propagating it, ending an error cascade at that cell. A cell behind a barrier is not an error descendant.
+- **Circular group**: A set of cells that reference each other in a cycle. A cycle is a defect only when the workbook does not declare iterative calculation; otherwise it is deliberate.
+- **Constant-formula**: A formula built entirely from numeric literals and arithmetic operators, referencing nothing. It carries a value that can be recovered without evaluating the workbook.
 
 ## Phase 1 roles
 

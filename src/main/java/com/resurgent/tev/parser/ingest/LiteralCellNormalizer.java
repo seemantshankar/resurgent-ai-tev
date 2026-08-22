@@ -55,8 +55,7 @@ final class LiteralCellNormalizer {
 
         return NormalizedCellFactory.buildCell(coord, rowNum, colNum, rawValue, value,
                 null, null, null, null, null,
-                rowHidden, colHidden, sheetHidden,
-                null, null, null);
+                rowHidden, colHidden, sheetHidden);
     }
 
     static String errorLiteral(byte errorCode) {

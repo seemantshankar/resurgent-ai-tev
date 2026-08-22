@@ -28,8 +28,7 @@ class CellContextEnricherTest {
                 null, null, null, null, null,
                 false, null, false, null,
                 null, null,
-                false, false, null, "cell", false, false, false,
-                null, null, null, null);
+                false, false, null, "cell", false, false, false);
     }
 
     private NormalizedCell numberCell(String coord, int row, int col, String value) {
@@ -42,8 +41,7 @@ class CellContextEnricherTest {
                 null, null, null, null, null,
                 false, null, false, null,
                 null, null,
-                false, false, null, "cell", false, false, false,
-                null, null, null, null);
+                false, false, null, "cell", false, false, false);
     }
 
     private NormalizedCell formulaCell(String coord, int row, int col,
@@ -57,8 +55,7 @@ class CellContextEnricherTest {
                 formulaText, formulaText, "ok", cachedValue, "fresh",
                 false, null, false, null,
                 null, null,
-                false, false, null, "cell", false, false, false,
-                null, null, null, null);
+                false, false, null, "cell", false, false, false);
     }
 
     private Map<String, NormalizedCell> byCoord(List<NormalizedCell> cells) {

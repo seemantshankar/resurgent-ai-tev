@@ -68,10 +68,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(7);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(8);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(7);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(8);
         }
     }
 
@@ -190,8 +190,7 @@ class PersistenceSeamTest {
                     null, null, null, null, null,
                     false, null, false, null,
                     "Revenue", "Year1",
-                    false, false, null, "cell", false, false, false,
-                    null, null, null, null);
+                    false, false, null, "cell", false, false, false);
             repo.insertCell(worksheetId, cell);
 
             try (ResultSet rs = db.connection().createStatement().executeQuery(
@@ -257,8 +256,7 @@ class PersistenceSeamTest {
                         java.math.BigDecimal.ONE, null, null,
                         null, null, null, null, null,
                         false, null, false, null, null, null,
-                        false, false, null, "cell", false, false, false,
-                        null, null, null, null);
+                        false, false, null, "cell", false, false, false);
                 repo.insertCell(worksheetId, goodCell);
 
                 // Forces a genuine SQLException mid-graph via a raw statement, simulating
@@ -280,6 +278,50 @@ class PersistenceSeamTest {
             assertThat(repo.countParseRuns()).isEqualTo(0);
             assertThat(repo.countWorksheets()).isEqualTo(0);
             assertThat(repo.countCells()).isEqualTo(0);
+        }
+    }
+
+    @Test
+    void v8MigrationAppliesCleanlyAndRebuildsCellTable() throws Exception {
+        try (WorkspaceDatabase db = openDb("v8.db")) {
+            java.sql.Connection c = db.connection();
+            WorkspaceRepository repo = new WorkspaceRepository(c);
+
+            assertThat(count(c, "schema_migration")).isEqualTo(8);
+            assertThat(tableNames(c)).contains("cell_reference", "cell_error_root");
+
+            long sourceFileId = repo.insertSourceFile(1L, "v8.xlsx", "hash8", "fm_xlsx",
+                    Timestamps.now(), "0.1.0", null);
+            long parseRunId = repo.insertParseRun(sourceFileId, 1L, "0.1.0", "cfg",
+                    Timestamps.now(), null, "success", "{}");
+            long worksheetId = repo.insertWorksheet(parseRunId, "Sheet1", 0);
+            long workbookId = repo.insertWorkbook(sourceFileId, "Excel", "16.0", 1,
+                    "[\"Sheet1\"]", "[]", "{}", false, Timestamps.now(), Timestamps.now());
+
+            NormalizedCell cell = new NormalizedCell(
+                    "A1", 1, 1, "100", "number", "number", "100", "100",
+                    new java.math.BigDecimal("100"), null, null,
+                    null, null, null, null, null,
+                    false, null, false, null, null, null,
+                    false, false, null, "cell", false, false, false);
+            long cellId = repo.insertCell(worksheetId, cell);
+            assertThat(cellId).isGreaterThan(0L);
+
+            long refId = repo.insertCellReference(cellId, 0, "Sheet1!A1", "local_cell",
+                    "Sheet1", worksheetId, "A1", cellId, null, false, false, 0, 0,
+                    false, false, null);
+            assertThat(refId).isGreaterThan(0L);
+
+            repo.insertCellErrorRoot(cellId, cellId);
+
+            repo.updateWorkbookCalcMetadata(workbookId, "auto", true, true, false, 0, 0);
+
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT calculation_mode, full_calc_on_load FROM workbook WHERE workbook_id = " + workbookId)) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("calculation_mode")).isEqualTo("auto");
+                assertThat(rs.getInt("full_calc_on_load")).isEqualTo(1);
+            }
         }
     }
 }

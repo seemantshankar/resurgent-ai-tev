@@ -154,6 +154,24 @@ public final class WorkspaceRepository {
         }
     }
 
+    private static void setLong(PreparedStatement ps, int index, Long value)
+            throws SQLException {
+        if (value == null) {
+            ps.setNull(index, java.sql.Types.INTEGER);
+        } else {
+            ps.setLong(index, value);
+        }
+    }
+
+    private static void setBoolean(PreparedStatement ps, int index, Boolean value)
+            throws SQLException {
+        if (value == null) {
+            ps.setNull(index, java.sql.Types.INTEGER);
+        } else {
+            ps.setInt(index, value ? 1 : 0);
+        }
+    }
+
     public long insertCell(long worksheetId, NormalizedCell cell) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO cell (worksheet_id, coord, row_num, col_num,"
@@ -163,10 +181,9 @@ public final class WorkspaceRepository {
                         + " cached_value, cache_state, coerced_from_text, parsed_quantity,"
                         + " is_error, error_type, row_label, col_label,"
                         + " is_merged_anchor, is_merged_participant, merged_range, value_source,"
-                        + " row_hidden, col_hidden, sheet_hidden,"
-                        + " external_ref, external_link_id, sheet_refs, defined_name_refs)"
+                        + " row_hidden, col_hidden, sheet_hidden)"
                         + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-                        + " ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        + " ?, ?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, worksheetId);
             ps.setString(2, cell.coord());
@@ -202,16 +219,67 @@ public final class WorkspaceRepository {
             ps.setInt(28, cell.rowHidden() ? 1 : 0);
             ps.setInt(29, cell.colHidden() ? 1 : 0);
             ps.setInt(30, cell.sheetHidden() ? 1 : 0);
-            ps.setString(31, cell.externalRef());
-            if (cell.externalLinkId() == null) {
-                ps.setNull(32, java.sql.Types.INTEGER);
-            } else {
-                ps.setLong(32, cell.externalLinkId());
-            }
-            ps.setString(33, cell.sheetRefs());
-            ps.setString(34, cell.definedNameRefs());
             ps.executeUpdate();
             return generatedId(ps);
+        }
+    }
+
+    public long insertCellReference(long fromCellId, int tokenIndex, String rawToken, String refKind,
+            String targetSheetName, Long targetWorksheetId, String targetRange, Long resolvedCellId,
+            Long externalLinkId, Boolean absRow, Boolean absCol, Integer rowOffset, Integer colOffset,
+            boolean isWholeColumn, boolean isWholeRow, String unresolvedReason) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cell_reference (from_cell_id, token_index, raw_token, ref_kind,"
+                        + " target_sheet_name, target_worksheet_id, target_range, resolved_cell_id,"
+                        + " external_link_id, abs_row, abs_col, row_offset, col_offset,"
+                        + " is_whole_column, is_whole_row, unresolved_reason)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, fromCellId);
+            ps.setInt(2, tokenIndex);
+            ps.setString(3, rawToken);
+            ps.setString(4, refKind);
+            ps.setString(5, targetSheetName);
+            setLong(ps, 6, targetWorksheetId);
+            ps.setString(7, targetRange);
+            setLong(ps, 8, resolvedCellId);
+            setLong(ps, 9, externalLinkId);
+            setBoolean(ps, 10, absRow);
+            setBoolean(ps, 11, absCol);
+            setInteger(ps, 12, rowOffset);
+            setInteger(ps, 13, colOffset);
+            ps.setInt(14, isWholeColumn ? 1 : 0);
+            ps.setInt(15, isWholeRow ? 1 : 0);
+            ps.setString(16, unresolvedReason);
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    public void insertCellErrorRoot(long cellId, long errorRootCellId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cell_error_root (cell_id, error_root_cell_id) VALUES (?, ?)")) {
+            ps.setLong(1, cellId);
+            ps.setLong(2, errorRootCellId);
+            ps.executeUpdate();
+        }
+    }
+
+    public void updateWorkbookCalcMetadata(long workbookId, String calcMode, Boolean fullCalcOnLoad,
+            Boolean calcChainPresent, Boolean iterativeCalc, Integer iterativeCount,
+            Integer errorCellCount) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE workbook SET calculation_mode = ?, full_calc_on_load = ?, calc_chain_present = ?,"
+                        + " iterative_calc = ?, iterative_count = ?, error_cell_count = ?"
+                        + " WHERE workbook_id = ?")) {
+            ps.setString(1, calcMode);
+            setBoolean(ps, 2, fullCalcOnLoad);
+            setBoolean(ps, 3, calcChainPresent);
+            setBoolean(ps, 4, iterativeCalc);
+            setInteger(ps, 5, iterativeCount);
+            setInteger(ps, 6, errorCellCount);
+            ps.setLong(7, workbookId);
+            ps.executeUpdate();
         }
     }
 

@@ -58,11 +58,18 @@ Non-goals:
 
 ### 2.1 Formats
 
+> **Implementation stack.** This document was originally drafted against a Python/PostgreSQL stack. The
+> implemented parser is **Java 25 + Maven + Apache POI + SQLite** — see
+> [ADR 0001](../docs/adr/0001-use-java-25-and-maven-for-the-parser-platform.md) and
+> [ADR 0002](../docs/adr/0002-adapt-the-postgresql-semantic-schema-to-sqlite.md). Library names below
+> reflect the implementation; the SQL in §4 remains PostgreSQL-flavoured reference, with ADR 0002
+> governing the actual SQLite shape.
+
 | Format | Reader | Notes |
 |---|---|---|
-| `.xlsx` / `.xlsm` | `openpyxl` | Formulas + cached values via two loads (`data_only=False/True`). |
-| `.xls` | `xlrd` (pinned) | Formulas available only partially; store `formula_text=NULL` when unavailable and set `formula_state='unavailable'`. |
-| `.csv` | stdlib `csv` + `charset-normalizer` | Sniff delimiter, quote char, encoding; no formulas; one worksheet per file. |
+| `.xlsx` / `.xlsm` | Apache POI (XSSF) | Formulas + cached values via two loads (formula view and value view). |
+| `.xls` | Apache POI (HSSF) | Formula text is usually available; some records cannot be decoded back to a formula string — store `formula_text=NULL` and set `formula_state='unavailable'`. |
+| `.csv` | FastCSV + encoding sniffer | Sniff delimiter, quote char, encoding; no formulas; one worksheet per file. |
 
 ### 2.2 Safety limits
 
@@ -150,7 +157,9 @@ CREATE TABLE workbook (
     error_cell_count    INT,
     calculation_mode    TEXT,                 -- 'auto' | 'manual' | unknown
     full_calc_on_load   BOOLEAN,
-    calc_chain_present  BOOLEAN
+    calc_chain_present  BOOLEAN,
+    iterative_calc      BOOLEAN,              -- calcPr/@iterate; distinguishes deliberate cycles
+    iterative_count     INT
 );
 
 CREATE TABLE worksheet (
@@ -224,12 +233,15 @@ CREATE TABLE cell (
     is_error            BOOLEAN DEFAULT false,
     error_type          TEXT,                 -- exact enum incl '#N/A'
     error_descendant    BOOLEAN DEFAULT false,
-    error_root_cell_id  BIGINT,
+    error_root_cell_id  BIGINT,               -- display convenience only; full set in cell_error_root
 
-    external_ref        TEXT,                 -- verbatim '[15]Manpower!F35'
-    external_link_id    INT REFERENCES external_link(external_link_id),
-    sheet_refs          JSONB,                -- local sheet refs, verbatim names
-    defined_name_refs   JSONB,
+    is_circular         BOOLEAN DEFAULT false,
+    circular_group_id   INT,                  -- SCC identifier, shared by all members of a cycle
+
+    -- Reference storage lives in cell_reference (§4.4), one row per reference token.
+    -- The former scalar cell.external_ref was removed: a formula may carry many external
+    -- refs (25 such formulas exist in the reference workbook) and a single column silently
+    -- kept only the first, making the §12 external-ref gate unsatisfiable.
 
     row_hash            TEXT,                 -- normalized row signature
     region_id           INT,                  -- FK added after region table exists
@@ -328,6 +340,55 @@ CREATE TABLE review_queue (
 );
 ```
 
+### 4.4 Reference graph (Sprint 2)
+
+One row per **reference token** in a formula. Ranges are stored **unexpanded** and expanded in
+memory during a run: `=SUM(D22:D28)` is one row, not seven. A reference to a blank coordinate
+never materializes a `cell` row — `resolved_cell_id` simply stays NULL — so whole-column refs
+(`A:A`) cannot fabricate a million coordinates. Range expansion is clamped to the worksheet's
+real bbox (§10.5), never to Excel's sheet limits.
+
+```sql
+CREATE TABLE cell_reference (
+    cell_reference_id   BIGSERIAL PRIMARY KEY,
+    from_cell_id        BIGINT NOT NULL REFERENCES cell(cell_id),
+    token_index         INT NOT NULL,         -- order within the formula, for skeleton synthesis
+    raw_token           TEXT NOT NULL,        -- verbatim, e.g. "'[15]Manpower'!F35" (§10.9 provenance)
+    ref_kind            TEXT NOT NULL,        -- 'local_cell' | 'local_range' | 'cross_sheet_cell'
+                                              -- | 'cross_sheet_range' | 'external' | 'defined_name'
+    target_sheet_name   TEXT,                 -- verbatim sheet name as written in the formula
+    target_worksheet_id INT REFERENCES worksheet(worksheet_id),
+    target_range        TEXT,                 -- 'D22:D28' or 'F35'
+    resolved_cell_id    BIGINT REFERENCES cell(cell_id),   -- single-cell refs that hit an occupied cell
+    external_link_id    INT REFERENCES external_link(external_link_id),
+
+    abs_row             BOOLEAN,              -- '$' flags survive tokenization for §7.4 skeletons
+    abs_col             BOOLEAN,
+    row_offset          INT,                  -- relative to from_cell; makes skeletons position-insensitive
+    col_offset          INT,
+    is_whole_column     BOOLEAN DEFAULT false,
+    is_whole_row        BOOLEAN DEFAULT false,
+
+    unresolved_reason   TEXT                  -- NULL when resolved; else 'sheet_not_found'
+                                              -- | 'external_unresolved' | 'defined_name_unresolved'
+);
+
+CREATE TABLE cell_error_root (
+    cell_id             BIGINT NOT NULL REFERENCES cell(cell_id),
+    error_root_cell_id  BIGINT NOT NULL REFERENCES cell(cell_id),
+    PRIMARY KEY (cell_id, error_root_cell_id)
+);
+```
+
+`cell_error_root` exists because a cell can descend from several error roots at once
+(`P  L !L35` and `M35` both feed `B  S `), which a single `cell.error_root_cell_id` column
+cannot express. The scalar column is retained for cheap display; the join table is the truth
+and is what answers "which statements does `Manpower!A3` poison?".
+
+Sheet-qualified references resolve by **verbatim** sheet-name match only. Normalized matching
+stays diagnostic (§10.4): a workbook containing both `'P  L '` and `'P L '` must not have them
+silently merged. Every miss records an `unresolved_reason` and a `review_queue` row.
+
 Useful indexes:
 
 ```sql
@@ -336,7 +397,12 @@ CREATE INDEX idx_cell_region         ON cell(region_id);
 CREATE INDEX idx_cell_numeric        ON cell(numeric_value) WHERE numeric_value IS NOT NULL;
 CREATE INDEX idx_cell_text           ON cell(text_value) WHERE text_value IS NOT NULL;
 CREATE INDEX idx_cell_error          ON cell(is_error, error_type);
-CREATE INDEX idx_cell_external       ON cell(external_ref) WHERE external_ref IS NOT NULL;
+CREATE INDEX idx_cellref_from        ON cell_reference(from_cell_id);
+CREATE INDEX idx_cellref_resolved    ON cell_reference(resolved_cell_id) WHERE resolved_cell_id IS NOT NULL;
+CREATE INDEX idx_cellref_unresolved  ON cell_reference(unresolved_reason) WHERE unresolved_reason IS NOT NULL;
+CREATE INDEX idx_cellref_external    ON cell_reference(external_link_id) WHERE external_link_id IS NOT NULL;
+CREATE INDEX idx_error_root          ON cell_error_root(error_root_cell_id);
+CREATE INDEX idx_cell_circular       ON cell(circular_group_id) WHERE circular_group_id IS NOT NULL;
 CREATE INDEX idx_region_ws           ON region(worksheet_id);
 CREATE INDEX idx_region_cost_head    ON region(cost_head_code);
 CREATE INDEX idx_cost_head_mandate   ON cost_head(mandate_id);
@@ -347,20 +413,21 @@ CREATE INDEX idx_prov_doc            ON provenance(document_id);
 
 ## 5. Format adapters
 
-```python
-class SpreadsheetAdapter(Protocol):
-    def sheets(self) -> list[SheetHandle]: ...
-    def cells(self, sheet: SheetHandle) -> Iterable[CellIn]: ...
-    def merged_ranges(self, sheet: SheetHandle) -> list[Range]: ...
-    def external_links(self) -> list[ExternalLinkIn]: ...
-    def defined_names(self) -> dict[str, str]: ...
-    def workbook_props(self) -> WorkbookProps: ...
+```java
+interface SpreadsheetAdapter {
+    List<SheetHandle> sheets();
+    Iterable<CellIn> cells(SheetHandle sheet);
+    List<Range> mergedRanges(SheetHandle sheet);
+    List<ExternalLinkIn> externalLinks();
+    Map<String, String> definedNames();
+    WorkbookProps workbookProps();
+}
 ```
 
 Implementations:
 
-- `OpenpyxlXlsxAdapter` for `.xlsx/.xlsm`.
-- `XlrdXlsAdapter` for legacy `.xls`; mark formulas unavailable if not exposed.
+- `XlsxAdapter` (POI XSSF) for `.xlsx/.xlsm`.
+- `XlsAdapter` (POI HSSF) for legacy `.xls`; mark formulas unavailable when a record will not decode.
 - `CsvAdapter` for `.csv`; synthesize one worksheet named from the file stem; all values are literal; encoding and delimiter recorded in `document.raw_metadata`.
 
 Every adapter must normalize into the same `CellIn` shape so downstream logic is format-agnostic.
@@ -447,19 +514,27 @@ Formula-family consistency is a **scored feature**, not a hard rule. The parser 
 
 #### 7.4.1 Skeleton abstraction
 
+> **Two-stage synthesis.** The `$H$` (header) token below requires knowing the region's
+> assumption/header row — but regions do not exist until Sprint 3, while the skeleton is a pure
+> function of the AST and is produced in Sprint 2. Sprint 2 therefore emits a **region-free
+> skeleton** in which *every* absolute reference is `$ABS$`. Sprint 3 refines `$ABS$` → `$H$`
+> once regions are known. This costs nothing in the §13 fixtures, which assert skeleton
+> *sameness across a family*, not the token's name: `=$ABS$*R` matching `=$ABS$*R` proves the
+> same thing `=$H$*R` would.
+
 For each formula cell, produce `formula_skeleton` by replacing every cell reference with a relative role token:
 
 ```text
-'P  L '!D22 = =$D$18*D10    ->  =$H$*R     (header column, same-row data)
-'P  L '!E22 = =$E$18*E10    ->  =$H$*R
-'P  L '!D23 = =$D$18*D11    ->  =$H$*R     (vertical neighbour of D22)
-'P  L '!E23 = =$E$18*E11    ->  =$H$*R
+'P  L '!D22 = =$D$18*D10    ->  =$ABS$*R   (Sprint 3 refines to =$H$*R)
+'P  L '!E22 = =$E$18*E10    ->  =$ABS$*R
+'P  L '!D23 = =$D$18*D11    ->  =$ABS$*R   (vertical neighbour of D22)
+'P  L '!E23 = =$E$18*E11    ->  =$ABS$*R
 'P  L '!D29 = =SUM(D22:D28) ->  =SUM(RANGE_VERTICAL)   (total row)
 ```
 
 Token rules:
 
-- Absolute references like `$D$18` → `$H$` (header) if they point to the assumption/header row of the region; otherwise `$ABS$`.
+- Absolute references like `$D$18` → `$ABS$` in Sprint 2; refined to `$H$` (header) in Sprint 3 when they point to the assumption/header row of the region.
 - Same-row relative references like `D10` → `R`.
 - Same-column relative references like `D10` below `D22` → `R` as well (vertical family).
 - Ranges like `D22:D28` → `RANGE_VERTICAL` / `RANGE_HORIZONTAL` based on orientation.
@@ -559,10 +634,31 @@ Rules:
 - If cached value exists and workbook calc mode is automatic: `cache_state='fresh'`.
 - If cached value exists but file shows manual calc or stale calc chain: `cache_state='stale'`; keep value but lower confidence.
 - If formula has no cached value: `cache_state='missing'`; do not invent a number unless evaluator is enabled and formula is whitelisted.
-- Evaluator whitelist: constants, arithmetic, `SUM`, `ROUND`, `MIN/MAX`, `IF` on literals/simple refs. No external links, no volatile functions, no circular refs, no UDFs/macros.
-- Recommended library: `formulas` behind an adapter. Any evaluation failure becomes `formula_state='parse_error'` and keeps cached/error state.
+- **Evaluation scope (Sprint 2): constant-formulas only.** A constant-formula is one whose entire
+  token stream is numeric literals plus `+ - * / ( )` and unary minus — **no references and no
+  function calls at all**. `=200/2` and `=33000` qualify; `=SUM(F233:F233)` (the §10.6 scratch case)
+  does not. This is decidable straight off the token stream, with no evaluator semantics, no locale,
+  and no error cases, and it is the only evaluation the semantics layer actually needs (§10.9).
+- Evaluating a constant-formula sets `numeric_value` and **leaves `cache_state` exactly as read from
+  the file**. Evaluation never rewrites cache provenance.
+- POI ships a `FormulaEvaluator`, but it evaluates everything rather than a whitelist and will
+  invent numbers for `cache_state='missing'` cells — precisely what this section forbids. It is not
+  used. A wider whitelist (`SUM`, `ROUND`, `MIN/MAX`, `IF` on literals/simple refs) is deferred to
+  Sprint 4 hardening; if it lands it sits behind an adapter, excludes external links, volatile
+  functions, circular refs, and UDFs/macros, and any failure becomes `formula_state='parse_error'`
+  while keeping cached/error state.
 
 Error literal handling: `#REF!` inside formula text is an AST error node and sets `is_error=true` even if cached value is missing.
+
+### 9.1 Circular references
+
+Excel permits circular references when iterative calculation is enabled, so a cycle is not by
+itself a defect. The parser detects strongly-connected components over the reference graph, marks
+every member `is_circular=true` with a shared `circular_group_id`, keeps cached values, and emits
+`review_queue` rows. Severity depends on `workbook.iterative_calc`: a cycle in a workbook that
+deliberately iterates is **info**; a cycle in one that does not is a **warning**. A cycle never
+fails the run — §12 allows partial success provided every failure is represented in the queue.
+The evaluator never enters a cycle.
 
 ---
 
@@ -578,7 +674,7 @@ Error literal handling: `#REF!` inside formula text is an AST error node and set
 ### 10.2 External workbook links
 
 - Parse `xl/externalLinks` and rels to resolve `[15]` to target URI/display name.
-- Store both verbatim ref (`cell.external_ref`) and resolved link (`cell.external_link_id`).
+- Store both verbatim ref (`cell_reference.raw_token`) and resolved link (`cell_reference.external_link_id`), one row per ref — a formula may carry several.
 - No network fetching. Stale cached values kept with confidence penalty.
 
 ### 10.3 Defined names
@@ -623,8 +719,20 @@ Rule: a scratch cell with outgoing precedents to non-scratch cells is not scratc
 - Exact error enum includes `#N/A`.
 - Error cells remain graph nodes.
 - Build descendants from parsed formula graph, including ranges and cross-sheet refs.
-- `error_descendant=true` marks cells whose chain passes through an error root.
+- `error_descendant=true` marks cells whose chain passes through an error root. All roots for a cell are stored in `cell_error_root` (§4.4), since a cell can descend from several at once.
 - Example expected: `P  L !B35 = =Manpower!A3` returns text; `L35/M35` become `#VALUE!`; downstream M/N columns in `B  S ` and `CASH FLOW` inherit `error_descendant`.
+
+**Error barriers.** Propagation is structural but not blind: some functions consume errors rather
+than propagating them, and `=IFERROR(L35,0)` returns `0` — it is not poisoned. Propagation stops at
+the error-consuming arguments of `IFERROR`, `IFNA`, `ISERROR`, `ISNA`, `ISERR`, `COUNT`, `COUNTA`,
+`AGGREGATE`, and `SUBTOTAL`. Barrier detection is a function-token check on the parsed stream, so it
+stays deterministic. Without barriers, a single `#N/A` in a model that wraps its lookups in
+`IFERROR` reports most of the workbook as poisoned — a report analysts learn to ignore.
+
+**Cached-value cross-check.** A cell's own cached value is *evidence*, not truth (§9): a stale or
+missing cache would silently clear real poison, so it never overrides the graph. Where the barrier
+verdict and the cached value disagree, the parser records a metric and a `review_queue` row — the
+usual cause is a stale cache.
 
 ### 10.9 Formula style and 2D coherence
 
@@ -711,9 +819,20 @@ Ambiguous aliases (`equipment`, `miscellaneous`) require either region context o
 
 Every heuristic output carries confidence and reasons. Minimum gates before `parse_run.status='success'`:
 
+Gates test **accounting, not perfection**. An explicitly-reasoned failure — a `parse_error`, an
+unresolved ref, a detected cycle — does not flip the run status, because it is already represented
+in `review_queue`. Only an *unaccounted* shortfall does. Requiring zero parse errors would mark
+every real client workbook `partial` forever (they reliably contain at least one dead external
+link), which would make the status field meaningless.
+
 - 100% of occupied cells ingested or explicitly rejected with reason.
-- 100% of formulas tokenized or marked `formula_state='parse_error'`.
-- 100% of external `[n]` refs either resolved to `external_link` or queued.
+- Formula reconciliation: `tokenized + parse_error + unavailable = total formula cells`.
+  `unavailable` is its own bucket, not a parse error — the file withheld the formula, the parser did
+  not fail on it (§2, `.xls`) — and those cells are queued for review.
+- Reference reconciliation: every reference token is either resolved or carries an
+  `unresolved_reason` and a `review_queue` row. This supersedes the v1 external-ref gate, which was
+  unsatisfiable against a scalar column.
+- Cycle reconciliation: every detected SCC is queued, with severity set by `workbook.iterative_calc`.
 - 0 unexplained losses between adapter cell count and DB cell count.
 - Cost-head coverage report: matched/unmatched regions and totals basis.
 - Error-cascade report: roots, descendants, affected statements.
@@ -725,6 +844,27 @@ Partial success is allowed only if all failures are represented in `review_queue
 
 ## 13. Test fixtures
 
+**Fixture policy.** Assertions run against the real reference workbook by default; synthetic
+fixtures exist only for behaviour the real workbook cannot exercise. The reference workbook is never
+committed (`fixtures/private/` is gitignored), so real-workbook tests skip on a fresh clone and
+assert only structural facts, never financial figures. Synthetic fixtures are built in-test with
+POI; no binaries are committed.
+
+A probe of the reference workbook (47 sheets, 5,841 formulas) fixes which side each behaviour falls
+on. It contains 25 multi-external-ref formulas, 68 constant-formulas, and 613 double-space string
+literals — all assertable directly. It contains **zero** uncached formulas and **zero**
+error-barrier functions, so those behaviours have no instance to test against and require
+synthetics:
+
+| Synthetic fixture | Covers |
+|---|---|
+| uncached formula | `cache_state='missing'`, no invented `numeric_value` (§9) |
+| `IFERROR`/`ISNA`/`COUNT` over an error | barrier stops the cascade; barrier-vs-cache disagreement queues (§10.8) |
+| circular ref, with and without `iterate` | SCC detection and the info/warning severity split (§9.1) |
+| `#REF!` to a deleted sheet | `unresolved_reason='sheet_not_found'` (§4.4) |
+| formula the parser cannot parse | `formula_state='parse_error'` plus reference salvage (§14) |
+| whole-column ref (`=SUM(A:A)`) | range expansion clamps to the real bbox instead of Excel's limits (§4.4) |
+
 Keep v1 fixtures and add the gap-regression tests:
 
 | Test | Source | Assertion |
@@ -734,7 +874,8 @@ Keep v1 fixtures and add the gap-regression tests:
 | merged no double count | `B  S !C5:K5` | SUM over participants equals anchor value once |
 | `#N/A` exact enum | synthetic | `error_type='#N/A'`, not text |
 | bool before int | synthetic | `TRUE` -> `bool_value=true`, not `numeric_value=1` |
-| external index resolved | `CAPITAL COST!I19` | `external_link_id` points to parsed link, `external_ref='[15]Manpower!F35'` |
+| external index resolved | `CAPITAL COST!I19` | `cell_reference.external_link_id` points to parsed link, `raw_token='[15]Manpower!F35'` |
+| multi-external-ref formula | `'[17]BS&PL'!G23+'[17]BS&PL'!G45` | both refs stored as separate `cell_reference` rows; neither is dropped |
 | missing cache marked | synthetic uncached formula | `cache_state='missing'`, no invented numeric |
 | normalization preserves strings | synthetic `="A  B"` | string literal spaces unchanged |
 | `.xls` adapter | legacy fixture | formulas unavailable -> `formula_state='unavailable'` |
@@ -743,8 +884,8 @@ Keep v1 fixtures and add the gap-regression tests:
 | error cascade | `P  L !B35:L35` -> `B  S !M16` | descendant flags set |
 | scratch with dependents kept | `B  S !Q11:R18` | not scratch if referenced |
 | period axis structured | `B  S `, `depreciation`, `power cost` | maps stored despite header spelling differences |
-| horizontal formula family | `P  L !D22:M22` | `D22:M22` share skeleton `=$H$*R` (allow single-cell `$` drift) |
-| vertical formula family | `P  L !D22:D28` | `D22:D28` share skeleton `=$H$*R` (except total row) |
+| horizontal formula family | `P  L !D22:M22` | `D22:M22` share one skeleton — `=$ABS$*R` in Sprint 2, `=$H$*R` after Sprint 3 refinement (allow single-cell `$` drift) |
+| vertical formula family | `P  L !D22:D28` | `D22:D28` share one skeleton (except total row) |
 | total row not a boundary | `P  L !D29 = =SUM(D22:D28)` | `coherence_score` low but label `Total` prevents split |
 | 2D coherence boundary | `Details` rows 44–52 vs 55–130 | skeleton family change + label/serial change triggers region split |
 | single-cell drift tolerated | `P  L !J23` drops `$` | region stays intact; `coherence_dirs` shows local 0.5 |
@@ -763,9 +904,36 @@ Keep v1 fixtures and add the gap-regression tests:
 
 ### Sprint 2 — formula/reference graph
 
-- Formula lexer/parser with quoted sheets, ranges, `%`, `^`, external refs, error literals.
-- Precedent/dependent graph, cycle detection, error-descendant marking.
-- Cached-value states and evaluator fallback behind whitelist.
+Sprint 2 is the **deterministic** formula layer: everything it produces is a pure function of the
+parsed formula, and every heuristic stays in Sprint 3 (§3).
+
+**Parsing.** POI's `FormulaParser` is the primary tokenizer — its grammar already covers the §10.9
+list (quoted sheet names, ranges, `%`, `^`, `[n]` external refs, defined names, error literals) and
+is battle-tested against exactly the dirty sheet names in the findings doc. On
+`FormulaParseException` a **reference-salvage fallback** runs: it scans the formula text for
+reference tokens and records them as unresolved `cell_reference` rows, marks
+`formula_state='parse_error'`, and produces no AST, no skeleton, and no constant-evaluation. This
+preserves the one thing a damaged formula still tells us — what it points at — without maintaining a
+second grammar.
+
+**Graph construction** runs inside the same parse run and the same transaction as ingest. There is
+no state in which a document is "ingested but ungraphed": §15's idempotency key is one file, one
+run, one verdict. Cell ids are already in hand from the insert batch, so the second pass costs a
+map, not a re-read.
+
+| Ticket | Delivers |
+|---|---|
+| 14 | V8 migration: `cell_reference`, `cell_error_root`, cell graph columns, workbook calc columns, and removal of the scalar `cell.external_ref` — one `cell` table rebuild carrying every Sprint 2 column |
+| 15 | Tokenizer seam: POI `FormulaParser` primary, reference-salvage fallback, `formula_state='parse_error'` |
+| 16 | Reference resolution: verbatim sheet matching, the three `unresolved_reason` values, external-link binding; retires the regex extractor from the main path |
+| 17 | Precedent/dependent graph, bbox-clamped range expansion, SCC cycle detection, workbook calc metadata persisted |
+| 18 | Error cascade: barrier list, `cell_error_root`, cached-value cross-check metric |
+| 19 | Constant-formula evaluation (arithmetic literals only; cache provenance untouched) |
+| 20 | `formula_skeleton` in region-free `$ABS$` form |
+| 21 | QA gate record refactor, Sprint 2 metrics, real-workbook integration-test extension |
+
+Ticket 14 unblocks the rest; the remainder run in order. Later tickets add schema only if they
+discover they need it, as corrective migrations.
 
 ### Sprint 3 — semantics
 

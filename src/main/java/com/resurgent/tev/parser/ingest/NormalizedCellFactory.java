@@ -15,8 +15,7 @@ final class NormalizedCellFactory {
     static NormalizedCell buildCell(String coord, int rowNum, int colNum,
             String rawValue, CellValue value, String formulaText,
             String formulaNormalized, String formulaState, String cachedValue,
-            String cacheState, boolean rowHidden, boolean colHidden, boolean sheetHidden,
-            String externalRef, String sheetRefs, String definedNameRefs) {
+            String cacheState, boolean rowHidden, boolean colHidden, boolean sheetHidden) {
         return new NormalizedCell(
                 coord, rowNum, colNum,
                 rawValue,
@@ -38,8 +37,7 @@ final class NormalizedCellFactory {
                 value.errorType(),
                 null, null,
                 false, false, null, "cell",
-                rowHidden, colHidden, sheetHidden,
-                externalRef, null, sheetRefs, definedNameRefs);
+                rowHidden, colHidden, sheetHidden);
     }
 
     static NormalizedCell markAnchor(NormalizedCell cell, CellRangeAddress region) {
@@ -66,8 +64,7 @@ final class NormalizedCellFactory {
                 cell.rowLabel(),
                 cell.colLabel(),
                 true, false, range, "cell",
-                cell.rowHidden(), cell.colHidden(), cell.sheetHidden(),
-                cell.externalRef(), cell.externalLinkId(), cell.sheetRefs(), cell.definedNameRefs());
+                cell.rowHidden(), cell.colHidden(), cell.sheetHidden());
     }
 
     static NormalizedCell createParticipant(NormalizedCell anchor, CellRangeAddress region,
@@ -97,7 +94,6 @@ final class NormalizedCellFactory {
                 null,
                 null,
                 false, true, range, "merged_anchor",
-                rowHidden, colHidden, sheetHidden,
-                null, null, null, null);
+                rowHidden, colHidden, sheetHidden);
     }
 }

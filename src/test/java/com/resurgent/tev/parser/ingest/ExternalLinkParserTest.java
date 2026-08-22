@@ -94,7 +94,7 @@ class ExternalLinkParserTest {
 
             NormalizedCell a1 = sheets.get(0).cells().get(0);
             assertThat(a1.formulaText()).isEqualTo("[1]Other!A1");
-            assertThat(a1.externalRef()).isEqualTo("[1]Other!A1");
+            assertThat(FormulaReferenceExtractor.extract(a1.formulaText()).externalRefs()).containsExactly("[1]Other!A1");
         }
     }
 }

@@ -62,11 +62,7 @@ public final class CellContextEnricher {
                     cell.valueSource(),
                     cell.rowHidden(),
                     cell.colHidden(),
-                    cell.sheetHidden(),
-                    cell.externalRef(),
-                    cell.externalLinkId(),
-                    cell.sheetRefs(),
-                    cell.definedNameRefs()));
+                    cell.sheetHidden()));
         }
         return enriched;
     }

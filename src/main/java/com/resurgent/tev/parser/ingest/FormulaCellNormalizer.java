@@ -1,6 +1,5 @@
 package com.resurgent.tev.parser.ingest;
 
-import java.util.List;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DateUtil;
@@ -27,10 +26,6 @@ final class FormulaCellNormalizer {
         }
 
         String formulaNormalized = FormulaNormalizer.normalize(formulaText);
-        FormulaReferences refs = FormulaReferenceExtractor.extract(formulaText, definedNames.keySet());
-        String externalRef = firstOrNull(refs.externalRefs());
-        String sheetRefs = jsonOrNull(refs.sheetRefs());
-        String definedNameRefs = jsonOrNull(refs.definedNameRefs());
 
         CachedResult cachedResult = readCachedValue(valueCell, cacheFresh, hasCachedValue);
         CellValue cached = cachedResult.value();
@@ -47,8 +42,7 @@ final class FormulaCellNormalizer {
 
         return NormalizedCellFactory.buildCell(coord, rowNum, colNum, "=" + formulaText, value,
                 formulaText, formulaNormalized, "ok", cachedValue, cacheState,
-                rowHidden, colHidden, sheetHidden,
-                externalRef, sheetRefs, definedNameRefs);
+                rowHidden, colHidden, sheetHidden);
     }
 
     private static NormalizedCell normalizeUnavailableFormula(Cell valueCell,
@@ -70,8 +64,7 @@ final class FormulaCellNormalizer {
 
         return NormalizedCellFactory.buildCell(coord, rowNum, colNum, null, value,
                 null, null, "unavailable", cachedValue, cacheState,
-                rowHidden, colHidden, sheetHidden,
-                null, null, null);
+                rowHidden, colHidden, sheetHidden);
     }
 
     private static CachedResult readCachedValue(Cell valueCell, boolean cacheFresh, boolean hasCachedValue) {
@@ -115,20 +108,5 @@ final class FormulaCellNormalizer {
             case ERROR -> LiteralCellNormalizer.errorLiteral(cell.getErrorCellValue());
             default -> null;
         };
-    }
-
-    private static String firstOrNull(List<String> values) {
-        return values == null || values.isEmpty() ? null : values.get(0);
-    }
-
-    private static String jsonOrNull(List<String> values) {
-        if (values == null || values.isEmpty()) {
-            return null;
-        }
-        try {
-            return com.resurgent.tev.parser.db.Jsonb.toJson(values);
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new IllegalStateException("failed to serialize reference list: " + values, e);
-        }
     }
 }

@@ -235,7 +235,7 @@ public final class IngestService {
         repo.insertAuditLog(parseRunId, "parse_run_started", now,
                 Jsonb.toJson(Map.of("fileName", fileName, "fileHash", fileHash)), "info");
 
-        Set<String> referencedNames = collectReferencedDefinedNames(sheets);
+        Set<String> referencedNames = collectReferencedDefinedNames(sheets, metadata.definedNames().keySet());
         long workbookId = repo.insertWorkbook(sourceFileId,
                 metadata.applicationName(), metadata.applicationVersion(),
                 metadata.sheetCount(), Jsonb.toJson(metadata.sheetNames()),
@@ -324,16 +324,16 @@ public final class IngestService {
         return (int) cells.stream().filter(NormalizedCell::isError).count();
     }
 
-    private Set<String> collectReferencedDefinedNames(List<XlsxSheet> sheets) throws IOException {
+    private Set<String> collectReferencedDefinedNames(List<XlsxSheet> sheets, java.util.Collection<String> definedNames) {
         Set<String> referenced = new HashSet<>();
         for (XlsxSheet sheet : sheets) {
             for (NormalizedCell cell : sheet.cells()) {
-                String refsJson = cell.definedNameRefs();
-                if (refsJson == null || refsJson.isBlank()) {
-                    continue;
+                if (cell.formulaText() != null && !cell.formulaText().isBlank()) {
+                    FormulaReferences refs = FormulaReferenceExtractor.extract(cell.formulaText(), definedNames);
+                    if (refs.definedNameRefs() != null) {
+                        referenced.addAll(refs.definedNameRefs());
+                    }
                 }
-                List<String> refs = Jsonb.fromJson(refsJson, new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
-                referenced.addAll(refs);
             }
         }
         return referenced;
@@ -355,7 +355,6 @@ public final class IngestService {
             if (index == null) {
                 continue;
             }
-            stats.total++;
             Long linkId = linkIndexToId.get(index);
             if (linkId == null) {
                 queueUnresolvableExternalRef(parseRunId, ref, sheetName, cell.coord(), repo, now);
@@ -367,7 +366,7 @@ public final class IngestService {
                 }
             }
         }
-        return firstLinkId == null ? cell : cell.withExternalLinkId(firstLinkId);
+        return cell;
     }
 
     private static Integer extractLinkIndex(String externalRef) {
@@ -410,8 +409,7 @@ public final class IngestService {
                 value.isError(),
                 value.errorType(),
                 null, null,
-                false, false, null, "cell", false, false, false,
-                null, null, null, null);
+                false, false, null, "cell", false, false, false);
     }
 
     private String rawMetadataJson(Path input, FileType fileType, XlsxWorkbook workbook)
