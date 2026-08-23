@@ -3,11 +3,16 @@ package com.resurgent.tev.parser.ingest;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
  * Tests for {@link FormulaSkeletonGenerator}: canonical, position-insensitive formula
  * skeleton emission per §7.4.1.
+ *
+ * <p>The cases above {@link #skeletonOf} hand-build their tokens to pin one substitution rule
+ * each. Those below drive {@link FormulaTokenizer} into the generator, because the two agreeing
+ * on a token's raw span is a contract neither can check alone.
  */
 class FormulaSkeletonGeneratorTest {
 
@@ -90,5 +95,57 @@ class FormulaSkeletonGeneratorTest {
 
         String skeleton = FormulaSkeletonGenerator.generate("=D18&\"D18 literal\"", List.of(t1));
         assertThat(skeleton).isEqualTo("=R&\"D18 literal\"");
+    }
+
+    /**
+     * The tests above hand-build their tokens, so they hold whatever the tokenizer does.
+     * These drive the real tokenizer into the generator, which is the pairing that actually
+     * runs in the pipeline: the generator abstracts a reference by replacing its raw span, so
+     * a raw token the tokenizer renders differently from the source leaves the reference
+     * un-abstracted and the skeleton position-sensitive.
+     */
+    private static String skeletonOf(String formula) {
+        FormulaTokenizerResult tokenized = FormulaTokenizer.tokenize(formula, 19, 9, Map.of());
+        return FormulaSkeletonGenerator.generate(formula, tokenized.tokens());
+    }
+
+    @Test
+    void externalReferenceFromTheTokenizerBecomesExt() {
+        assertThat(skeletonOf("[15]Manpower!F35")).isEqualTo("EXT");
+    }
+
+    @Test
+    void unquotedCrossSheetReferenceFromTheTokenizerIsFullyAbstracted() {
+        assertThat(skeletonOf("E23/SALESPROJECTION!E81*100")).isEqualTo("R/R*100");
+    }
+
+    @Test
+    void quotedCrossSheetReferenceFromTheTokenizerIsFullyAbstracted() {
+        assertThat(skeletonOf("'P  L '!D29-D10")).isEqualTo("R-R");
+    }
+
+    @Test
+    void wholeColumnReferenceFromTheTokenizerBecomesARange() {
+        assertThat(skeletonOf("SUM(A:A)")).isEqualTo("SUM(RANGE_VERTICAL)");
+    }
+
+    @Test
+    void absoluteRangeFromTheTokenizerBecomesARange() {
+        assertThat(skeletonOf("SUM($D$22:$D$28)")).isEqualTo("SUM(RANGE_VERTICAL)");
+    }
+
+    @Test
+    void skeletonsFromTheTokenizerNeverRetainASheetName() {
+        for (String formula : List.of(
+                "[15]Manpower!F35",
+                "SALESPROJECTION!E81",
+                "'P  L '!D29-D10",
+                "SUM(SALESPROJECTION!E81:E90)",
+                "IRR_CASE_II!E33",
+                "SUM(SALESPROJECTION!A:A)")) {
+            assertThat(skeletonOf(formula))
+                    .as("skeleton of '%s' must not carry a sheet reference", formula)
+                    .doesNotContain("!");
+        }
     }
 }

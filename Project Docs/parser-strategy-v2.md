@@ -353,7 +353,7 @@ CREATE TABLE cell_reference (
     cell_reference_id   BIGSERIAL PRIMARY KEY,
     from_cell_id        BIGINT NOT NULL REFERENCES cell(cell_id),
     token_index         INT NOT NULL,         -- order within the formula, for skeleton synthesis
-    raw_token           TEXT NOT NULL,        -- verbatim, e.g. "'[15]Manpower'!F35" (§10.9 provenance)
+    raw_token           TEXT NOT NULL,        -- verbatim, e.g. "[15]Manpower!F35" (§10.9 provenance)
     ref_kind            TEXT NOT NULL,        -- 'local_cell' | 'local_range' | 'cross_sheet_cell'
                                               -- | 'cross_sheet_range' | 'external' | 'defined_name'
     target_sheet_name   TEXT,                 -- verbatim sheet name as written in the formula
@@ -675,6 +675,14 @@ The evaluator never enters a cycle.
 
 - Parse `xl/externalLinks` and rels to resolve `[15]` to target URI/display name.
 - Store both verbatim ref (`cell_reference.raw_token`) and resolved link (`cell_reference.external_link_id`), one row per ref — a formula may carry several.
+- `raw_token` is the reference's **span in the formula as written**, never a re-rendering of the
+  parsed token. Excel quotes a sheet name only where the name requires it (`'P  L '!D29` but
+  `SALESPROJECTION!E81`) and writes each endpoint's `$` markers independently, so a re-rendered
+  token need not occur in the formula it came from. §7.4 depends on this: the skeleton generator
+  abstracts a reference by replacing its raw span, and a span that is not literally present leaves
+  the reference un-abstracted and the skeleton position-sensitive. `target_range` is the
+  normalized counterpart (`E81:E90`, whole columns expanded to their bounds) and stays the
+  resolution lookup key.
 - No network fetching. Stale cached values kept with confidence penalty.
 
 ### 10.3 Defined names
