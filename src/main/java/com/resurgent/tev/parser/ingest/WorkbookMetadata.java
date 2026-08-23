@@ -19,5 +19,10 @@ public record WorkbookMetadata(
         boolean isProtected,
         String createdAt,
         String modifiedAt,
-        List<ExternalLinkIn> externalLinks) {
+        List<ExternalLinkIn> externalLinks,
+        String calculationMode,
+        Boolean fullCalcOnLoad,
+        Boolean calcChainPresent,
+        boolean iterativeCalc,
+        Integer iterativeCount) {
 }

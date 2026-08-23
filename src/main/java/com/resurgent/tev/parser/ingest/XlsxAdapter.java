@@ -128,9 +128,30 @@ public final class XlsxAdapter {
             modifiedAt = timestamp(xssf.getProperties().getCoreProperties().getModified());
         }
 
+        String calculationMode = null;
+        Boolean fullCalcOnLoad = null;
+        Boolean calcChainPresent = null;
+        boolean iterativeCalc = false;
+        Integer iterativeCount = null;
+        if (workbook instanceof XSSFWorkbook xssf) {
+            var calcPr = xssf.getCTWorkbook().getCalcPr();
+            if (calcPr != null) {
+                if (calcPr.getCalcMode() != null) {
+                    calculationMode = calcPr.getCalcMode().toString();
+                }
+                fullCalcOnLoad = calcPr.getFullCalcOnLoad();
+                iterativeCalc = calcPr.getIterate();
+                if (calcPr.isSetIterateCount()) {
+                    iterativeCount = (int) calcPr.getIterateCount();
+                }
+            }
+            calcChainPresent = xssf.getCalculationChain() != null;
+        }
+
         return new WorkbookMetadata(
                 applicationName, applicationVersion, sheetCount, sheetNames,
-                definedNames, properties, isProtected, createdAt, modifiedAt, externalLinks);
+                definedNames, properties, isProtected, createdAt, modifiedAt, externalLinks,
+                calculationMode, fullCalcOnLoad, calcChainPresent, iterativeCalc, iterativeCount);
     }
 
     private static void putIfPresent(Map<String, Object> map, String key, String value) {

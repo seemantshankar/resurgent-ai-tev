@@ -17,6 +17,7 @@ import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
@@ -24,8 +25,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Application service behind {@code tev-parse ingest}: parses the input file and
@@ -36,7 +35,13 @@ public final class IngestService {
 
     private static final String PARSER_VERSION = "0.1.0-SNAPSHOT";
 
-    private static final Pattern EXTERNAL_LINK_INDEX_PATTERN = Pattern.compile("^\\[(\\d+)\\]");
+    /**
+     * Error-consuming functions (§10.8): a cell whose formula's function set intersects
+     * this set is an error barrier — its dependents do not inherit error_descendant/
+     * cell_error_root through it, unless the barrier cell is itself still is_error.
+     */
+    private static final Set<String> BARRIER_FUNCTIONS = Set.of(
+            "IFERROR", "IFNA", "ISERROR", "ISNA", "ISERR", "COUNT", "COUNTA", "AGGREGATE", "SUBTOTAL");
 
     private final CsvSniffer sniffer = new CsvSniffer();
     private final CsvAdapter csvAdapter = new CsvAdapter();
@@ -208,10 +213,12 @@ public final class IngestService {
             cellsWritten++;
         }
 
-        QaGateResult qa = QaGate.evaluate(cellCount, cellsWritten, 0, 0, 0);
+        // CSV has no formulas or structural references, so those reconciliation buckets
+        // are trivially 0/0/0 and never force a partial/failed status on their own.
+        QaGateResult qa = QaGate.evaluate(cellCount, cellsWritten, 0, 0, 0, 0, 0, 0, 0);
         String metricsJson = IngestMetrics.toJson(fileName, fileHash, sheet.sheetName(), rowCount,
                 cellCount, cellsWritten, coercedCount(enriched), errorCount(enriched),
-                0, 0, 0, qa);
+                0, 0, 0, 0, 0, 0, 0, qa);
         repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
         repo.insertAuditLog(parseRunId, "parse_run_completed", Timestamps.now(),
                 Jsonb.toJson(Map.of("status", qa.status(), "cellsWritten", cellsWritten)),
@@ -256,9 +263,15 @@ public final class IngestService {
         int cellsWritten = 0;
         int cellsCoerced = 0;
         int cellsError = 0;
-        ExternalRefStats refStats = new ExternalRefStats();
+        int formulaCellsTotal = 0;
+        int formulaCellsTokenized = 0;
+        int formulaCellsParseError = 0;
+        int formulaCellsUnavailable = 0;
 
+        // B3: built once alongside sheetNameToId so ReferenceResolver never needs to
+        // linear-scan for a worksheet's sheet name.
         Map<String, Long> sheetNameToId = new HashMap<>();
+        Map<Long, String> worksheetIdToSheetName = new HashMap<>();
         Map<String, Map<String, Long>> cellCoordMap = new HashMap<>();
         List<PendingCellTokens> pendingTokensList = new ArrayList<>();
 
@@ -270,6 +283,7 @@ public final class IngestService {
                     sheet.dimensionsDeclared(), sheet.realContentRows(),
                     sheet.declaredMerged());
             sheetNameToId.put(sheet.sheetName(), worksheetId);
+            worksheetIdToSheetName.put(worksheetId, sheet.sheetName());
             Map<String, Long> coordMap = new HashMap<>();
             cellCoordMap.put(sheet.sheetName(), coordMap);
 
@@ -278,8 +292,17 @@ public final class IngestService {
                 NormalizedCell cellToInsert = cell;
                 FormulaTokenizerResult tokRes = null;
                 String skeleton = null;
+                boolean isBarrierForCurrentCell = false;
                 if (cell.formulaText() != null && !cell.formulaText().isBlank()) {
                     tokRes = FormulaTokenizer.tokenize(cell.formulaText(), cell.rowNum(), cell.colNum(), metadata.definedNames());
+                    isBarrierForCurrentCell = isBarrierFormula(tokRes);
+                    // POI misclassifies a handful of functions (observed for IFERROR/IFNA) as a
+                    // "NameX" external-name reference instead of an AbstractFunctionPtg, which
+                    // would otherwise pollute both the skeleton and the persisted reference graph
+                    // with a bogus "external reference" to the bare function name. Strip those
+                    // pseudo-tokens out before they're used for anything downstream.
+                    tokRes = new FormulaTokenizerResult(tokRes.formulaState(),
+                            stripFunctionNamePseudoTokens(tokRes.tokens()), tokRes.functionTokens());
                     skeleton = FormulaSkeletonGenerator.generate(cell.formulaText(), tokRes.tokens());
 
                     BigDecimal evaluatedNumeric = cell.numericValue();
@@ -312,49 +335,79 @@ public final class IngestService {
                             cell.rowHidden(), cell.colHidden(), cell.sheetHidden());
                 }
 
-                NormalizedCell resolved = resolveExternalRefs(cellToInsert, sheet.sheetName(),
-                        parseRunId, linkIndexToId, repo, now, refStats);
-                long cellId = repo.insertCell(worksheetId, resolved);
-                coordMap.put(resolved.coord(), cellId);
-                recordCellProvenance(repo, cellId, sourceFileId, parseRunId, sheet.sheetName(), resolved);
+                long cellId = repo.insertCell(worksheetId, cellToInsert);
+                coordMap.put(cellToInsert.coord(), cellId);
+                recordCellProvenance(repo, cellId, sourceFileId, parseRunId, sheet.sheetName(), cellToInsert);
 
                 if (skeleton != null) {
                     repo.updateCellSkeleton(cellId, skeleton);
                 }
                 if (tokRes != null && !tokRes.tokens().isEmpty()) {
-                    pendingTokensList.add(new PendingCellTokens(cellId, tokRes.tokens()));
+                    pendingTokensList.add(new PendingCellTokens(cellId, worksheetId, tokRes.tokens()));
+                }
+                if (isBarrierForCurrentCell) {
+                    repo.updateCellErrorBarrier(cellId, true);
+                }
+
+                // Formula reconciliation (§12/C6): every formula cell's tokenization state
+                // is accounted for as exactly one of tokenized/parse_error/unavailable.
+                if ("formula".equals(cellToInsert.rawType())) {
+                    formulaCellsTotal++;
+                    String state = cellToInsert.formulaState();
+                    if ("ok".equals(state)) {
+                        formulaCellsTokenized++;
+                    } else if ("parse_error".equals(state)) {
+                        formulaCellsParseError++;
+                    } else if ("unavailable".equals(state)) {
+                        formulaCellsUnavailable++;
+                    }
                 }
 
                 cellsWritten++;
-                if (resolved.coercedFromText()) {
+                if (cellToInsert.coercedFromText()) {
                     cellsCoerced++;
                 }
-                if (resolved.isError()) {
+                if (cellToInsert.isError()) {
                     cellsError++;
                 }
             }
             sheetIndex++;
         }
 
-        // Pass 2: Resolve reference tokens and persist cell_reference rows
+        // Pass 2: Resolve reference tokens and persist cell_reference rows.
         ReferenceResolver resolver = new ReferenceResolver(repo);
+        ReferenceStats refStats = new ReferenceStats();
+        ReferenceResolutionContext refCtx = new ReferenceResolutionContext(sheetNameToId,
+                worksheetIdToSheetName, linkIndexToId, cellCoordMap,
+                metadata.definedNames().keySet(), parseRunId, now);
         for (PendingCellTokens pct : pendingTokensList) {
-            resolver.resolveAndPersist(pct.cellId, pct.tokens, parseRunId, sheetNameToId, linkIndexToId, cellCoordMap, now);
+            resolver.resolveAndPersist(pct.cellId, pct.worksheetId, pct.tokens, refCtx, refStats);
         }
 
-        // Pass 3: Graph construction and Tarjan SCC cycle detection
+        // Pass 3: Graph construction and Tarjan SCC cycle detection. Both this pass and
+        // pass 4 share one adjacency map (ranges expanded in memory, clamped to each
+        // worksheet's real bbox) built once here rather than each running its own query.
+        Map<Long, List<Long>> adjacency = ReferenceGraphLoader.loadAdjacency(repo, parseRunId);
         DependencyGraphEngine graphEngine = new DependencyGraphEngine(repo);
-        graphEngine.processWorkbookGraph(workbookId, parseRunId);
+        graphEngine.processWorkbookGraph(workbookId, parseRunId, adjacency, metadata.iterativeCalc());
 
-        // Pass 4: Error cascade tracing and root error barriers
+        // Pass 4: Error cascade tracing — root error cells and their non-error descendants.
         ErrorCascadeEngine errorEngine = new ErrorCascadeEngine(repo);
-        errorEngine.processErrorCascades(parseRunId);
+        errorEngine.processErrorCascades(parseRunId, adjacency);
+
+        // Calc metadata persistence (#19 / C5): cellsError is only known now that the
+        // sheet loop above has finished, so this can't happen right after insertWorkbook.
+        repo.updateWorkbookCalcMetadata(workbookId, metadata.calculationMode(),
+                metadata.fullCalcOnLoad(), metadata.calcChainPresent(), metadata.iterativeCalc(),
+                metadata.iterativeCount(), cellsError);
 
         QaGateResult qa = QaGate.evaluate(cellCount, cellsWritten,
-                refStats.total, refStats.resolved, refStats.queued);
+                refStats.total(), refStats.resolved(), refStats.unresolved(),
+                formulaCellsTotal, formulaCellsTokenized, formulaCellsParseError, formulaCellsUnavailable);
         String metricsJson = IngestMetrics.toJson(fileName, fileHash, primarySheetName(sheets),
                 rowCount, cellCount, cellsWritten, cellsCoerced, cellsError,
-                refStats.total, refStats.resolved, refStats.queued, qa);
+                refStats.total(), refStats.resolved(), refStats.unresolved(),
+                formulaCellsTotal, formulaCellsTokenized, formulaCellsParseError, formulaCellsUnavailable, qa);
         repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
         repo.insertAuditLog(parseRunId, "parse_run_completed", Timestamps.now(),
                 Jsonb.toJson(Map.of("status", qa.status(), "cellsWritten", cellsWritten)),
@@ -362,6 +415,43 @@ public final class IngestService {
         repo.commit();
         return new IngestSummary(fileName, fileHash, primarySheetName(sheets), rowCount,
                 cellCount, sourceFileId, parseRunId, dbPath, qa.status(), metricsJson);
+    }
+
+    /**
+     * A cell is an error barrier when its formula's function set intersects
+     * {@link #BARRIER_FUNCTIONS}. POI's {@link FormulaTokenizer} normally surfaces a
+     * function name via {@code functionTokens} (an {@code AbstractFunctionPtg}), but for
+     * a handful of functions POI's parser doesn't have builtin metadata for in this parse
+     * context (observed for IFERROR/IFNA) it instead emits a name-lookup reference token
+     * with {@code refKind="external"} whose raw text is the bare function name — so both
+     * sources are checked here, not just functionTokens.
+     */
+    private static boolean isBarrierFormula(FormulaTokenizerResult tokRes) {
+        if (tokRes.functionTokens() != null && tokRes.functionTokens().stream()
+                .map(String::toUpperCase).anyMatch(BARRIER_FUNCTIONS::contains)) {
+            return true;
+        }
+        return tokRes.tokens() != null && tokRes.tokens().stream()
+                .anyMatch(IngestService::isFunctionNamePseudoToken);
+    }
+
+    /** True for a token that is actually a barrier function's bare name, not a real reference. */
+    private static boolean isFunctionNamePseudoToken(FormulaToken t) {
+        return "external".equals(t.refKind()) && t.targetSheetName() == null
+                && t.rawToken() != null && BARRIER_FUNCTIONS.contains(t.rawToken().toUpperCase());
+    }
+
+    private static List<FormulaToken> stripFunctionNamePseudoTokens(List<FormulaToken> tokens) {
+        if (tokens == null || tokens.isEmpty()) {
+            return tokens;
+        }
+        List<FormulaToken> cleaned = new ArrayList<>(tokens.size());
+        for (FormulaToken t : tokens) {
+            if (!isFunctionNamePseudoToken(t)) {
+                cleaned.add(t);
+            }
+        }
+        return cleaned;
     }
 
     private static void recordCellProvenance(WorkspaceRepository repo, long cellId,
@@ -379,14 +469,7 @@ public final class IngestService {
         };
     }
 
-    /** Mutable running totals for external-reference reconciliation across a workbook's sheets. */
-    private static final class ExternalRefStats {
-        int total;
-        int resolved;
-        int queued;
-    }
-
-    private record PendingCellTokens(long cellId, List<FormulaToken> tokens) {}
+    private record PendingCellTokens(long cellId, long worksheetId, List<FormulaToken> tokens) {}
 
     private static int coercedCount(List<NormalizedCell> cells) {
         return (int) cells.stream().filter(NormalizedCell::coercedFromText).count();
@@ -396,7 +479,7 @@ public final class IngestService {
         return (int) cells.stream().filter(NormalizedCell::isError).count();
     }
 
-    private Set<String> collectReferencedDefinedNames(List<XlsxSheet> sheets, java.util.Collection<String> definedNames) {
+    private Set<String> collectReferencedDefinedNames(List<XlsxSheet> sheets, Collection<String> definedNames) {
         Set<String> referenced = new HashSet<>();
         for (XlsxSheet sheet : sheets) {
             for (NormalizedCell cell : sheet.cells()) {
@@ -409,54 +492,6 @@ public final class IngestService {
             }
         }
         return referenced;
-    }
-
-    private NormalizedCell resolveExternalRefs(NormalizedCell cell, String sheetName,
-            long parseRunId, Map<Integer, Long> linkIndexToId,
-            WorkspaceRepository repo, String now, ExternalRefStats stats)
-            throws IOException, SQLException {
-        String formulaText = cell.formulaText();
-        if (formulaText == null || formulaText.isBlank()) {
-            return cell;
-        }
-
-        FormulaReferences refs = FormulaReferenceExtractor.extract(formulaText);
-        Long firstLinkId = null;
-        for (String ref : refs.externalRefs()) {
-            Integer index = extractLinkIndex(ref);
-            if (index == null) {
-                continue;
-            }
-            stats.total++;
-            Long linkId = linkIndexToId.get(index);
-            if (linkId == null) {
-                queueUnresolvableExternalRef(parseRunId, ref, sheetName, cell.coord(), repo, now);
-                stats.queued++;
-            } else {
-                stats.resolved++;
-                if (firstLinkId == null) {
-                    firstLinkId = linkId;
-                }
-            }
-        }
-        return cell;
-    }
-
-    private static Integer extractLinkIndex(String externalRef) {
-        Matcher m = EXTERNAL_LINK_INDEX_PATTERN.matcher(externalRef);
-        return m.find() ? Integer.parseInt(m.group(1)) : null;
-    }
-
-    private static void queueUnresolvableExternalRef(long parseRunId, String externalRef,
-            String sheetName, String coord, WorkspaceRepository repo, String now)
-            throws IOException, SQLException {
-        String summary = "Unresolvable external reference: " + externalRef;
-        String detail = Jsonb.toJson(Map.of(
-                "externalRef", externalRef,
-                "sheet", sheetName,
-                "coord", coord));
-        repo.insertReviewQueue(parseRunId, "external_link", summary, detail, "Pending",
-                false, now, null);
     }
 
     private static NormalizedCell csvCell(int rowNum, int colNum, String field) {

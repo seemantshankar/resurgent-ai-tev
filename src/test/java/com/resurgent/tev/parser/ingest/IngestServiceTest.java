@@ -101,11 +101,10 @@ class IngestServiceTest {
                 try (ResultSet rs = c.createStatement().executeQuery(
                         "SELECT category, summary, detail FROM review_queue")) {
                     assertThat(rs.next()).isTrue();
-                    assertThat(rs.getString("category")).isEqualTo("external_link");
-                    assertThat(rs.getString("summary")).contains("[99]Missing!A1");
+                    assertThat(rs.getString("category")).isEqualTo("formula_reference");
+                    assertThat(rs.getString("summary")).contains("[99]Missing").contains("A1");
                     Map<String, Object> detail = Jsonb.fromJson(rs.getString("detail"), Map.class);
-                    assertThat(detail).containsEntry("externalRef", "[99]Missing!A1");
-                    assertThat(detail).containsEntry("coord", "A1");
+                    assertThat(detail.get("rawToken").toString()).contains("[99]Missing").contains("A1");
                 }
             }
         }
@@ -426,7 +425,7 @@ class IngestServiceTest {
     }
 
     @Test
-    void externalRefReconciliation_countsResolvedAndQueuedRefs() throws Exception {
+    void referenceReconciliation_countsResolvedAndUnresolvedRefs() throws Exception {
         try (XSSFWorkbook external = new XSSFWorkbook();
                 XSSFWorkbook main = new XSSFWorkbook()) {
             external.createSheet("Other");
@@ -440,11 +439,107 @@ class IngestServiceTest {
             IngestSummary summary = new IngestService().ingest(xlsx, 1L, db);
 
             Map<String, Object> metrics = Jsonb.fromJson(summary.metricsJson(), Map.class);
-            assertThat(metrics).containsEntry("externalRefsTotal", 2);
-            assertThat(metrics).containsEntry("externalRefsResolved", 1);
-            assertThat(metrics).containsEntry("externalRefsQueued", 1);
+            assertThat(metrics).containsEntry("referencesTotal", 2);
+            assertThat(metrics).containsEntry("referencesResolved", 1);
+            assertThat(metrics).containsEntry("referencesUnresolved", 1);
             assertThat(metrics).containsEntry("qaStatus", "success");
             assertThat(summary.status()).isEqualTo("success");
+        }
+    }
+
+    // ---- §13 synthetic fixtures ----
+
+    @Test
+    void refToDeletedSheetIsUnresolvedSheetNotFoundViaFullIngest() throws Exception {
+        try (XSSFWorkbook main = new XSSFWorkbook()) {
+            Sheet sheet = main.createSheet("Sheet1");
+            sheet.createRow(0).createCell(0).setCellFormula("DeletedSheet!A1");
+
+            Path xlsx = writeWorkbook(main, "deleted-sheet.xlsx");
+            Path db = tempDir.resolve("deleted-sheet.db");
+            new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                    ResultSet rs = c.createStatement().executeQuery(
+                            "SELECT unresolved_reason FROM cell_reference")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("unresolved_reason")).isEqualTo("sheet_not_found");
+            }
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                assertThat(count(c, "review_queue")).isGreaterThanOrEqualTo(1);
+            }
+        }
+    }
+
+    @Test
+    void barrierFunctionStopsErrorCascadeViaFullIngest() throws Exception {
+        try (XSSFWorkbook main = new XSSFWorkbook()) {
+            Sheet sheet = main.createSheet("Sheet1");
+            Row row = sheet.createRow(0);
+            row.createCell(0).setCellFormula("1/0");
+            row.createCell(1).setCellFormula("IFERROR(A1,0)");
+            row.createCell(2).setCellFormula("B1");
+
+            org.apache.poi.ss.usermodel.FormulaEvaluator evaluator =
+                    main.getCreationHelper().createFormulaEvaluator();
+            evaluator.evaluateFormulaCell(row.getCell(0));
+
+            Path xlsx = writeWorkbook(main, "barrier.xlsx");
+            Path db = tempDir.resolve("barrier.db");
+            new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT is_error_barrier FROM cell WHERE coord = 'B1'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getBoolean("is_error_barrier")).isTrue();
+                }
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT error_descendant FROM cell WHERE coord = 'C1'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getBoolean("error_descendant")).isFalse();
+                }
+            }
+        }
+    }
+
+    @Test
+    void circularReferenceSeverityFollowsIterativeCalcSetting() throws Exception {
+        try (XSSFWorkbook main = new XSSFWorkbook()) {
+            Sheet sheet = main.createSheet("Sheet1");
+            Row row = sheet.createRow(0);
+            row.createCell(0).setCellFormula("B1");
+            row.createCell(1).setCellFormula("A1");
+            main.getCTWorkbook().addNewCalcPr().setIterate(true);
+
+            Path xlsx = writeWorkbook(main, "circular-iterative.xlsx");
+            Path db = tempDir.resolve("circular-iterative.db");
+            new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                    ResultSet rs = c.createStatement().executeQuery(
+                            "SELECT detail FROM review_queue WHERE category = 'circular_reference'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("detail")).contains("\"severity\":\"info\"");
+            }
+        }
+
+        try (XSSFWorkbook main = new XSSFWorkbook()) {
+            Sheet sheet = main.createSheet("Sheet1");
+            Row row = sheet.createRow(0);
+            row.createCell(0).setCellFormula("B1");
+            row.createCell(1).setCellFormula("A1");
+
+            Path xlsx = writeWorkbook(main, "circular-noniterative.xlsx");
+            Path db = tempDir.resolve("circular-noniterative.db");
+            new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                    ResultSet rs = c.createStatement().executeQuery(
+                            "SELECT detail FROM review_queue WHERE category = 'circular_reference'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("detail")).contains("\"severity\":\"warning\"");
+            }
         }
     }
 }

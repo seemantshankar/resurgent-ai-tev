@@ -1,8 +1,6 @@
 -- Ticket 14: V8 migration - reference graph schema and cell table rebuild.
 -- ADR 0002 compliance: BOOLEAN -> INTEGER CHECK(0|1); BIGSERIAL -> INTEGER PRIMARY KEY AUTOINCREMENT.
 
-PRAGMA foreign_keys = OFF;
-
 CREATE TABLE cell_new (
     cell_id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     worksheet_id            INTEGER NOT NULL REFERENCES worksheet (worksheet_id),
@@ -38,7 +36,7 @@ CREATE TABLE cell_new (
     col_hidden              INTEGER NOT NULL DEFAULT 0 CHECK (col_hidden IN (0, 1)),
     sheet_hidden            INTEGER NOT NULL DEFAULT 0 CHECK (sheet_hidden IN (0, 1)),
     is_circular             INTEGER NOT NULL DEFAULT 0 CHECK (is_circular IN (0, 1)),
-    circular_group_id       TEXT,
+    circular_group_id       INTEGER,
     row_hash                TEXT,
     region_id               INTEGER,
     provenance_id           INTEGER,
@@ -69,8 +67,6 @@ FROM cell;
 
 DROP TABLE cell;
 ALTER TABLE cell_new RENAME TO cell;
-
-PRAGMA foreign_keys = ON;
 
 -- New tables for reference graph and error roots
 CREATE TABLE cell_reference (
@@ -116,6 +112,9 @@ CREATE INDEX idx_cell_numeric ON cell (numeric_value) WHERE numeric_value IS NOT
 CREATE INDEX idx_cell_text ON cell (text_value) WHERE text_value IS NOT NULL;
 CREATE INDEX idx_cell_error ON cell (is_error, error_type);
 CREATE INDEX idx_cell_circular ON cell (circular_group_id) WHERE circular_group_id IS NOT NULL;
+CREATE INDEX idx_cell_row_label ON cell (row_label);
+CREATE INDEX idx_cell_col_label ON cell (col_label);
+CREATE INDEX idx_cell_value_source ON cell (value_source);
 CREATE INDEX idx_cellref_from ON cell_reference (from_cell_id);
 CREATE INDEX idx_cellref_resolved ON cell_reference (resolved_cell_id) WHERE resolved_cell_id IS NOT NULL;
 CREATE INDEX idx_cellref_unresolved ON cell_reference (unresolved_reason) WHERE unresolved_reason IS NOT NULL;

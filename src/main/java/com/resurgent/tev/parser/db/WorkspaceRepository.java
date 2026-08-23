@@ -226,10 +226,7 @@ public final class WorkspaceRepository {
         }
     }
 
-    public long insertCellReference(long fromCellId, int tokenIndex, String rawToken, String refKind,
-            String targetSheetName, Long targetWorksheetId, String targetRange, Long resolvedCellId,
-            Long externalLinkId, Boolean absRow, Boolean absCol, Integer rowOffset, Integer colOffset,
-            boolean isWholeColumn, boolean isWholeRow, String unresolvedReason) throws SQLException {
+    public long insertCellReference(CellReferenceRow row) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO cell_reference (from_cell_id, token_index, raw_token, ref_kind,"
                         + " target_sheet_name, target_worksheet_id, target_range, resolved_cell_id,"
@@ -237,22 +234,22 @@ public final class WorkspaceRepository {
                         + " is_whole_column, is_whole_row, unresolved_reason)"
                         + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
-            ps.setLong(1, fromCellId);
-            ps.setInt(2, tokenIndex);
-            ps.setString(3, rawToken);
-            ps.setString(4, refKind);
-            ps.setString(5, targetSheetName);
-            setLong(ps, 6, targetWorksheetId);
-            ps.setString(7, targetRange);
-            setLong(ps, 8, resolvedCellId);
-            setLong(ps, 9, externalLinkId);
-            setBoolean(ps, 10, absRow);
-            setBoolean(ps, 11, absCol);
-            setInteger(ps, 12, rowOffset);
-            setInteger(ps, 13, colOffset);
-            ps.setInt(14, isWholeColumn ? 1 : 0);
-            ps.setInt(15, isWholeRow ? 1 : 0);
-            ps.setString(16, unresolvedReason);
+            ps.setLong(1, row.fromCellId());
+            ps.setInt(2, row.tokenIndex());
+            ps.setString(3, row.rawToken());
+            ps.setString(4, row.refKind());
+            ps.setString(5, row.targetSheetName());
+            setLong(ps, 6, row.targetWorksheetId());
+            ps.setString(7, row.targetRange());
+            setLong(ps, 8, row.resolvedCellId());
+            setLong(ps, 9, row.externalLinkId());
+            setBoolean(ps, 10, row.absRow());
+            setBoolean(ps, 11, row.absCol());
+            setInteger(ps, 12, row.rowOffset());
+            setInteger(ps, 13, row.colOffset());
+            ps.setInt(14, row.isWholeColumn() ? 1 : 0);
+            ps.setInt(15, row.isWholeRow() ? 1 : 0);
+            ps.setString(16, row.unresolvedReason());
             ps.executeUpdate();
             return generatedId(ps);
         }
@@ -547,14 +544,57 @@ public final class WorkspaceRepository {
         return count("SELECT COUNT(*) FROM ingest_rejection");
     }
 
-    public ResultSet findCellReferencesByParseRun(long parseRunId) throws SQLException {
+    /**
+     * All {@code cell_reference} rows for a parse run, enriched with the referencing
+     * cell's own worksheet id (needed to resolve local, unqualified ranges) — feeds
+     * {@code ReferenceGraphLoader}, which expands range references into direct edges.
+     */
+    public ResultSet findCellReferenceRowsByParseRun(long parseRunId) throws SQLException {
         PreparedStatement ps = connection.prepareStatement(
-                "SELECT cr.from_cell_id, cr.resolved_cell_id FROM cell_reference cr"
+                "SELECT cr.from_cell_id, cr.resolved_cell_id, cr.target_worksheet_id,"
+                        + " cr.target_range, cr.is_whole_column, cr.is_whole_row, c.worksheet_id AS from_worksheet_id"
+                        + " FROM cell_reference cr"
                         + " JOIN cell c ON cr.from_cell_id = c.cell_id"
                         + " JOIN worksheet w ON c.worksheet_id = w.worksheet_id"
-                        + " WHERE w.parse_run_id = ? AND cr.resolved_cell_id IS NOT NULL");
+                        + " WHERE w.parse_run_id = ?");
         ps.setLong(1, parseRunId);
         return ps.executeQuery();
+    }
+
+    /** Cell ids that exist within a row/col bounding box on one worksheet (range expansion, C3). */
+    public java.util.List<Long> findCellIdsInRange(long worksheetId, int minRow, int maxRow,
+            int minCol, int maxCol) throws SQLException {
+        java.util.List<Long> ids = new java.util.ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT cell_id FROM cell WHERE worksheet_id = ? AND row_num BETWEEN ? AND ?"
+                        + " AND col_num BETWEEN ? AND ?")) {
+            ps.setLong(1, worksheetId);
+            ps.setInt(2, minRow);
+            ps.setInt(3, maxRow);
+            ps.setInt(4, minCol);
+            ps.setInt(5, maxCol);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    ids.add(rs.getLong(1));
+                }
+            }
+        }
+        return ids;
+    }
+
+    /** Worksheet bbox (min/max row/col), used to clamp whole-column/whole-row range expansion. */
+    public int[] findWorksheetBbox(long worksheetId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT bbox_min_row, bbox_min_col, bbox_max_row, bbox_max_col FROM worksheet"
+                        + " WHERE worksheet_id = ?")) {
+            ps.setLong(1, worksheetId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                return new int[] { rs.getInt(1), rs.getInt(2), rs.getInt(3), rs.getInt(4) };
+            }
+        }
     }
 
     public void updateCellCircularStatus(long cellId, boolean isCircular, long circularGroupId) throws SQLException {
@@ -589,6 +629,40 @@ public final class WorkspaceRepository {
             ps.setLong(2, cellId);
             ps.executeUpdate();
         }
+    }
+
+    public void updateCellErrorDescendant(long cellId, boolean errorDescendant) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cell SET error_descendant = ? WHERE cell_id = ?")) {
+            ps.setInt(1, errorDescendant ? 1 : 0);
+            ps.setLong(2, cellId);
+            ps.executeUpdate();
+        }
+    }
+
+    public void updateCellErrorBarrier(long cellId, boolean isErrorBarrier) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cell SET is_error_barrier = ? WHERE cell_id = ?")) {
+            ps.setInt(1, isErrorBarrier ? 1 : 0);
+            ps.setLong(2, cellId);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Cell ids flagged as error barriers (function-wise) for a parse run, with their is_error flag. */
+    public java.util.Map<Long, Boolean> findErrorBarrierCellsByParseRun(long parseRunId) throws SQLException {
+        java.util.Map<Long, Boolean> result = new java.util.HashMap<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT c.cell_id, c.is_error FROM cell c JOIN worksheet w ON c.worksheet_id = w.worksheet_id"
+                        + " WHERE w.parse_run_id = ? AND c.is_error_barrier = 1")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.put(rs.getLong(1), rs.getInt(2) == 1);
+                }
+            }
+        }
+        return result;
     }
 
     public void updateCellSkeleton(long cellId, String formulaSkeleton) throws SQLException {

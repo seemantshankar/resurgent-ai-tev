@@ -68,10 +68,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(8);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(9);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(8);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(9);
         }
     }
 
@@ -287,7 +287,7 @@ class PersistenceSeamTest {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(8);
+            assertThat(count(c, "schema_migration")).isEqualTo(9);
             assertThat(tableNames(c)).contains("cell_reference", "cell_error_root");
 
             long sourceFileId = repo.insertSourceFile(1L, "v8.xlsx", "hash8", "fm_xlsx",
@@ -307,9 +307,9 @@ class PersistenceSeamTest {
             long cellId = repo.insertCell(worksheetId, cell);
             assertThat(cellId).isGreaterThan(0L);
 
-            long refId = repo.insertCellReference(cellId, 0, "Sheet1!A1", "local_cell",
+            long refId = repo.insertCellReference(new CellReferenceRow(cellId, 0, "Sheet1!A1", "local_cell",
                     "Sheet1", worksheetId, "A1", cellId, null, false, false, 0, 0,
-                    false, false, null);
+                    false, false, null));
             assertThat(refId).isGreaterThan(0L);
 
             repo.insertCellErrorRoot(cellId, cellId);
