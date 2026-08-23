@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import com.fasterxml.jackson.core.type.TypeReference;
 
@@ -46,6 +47,40 @@ class PersistenceSeamTest {
         }
     }
 
+    private static void applyV9Schema(Path dbPath) throws Exception {
+        try (java.sql.Connection connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
+            for (int version = 1; version <= 9; version++) {
+                String resource = "db/migration/V" + version + "__" + switch (version) {
+                    case 1 -> "initial_schema";
+                    case 2 -> "source_file_raw_metadata";
+                    case 3 -> "sprint1_schema";
+                    case 4 -> "xlsx_cell_contract";
+                    case 5 -> "cell_header_labels";
+                    case 6 -> "structural_and_external_refs";
+                    case 7 -> "audit_log_nullable_parse_run";
+                    case 8 -> "sprint2_schema";
+                    default -> "error_barriers";
+                } + ".sql";
+                String sql = new String(PersistenceSeamTest.class.getClassLoader()
+                        .getResourceAsStream(resource).readAllBytes(), StandardCharsets.UTF_8);
+                try (java.sql.Statement statement = connection.createStatement()) {
+                    for (String part : sql.split(";\\s*\\R")) {
+                        String trimmed = part.replaceAll("(?m)^--.*$", "").trim();
+                        if (!trimmed.isEmpty()) {
+                            statement.execute(trimmed);
+                        }
+                    }
+                }
+            }
+            try (java.sql.Statement statement = connection.createStatement()) {
+                statement.execute("CREATE TABLE schema_migration (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)");
+                for (int version = 1; version <= 9; version++) {
+                    statement.execute("INSERT INTO schema_migration VALUES (" + version + ", 'now')");
+                }
+            }
+        }
+    }
+
     @Test
     void sprint1TablesAreCreated() throws Exception {
         try (WorkspaceDatabase db = openDb("sprint1.db")) {
@@ -68,10 +103,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(9);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(10);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(9);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(10);
         }
     }
 
@@ -287,7 +322,7 @@ class PersistenceSeamTest {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(9);
+            assertThat(count(c, "schema_migration")).isEqualTo(10);
             assertThat(tableNames(c)).contains("cell_reference", "cell_error_root");
 
             long sourceFileId = repo.insertSourceFile(1L, "v8.xlsx", "hash8", "fm_xlsx",
@@ -322,6 +357,53 @@ class PersistenceSeamTest {
                 assertThat(rs.getString("calculation_mode")).isEqualTo("auto");
                 assertThat(rs.getInt("full_calc_on_load")).isEqualTo(1);
             }
+        }
+    }
+
+    @Test
+    void v10MigrationAddsRegionMembershipColumns() throws Exception {
+        try (WorkspaceDatabase db = openDb("v10.db")) {
+            java.sql.Connection c = db.connection();
+            assertThat(tableNames(c)).contains("region");
+            assertThat(count(c, "schema_migration")).isEqualTo(10);
+
+            try (ResultSet rs = c.createStatement().executeQuery("PRAGMA table_info(cell)")) {
+                java.util.Set<String> columns = new java.util.HashSet<>();
+                while (rs.next()) {
+                    columns.add(rs.getString("name"));
+                }
+                assertThat(columns).contains("region_id", "formula_skeleton_regional",
+                        "is_bold", "has_fill", "has_border", "number_format");
+            }
+            try (ResultSet rs = c.createStatement().executeQuery("PRAGMA table_info(worksheet)")) {
+                java.util.Set<String> columns = new java.util.HashSet<>();
+                while (rs.next()) {
+                    columns.add(rs.getString("name"));
+                }
+                assertThat(columns).contains("role", "role_conf");
+            }
+        }
+    }
+
+    @Test
+    void v10MigrationUpgradesPopulatedV9DatabaseWithoutLosingCells() throws Exception {
+        Path dbPath = tempDir.resolve("populated-v9.db");
+        applyV9Schema(dbPath);
+        try (java.sql.Connection connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+                java.sql.Statement statement = connection.createStatement()) {
+            statement.execute("INSERT INTO source_file (mandate_id, file_name, file_hash, file_type, ingested_at, parser_version) VALUES (1, 'a.xlsx', 'hash', 'fm_xlsx', 'now', 'v1')");
+            statement.execute("INSERT INTO parse_run (source_file_id, mandate_id, parser_version, config_hash, started_at, status) VALUES (1, 1, 'v1', 'cfg', 'now', 'success')");
+            statement.execute("INSERT INTO worksheet (parse_run_id, sheet_name, sheet_index) VALUES (1, 'Sheet1', 0)");
+            statement.execute("INSERT INTO cell (worksheet_id, coord, row_num, col_num, raw_type, value_type, formula_skeleton, is_error_barrier) VALUES (1, 'A1', 1, 1, 'number', 'number', '=R', 1)");
+        }
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath);
+                ResultSet rs = db.connection().createStatement().executeQuery(
+                        "SELECT coord, formula_skeleton, is_error_barrier FROM cell")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("coord")).isEqualTo("A1");
+            assertThat(rs.getString("formula_skeleton")).isEqualTo("=R");
+            assertThat(rs.getInt("is_error_barrier")).isEqualTo(1);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(10);
         }
     }
 }
