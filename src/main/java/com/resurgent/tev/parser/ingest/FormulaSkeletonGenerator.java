@@ -49,7 +49,9 @@ public final class FormulaSkeletonGenerator {
             // something else entirely (e.g. text-only); only the former collapses to
             // a fixed skeleton token.
             if (CONSTANT_GRAMMAR.matcher(clean.trim()).matches() && clean.trim().matches(".*\\d.*")) {
-                return (hasEquals ? "=" : "") + "CONST";
+                // Formula adapters disagree on whether formula_text carries its leading '=';
+                // the sentinel is canonical either way so region scoring can reliably exclude it.
+                return "=CONST";
             }
             return hasEquals ? "=" + clean : clean;
         }

@@ -708,6 +708,22 @@ public final class WorkspaceRepository {
         }
     }
 
+    /** Stores the deterministic local formula-family evidence used by region scoring. */
+    public void updateCellCoherence(long cellId, Double coherenceScore, String coherenceDirs)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cell SET coherence_score = ?, coherence_dirs = ? WHERE cell_id = ?")) {
+            if (coherenceScore == null) {
+                ps.setNull(1, java.sql.Types.REAL);
+            } else {
+                ps.setDouble(1, coherenceScore);
+            }
+            ps.setString(2, coherenceDirs);
+            ps.setLong(3, cellId);
+            ps.executeUpdate();
+        }
+    }
+
     private long count(String sql) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(sql);
                 ResultSet rs = ps.executeQuery()) {

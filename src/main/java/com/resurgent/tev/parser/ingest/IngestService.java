@@ -215,7 +215,7 @@ public final class IngestService {
             cellsById.put(cellId, new RegionDetector.RegionCell(cell, null));
             cellsWritten++;
         }
-        persistRegions(repo, worksheetId, parseRunId, sheet.sheetName(), cellsById);
+        persistRegions(repo, worksheetId, parseRunId, sheet.sheetName(), cellsById, config);
 
         // CSV has no formulas or structural references, so those reconciliation buckets
         // are trivially 0/0/0 and never force a partial/failed status on their own.
@@ -378,7 +378,7 @@ public final class IngestService {
                     cellsError++;
                 }
             }
-            persistRegions(repo, worksheetId, parseRunId, sheet.sheetName(), cellsById);
+            persistRegions(repo, worksheetId, parseRunId, sheet.sheetName(), cellsById, config);
             sheetIndex++;
         }
 
@@ -463,13 +463,34 @@ public final class IngestService {
     }
 
     private void persistRegions(WorkspaceRepository repo, long worksheetId, long parseRunId,
-            String sheetName, Map<Long, RegionDetector.RegionCell> cellsById) throws SQLException {
-        for (RegionDetector.DetectedRegion region : regionDetector.detect(sheetName, cellsById)) {
+            String sheetName, Map<Long, RegionDetector.RegionCell> cellsById, ParserConfig config)
+            throws SQLException, IOException {
+        for (RegionDetector.DetectedRegion region : regionDetector.detect(sheetName, cellsById,
+                config.regionBreakThreshold())) {
             long regionId = repo.insertRegion(worksheetId, parseRunId, region.key(),
                     region.startRow(), region.endRow(), region.startCol(), region.endCol());
             for (long cellId : region.cellIds()) {
                 repo.updateCellRegion(cellId, regionId);
             }
+            persistCoherence(repo, region, cellsById);
+        }
+    }
+
+    private static void persistCoherence(WorkspaceRepository repo, RegionDetector.DetectedRegion region,
+            Map<Long, RegionDetector.RegionCell> cellsById) throws SQLException, IOException {
+        Map<Long, RegionDetector.RegionCell> regionCells = new LinkedHashMap<>();
+        for (long id : region.cellIds()) {
+            regionCells.put(id, cellsById.get(id));
+        }
+        for (Map.Entry<Long, RegionDetector.RegionCell> entry : regionCells.entrySet()) {
+            if (entry.getValue().formulaSkeleton() == null) {
+                continue;
+            }
+            Map<String, Double> dirs = RegionDetector.coherenceDirections(entry.getKey(), regionCells);
+            java.util.OptionalDouble average = dirs.values().stream().filter(value -> value > 0)
+                    .mapToDouble(Double::doubleValue).average();
+            Double score = average.isPresent() ? average.getAsDouble() : null;
+            repo.updateCellCoherence(entry.getKey(), score, Jsonb.toJson(dirs));
         }
     }
 

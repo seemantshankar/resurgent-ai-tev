@@ -19,6 +19,7 @@ class ParserConfigTest {
         assertThat(config.xlsEnabled()).isFalse();
         assertThat(config.rejectPasswordProtected()).isTrue();
         assertThat(config.rejectActiveXOleDde()).isTrue();
+        assertThat(config.regionBreakThreshold()).isEqualTo(4);
     }
 
     @Test
@@ -41,8 +42,15 @@ class ParserConfigTest {
                 defaults.maxZipExpansionRatio(),
                 defaults.xlsEnabled(),
                 defaults.rejectPasswordProtected(),
-                defaults.rejectActiveXOleDde());
+                defaults.rejectActiveXOleDde(),
+                defaults.regionBreakThreshold());
 
         assertThat(larger.configHash()).isNotEqualTo(defaults.configHash());
+    }
+
+    @Test
+    void configHashIncludesVersionedRegionWeights() {
+        assertThat(RegionWeights.defaults().contentHash()).hasSize(64);
+        assertThat(ParserConfig.embeddedDefaults().configHash()).hasSize(64);
     }
 }

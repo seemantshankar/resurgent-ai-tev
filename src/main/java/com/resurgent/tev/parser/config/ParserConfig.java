@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.Map;
 
 /**
  * Effective parser configuration. Instances are immutable and carry a deterministic
@@ -23,7 +24,8 @@ public record ParserConfig(
         int maxZipExpansionRatio,
         boolean xlsEnabled,
         boolean rejectPasswordProtected,
-        boolean rejectActiveXOleDde) {
+        boolean rejectActiveXOleDde,
+        int regionBreakThreshold) {
 
     /** Embedded defaults used when no --config file is supplied. */
     public static ParserConfig embeddedDefaults() {
@@ -36,7 +38,8 @@ public record ParserConfig(
                 100,                   // expansion ratio (compressed bytes -> unpacked bytes)
                 false,                 // xls adapter disabled by default
                 true,                  // reject password-protected files
-                true);                 // reject ActiveX/OLE/DDE payloads
+                true,                  // reject ActiveX/OLE/DDE payloads
+                4);                    // region break score
     }
 
     /** Hard ceilings that user values may not exceed. */
@@ -58,7 +61,10 @@ public record ParserConfig(
      */
     public String configHash() {
         try {
-            String canonical = CANONICAL_MAPPER.writeValueAsString(this);
+            // The weights are intentionally outside this positional record, but still part of
+            // the run identity: changing the resource must not reuse an old parse run.
+            String canonical = CANONICAL_MAPPER.writeValueAsString(Map.of(
+                    "config", this, "regionWeightsHash", RegionWeights.defaults().contentHash()));
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             return HexFormat.of().formatHex(digest.digest(canonical.getBytes(StandardCharsets.UTF_8)));
         } catch (JsonProcessingException e) {

@@ -198,6 +198,56 @@ class IngestServiceTest {
     }
 
     @Test
+    void regionBreakScoringSplitsPersistentStyledSchemaChange() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Model");
+            for (int row = 0; row < 3; row++) {
+                sheet.createRow(row).createCell(0).setCellFormula("1+1");
+            }
+            org.apache.poi.ss.usermodel.Cell title = sheet.createRow(3).createCell(0);
+            title.setCellValue("Details");
+            org.apache.poi.ss.usermodel.CellStyle style = workbook.createCellStyle();
+            org.apache.poi.ss.usermodel.Font font = workbook.createFont();
+            font.setBold(true);
+            style.setFont(font);
+            title.setCellStyle(style);
+            for (int row = 4; row < 7; row++) {
+                sheet.createRow(row).createCell(0).setCellValue("line item " + row);
+                sheet.getRow(row).createCell(1).setCellValue(row);
+            }
+
+            Path xlsx = writeWorkbook(workbook, "scored-region-break.xlsx");
+            Path db = tempDir.resolve("scored-region-break.db");
+            new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                assertThat(count(c, "region")).isEqualTo(2);
+            }
+        }
+    }
+
+    @Test
+    void regionBreakScoringDoesNotSplitKnownTotal() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Model");
+            for (int row = 0; row < 3; row++) {
+                sheet.createRow(row).createCell(0).setCellFormula("1+1");
+            }
+            sheet.createRow(3).createCell(0).setCellValue("Total");
+            sheet.getRow(3).createCell(1).setCellFormula("SUM(A1:A3)");
+            sheet.createRow(4).createCell(0).setCellFormula("1+1");
+
+            Path xlsx = writeWorkbook(workbook, "total-is-not-break.xlsx");
+            Path db = tempDir.resolve("total-is-not-break.db");
+            new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                assertThat(count(c, "region")).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
     void regionDetectionDoesNotTreatHiddenColumnsAsConnectivity() throws Exception {
         try (XSSFWorkbook emptySeparator = new XSSFWorkbook();
                 XSSFWorkbook populatedSeparator = new XSSFWorkbook()) {

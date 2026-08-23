@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "signals": {
+    "titleStyle": 2,
+    "columnProfileShift": 2,
+    "serialReset": 2,
+    "skeletonDrift": 2,
+    "sectionMarker": 1,
+    "formulaAnchorChange": 1,
+    "blankRowsWithHeader": 1,
+    "coherentSpacer": -2,
+    "hiddenRowsInSummedRange": -2,
+    "protectedTotalOrMerge": -3
+  }
+}
