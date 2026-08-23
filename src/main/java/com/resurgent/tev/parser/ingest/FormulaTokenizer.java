@@ -61,21 +61,27 @@ public final class FormulaTokenizer {
                 } else if (ptg instanceof Ref3DPtg ref3d) {
                     String sheetName = restoreExternalSheetPrefix(safeGetSheetName(fpw, ref3d.getExternSheetIndex()), cleanFormula);
                     tokens.add(build3DCellToken(tokenIndex++, sheetName, ref3d.getRow() + 1, ref3d.getColumn() + 1,
-                            !ref3d.isRowRelative(), !ref3d.isColRelative(), formulaRow, formulaCol));
+                            !ref3d.isRowRelative(), !ref3d.isColRelative(), formulaRow, formulaCol, cleanFormula));
                 } else if (ptg instanceof Ref3DPxg ref3dpxg) {
                     String sheetName = restoreExternalSheetPrefix(ref3dpxg.getSheetName(), cleanFormula);
                     tokens.add(build3DCellToken(tokenIndex++, sheetName, ref3dpxg.getRow() + 1, ref3dpxg.getColumn() + 1,
-                            !ref3dpxg.isRowRelative(), !ref3dpxg.isColRelative(), formulaRow, formulaCol));
+                            !ref3dpxg.isRowRelative(), !ref3dpxg.isColRelative(), formulaRow, formulaCol, cleanFormula));
                 } else if (ptg instanceof Area3DPtg area3d) {
                     String sheetName = restoreExternalSheetPrefix(safeGetSheetName(fpw, area3d.getExternSheetIndex()), cleanFormula);
-                    tokens.add(build3DRangeToken(tokenIndex++, sheetName, area3d.getFirstRow() + 1, area3d.getLastRow() + 1,
-                            area3d.getFirstColumn() + 1, area3d.getLastColumn() + 1,
-                            !area3d.isFirstRowRelative(), !area3d.isFirstColRelative(), formulaRow, formulaCol));
+                    tokens.add(build3DRangeToken(tokenIndex++, sheetName, new RangeBounds(
+                            area3d.getFirstRow() + 1, area3d.getFirstColumn() + 1,
+                            area3d.getLastRow() + 1, area3d.getLastColumn() + 1,
+                            !area3d.isFirstRowRelative(), !area3d.isFirstColRelative(),
+                            !area3d.isLastRowRelative(), !area3d.isLastColRelative()),
+                            formulaRow, formulaCol, cleanFormula));
                 } else if (ptg instanceof Area3DPxg area3dpxg) {
                     String sheetName = restoreExternalSheetPrefix(area3dpxg.getSheetName(), cleanFormula);
-                    tokens.add(build3DRangeToken(tokenIndex++, sheetName, area3dpxg.getFirstRow() + 1, area3dpxg.getLastRow() + 1,
-                            area3dpxg.getFirstColumn() + 1, area3dpxg.getLastColumn() + 1,
-                            !area3dpxg.isFirstRowRelative(), !area3dpxg.isFirstColRelative(), formulaRow, formulaCol));
+                    tokens.add(build3DRangeToken(tokenIndex++, sheetName, new RangeBounds(
+                            area3dpxg.getFirstRow() + 1, area3dpxg.getFirstColumn() + 1,
+                            area3dpxg.getLastRow() + 1, area3dpxg.getLastColumn() + 1,
+                            !area3dpxg.isFirstRowRelative(), !area3dpxg.isFirstColRelative(),
+                            !area3dpxg.isLastRowRelative(), !area3dpxg.isLastColRelative()),
+                            formulaRow, formulaCol, cleanFormula));
                 } else if (ptg instanceof NamePtg namePtg) {
                     String name = fpw.getNameText(namePtg);
                     tokens.add(new FormulaToken(tokenIndex++, name, "defined_name", null, name, null, null, null, null, false, false));
@@ -162,41 +168,109 @@ public final class FormulaTokenizer {
     }
 
     private static FormulaToken buildLocalRangeToken(int index, AreaPtg area, int formulaRow, int formulaCol) {
-        int firstRow = area.getFirstRow() + 1;
-        int lastRow = area.getLastRow() + 1;
-        int firstCol = area.getFirstColumn() + 1;
-        int lastCol = area.getLastColumn() + 1;
-        boolean isWholeCol = isWholeColumn(firstRow, lastRow);
-        boolean isWholeRow = isWholeRow(firstCol, lastCol);
+        RangeBounds bounds = new RangeBounds(
+                area.getFirstRow() + 1, area.getFirstColumn() + 1,
+                area.getLastRow() + 1, area.getLastColumn() + 1,
+                !area.isFirstRowRelative(), !area.isFirstColRelative(),
+                !area.isLastRowRelative(), !area.isLastColRelative());
 
-        String range = rangeString(firstRow, firstCol, lastRow, lastCol);
-
-        boolean absRow = !area.isFirstRowRelative();
-        boolean absCol = !area.isFirstColRelative();
-
-        return new FormulaToken(index, range, "local_range", null, range, absRow, absCol,
-                firstRow - formulaRow, firstCol - formulaCol, isWholeCol, isWholeRow);
+        return new FormulaToken(index, bounds.asWritten(), "local_range", null, bounds.normalized(),
+                bounds.absFirstRow(), bounds.absFirstCol(),
+                bounds.firstRow() - formulaRow, bounds.firstCol() - formulaCol,
+                bounds.isWholeColumn(), bounds.isWholeRow());
     }
 
     private static FormulaToken build3DCellToken(int index, String sheetName, int targetRow, int targetCol,
-            boolean absRow, boolean absCol, int formulaRow, int formulaCol) {
+            boolean absRow, boolean absCol, int formulaRow, int formulaCol, String formulaText) {
         String colStr = CellReference.convertNumToColString(targetCol - 1);
         String cellRef = colStr + targetRow;
-        String rawToken = (sheetName != null ? "'" + sheetName + "'!" : "") + (absCol ? "$" : "") + colStr + (absRow ? "$" : "") + targetRow;
+        String coordinate = (absCol ? "$" : "") + colStr + (absRow ? "$" : "") + targetRow;
+        String rawToken = sheetPrefixAsWritten(sheetName, coordinate, formulaText) + coordinate;
         String kind = sheetName != null && sheetName.startsWith("[") ? "external" : "cross_sheet_cell";
         return new FormulaToken(index, rawToken, kind, sheetName, cellRef, absRow, absCol,
                 targetRow - formulaRow, targetCol - formulaCol, false, false);
     }
 
-    private static FormulaToken build3DRangeToken(int index, String sheetName, int firstRow, int lastRow,
-            int firstCol, int lastCol, boolean absRow, boolean absCol, int formulaRow, int formulaCol) {
-        boolean isWholeCol = isWholeColumn(firstRow, lastRow);
-        boolean isWholeRow = isWholeRow(firstCol, lastCol);
-        String range = rangeString(firstRow, firstCol, lastRow, lastCol);
-        String rawToken = (sheetName != null ? "'" + sheetName + "'!" : "") + range;
+    private static FormulaToken build3DRangeToken(int index, String sheetName, RangeBounds bounds,
+            int formulaRow, int formulaCol, String formulaText) {
+        String writtenRange = bounds.asWritten();
+        String rawToken = sheetPrefixAsWritten(sheetName, writtenRange, formulaText) + writtenRange;
         String kind = sheetName != null && sheetName.startsWith("[") ? "external" : "cross_sheet_range";
-        return new FormulaToken(index, rawToken, kind, sheetName, range, absRow, absCol,
-                firstRow - formulaRow, firstCol - formulaCol, isWholeCol, isWholeRow);
+        return new FormulaToken(index, rawToken, kind, sheetName, bounds.normalized(),
+                bounds.absFirstRow(), bounds.absFirstCol(),
+                bounds.firstRow() - formulaRow, bounds.firstCol() - formulaCol,
+                bounds.isWholeColumn(), bounds.isWholeRow());
+    }
+
+    /**
+     * A range's bounds and the absolute markers each endpoint carries, as parsed. Bundled because
+     * the ten values move together through range rendering, whole-column detection, and offsets.
+     */
+    private record RangeBounds(int firstRow, int firstCol, int lastRow, int lastCol,
+            boolean absFirstRow, boolean absFirstCol, boolean absLastRow, boolean absLastCol) {
+
+        boolean isWholeColumn() {
+            return FormulaTokenizer.isWholeColumn(firstRow, lastRow);
+        }
+
+        boolean isWholeRow() {
+            return FormulaTokenizer.isWholeRow(firstCol, lastCol);
+        }
+
+        /** Normalized {@code first:last}, the resolution lookup key (§4.4). */
+        String normalized() {
+            return rangeString(firstRow, firstCol, lastRow, lastCol);
+        }
+
+        /**
+         * The coordinate as the formula writes it. {@link #normalized()} drops the absolute markers
+         * and expands a whole-column reference to its row bounds — right for the lookup key, wrong
+         * for the raw token, which §10.9 keeps verbatim.
+         *
+         * <p>Read entirely off the parsed ptg rather than searched for in the formula text, so two
+         * ranges over the same cells differing only in their markers cannot be confused for one
+         * another, and the result stays a pure function of the parse (§3).
+         */
+        String asWritten() {
+            String firstColStr = CellReference.convertNumToColString(firstCol - 1);
+            String lastColStr = CellReference.convertNumToColString(lastCol - 1);
+            if (isWholeColumn()) {
+                // Written by its columns alone: A:A, never the row bounds normalized() expands to.
+                return (absFirstCol ? "$" : "") + firstColStr + ":" + (absLastCol ? "$" : "") + lastColStr;
+            }
+            if (isWholeRow()) {
+                return (absFirstRow ? "$" : "") + firstRow + ":" + (absLastRow ? "$" : "") + lastRow;
+            }
+            return (absFirstCol ? "$" : "") + firstColStr + (absFirstRow ? "$" : "") + firstRow
+                    + ":" + (absLastCol ? "$" : "") + lastColStr + (absLastRow ? "$" : "") + lastRow;
+        }
+    }
+
+    /**
+     * Renders the {@code sheet!} prefix the way the formula itself writes it.
+     *
+     * <p>Excel quotes a sheet name only where the name requires it, so re-rendering every name
+     * quoted yields a raw token that does not occur in the formula it came from — breaking §10.9's
+     * "preserve raw formula verbatim" and, downstream, {@link FormulaSkeletonGenerator}, which
+     * abstracts a reference by replacing its raw span and silently leaves the reference intact when
+     * that span is not literally present.
+     *
+     * <p>Quoting is a property of the source text alone — the parsed ptg does not record it — so
+     * unlike the coordinate it has to be recovered from the formula. Both candidates are tested
+     * with the coordinate attached, so a sheet name can never match inside a longer name that
+     * shares its prefix. Where neither is found the quoted form is returned, being always
+     * Excel-legal; a caller that reaches it has a formula whose text disagrees with its own parse.
+     */
+    private static String sheetPrefixAsWritten(String sheetName, String coordinate, String formulaText) {
+        if (sheetName == null) {
+            return "";
+        }
+        String quoted = "'" + sheetName + "'!";
+        if (formulaText != null && formulaText.contains(sheetName + "!" + coordinate)
+                && !formulaText.contains(quoted + coordinate)) {
+            return sheetName + "!";
+        }
+        return quoted;
     }
 
     private static List<FormulaToken> salvageTokens(String formulaText, int formulaRow, int formulaCol) {
