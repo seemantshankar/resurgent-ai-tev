@@ -113,7 +113,7 @@ class CellContextEnricherTest {
     }
 
     @Test
-    void headerCellsThemselvesGetTheirOwnRowAndColumnLabels() {
+    void headerCellsRetainOnlyProvisionalLabelsUntilRegionAnalysis() {
         List<NormalizedCell> cells = new ArrayList<>();
         cells.add(textCell("A1", 1, 1, "Metric"));
         cells.add(textCell("B1", 1, 2, "Year1"));
@@ -123,8 +123,8 @@ class CellContextEnricherTest {
         List<NormalizedCell> enriched = enricher.enrich(cells);
         Map<String, NormalizedCell> byCoord = byCoord(enriched);
 
-        // B1 is a header cell; its row label is A1, its col label is itself (Year1)
+        // RegionHeaderAnalyzer supplies the definitive header label during ingestion.
         assertThat(byCoord.get("B1").rowLabel()).isEqualTo("Metric");
-        assertThat(byCoord.get("B1").colLabel()).isEqualTo("Year1");
+        assertThat(byCoord.get("B1").colLabel()).isNull();
     }
 }

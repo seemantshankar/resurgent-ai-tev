@@ -50,6 +50,8 @@ public final class IngestService {
     private final CellContextEnricher enricher = new CellContextEnricher();
     private final SafetyEnforcer safetyEnforcer = new SafetyEnforcer();
     private final RegionDetector regionDetector = new RegionDetector();
+    private final RegionHeaderAnalyzer regionHeaderAnalyzer = new RegionHeaderAnalyzer();
+    private static final double CLASSIFICATION_REVIEW_CONFIDENCE = 0.5;
 
     /** Convenience overload that uses embedded defaults. */
     public IngestSummary ingest(Path input, long mandateId, Path dbPath)
@@ -467,13 +469,69 @@ public final class IngestService {
             throws SQLException, IOException {
         for (RegionDetector.DetectedRegion region : regionDetector.detect(sheetName, cellsById,
                 config.regionBreakThreshold())) {
+            List<Map.Entry<Long, RegionDetector.RegionCell>> regionEntries = region.cellIds().stream()
+                    .map(id -> Map.entry(id, cellsById.get(id)))
+                    .toList();
+            List<NormalizedCell> regionCells = regionEntries.stream()
+                    .map(entry -> entry.getValue().cell())
+                    .toList();
+            RegionHeaderContext headerContext = regionHeaderAnalyzer.analyze(regionCells,
+                    new RegionHeaderAnalyzer.Bounds(region.startRow(), region.endRow(),
+                            region.startCol(), region.endCol()));
+            RegionClassification classification = new RegionClassifier(
+                    com.resurgent.tev.parser.config.RegionWeights.defaults(),
+                    config.classificationEvidenceFloor()).classify(
+                    new RegionClassifier.RegionBounds(region.startRow(), region.endRow(),
+                            region.startCol(), region.endCol()),
+                    regionEntries.stream().map(entry -> classifierCell(entry.getValue().cell())).toList(),
+                    new RegionClassifier.HeaderContext(headerContext.headerRows(),
+                            new ArrayList<>(headerContext.columnLabelsByColumn().values())));
             long regionId = repo.insertRegion(worksheetId, parseRunId, region.key(),
-                    region.startRow(), region.endRow(), region.startCol(), region.endCol());
+                    region.startRow(), region.endRow(), region.startCol(), region.endCol(),
+                    Jsonb.toJson(headerContext.headerRows()), classification.type().databaseValue(),
+                    classification.confidence(), classification.costHeadCode(),
+                    Jsonb.toJson(headerContext.periodAxisByColumn()), Jsonb.toJson(classification.reasons()));
             for (long cellId : region.cellIds()) {
                 repo.updateCellRegion(cellId, regionId);
             }
+            persistRegionLabels(repo, regionEntries, headerContext);
+            queueClassificationReview(repo, parseRunId, region, classification);
             persistCoherence(repo, region, cellsById);
         }
+    }
+
+    private static RegionClassifier.RegionCell classifierCell(NormalizedCell cell) {
+        return new RegionClassifier.RegionCell(cell.rowNum(), cell.colNum(), cell.displayValue(),
+                cell.formulaText() != null && !cell.formulaText().isBlank(), cell.numericValue() != null);
+    }
+
+    private static void persistRegionLabels(WorkspaceRepository repo,
+            List<Map.Entry<Long, RegionDetector.RegionCell>> regionEntries,
+            RegionHeaderContext headerContext) throws SQLException {
+        for (Map.Entry<Long, RegionDetector.RegionCell> entry : regionEntries) {
+            NormalizedCell cell = entry.getValue().cell();
+            String rowLabel = headerContext.rowLabelsByRow().getOrDefault(cell.rowNum(), cell.rowLabel());
+            String colLabel = headerContext.columnLabelsByColumn().getOrDefault(cell.colNum(), cell.colLabel());
+            repo.updateCellLabels(entry.getKey(), rowLabel, colLabel);
+        }
+    }
+
+    private static void queueClassificationReview(WorkspaceRepository repo, long parseRunId,
+            RegionDetector.DetectedRegion region, RegionClassification classification)
+            throws SQLException, IOException {
+        if (classification.type() != RegionType.UNKNOWN
+                && classification.confidence() >= CLASSIFICATION_REVIEW_CONFIDENCE) {
+            return;
+        }
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("regionKey", region.key());
+        detail.put("regionType", classification.type().databaseValue());
+        detail.put("regionConfidence", classification.confidence());
+        detail.put("reasonCodes", classification.reasons().stream()
+                .map(reason -> reason.code().name()).toList());
+        repo.insertReviewQueue(parseRunId, "region_classification",
+                "Region classification requires review: " + region.key(), Jsonb.toJson(detail),
+                "Pending", false, Timestamps.now(), null);
     }
 
     private static void persistCoherence(WorkspaceRepository repo, RegionDetector.DetectedRegion region,

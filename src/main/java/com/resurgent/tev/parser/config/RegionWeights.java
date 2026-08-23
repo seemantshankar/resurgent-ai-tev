@@ -17,10 +17,13 @@ public final class RegionWeights {
     private static final RegionWeights DEFAULT = load();
 
     private final Map<String, Integer> signals;
+    private final Map<String, Integer> classification;
     private final String contentHash;
 
-    private RegionWeights(Map<String, Integer> signals, String contentHash) {
+    private RegionWeights(Map<String, Integer> signals, Map<String, Integer> classification,
+            String contentHash) {
         this.signals = Map.copyOf(signals);
+        this.classification = Map.copyOf(classification);
         this.contentHash = contentHash;
     }
 
@@ -40,6 +43,15 @@ public final class RegionWeights {
         return contentHash;
     }
 
+    /** Versioned weights for region classification rather than region boundary detection. */
+    public int classification(String name) {
+        Integer value = classification.get(name);
+        if (value == null) {
+            throw new IllegalStateException("missing classification weight: " + name);
+        }
+        return value;
+    }
+
     private static RegionWeights load() {
         try (InputStream stream = RegionWeights.class.getResourceAsStream(RESOURCE)) {
             if (stream == null) {
@@ -51,13 +63,7 @@ public final class RegionWeights {
             if (!(rawSignals instanceof Map<?, ?> map)) {
                 throw new IllegalStateException("region weights resource has no signals object");
             }
-            Map<String, Integer> signals = new java.util.LinkedHashMap<>();
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                if (!(entry.getKey() instanceof String name) || !(entry.getValue() instanceof Number number)) {
-                    throw new IllegalStateException("region weights signals must be numeric");
-                }
-                signals.put(name, number.intValue());
-            }
+            Map<String, Integer> signals = numericMap(map, "signals");
             for (String required : new String[] {"titleStyle", "columnProfileShift", "serialReset",
                     "skeletonDrift", "sectionMarker", "formulaAnchorChange", "blankRowsWithHeader",
                     "coherentSpacer", "hiddenRowsInSummedRange", "protectedTotalOrMerge"}) {
@@ -65,10 +71,32 @@ public final class RegionWeights {
                     throw new IllegalStateException("region weights resource missing " + required);
                 }
             }
-            return new RegionWeights(signals, sha256(content));
+            Object rawClassification = root.get("classification");
+            if (!(rawClassification instanceof Map<?, ?> classificationMap)) {
+                throw new IllegalStateException("region weights resource has no classification object");
+            }
+            Map<String, Integer> classification = numericMap(classificationMap, "classification");
+            for (String required : new String[] {"headerToken", "statementShape", "costHeadAlias",
+                    "verticalForm", "scratchPattern", "serialPattern"}) {
+                if (!classification.containsKey(required)) {
+                    throw new IllegalStateException("region weights classification missing " + required);
+                }
+            }
+            return new RegionWeights(signals, classification, sha256(content));
         } catch (IOException e) {
             throw new IllegalStateException("cannot load region weights resource", e);
         }
+    }
+
+    private static Map<String, Integer> numericMap(Map<?, ?> source, String section) {
+        Map<String, Integer> result = new java.util.LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : source.entrySet()) {
+            if (!(entry.getKey() instanceof String name) || !(entry.getValue() instanceof Number number)) {
+                throw new IllegalStateException("region weights " + section + " must be numeric");
+            }
+            result.put(name, number.intValue());
+        }
+        return result;
     }
 
     private static String sha256(byte[] content) {

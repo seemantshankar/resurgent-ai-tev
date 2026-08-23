@@ -164,6 +164,49 @@ class IngestServiceTest {
     }
 
     @Test
+    void regionPersistenceUsesPeriodHeadersForAxisAndDenormalizedCellLabels() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Model");
+            Row headers = sheet.createRow(0);
+            headers.createCell(0).setCellValue("Particulars");
+            headers.createCell(1).setCellValue("FY 2024-25");
+            headers.createCell(2).setCellValue("FY 2025-26");
+            Row pbit = sheet.createRow(1);
+            pbit.createCell(0).setCellValue("PBIT");
+            pbit.createCell(1).setCellValue(100.0);
+            pbit.createCell(2).setCellValue(200.0);
+
+            Path xlsx = writeWorkbook(workbook, "period-axis.xlsx");
+            Path db = tempDir.resolve("period-axis.db");
+            new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT header_rows, period_axis, detection_reasons FROM region")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(Jsonb.fromJson(rs.getString("header_rows"), List.class)).containsExactly(1);
+                    assertThat(Jsonb.fromJson(rs.getString("period_axis"), Map.class))
+                            .containsEntry("B", 1).containsEntry("C", 2);
+                    assertThat(Jsonb.fromJson(rs.getString("detection_reasons"), List.class)).isNotEmpty();
+                }
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT row_label, col_label FROM cell WHERE coord = 'B2'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("row_label")).isEqualTo("PBIT");
+                    assertThat(rs.getString("col_label")).isEqualTo("FY 2024-25");
+                }
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT category, detail FROM review_queue WHERE category = 'region_classification'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(Jsonb.fromJson(rs.getString("detail"), Map.class))
+                            .containsEntry("regionType", "unknown")
+                            .containsKey("reasonCodes");
+                }
+            }
+        }
+    }
+
+    @Test
     void regionDetectionUsesFormulaSkeletonsForOneCellDilation() throws Exception {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Model");
@@ -293,7 +336,11 @@ class IngestServiceTest {
             try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
                 assertThat(count(c, "workbook")).isEqualTo(1);
                 assertThat(count(c, "external_link")).isEqualTo(1);
-                assertThat(count(c, "review_queue")).isEqualTo(0);
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT COUNT(*) FROM review_queue WHERE category = 'formula_reference'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).isZero();
+                }
 
                 long linkId;
                 try (ResultSet rs = c.createStatement().executeQuery(
@@ -324,10 +371,14 @@ class IngestServiceTest {
 
             try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
                 assertThat(count(c, "external_link")).isEqualTo(0);
-                assertThat(count(c, "review_queue")).isEqualTo(1);
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT COUNT(*) FROM review_queue WHERE category = 'formula_reference'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).isEqualTo(1);
+                }
 
                 try (ResultSet rs = c.createStatement().executeQuery(
-                        "SELECT category, summary, detail FROM review_queue")) {
+                        "SELECT category, summary, detail FROM review_queue WHERE category = 'formula_reference'")) {
                     assertThat(rs.next()).isTrue();
                     assertThat(rs.getString("category")).isEqualTo("formula_reference");
                     assertThat(rs.getString("summary")).contains("[99]Missing").contains("A1");

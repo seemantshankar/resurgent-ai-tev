@@ -11,5 +11,13 @@
     "coherentSpacer": -2,
     "hiddenRowsInSummedRange": -2,
     "protectedTotalOrMerge": -3
+  },
+  "classification": {
+    "headerToken": 2,
+    "statementShape": 4,
+    "costHeadAlias": 8,
+    "verticalForm": 3,
+    "scratchPattern": 3,
+    "serialPattern": 3
   }
 }

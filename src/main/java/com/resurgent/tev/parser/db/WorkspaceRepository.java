@@ -250,12 +250,51 @@ public final class WorkspaceRepository {
         }
     }
 
+    /** Persists the complete Sprint 3a classification and header facts for a detected region. */
+    public long insertRegion(long worksheetId, long parseRunId, String regionKey,
+            int startRow, int endRow, int startCol, int endCol, String headerRows,
+            String regionType, double regionConf, String costHeadCode, String periodAxis,
+            String detectionReasons) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO region (worksheet_id, parse_run_id, region_key, start_row, end_row,"
+                        + " start_col, end_col, header_rows, region_type, region_conf, cost_head_code,"
+                        + " period_axis, detection_reasons) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, worksheetId);
+            ps.setLong(2, parseRunId);
+            ps.setString(3, regionKey);
+            ps.setInt(4, startRow);
+            ps.setInt(5, endRow);
+            ps.setInt(6, startCol);
+            ps.setInt(7, endCol);
+            ps.setString(8, headerRows);
+            ps.setString(9, regionType);
+            ps.setDouble(10, regionConf);
+            ps.setString(11, costHeadCode);
+            ps.setString(12, periodAxis);
+            ps.setString(13, detectionReasons);
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
     /** Assigns one occupied cell to its detector-produced region. */
     public void updateCellRegion(long cellId, long regionId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "UPDATE cell SET region_id = ? WHERE cell_id = ?")) {
             ps.setLong(1, regionId);
             ps.setLong(2, cellId);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Replaces the provisional generic labels with labels inferred from the cell's region headers. */
+    public void updateCellLabels(long cellId, String rowLabel, String colLabel) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cell SET row_label = ?, col_label = ? WHERE cell_id = ?")) {
+            ps.setString(1, rowLabel);
+            ps.setString(2, colLabel);
+            ps.setLong(3, cellId);
             ps.executeUpdate();
         }
     }
