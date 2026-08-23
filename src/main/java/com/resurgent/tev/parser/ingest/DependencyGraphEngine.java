@@ -12,6 +12,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.Stack;
 
+import com.resurgent.tev.parser.db.Jsonb;
+import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 
 /**
@@ -53,6 +55,9 @@ public final class DependencyGraphEngine {
             for (long cellId : cycle) {
                 repo.updateCellCircularStatus(cellId, true, groupId);
             }
+            repo.insertReviewQueue(parseRunId, "circular_reference", "Circular reference cycle detected",
+                    Jsonb.toJson(Map.of("groupId", groupId, "cycleSize", cycle.size())),
+                    "Pending", false, Timestamps.now(), null);
         }
 
         repo.updateWorkbookCycleMetadata(workbookId, isCircular, groupCount, maxCycleLength);

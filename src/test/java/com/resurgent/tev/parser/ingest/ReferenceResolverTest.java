@@ -55,7 +55,7 @@ class ReferenceResolverTest {
             Map<String, Map<String, Long>> cellCoordMap = Map.of("P  L ", Map.of("F35", targetCellId));
 
             ReferenceResolver resolver = new ReferenceResolver(repo);
-            resolver.resolveAndPersist(sourceCellId, List.of(token), parseRunId, sheetNameToId, externalLinkMap, cellCoordMap, Timestamps.now());
+            resolver.resolveAndPersist(sourceCellId, "Sheet1", List.of(token), parseRunId, sheetNameToId, externalLinkMap, cellCoordMap, Timestamps.now());
 
             try (ResultSet rs = c.createStatement().executeQuery(
                     "SELECT from_cell_id, ref_kind, target_sheet_name, target_worksheet_id, resolved_cell_id, external_link_id, unresolved_reason FROM cell_reference")) {
@@ -89,7 +89,7 @@ class ReferenceResolverTest {
             FormulaToken token = new FormulaToken(0, "MissingSheet!A1", "cross_sheet_cell", "MissingSheet", "A1", false, false, 0, 0, false, false);
 
             ReferenceResolver resolver = new ReferenceResolver(repo);
-            resolver.resolveAndPersist(cellId, List.of(token), parseRunId, Map.of("Sheet1", ws1), Map.of(), Map.of(), Timestamps.now());
+            resolver.resolveAndPersist(cellId, "Sheet1", List.of(token), parseRunId, Map.of("Sheet1", ws1), Map.of(), Map.of(), Timestamps.now());
 
             try (ResultSet rs = c.createStatement().executeQuery(
                     "SELECT unresolved_reason FROM cell_reference")) {

@@ -289,6 +289,7 @@ public final class IngestService {
                     if (tokRes.tokens().isEmpty()) {
                         ConstantFormulaEvaluator.EvalResult evalRes = ConstantFormulaEvaluator.evaluate(cell.formulaText(), tokRes.tokens());
                         if (evalRes != null) {
+                            skeleton = FormulaSkeletonGenerator.CONSTANT_SKELETON;
                             if (evalRes.numericValue() != null) {
                                 evaluatedNumeric = evalRes.numericValue();
                             }
@@ -322,7 +323,7 @@ public final class IngestService {
                     repo.updateCellSkeleton(cellId, skeleton);
                 }
                 if (tokRes != null && !tokRes.tokens().isEmpty()) {
-                    pendingTokensList.add(new PendingCellTokens(cellId, tokRes.tokens()));
+                    pendingTokensList.add(new PendingCellTokens(cellId, sheet.sheetName(), tokRes.tokens()));
                 }
 
                 cellsWritten++;
@@ -339,7 +340,7 @@ public final class IngestService {
         // Pass 2: Resolve reference tokens and persist cell_reference rows
         ReferenceResolver resolver = new ReferenceResolver(repo);
         for (PendingCellTokens pct : pendingTokensList) {
-            resolver.resolveAndPersist(pct.cellId, pct.tokens, parseRunId, sheetNameToId, linkIndexToId, cellCoordMap, now);
+            resolver.resolveAndPersist(pct.cellId, pct.sheetName, pct.tokens, parseRunId, sheetNameToId, linkIndexToId, cellCoordMap, now);
         }
 
         // Pass 3: Graph construction and Tarjan SCC cycle detection
@@ -386,7 +387,7 @@ public final class IngestService {
         int queued;
     }
 
-    private record PendingCellTokens(long cellId, List<FormulaToken> tokens) {}
+    private record PendingCellTokens(long cellId, String sheetName, List<FormulaToken> tokens) {}
 
     private static int coercedCount(List<NormalizedCell> cells) {
         return (int) cells.stream().filter(NormalizedCell::coercedFromText).count();

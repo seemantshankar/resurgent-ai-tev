@@ -7,7 +7,9 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -586,6 +588,30 @@ public final class WorkspaceRepository {
         try (PreparedStatement ps = connection.prepareStatement(
                 "UPDATE cell SET error_root_cell_id = ? WHERE cell_id = ?")) {
             ps.setLong(1, errorRootCellId);
+            ps.setLong(2, cellId);
+            ps.executeUpdate();
+        }
+    }
+
+    public Map<Long, String> findFormulasByParseRun(long parseRunId) throws SQLException {
+        Map<Long, String> map = new HashMap<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT c.cell_id, c.formula_text FROM cell c JOIN worksheet w ON c.worksheet_id = w.worksheet_id"
+                        + " WHERE w.parse_run_id = ? AND c.formula_text IS NOT NULL")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    map.put(rs.getLong(1), rs.getString(2));
+                }
+            }
+        }
+        return map;
+    }
+
+    public void updateCellErrorDescendant(long cellId, boolean errorDescendant) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cell SET error_descendant = ? WHERE cell_id = ?")) {
+            ps.setInt(1, errorDescendant ? 1 : 0);
             ps.setLong(2, cellId);
             ps.executeUpdate();
         }

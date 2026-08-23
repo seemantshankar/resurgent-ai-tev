@@ -5,9 +5,18 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * Emits canonical, region-free formula skeletons where coordinate references are replaced with {@code $ABS$}.
+ * Emits canonical, region-free formula skeletons in which every coordinate reference &mdash; absolute,
+ * relative, or a range &mdash; is replaced with the single generic token {@code $ABS$}.
+ *
+ * <p>§7.4.1 additionally specifies {@code R} for relative references and
+ * {@code RANGE_VERTICAL}/{@code RANGE_HORIZONTAL} for ranges. Those tokens are not emitted yet; every
+ * reference collapses to {@code $ABS$}, which still makes a formula family compare equal to itself
+ * but cannot distinguish a family from a total row.
  */
 public final class FormulaSkeletonGenerator {
+
+    /** Skeleton assigned to a constant-formula: one built from literals and arithmetic, referencing nothing. */
+    public static final String CONSTANT_SKELETON = "=CONST";
 
     private FormulaSkeletonGenerator() {}
 
@@ -32,18 +41,17 @@ public final class FormulaSkeletonGenerator {
                 continue;
             }
 
-            String replacement;
-            if (token.targetSheetName() != null && !token.targetSheetName().isBlank() && token.targetRange() != null) {
-                replacement = rawToken.replace(token.targetRange(), "$ABS$");
-            } else if (token.targetRange() != null) {
-                replacement = "$ABS$";
-            } else {
-                replacement = "$ABS$";
-            }
-
+            String replacement = abstractReferenceToken(token);
             skeleton = skeleton.replace(rawToken, replacement);
         }
 
         return skeleton;
+    }
+
+    private static String abstractReferenceToken(FormulaToken token) {
+        if (token.targetSheetName() != null && !token.targetSheetName().isBlank() && token.targetRange() != null) {
+            return token.rawToken().replace(token.targetRange(), "$ABS$");
+        }
+        return "$ABS$";
     }
 }

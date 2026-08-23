@@ -24,7 +24,7 @@ public final class ReferenceResolver {
         this.repo = repo;
     }
 
-    public void resolveAndPersist(long fromCellId, List<FormulaToken> tokens, long parseRunId,
+    public void resolveAndPersist(long fromCellId, String currentSheetName, List<FormulaToken> tokens, long parseRunId,
             Map<String, Long> sheetNameToId, Map<Integer, Long> externalLinkMap,
             Map<String, Map<String, Long>> cellCoordMap, String now) throws SQLException, IOException {
         if (tokens == null || tokens.isEmpty()) {
@@ -53,6 +53,8 @@ public final class ReferenceResolver {
 
             if (targetSheet != null && !targetSheet.isBlank() && !targetSheet.startsWith("[")) {
                 targetWorksheetId = sheetNameToId.get(targetSheet);
+            } else if (targetSheet == null) {
+                targetWorksheetId = sheetNameToId.get(currentSheetName);
             }
 
             if (targetWorksheetId == null && externalLinkId == null && !externalLinkMap.isEmpty()) {
@@ -76,7 +78,7 @@ public final class ReferenceResolver {
             }
 
             if (unresolvedReason == null && token.targetRange() != null && !token.targetRange().contains(":")) {
-                String targetSheetLookup = targetSheet != null ? targetSheet : getSheetNameForWorksheetId(sheetNameToId, targetWorksheetId);
+                String targetSheetLookup = targetSheet != null ? targetSheet : currentSheetName;
                 if (targetSheetLookup != null && cellCoordMap.containsKey(targetSheetLookup)) {
                     resolvedCellId = cellCoordMap.get(targetSheetLookup).get(token.targetRange());
                 }
@@ -95,18 +97,6 @@ public final class ReferenceResolver {
         }
         Matcher m = EXT_LINK_PATTERN.matcher(token);
         return m.find() ? Integer.parseInt(m.group(1)) : null;
-    }
-
-    private static String getSheetNameForWorksheetId(Map<String, Long> sheetNameToId, Long worksheetId) {
-        if (worksheetId == null) {
-            return null;
-        }
-        for (Map.Entry<String, Long> entry : sheetNameToId.entrySet()) {
-            if (worksheetId.equals(entry.getValue())) {
-                return entry.getKey();
-            }
-        }
-        return null;
     }
 
     private void queueReview(long parseRunId, String category, String summary, Map<String, Object> detailMap, String now)

@@ -286,4 +286,68 @@ class RealWorkbookIT {
             }
         }
     }
+
+    @Test
+    void multiExternalReferencesAreStoredAsSeparateCellReferenceRows() throws Exception {
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            long multiRefCellCount = scalarLong(c,
+                    "SELECT COUNT(*) FROM ("
+                            + " SELECT from_cell_id FROM cell_reference"
+                            + " WHERE ref_kind = 'external'"
+                            + " GROUP BY from_cell_id HAVING COUNT(*) > 1"
+                            + ")");
+            assertThat(multiRefCellCount).isGreaterThan(0);
+        }
+    }
+
+    @Test
+    void errorCascadePopulatesCellErrorRootAndDescendantFlags() throws Exception {
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            long rootErrorCount = scalarLong(c, "SELECT COUNT(*) FROM cell WHERE is_error = 1");
+            assertThat(rootErrorCount).isGreaterThan(0);
+
+            long cellErrorRootJoinCount = scalarLong(c, "SELECT COUNT(*) FROM cell_error_root");
+            assertThat(cellErrorRootJoinCount).isGreaterThan(0);
+        }
+    }
+
+    @Test
+    void formulaSkeletonsMatchHorizontalVerticalAndConstantPatterns() throws Exception {
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            // 1. Horizontal family: P  L !D22:M22 share formula_skeleton '$ABS$*$ABS$'
+            try (PreparedStatement ps = c.prepareStatement(
+                    "SELECT DISTINCT c.formula_skeleton FROM cell c"
+                            + " JOIN worksheet w ON c.worksheet_id = w.worksheet_id"
+                            + " WHERE w.sheet_name = 'P  L ' AND c.row_num = 22 AND c.col_num BETWEEN 4 AND 13")) {
+                try (ResultSet rs = ps.executeQuery()) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString(1)).isEqualTo("$ABS$*$ABS$");
+                    assertThat(rs.next()).as("All cells in P  L !D22:M22 share one skeleton").isFalse();
+                }
+            }
+
+            // 2. Vertical family: P  L !D22:D28 share formula_skeleton '$ABS$*$ABS$'
+            try (PreparedStatement ps = c.prepareStatement(
+                    "SELECT DISTINCT c.formula_skeleton FROM cell c"
+                            + " JOIN worksheet w ON c.worksheet_id = w.worksheet_id"
+                            + " WHERE w.sheet_name = 'P  L ' AND c.col_num = 4 AND c.row_num BETWEEN 22 AND 28")) {
+                try (ResultSet rs = ps.executeQuery()) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString(1)).isEqualTo("$ABS$*$ABS$");
+                    assertThat(rs.next()).as("All cells in P  L !D22:D28 share one skeleton").isFalse();
+                }
+            }
+
+            // 3. Constant formula: SALESPROJECTION!F41 = =200/2 has skeleton '=CONST'
+            try (PreparedStatement ps = c.prepareStatement(
+                    "SELECT c.formula_skeleton FROM cell c"
+                            + " JOIN worksheet w ON c.worksheet_id = w.worksheet_id"
+                            + " WHERE w.sheet_name = 'SALESPROJECTION' AND c.coord = 'F41'")) {
+                try (ResultSet rs = ps.executeQuery()) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString(1)).isEqualTo("=CONST");
+                }
+            }
+        }
+    }
 }
