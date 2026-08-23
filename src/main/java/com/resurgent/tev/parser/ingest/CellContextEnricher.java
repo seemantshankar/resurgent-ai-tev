@@ -62,7 +62,11 @@ public final class CellContextEnricher {
                     cell.valueSource(),
                     cell.rowHidden(),
                     cell.colHidden(),
-                    cell.sheetHidden()));
+                    cell.sheetHidden(),
+                    cell.isBold(),
+                    cell.hasFill(),
+                    cell.hasBorder(),
+                    cell.numberFormat()));
         }
         return enriched;
     }

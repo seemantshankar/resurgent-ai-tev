@@ -49,6 +49,7 @@ public final class IngestService {
     private final XlsAdapter xlsAdapter = new XlsAdapter();
     private final CellContextEnricher enricher = new CellContextEnricher();
     private final SafetyEnforcer safetyEnforcer = new SafetyEnforcer();
+    private final RegionDetector regionDetector = new RegionDetector();
 
     /** Convenience overload that uses embedded defaults. */
     public IngestSummary ingest(Path input, long mandateId, Path dbPath)
@@ -207,11 +208,14 @@ public final class IngestService {
         }
         List<NormalizedCell> enriched = enricher.enrich(cells);
         int cellsWritten = 0;
+        Map<Long, RegionDetector.RegionCell> cellsById = new LinkedHashMap<>();
         for (NormalizedCell cell : enriched) {
             long cellId = repo.insertCell(worksheetId, cell);
             recordCellProvenance(repo, cellId, sourceFileId, parseRunId, sheet.sheetName(), cell);
+            cellsById.put(cellId, new RegionDetector.RegionCell(cell, null));
             cellsWritten++;
         }
+        persistRegions(repo, worksheetId, parseRunId, sheet.sheetName(), cellsById);
 
         // CSV has no formulas or structural references, so those reconciliation buckets
         // are trivially 0/0/0 and never force a partial/failed status on their own.
@@ -286,6 +290,7 @@ public final class IngestService {
             worksheetIdToSheetName.put(worksheetId, sheet.sheetName());
             Map<String, Long> coordMap = new HashMap<>();
             cellCoordMap.put(sheet.sheetName(), coordMap);
+            Map<Long, RegionDetector.RegionCell> cellsById = new LinkedHashMap<>();
 
             List<NormalizedCell> enriched = enricher.enrich(sheet.cells());
             for (NormalizedCell cell : enriched) {
@@ -332,11 +337,13 @@ public final class IngestService {
                             cell.parsedQuantity(), isErr, errType,
                             cell.rowLabel(), cell.colLabel(), cell.isMergedAnchor(),
                             cell.isMergedParticipant(), cell.mergedRange(), cell.valueSource(),
-                            cell.rowHidden(), cell.colHidden(), cell.sheetHidden());
+                            cell.rowHidden(), cell.colHidden(), cell.sheetHidden(),
+                            cell.isBold(), cell.hasFill(), cell.hasBorder(), cell.numberFormat());
                 }
 
                 long cellId = repo.insertCell(worksheetId, cellToInsert);
                 coordMap.put(cellToInsert.coord(), cellId);
+                cellsById.put(cellId, new RegionDetector.RegionCell(cellToInsert, skeleton));
                 recordCellProvenance(repo, cellId, sourceFileId, parseRunId, sheet.sheetName(), cellToInsert);
 
                 if (skeleton != null) {
@@ -371,6 +378,7 @@ public final class IngestService {
                     cellsError++;
                 }
             }
+            persistRegions(repo, worksheetId, parseRunId, sheet.sheetName(), cellsById);
             sheetIndex++;
         }
 
@@ -454,6 +462,17 @@ public final class IngestService {
         return cleaned;
     }
 
+    private void persistRegions(WorkspaceRepository repo, long worksheetId, long parseRunId,
+            String sheetName, Map<Long, RegionDetector.RegionCell> cellsById) throws SQLException {
+        for (RegionDetector.DetectedRegion region : regionDetector.detect(sheetName, cellsById)) {
+            long regionId = repo.insertRegion(worksheetId, parseRunId, region.key(),
+                    region.startRow(), region.endRow(), region.startCol(), region.endCol());
+            for (long cellId : region.cellIds()) {
+                repo.updateCellRegion(cellId, regionId);
+            }
+        }
+    }
+
     private static void recordCellProvenance(WorkspaceRepository repo, long cellId,
             long sourceFileId, long parseRunId, String sheetName, NormalizedCell cell)
             throws SQLException {
@@ -525,6 +544,9 @@ public final class IngestService {
         if (fileType == FileType.FM_XLSX || fileType == FileType.FM_XLS) {
             Map<String, Object> map = new LinkedHashMap<>();
             map.put("format", fileType == FileType.FM_XLSX ? "xlsx" : "xls");
+            if (fileType == FileType.FM_XLS) {
+                map.put("style_capture_reason", "xls_style_capture_not_supported");
+            }
             if (workbook != null) {
                 WorkbookMetadata metadata = workbook.metadata();
                 map.put("sheetCount", metadata.sheetCount());
@@ -542,6 +564,7 @@ public final class IngestService {
         map.put("delimiter", String.valueOf(dialect.delimiter()));
         map.put("hasBom", dialect.hasBom());
         map.put("detectedBy", dialect.detectedBy());
+        map.put("style_capture_reason", "csv_has_no_cell_styles");
         return Jsonb.toJson(map);
     }
 

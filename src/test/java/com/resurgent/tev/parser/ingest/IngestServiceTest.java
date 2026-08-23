@@ -20,6 +20,7 @@ import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.usermodel.Name;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -46,6 +47,183 @@ class IngestServiceTest {
         try (ResultSet rs = c.createStatement().executeQuery("SELECT COUNT(*) FROM " + table)) {
             rs.next();
             return rs.getLong(1);
+        }
+    }
+
+    @Test
+    void csvIngestLeavesStyleColumnsNullAndRecordsWhyStyleWasUnavailable() throws Exception {
+        Path csv = tempDir.resolve("model.csv");
+        Files.writeString(csv, "Title,Amount\nProject cost summary,1200\n");
+        Path db = tempDir.resolve("model.csv.db");
+
+        new IngestService().ingest(csv, 1L, db);
+
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT is_bold, has_fill, has_border, number_format FROM cell WHERE coord = 'A1'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getObject("is_bold")).isNull();
+                assertThat(rs.getObject("has_fill")).isNull();
+                assertThat(rs.getObject("has_border")).isNull();
+                assertThat(rs.getString("number_format")).isNull();
+            }
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT raw_metadata FROM source_file")) {
+                assertThat(rs.next()).isTrue();
+                Map<String, Object> metadata = Jsonb.fromJson(rs.getString(1), Map.class);
+                assertThat(metadata).containsEntry("style_capture_reason", "csv_has_no_cell_styles");
+            }
+        }
+    }
+
+    @Test
+    void xlsxIngestPersistsStyledTitleFields() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Model");
+            org.apache.poi.ss.usermodel.Cell title = sheet.createRow(0).createCell(0);
+            title.setCellValue("Project cost summary");
+            org.apache.poi.ss.usermodel.CellStyle style = workbook.createCellStyle();
+            style.setDataFormat(workbook.createDataFormat().getFormat("$#,##0.00"));
+            style.setFillForegroundColor(org.apache.poi.ss.usermodel.IndexedColors.YELLOW.getIndex());
+            style.setFillPattern(org.apache.poi.ss.usermodel.FillPatternType.SOLID_FOREGROUND);
+            style.setBorderBottom(org.apache.poi.ss.usermodel.BorderStyle.THIN);
+            org.apache.poi.ss.usermodel.Font font = workbook.createFont();
+            font.setBold(true);
+            style.setFont(font);
+            title.setCellStyle(style);
+
+            Path xlsx = writeWorkbook(workbook, "styled-title.xlsx");
+            Path db = tempDir.resolve("styled-title.db");
+            new IngestService().ingest(xlsx, 1L, db);
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                    ResultSet rs = c.createStatement().executeQuery(
+                            "SELECT is_bold, has_fill, has_border, number_format FROM cell WHERE coord = 'A1'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getInt("is_bold")).isEqualTo(1);
+                assertThat(rs.getInt("has_fill")).isEqualTo(1);
+                assertThat(rs.getInt("has_border")).isEqualTo(1);
+                assertThat(rs.getString("number_format")).isEqualTo("$#,##0.00");
+            }
+        }
+    }
+
+    @Test
+    void regionDetectionSplitsABannerThatBridgesTwoDisjointBlocks() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Model");
+            sheet.createRow(0).createCell(0).setCellValue("Revenue schedule");
+            sheet.addMergedRegion(new CellRangeAddress(0, 0, 0, 5));
+            sheet.createRow(1).createCell(0).setCellValue("Left");
+            sheet.getRow(1).createCell(1).setCellValue(1.0);
+            sheet.getRow(1).createCell(4).setCellValue("Right");
+            sheet.getRow(1).createCell(5).setCellValue(2.0);
+
+            Path xlsx = writeWorkbook(workbook, "banner-two-blocks.xlsx");
+            Path db = tempDir.resolve("banner-two-blocks.db");
+            new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                assertThat(count(c, "region")).isEqualTo(3);
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT region_type, region_key FROM region ORDER BY start_row, start_col")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("region_type")).isEqualTo("unknown");
+                    assertThat(rs.getString("region_key")).isEqualTo("Model!A1");
+                }
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT COUNT(DISTINCT region_id) FROM cell WHERE region_id IS NOT NULL")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).isEqualTo(3);
+                }
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT COUNT(*) = COUNT(region_id) FROM cell")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).isEqualTo(1);
+                }
+            }
+        }
+    }
+
+    @Test
+    void regionDetectionKeepsBannerWithASingleBlock() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Model");
+            sheet.createRow(0).createCell(0).setCellValue("Revenue schedule");
+            sheet.addMergedRegion(new CellRangeAddress(0, 0, 0, 2));
+            sheet.createRow(1).createCell(0).setCellValue("Label");
+            sheet.getRow(1).createCell(1).setCellValue(1.0);
+
+            Path xlsx = writeWorkbook(workbook, "banner-one-block.xlsx");
+            Path db = tempDir.resolve("banner-one-block.db");
+            new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                assertThat(count(c, "region")).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
+    void regionDetectionUsesFormulaSkeletonsForOneCellDilation() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Model");
+            sheet.createRow(0).createCell(0).setCellFormula("1+1");
+            sheet.createRow(2).createCell(0).setCellFormula("2+2");
+
+            Path xlsx = writeWorkbook(workbook, "formula-gap.xlsx");
+            Path db = tempDir.resolve("formula-gap.db");
+            new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                assertThat(count(c, "region")).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
+    void regionDetectionAllowsOneSkeletonTokenDifferenceForOneCellDilation() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Model");
+            sheet.createRow(0).createCell(0).setCellFormula("SUM(1)");
+            sheet.createRow(2).createCell(0).setCellFormula("SUM(2)");
+
+            Path xlsx = writeWorkbook(workbook, "formula-one-token-gap.xlsx");
+            Path db = tempDir.resolve("formula-one-token-gap.db");
+            new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                assertThat(count(c, "region")).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
+    void regionDetectionDoesNotTreatHiddenColumnsAsConnectivity() throws Exception {
+        try (XSSFWorkbook emptySeparator = new XSSFWorkbook();
+                XSSFWorkbook populatedSeparator = new XSSFWorkbook()) {
+            Sheet empty = emptySeparator.createSheet("Model");
+            empty.createRow(0).createCell(0).setCellValue(1.0);
+            empty.getRow(0).createCell(2).setCellValue(2.0);
+            empty.setColumnHidden(1, true);
+
+            Sheet populated = populatedSeparator.createSheet("Model");
+            populated.createRow(0).createCell(0).setCellValue(1.0);
+            populated.getRow(0).createCell(1).setCellValue(3.0);
+            populated.getRow(0).createCell(2).setCellValue(2.0);
+            populated.setColumnHidden(1, true);
+
+            Path emptyXlsx = writeWorkbook(emptySeparator, "hidden-empty-separator.xlsx");
+            Path populatedXlsx = writeWorkbook(populatedSeparator, "hidden-populated-separator.xlsx");
+            Path emptyDb = tempDir.resolve("hidden-empty-separator.db");
+            Path populatedDb = tempDir.resolve("hidden-populated-separator.db");
+            new IngestService().ingest(emptyXlsx, 1L, emptyDb);
+            new IngestService().ingest(populatedXlsx, 1L, populatedDb);
+
+            try (Connection emptyConnection = DriverManager.getConnection("jdbc:sqlite:" + emptyDb);
+                    Connection populatedConnection = DriverManager.getConnection("jdbc:sqlite:" + populatedDb)) {
+                assertThat(count(emptyConnection, "region")).isEqualTo(2);
+                assertThat(count(populatedConnection, "region")).isEqualTo(1);
+            }
         }
     }
 
@@ -295,7 +473,8 @@ class IngestServiceTest {
                     assertThat(rs.next()).isTrue();
                     assertThat(rs.getString(1))
                             .contains("\"format\":\"xls\"")
-                            .contains("\"sheetNames\"");
+                            .contains("\"sheetNames\"")
+                            .contains("\"style_capture_reason\":\"xls_style_capture_not_supported\"");
                 }
             }
         }

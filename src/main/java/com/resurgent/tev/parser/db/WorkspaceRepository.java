@@ -183,9 +183,10 @@ public final class WorkspaceRepository {
                         + " cached_value, cache_state, coerced_from_text, parsed_quantity,"
                         + " is_error, error_type, row_label, col_label,"
                         + " is_merged_anchor, is_merged_participant, merged_range, value_source,"
-                        + " row_hidden, col_hidden, sheet_hidden)"
+                        + " row_hidden, col_hidden, sheet_hidden,"
+                        + " is_bold, has_fill, has_border, number_format)"
                         + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-                        + " ?, ?, ?, ?, ?, ?)",
+                        + " ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, worksheetId);
             ps.setString(2, cell.coord());
@@ -221,8 +222,41 @@ public final class WorkspaceRepository {
             ps.setInt(28, cell.rowHidden() ? 1 : 0);
             ps.setInt(29, cell.colHidden() ? 1 : 0);
             ps.setInt(30, cell.sheetHidden() ? 1 : 0);
+            setBoolean(ps, 31, cell.isBold());
+            setBoolean(ps, 32, cell.hasFill());
+            setBoolean(ps, 33, cell.hasBorder());
+            ps.setString(34, cell.numberFormat());
             ps.executeUpdate();
             return generatedId(ps);
+        }
+    }
+
+    /** Persists a geometry-only region; classification fields remain at their schema defaults. */
+    public long insertRegion(long worksheetId, long parseRunId, String regionKey,
+            int startRow, int endRow, int startCol, int endCol) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO region (worksheet_id, parse_run_id, region_key, start_row, end_row,"
+                        + " start_col, end_col, region_type, region_conf) VALUES (?, ?, ?, ?, ?, ?, ?, 'unknown', 0)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, worksheetId);
+            ps.setLong(2, parseRunId);
+            ps.setString(3, regionKey);
+            ps.setInt(4, startRow);
+            ps.setInt(5, endRow);
+            ps.setInt(6, startCol);
+            ps.setInt(7, endCol);
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    /** Assigns one occupied cell to its detector-produced region. */
+    public void updateCellRegion(long cellId, long regionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cell SET region_id = ? WHERE cell_id = ?")) {
+            ps.setLong(1, regionId);
+            ps.setLong(2, cellId);
+            ps.executeUpdate();
         }
     }
 
