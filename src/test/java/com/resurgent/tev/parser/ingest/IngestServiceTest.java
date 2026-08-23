@@ -504,6 +504,31 @@ class IngestServiceTest {
     }
 
     @Test
+    void uncachedFormulaIsMarkedMissingAndInventsNoValueViaFullIngest() throws Exception {
+        try (XSSFWorkbook main = new XSSFWorkbook()) {
+            Sheet sheet = main.createSheet("Sheet1");
+            sheet.createRow(0).createCell(0).setCellValue(10.0);
+            // Written without evaluating, so the file carries no cached result for A2.
+            sheet.createRow(1).createCell(0).setCellFormula("A1*2");
+
+            Path xlsx = writeWorkbook(main, "uncached.xlsx");
+            Path db = tempDir.resolve("uncached.db");
+            new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT cache_state, numeric_value FROM cell WHERE coord = 'A2'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("cache_state")).isEqualTo("missing");
+                    assertThat(rs.getObject("numeric_value"))
+                            .as("an uncached formula must not have a value invented for it")
+                            .isNull();
+                }
+            }
+        }
+    }
+
+    @Test
     void circularReferenceSeverityFollowsIterativeCalcSetting() throws Exception {
         try (XSSFWorkbook main = new XSSFWorkbook()) {
             Sheet sheet = main.createSheet("Sheet1");
