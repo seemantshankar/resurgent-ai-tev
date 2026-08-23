@@ -72,8 +72,8 @@ class RealWorkbookIT {
         // actually runs here — but the queued-failure branch stays a real,
         // reachable path rather than dead code, since neither branch short-circuits
         // into an unconditional 'success' assertion afterwards.
+        Map<String, Object> metrics = Jsonb.fromJson(summary.metricsJson(), Map.class);
         if ("success".equals(summary.status())) {
-            Map<String, Object> metrics = Jsonb.fromJson(summary.metricsJson(), Map.class);
             assertThat(metrics).containsEntry("cellsRejected", 0);
         } else {
             try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
@@ -84,6 +84,35 @@ class RealWorkbookIT {
             assertThat(scalarLong(c, "SELECT COUNT(*) FROM source_file")).isEqualTo(1);
             assertThat(scalarLong(c, "SELECT COUNT(*) FROM parse_run")).isEqualTo(1);
             assertThat(scalarLong(c, "SELECT COUNT(*) FROM cell")).isGreaterThan(0);
+
+            // Sprint 3a: all semantically occupied cells belong to a detected region, and every region is
+            // either confidently classified or has its own classification-review queue row.
+            long cellsWithoutRegion = scalarLong(c, "SELECT COUNT(*) FROM cell WHERE region_id IS NULL"
+                    + " AND (is_merged_participant = 1 OR is_error = 1 OR formula_text IS NOT NULL"
+                    + " OR (raw_value IS NOT NULL AND trim(raw_value) <> ''))");
+            long regionsTotal = scalarLong(c, "SELECT COUNT(*) FROM region");
+            long regionsClassified = scalarLong(c,
+                    "SELECT COUNT(*) FROM region WHERE region_type <> 'unknown' AND region_conf >= 0.5");
+            long regionsQueuedForReview = scalarLong(c,
+                    "SELECT COUNT(DISTINCT CAST(json_extract(detail, '$.regionId') AS INTEGER))"
+                            + " FROM review_queue WHERE parse_run_id = " + summary.parseRunId()
+                            + " AND category = 'region_classification'");
+            long regionsUnaccounted = scalarLong(c,
+                    "SELECT COUNT(*) FROM region r WHERE r.parse_run_id = " + summary.parseRunId()
+                            + " AND (r.region_type = 'unknown' OR r.region_conf < 0.5)"
+                            + " AND NOT EXISTS (SELECT 1 FROM review_queue q"
+                            + " WHERE q.parse_run_id = r.parse_run_id"
+                            + " AND q.category = 'region_classification'"
+                            + " AND CAST(json_extract(q.detail, '$.regionId') AS INTEGER) = r.region_id)");
+            assertThat(cellsWithoutRegion).isZero();
+            assertThat(regionsTotal).isGreaterThan(0);
+            assertThat(regionsUnaccounted).isZero();
+            assertThat(regionsClassified + regionsQueuedForReview).isEqualTo(regionsTotal);
+            assertThat(metrics).containsEntry("regionsTotal", (int) regionsTotal)
+                    .containsEntry("cellsWithoutRegion", (int) cellsWithoutRegion)
+                    .containsEntry("regionsClassified", (int) regionsClassified)
+                    .containsEntry("regionsQueuedForReview", (int) regionsQueuedForReview)
+                    .containsEntry("regionsUnaccounted", (int) regionsUnaccounted);
 
             // "Zero unexplained losses" (issue #1 QA gate): every occupied cell the
             // adapter saw is either written or explicitly rejected — never silently

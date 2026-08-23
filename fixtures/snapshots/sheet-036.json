@@ -1,0 +1,21 @@
+[ {
+  "bbox" : {
+    "end_col" : 13,
+    "end_row" : 25,
+    "start_col" : 1,
+    "start_row" : 1
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "STATEMENT_SHAPE",
+    "params" : {
+      "row_span" : 25
+    },
+    "weight" : 4
+  } ],
+  "region_conf" : 1.0,
+  "region_key" : "sheet-036!A1",
+  "region_type" : "bs",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-036"
+} ]

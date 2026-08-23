@@ -9,7 +9,9 @@ import java.util.List;
  * reference tokens were either resolved or carry an {@code unresolved_reason}
  * (which in turn always has a matching review_queue row), and every formula
  * cell's tokenization state accounts for the cell (tokenized, parse_error, or
- * unavailable). Any shortfall flips the run to 'partial' (some cells landed)
+ * unavailable). Sprint 3a additionally requires every retained cell to be in
+ * a region and every region to be classified or queued for review. Any
+ * shortfall flips the run to 'partial' (some cells landed)
  * or 'failed' (none did), with reasons recorded rather than a silent success.
  *
  * <p>No adapter currently produces an explicit per-cell rejection (with its
@@ -26,7 +28,7 @@ public final class QaGate {
     public static QaGateResult evaluate(int cellsIn, int cellsWritten,
             int referencesTotal, int referencesResolved, int referencesUnresolved,
             int formulaCellsTotal, int formulaCellsTokenized, int formulaCellsParseError,
-            int formulaCellsUnavailable) {
+            int formulaCellsUnavailable, int cellsWithoutRegion, int regionsUnaccounted) {
         List<String> reasons = new ArrayList<>();
         int cellsRejected = cellsIn - cellsWritten;
         if (cellsRejected != 0) {
@@ -43,6 +45,14 @@ public final class QaGate {
             reasons.add("formula_reconciliation_mismatch: " + formulaCellsTotal
                     + " formula cells but " + formulaCellsAccountedFor
                     + " tokenized, parse_error, or unavailable");
+        }
+        if (cellsWithoutRegion != 0) {
+            reasons.add("region_coverage_mismatch: " + cellsWithoutRegion
+                    + " persisted cells have no region");
+        }
+        if (regionsUnaccounted != 0) {
+            reasons.add("classification_accounting_mismatch: " + regionsUnaccounted
+                    + " regions are neither confidently classified nor queued for review");
         }
 
         String status;

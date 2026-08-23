@@ -221,10 +221,12 @@ public final class IngestService {
 
         // CSV has no formulas or structural references, so those reconciliation buckets
         // are trivially 0/0/0 and never force a partial/failed status on their own.
-        QaGateResult qa = QaGate.evaluate(cellCount, cellsWritten, 0, 0, 0, 0, 0, 0, 0);
+        RegionQaStats regionQa = repo.selectRegionQaStats(parseRunId, CLASSIFICATION_REVIEW_CONFIDENCE);
+        QaGateResult qa = QaGate.evaluate(cellCount, cellsWritten, 0, 0, 0, 0, 0, 0, 0,
+                regionQa.cellsWithoutRegion(), regionQa.regionsUnaccounted());
         String metricsJson = IngestMetrics.toJson(fileName, fileHash, sheet.sheetName(), rowCount,
                 cellCount, cellsWritten, coercedCount(enriched), errorCount(enriched),
-                0, 0, 0, 0, 0, 0, 0, qa);
+                0, 0, 0, 0, 0, 0, 0, regionQa, qa);
         repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
         repo.insertAuditLog(parseRunId, "parse_run_completed", Timestamps.now(),
                 Jsonb.toJson(Map.of("status", qa.status(), "cellsWritten", cellsWritten)),
@@ -411,13 +413,16 @@ public final class IngestService {
                 metadata.fullCalcOnLoad(), metadata.calcChainPresent(), metadata.iterativeCalc(),
                 metadata.iterativeCount(), cellsError);
 
+        RegionQaStats regionQa = repo.selectRegionQaStats(parseRunId, CLASSIFICATION_REVIEW_CONFIDENCE);
         QaGateResult qa = QaGate.evaluate(cellCount, cellsWritten,
                 refStats.total(), refStats.resolved(), refStats.unresolved(),
-                formulaCellsTotal, formulaCellsTokenized, formulaCellsParseError, formulaCellsUnavailable);
+                formulaCellsTotal, formulaCellsTokenized, formulaCellsParseError, formulaCellsUnavailable,
+                regionQa.cellsWithoutRegion(), regionQa.regionsUnaccounted());
         String metricsJson = IngestMetrics.toJson(fileName, fileHash, primarySheetName(sheets),
                 rowCount, cellCount, cellsWritten, cellsCoerced, cellsError,
                 refStats.total(), refStats.resolved(), refStats.unresolved(),
-                formulaCellsTotal, formulaCellsTokenized, formulaCellsParseError, formulaCellsUnavailable, qa);
+                formulaCellsTotal, formulaCellsTokenized, formulaCellsParseError, formulaCellsUnavailable,
+                regionQa, qa);
         repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
         repo.insertAuditLog(parseRunId, "parse_run_completed", Timestamps.now(),
                 Jsonb.toJson(Map.of("status", qa.status(), "cellsWritten", cellsWritten)),
@@ -495,7 +500,7 @@ public final class IngestService {
                 repo.updateCellRegion(cellId, regionId);
             }
             persistRegionLabels(repo, regionEntries, headerContext);
-            queueClassificationReview(repo, parseRunId, region, classification);
+            queueClassificationReview(repo, parseRunId, regionId, region, classification);
             persistCoherence(repo, region, cellsById);
         }
     }
@@ -516,7 +521,7 @@ public final class IngestService {
         }
     }
 
-    private static void queueClassificationReview(WorkspaceRepository repo, long parseRunId,
+    private static void queueClassificationReview(WorkspaceRepository repo, long parseRunId, long regionId,
             RegionDetector.DetectedRegion region, RegionClassification classification)
             throws SQLException, IOException {
         if (classification.type() != RegionType.UNKNOWN
@@ -524,6 +529,7 @@ public final class IngestService {
             return;
         }
         Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("regionId", regionId);
         detail.put("regionKey", region.key());
         detail.put("regionType", classification.type().databaseValue());
         detail.put("regionConfidence", classification.confidence());

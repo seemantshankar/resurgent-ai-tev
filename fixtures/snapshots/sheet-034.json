@@ -1,0 +1,21 @@
+[ {
+  "bbox" : {
+    "end_col" : 8,
+    "end_row" : 8,
+    "start_col" : 1,
+    "start_row" : 1
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "STATEMENT_SHAPE",
+    "params" : {
+      "row_span" : 8
+    },
+    "weight" : 4
+  } ],
+  "region_conf" : 0.5,
+  "region_key" : "sheet-034!A1",
+  "region_type" : "capacity",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-034"
+} ]

@@ -1,0 +1,481 @@
+[ {
+  "bbox" : {
+    "end_col" : 10,
+    "end_row" : 1,
+    "start_col" : 10,
+    "start_row" : 1
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!J1",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 3,
+    "end_row" : 4,
+    "start_col" : 3,
+    "start_row" : 4
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!C4",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 14,
+    "end_row" : 7,
+    "start_col" : 14,
+    "start_row" : 7
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!N7",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 16,
+    "end_row" : 10,
+    "start_col" : 8,
+    "start_row" : 9
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 2
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!H9",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 3,
+    "end_row" : 13,
+    "start_col" : 3,
+    "start_row" : 13
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!C13",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 5,
+    "end_row" : 48,
+    "start_col" : 5,
+    "start_row" : 13
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "STATEMENT_SHAPE",
+    "params" : {
+      "row_span" : 36
+    },
+    "weight" : 4
+  } ],
+  "region_conf" : 1.0,
+  "region_key" : "sheet-031!E13",
+  "region_type" : "bs",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 16,
+    "end_row" : 13,
+    "start_col" : 8,
+    "start_row" : 13
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!H13",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 3,
+    "end_row" : 16,
+    "start_col" : 3,
+    "start_row" : 16
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!C16",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 16,
+    "end_row" : 16,
+    "start_col" : 8,
+    "start_row" : 16
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!H16",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 3,
+    "end_row" : 20,
+    "start_col" : 3,
+    "start_row" : 20
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!C20",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 16,
+    "end_row" : 20,
+    "start_col" : 8,
+    "start_row" : 20
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!H20",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 3,
+    "end_row" : 23,
+    "start_col" : 3,
+    "start_row" : 23
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!C23",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 11,
+    "end_row" : 25,
+    "start_col" : 8,
+    "start_row" : 25
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!H25",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 16,
+    "end_row" : 26,
+    "start_col" : 8,
+    "start_row" : 26
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!H26",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 3,
+    "end_row" : 33,
+    "start_col" : 3,
+    "start_row" : 33
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!C33",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 16,
+    "end_row" : 33,
+    "start_col" : 8,
+    "start_row" : 33
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!H33",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 3,
+    "end_row" : 41,
+    "start_col" : 3,
+    "start_row" : 36
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "VERTICAL_FORM",
+    "params" : {
+      "column_span" : 1
+    },
+    "weight" : 3
+  } ],
+  "region_conf" : 1.0,
+  "region_key" : "sheet-031!C36",
+  "region_type" : "vertical_form",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 11,
+    "end_row" : 36,
+    "start_col" : 8,
+    "start_row" : 36
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!H36",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 16,
+    "end_row" : 39,
+    "start_col" : 8,
+    "start_row" : 37
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!H37",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 16,
+    "end_row" : 41,
+    "start_col" : 8,
+    "start_row" : 41
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!H41",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 3,
+    "end_row" : 47,
+    "start_col" : 3,
+    "start_row" : 45
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "VERTICAL_FORM",
+    "params" : {
+      "column_span" : 1
+    },
+    "weight" : 3
+  } ],
+  "region_conf" : 1.0,
+  "region_key" : "sheet-031!C45",
+  "region_type" : "vertical_form",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 16,
+    "end_row" : 47,
+    "start_col" : 8,
+    "start_row" : 45
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!H45",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 5,
+    "end_row" : 53,
+    "start_col" : 5,
+    "start_row" : 53
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!E53",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+}, {
+  "bbox" : {
+    "end_col" : 13,
+    "end_row" : 53,
+    "start_col" : 8,
+    "start_row" : 53
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-031!H53",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-031"
+} ]

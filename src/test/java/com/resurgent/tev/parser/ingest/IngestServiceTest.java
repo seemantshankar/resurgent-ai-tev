@@ -94,7 +94,7 @@ class IngestServiceTest {
 
             Path xlsx = writeWorkbook(workbook, "styled-title.xlsx");
             Path db = tempDir.resolve("styled-title.db");
-            new IngestService().ingest(xlsx, 1L, db);
+            IngestSummary summary = new IngestService().ingest(xlsx, 1L, db);
             try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
                     ResultSet rs = c.createStatement().executeQuery(
                             "SELECT is_bold, has_fill, has_border, number_format FROM cell WHERE coord = 'A1'")) {
@@ -178,7 +178,7 @@ class IngestServiceTest {
 
             Path xlsx = writeWorkbook(workbook, "period-axis.xlsx");
             Path db = tempDir.resolve("period-axis.db");
-            new IngestService().ingest(xlsx, 1L, db);
+            IngestSummary summary = new IngestService().ingest(xlsx, 1L, db);
 
             try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
                 try (ResultSet rs = c.createStatement().executeQuery(
@@ -200,9 +200,17 @@ class IngestServiceTest {
                     assertThat(rs.next()).isTrue();
                     assertThat(Jsonb.fromJson(rs.getString("detail"), Map.class))
                             .containsEntry("regionType", "unknown")
+                            .containsKey("regionId")
                             .containsKey("reasonCodes");
                 }
             }
+            Map<String, Object> metrics = Jsonb.fromJson(summary.metricsJson(), Map.class);
+            assertThat(metrics).containsEntry("regionsTotal", 1)
+                    .containsEntry("cellsWithoutRegion", 0)
+                    .containsEntry("regionsClassified", 0)
+                    .containsEntry("regionsQueuedForReview", 1)
+                    .containsEntry("regionsUnaccounted", 0)
+                    .containsEntry("qaStatus", "success");
         }
     }
 

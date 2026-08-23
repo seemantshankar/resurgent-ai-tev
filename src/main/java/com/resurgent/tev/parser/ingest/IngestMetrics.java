@@ -20,7 +20,7 @@ final class IngestMetrics {
             int cellsIn, int cellsWritten, int cellsCoerced, int cellsError,
             int referencesTotal, int referencesResolved, int referencesUnresolved,
             int formulaCellsTotal, int formulaCellsTokenized, int formulaCellsParseError,
-            int formulaCellsUnavailable, QaGateResult qa) {
+            int formulaCellsUnavailable, RegionQaStats regionQa, QaGateResult qa) {
         ObjectNode metrics = MAPPER.createObjectNode();
         metrics.put("fileName", fileName);
         metrics.put("fileHash", fileHash);
@@ -38,6 +38,11 @@ final class IngestMetrics {
         metrics.put("formulaCellsTokenized", formulaCellsTokenized);
         metrics.put("formulaCellsParseError", formulaCellsParseError);
         metrics.put("formulaCellsUnavailable", formulaCellsUnavailable);
+        metrics.put("regionsTotal", regionQa.regionsTotal());
+        metrics.put("cellsWithoutRegion", regionQa.cellsWithoutRegion());
+        metrics.put("regionsClassified", regionQa.regionsClassified());
+        metrics.put("regionsQueuedForReview", regionQa.regionsQueuedForReview());
+        metrics.put("regionsUnaccounted", regionQa.regionsUnaccounted());
         metrics.put("qaStatus", qa.status());
         ArrayNode reasons = metrics.putArray("qaFailureReasons");
         qa.reasons().forEach(reasons::add);

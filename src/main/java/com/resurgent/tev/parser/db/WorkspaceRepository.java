@@ -2,6 +2,7 @@ package com.resurgent.tev.parser.db;
 
 import com.resurgent.tev.parser.ingest.NormalizedCell;
 import com.resurgent.tev.parser.ingest.ParsedQuantity;
+import com.resurgent.tev.parser.ingest.RegionQaStats;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -285,6 +286,43 @@ public final class WorkspaceRepository {
             ps.setLong(1, regionId);
             ps.setLong(2, cellId);
             ps.executeUpdate();
+        }
+    }
+
+    /**
+     * Returns the region coverage and classification-accounting facts for one
+     * parse run. Classification review rows carry the durable region id in
+     * their JSON detail, so this query can prove that each low-confidence or
+     * unknown region has a corresponding review item rather than merely
+     * counting unrelated queue entries.
+     */
+    public RegionQaStats selectRegionQaStats(long parseRunId, double confidenceFloor)
+            throws SQLException {
+        String sql = "SELECT "
+                + "(SELECT COUNT(*) FROM cell c JOIN worksheet w ON w.worksheet_id = c.worksheet_id "
+                + " WHERE w.parse_run_id = ? AND c.region_id IS NULL"
+                + " AND (c.is_merged_participant = 1 OR c.is_error = 1 OR c.formula_text IS NOT NULL"
+                + " OR (c.raw_value IS NOT NULL AND trim(c.raw_value) <> ''))), "
+                + "COUNT(r.region_id), "
+                + "COALESCE(SUM(CASE WHEN r.region_type <> 'unknown' AND r.region_conf >= ? THEN 1 ELSE 0 END), 0), "
+                + "COALESCE(SUM(CASE WHEN q.region_id IS NOT NULL THEN 1 ELSE 0 END), 0), "
+                + "COALESCE(SUM(CASE WHEN (r.region_type = 'unknown' OR r.region_conf < ?) "
+                + " AND q.region_id IS NULL THEN 1 ELSE 0 END), 0) "
+                + "FROM region r LEFT JOIN ("
+                + " SELECT DISTINCT CAST(json_extract(detail, '$.regionId') AS INTEGER) AS region_id "
+                + " FROM review_queue WHERE parse_run_id = ? AND category = 'region_classification'"
+                + ") q ON q.region_id = r.region_id WHERE r.parse_run_id = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setLong(1, parseRunId);
+            ps.setDouble(2, confidenceFloor);
+            ps.setDouble(3, confidenceFloor);
+            ps.setLong(4, parseRunId);
+            ps.setLong(5, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return new RegionQaStats(rs.getInt(2), rs.getInt(1), rs.getInt(3),
+                        rs.getInt(4), rs.getInt(5));
+            }
         }
     }
 
