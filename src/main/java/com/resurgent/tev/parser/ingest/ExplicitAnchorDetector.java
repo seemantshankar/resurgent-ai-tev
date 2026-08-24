@@ -97,7 +97,56 @@ final class ExplicitAnchorDetector {
             double confidence,
             List<String> reasons,
             boolean review,
-            List<Contribution> contributions) {}
+            List<Contribution> contributions) {
+
+        Candidate withAcceptedManuals(String fileHash, List<AcceptedManual> manuals) {
+            List<Contribution> combined = new ArrayList<>(contributions);
+            BigDecimal total = amount == null ? BigDecimal.ZERO : amount;
+            boolean matched = false;
+            for (AcceptedManual manual : manuals) {
+                if (!costHeadCode.equals(manual.costHeadCode())) {
+                    continue;
+                }
+                matched = true;
+                BigDecimal manualAmount = new BigDecimal(manual.amount());
+                BigDecimal normalized = RegionSchemaInferencer.rupees(
+                        manualAmount, manual.unit(), manual.currency());
+                boolean converted = normalized != null && normalized.compareTo(manualAmount) != 0;
+                BigDecimal addend = normalized == null ? manualAmount : normalized;
+                total = total.add(addend);
+                combined.add(new Contribution(
+                        0L,
+                        "manual:" + manual.id(),
+                        0L,
+                        0L,
+                        "manual",
+                        manualAmount,
+                        manual.unit(),
+                        manual.currency(),
+                        addend,
+                        converted ? RegionSchemaInferencer.UNIT_RS : manual.unit(),
+                        converted ? RegionSchemaInferencer.CURRENCY_INR : manual.currency(),
+                        1.0,
+                        List.of("MANUAL_CONTRIBUTION"),
+                        List.of()));
+            }
+            if (!matched) {
+                return this;
+            }
+            combined.sort(Comparator.comparing(Contribution::regionKey).thenComparing(Contribution::basis));
+            return new Candidate(
+                    costHeadId,
+                    costHeadCode,
+                    ExplicitAnchorDetector.fingerprint(fileHash, costHeadCode, combined),
+                    total,
+                    currency,
+                    unit,
+                    confidence,
+                    reasons,
+                    true,
+                    List.copyOf(combined));
+        }
+    }
 
     List<Candidate> detect(List<RegionSnapshot> regions, Map<Long, List<Long>> precedents, String fileHash) {
         Map<String, LocatedCell> catalog = catalog(regions);
@@ -799,15 +848,7 @@ final class ExplicitAnchorDetector {
 
     private static CellSnapshot findAnchor(
             List<CellSnapshot> cells, Set<Integer> amountCols, Set<Integer> headerRows) {
-        Set<Integer> totalRows = new LinkedHashSet<>();
-        for (CellSnapshot cell : cells) {
-            if (headerRows.contains(cell.row()) || amountCols.contains(cell.col())) {
-                continue;
-            }
-            if (cell.text() != null && TOTAL_LABEL.matcher(cell.text().trim()).matches()) {
-                totalRows.add(cell.row());
-            }
-        }
+        Set<Integer> totalRows = totalRows(cells, amountCols, headerRows);
         CellSnapshot found = null;
         for (CellSnapshot cell : cells) {
             if (!totalRows.contains(cell.row()) || !amountCols.contains(cell.col())) {
@@ -818,6 +859,20 @@ final class ExplicitAnchorDetector {
             }
         }
         return found;
+    }
+
+    private static Set<Integer> totalRows(
+            List<CellSnapshot> cells, Set<Integer> amountCols, Set<Integer> headerRows) {
+        Set<Integer> totalRows = new LinkedHashSet<>();
+        for (CellSnapshot cell : cells) {
+            if (headerRows.contains(cell.row()) || amountCols.contains(cell.col())) {
+                continue;
+            }
+            if (cell.text() != null && TOTAL_LABEL.matcher(cell.text().trim()).matches()) {
+                totalRows.add(cell.row());
+            }
+        }
+        return totalRows;
     }
 
     private static String exclusionReason(
@@ -832,6 +887,9 @@ final class ExplicitAnchorDetector {
             String expectedUnit,
             String expectedCurrency) {
         if (anchorId != null && cell.cellId() == anchorId) {
+            return TOTAL_ANCHOR;
+        }
+        if (totalRows(regionCells, amountCols, headerRows).contains(cell.row())) {
             return TOTAL_ANCHOR;
         }
         if (cell.mergedParticipant()) {
@@ -1009,6 +1067,11 @@ final class ExplicitAnchorDetector {
     }
 
     static String fingerprint(String fileHash, String costHeadCode, List<Contribution> contributions) {
+        return fingerprint(fileHash, costHeadCode, contributions, List.of());
+    }
+
+    static String fingerprint(String fileHash, String costHeadCode, List<Contribution> contributions,
+            List<AcceptedManual> manuals) {
         StringBuilder canonical = new StringBuilder();
         canonical.append(fileHash == null ? "" : fileHash).append('\n');
         canonical.append(costHeadCode).append('\n');
@@ -1025,6 +1088,25 @@ final class ExplicitAnchorDetector {
                 canonical.append('|').append(cell.coord()).append(':').append(cell.participation());
             }
             canonical.append('\n');
+        }
+        List<AcceptedManual> relevant = new ArrayList<>();
+        for (AcceptedManual manual : manuals) {
+            if (costHeadCode.equals(manual.costHeadCode())) {
+                relevant.add(manual);
+            }
+        }
+        relevant.sort(Comparator.comparingLong(AcceptedManual::id)
+                .thenComparing(AcceptedManual::amount)
+                .thenComparing(manual -> nullToEmpty(manual.unit()))
+                .thenComparing(manual -> nullToEmpty(manual.currency()))
+                .thenComparing(manual -> nullToEmpty(manual.adjustsKey())));
+        for (AcceptedManual manual : relevant) {
+            canonical.append("manual|").append(manual.id()).append('|')
+                    .append(manual.amount()).append('|')
+                    .append(nullToEmpty(manual.unit())).append('|')
+                    .append(nullToEmpty(manual.currency())).append('|')
+                    .append(nullToEmpty(manual.adjustsKey()))
+                    .append('\n');
         }
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")
@@ -1051,6 +1133,14 @@ final class ExplicitAnchorDetector {
     private static boolean disabledLine(String formula) {
         return formula != null && DISABLED_LINE.matcher(formula.trim()).matches();
     }
+
+    record AcceptedManual(
+            long id,
+            String costHeadCode,
+            String amount,
+            String unit,
+            String currency,
+            String adjustsKey) {}
 
     private static String nullToEmpty(String value) {
         return value == null ? "" : value;

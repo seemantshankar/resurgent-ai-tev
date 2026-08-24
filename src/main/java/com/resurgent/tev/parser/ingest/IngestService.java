@@ -708,35 +708,69 @@ public final class IngestService {
                     cellsByRegion.getOrDefault(region.regionId(), List.of())));
         }
         Map<Long, List<Long>> precedents = ReferenceGraphLoader.loadAdjacency(repo, parseRunId);
-        for (ExplicitAnchorDetector.Candidate candidate : explicitAnchorDetector.detect(
+        List<ExplicitAnchorDetector.AcceptedManual> manuals = loadAcceptedManuals(repo, sourceFileId);
+        for (ExplicitAnchorDetector.Candidate detected : explicitAnchorDetector.detect(
                 snapshots, precedents, fileHash)) {
+            ExplicitAnchorDetector.Candidate candidate = detected.withAcceptedManuals(fileHash, manuals);
             long candidateId = repo.insertCostHeadCandidate(
                     parseRunId, sourceFileId, candidate.costHeadId(), candidate.fingerprint(),
                     candidate.amount(), candidate.currency(), candidate.unit(), 0,
                     candidate.confidence(), Jsonb.toJson(candidate.reasons()));
             for (ExplicitAnchorDetector.Contribution contribution : candidate.contributions()) {
+                boolean manual = "manual".equals(contribution.basis());
                 long contributionId = repo.insertCostHeadContribution(
-                        candidateId, contribution.mappingId(), contribution.regionId(),
-                        contribution.anchorCellId(), contribution.basis(), contribution.sourceAmount(),
+                        candidateId,
+                        manual ? null : contribution.mappingId(),
+                        manual ? 0L : contribution.regionId(),
+                        manual ? null : contribution.anchorCellId(),
+                        contribution.basis(), contribution.sourceAmount(),
                         contribution.sourceCurrency(), contribution.sourceUnit(),
                         contribution.normalizedAmount(), contribution.normalizedCurrency(),
                         contribution.normalizedUnit(), contribution.confidence(),
-                        Jsonb.toJson(contribution.reasons()));
+                        Jsonb.toJson(contribution.reasons()),
+                        manual);
                 for (ExplicitAnchorDetector.CellParticipation cell : contribution.cells()) {
                     repo.insertCostHeadContributionCell(
                             contributionId, cell.cellId(), cell.participation(), cell.reason());
                 }
             }
             if (candidate.review()) {
-                repo.insertReviewQueue(parseRunId, "cost_head_candidate",
+                Map<String, Object> detail = new LinkedHashMap<>();
+                detail.put("candidateId", candidateId);
+                detail.put("costHeadCode", candidate.costHeadCode());
+                detail.put("fingerprint", candidate.fingerprint());
+                detail.put("amount", candidate.amount() == null ? "" : candidate.amount().toPlainString());
+                detail.put("unit", candidate.unit() == null ? "" : candidate.unit());
+                detail.put("currency", candidate.currency() == null ? "" : candidate.currency());
+                detail.put("bases", candidate.contributions().stream()
+                        .map(ExplicitAnchorDetector.Contribution::basis).toList());
+                long reviewQueueId = repo.insertReviewQueue(parseRunId, "cost_head_candidate",
                         "Cost-head candidate requires review: " + candidate.costHeadCode(),
-                        Jsonb.toJson(Map.of(
-                                "candidateId", candidateId,
-                                "costHeadCode", candidate.costHeadCode(),
-                                "fingerprint", candidate.fingerprint())),
+                        Jsonb.toJson(detail),
                         "Pending", false, Timestamps.now(), null,
                         "candidate", candidate.costHeadCode(), candidate.confidence());
+                carryTotalDecision(repo, reviewQueueId, sourceFileId, candidate);
             }
+        }
+    }
+
+    private static List<ExplicitAnchorDetector.AcceptedManual> loadAcceptedManuals(
+            WorkspaceRepository repo, long sourceFileId) throws SQLException {
+        List<ExplicitAnchorDetector.AcceptedManual> manuals = new ArrayList<>();
+        for (WorkspaceRepository.AcceptedManualRow row : repo.findAcceptedManuals(sourceFileId)) {
+            manuals.add(new ExplicitAnchorDetector.AcceptedManual(
+                    row.id(), row.costHeadCode(), row.amount(), row.unit(), row.currency(),
+                    row.adjustsKey()));
+        }
+        return manuals;
+    }
+
+    private static void carryTotalDecision(WorkspaceRepository repo, long reviewQueueId,
+            long sourceFileId, ExplicitAnchorDetector.Candidate candidate) throws SQLException {
+        Long decisionId = repo.findLatestAcceptedTotalDecisionId(
+                sourceFileId, candidate.costHeadCode(), candidate.fingerprint());
+        if (decisionId != null) {
+            repo.carryReviewQueue(reviewQueueId, decisionId, "Accepted");
         }
     }
 
