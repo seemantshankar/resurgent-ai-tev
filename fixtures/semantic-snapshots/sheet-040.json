@@ -1,0 +1,101 @@
+{
+  "candidates" : [ ],
+  "contributions" : [ ],
+  "duplicates" : [ ],
+  "regions" : [ {
+    "bbox" : {
+      "end_col" : 1,
+      "end_row" : 9,
+      "start_col" : 1,
+      "start_row" : 1
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 9,
+      "end_row" : 9,
+      "start_col" : 3,
+      "start_row" : 1
+    },
+    "columns" : [ {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 7,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 8,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 9,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  } ],
+  "role" : "unknown",
+  "role_conf" : 0.0,
+  "role_reasons" : [ {
+    "code" : "SCRATCH_ORPHAN_CONTENT",
+    "params" : {
+      "cell_count" : 1
+    },
+    "weight" : 1
+  } ],
+  "scratch_cells" : [ {
+    "coord" : "A3",
+    "orphan" : true,
+    "reasons" : [ ],
+    "scratch" : false,
+    "support" : false
+  } ],
+  "sheet_id" : "sheet-040"
+}

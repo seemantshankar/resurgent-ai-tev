@@ -235,11 +235,14 @@ public final class IngestService {
         // CSV has no formulas or structural references, so those reconciliation buckets
         // are trivially 0/0/0 and never force a partial/failed status on their own.
         RegionQaStats regionQa = repo.selectRegionQaStats(parseRunId, CLASSIFICATION_REVIEW_CONFIDENCE);
-        QaGateResult qa = withTrustQa(QaGate.evaluate(cellCount, cellsWritten, 0, 0, 0, 0, 0, 0, 0,
-                regionQa.cellsWithoutRegion(), regionQa.regionsUnaccounted()), costHeads);
+        SemanticFacts semanticFacts = repo.selectSemanticFacts(parseRunId);
+        SemanticReport semantic = SemanticReporter.build(semanticFacts, costHeads);
+        QaGateResult qa = withSemanticQa(QaGate.evaluate(cellCount, cellsWritten, 0, 0, 0, 0, 0, 0, 0,
+                regionQa.cellsWithoutRegion(), regionQa.regionsUnaccounted()), costHeads,
+                semanticFacts.qa(), repo.findAcceptedTotalFingerprints(sourceFileId));
         String metricsJson = IngestMetrics.toJson(fileName, fileHash, sheet.sheetName(), rowCount,
                 cellCount, cellsWritten, coercedCount(enriched), errorCount(enriched),
-                0, 0, 0, 0, 0, 0, 0, regionQa, qa, worksheetRoles, costHeads);
+                0, 0, 0, 0, 0, 0, 0, regionQa, qa, worksheetRoles, costHeads, semantic);
         repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
         repo.insertAuditLog(parseRunId, "parse_run_completed", Timestamps.now(),
                 Jsonb.toJson(Map.of("status", qa.status(), "cellsWritten", cellsWritten)),
@@ -431,15 +434,18 @@ public final class IngestService {
                 metadata.iterativeCount(), cellsError);
 
         RegionQaStats regionQa = repo.selectRegionQaStats(parseRunId, CLASSIFICATION_REVIEW_CONFIDENCE);
-        QaGateResult qa = withTrustQa(QaGate.evaluate(cellCount, cellsWritten,
+        SemanticFacts semanticFacts = repo.selectSemanticFacts(parseRunId);
+        SemanticReport semantic = SemanticReporter.build(semanticFacts, costHeads);
+        QaGateResult qa = withSemanticQa(QaGate.evaluate(cellCount, cellsWritten,
                 refStats.total(), refStats.resolved(), refStats.unresolved(),
                 formulaCellsTotal, formulaCellsTokenized, formulaCellsParseError, formulaCellsUnavailable,
-                regionQa.cellsWithoutRegion(), regionQa.regionsUnaccounted()), costHeads);
+                regionQa.cellsWithoutRegion(), regionQa.regionsUnaccounted()), costHeads,
+                semanticFacts.qa(), repo.findAcceptedTotalFingerprints(sourceFileId));
         String metricsJson = IngestMetrics.toJson(fileName, fileHash, primarySheetName(sheets),
                 rowCount, cellCount, cellsWritten, cellsCoerced, cellsError,
                 refStats.total(), refStats.resolved(), refStats.unresolved(),
                 formulaCellsTotal, formulaCellsTokenized, formulaCellsParseError, formulaCellsUnavailable,
-                regionQa, qa, worksheetRoles, costHeads);
+                regionQa, qa, worksheetRoles, costHeads, semantic);
         repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
         repo.insertAuditLog(parseRunId, "parse_run_completed", Timestamps.now(),
                 Jsonb.toJson(Map.of("status", qa.status(), "cellsWritten", cellsWritten)),
@@ -686,8 +692,11 @@ public final class IngestService {
                 "Pending", false, Timestamps.now(), null);
     }
 
-    private static QaGateResult withTrustQa(QaGateResult qa, List<CostHeadTrust> costHeads) {
-        List<String> extra = TrustQa.reportReasons(costHeads);
+    private static QaGateResult withSemanticQa(QaGateResult qa, List<CostHeadTrust> costHeads,
+            SemanticQaStats semanticStats, Set<String> acceptedFingerprints) {
+        List<String> extra = new ArrayList<>();
+        extra.addAll(TrustQa.reportReasons(costHeads));
+        extra.addAll(SemanticQa.reasons(semanticStats, costHeads, acceptedFingerprints));
         if (extra.isEmpty()) {
             return qa;
         }
@@ -737,6 +746,7 @@ public final class IngestService {
                 fileHash, explicitAnchorDetector.detect(snapshots, precedents, fileHash),
                 proposals, decisions, precedents);
         List<CostHeadTrust> reports = new ArrayList<>();
+        Set<Long> coveredHeads = new HashSet<>();
         for (ExplicitAnchorDetector.Candidate raw : detected) {
             ExplicitAnchorDetector.Candidate candidate = raw.withAcceptedManuals(fileHash, manuals);
             String acceptedFingerprint = repo.findLatestAcceptedTotalFingerprint(
@@ -796,6 +806,21 @@ public final class IngestService {
                     candidate.amount(), candidate.unit(), candidate.currency(),
                     candidate.confidence(), reasons, reviewStatus, candidate.fingerprint(),
                     verdict.gates()));
+            coveredHeads.add(candidate.costHeadId());
+        }
+        Set<Long> queued = new HashSet<>();
+        for (WorkspaceRepository.RegionAnchorRow region : regions) {
+            if (coveredHeads.contains(region.costHeadId()) || !queued.add(region.costHeadId())) {
+                continue;
+            }
+            repo.insertReviewQueue(parseRunId, "cost_head_candidate",
+                    "Mapped cost head has no candidate: " + region.costHeadCode(),
+                    Jsonb.toJson(Map.of(
+                            "costHeadCode", region.costHeadCode(),
+                            "blocker", "NO_CANDIDATE",
+                            "regionKey", region.regionKey())),
+                    "Pending", false, Timestamps.now(), null,
+                    "candidate", region.costHeadCode(), 0.0);
         }
         return reports;
     }

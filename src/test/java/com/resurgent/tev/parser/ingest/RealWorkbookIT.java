@@ -11,6 +11,7 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -121,6 +122,31 @@ class RealWorkbookIT {
                     "SELECT COUNT(*) FROM (SELECT worksheet_id, coord FROM cell"
                             + " GROUP BY worksheet_id, coord HAVING COUNT(*) > 1)"))
                     .isZero();
+        }
+    }
+
+    @Test
+    void semanticAccountingIsCompleteAndReportsStayStructural() throws Exception {
+        Map<String, Object> metrics = Jsonb.fromJson(summary.metricsJson(), Map.class);
+        assertThat(metrics).containsKeys("vocabulary", "mappings", "totals", "bases",
+                "blockers", "unitCurrencyUnknowns", "scratch", "duplicates", "worksheets");
+        assertThat(metrics).doesNotContainKeys("unknownRegionRatio", "fuzzyTruthThreshold");
+        assertThat(metrics.get("vocabulary")).isInstanceOf(Map.class);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> vocabulary = (Map<String, Object>) metrics.get("vocabulary");
+        assertThat(vocabulary).containsKeys("observed", "unobserved");
+        assertThat(vocabulary.get("observed")).isInstanceOf(List.class);
+        assertThat(vocabulary.get("unobserved")).isInstanceOf(List.class);
+
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            assertThat(scalarLong(c, "SELECT COUNT(*) FROM worksheet")).isEqualTo(47);
+            assertThat(scalarLong(c,
+                    "SELECT COUNT(*) FROM worksheet WHERE role IS NULL OR role_reasons IS NULL"))
+                    .isZero();
+            if (!"success".equals(summary.status())) {
+                assertThat(scalarLong(c, "SELECT COUNT(*) FROM review_queue")).isGreaterThan(0);
+                assertThat(summary.status()).isEqualTo("partial");
+            }
         }
     }
 

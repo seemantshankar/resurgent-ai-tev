@@ -3,6 +3,8 @@ package com.resurgent.tev.parser.db;
 import com.resurgent.tev.parser.ingest.NormalizedCell;
 import com.resurgent.tev.parser.ingest.ParsedQuantity;
 import com.resurgent.tev.parser.ingest.RegionQaStats;
+import com.resurgent.tev.parser.ingest.SemanticFacts;
+import com.resurgent.tev.parser.ingest.SemanticQaStats;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -422,6 +424,263 @@ public final class WorkspaceRepository {
                 rs.next();
                 return new RegionQaStats(rs.getInt(2), rs.getInt(1), rs.getInt(3),
                         rs.getInt(4), rs.getInt(5));
+            }
+        }
+    }
+
+    public SemanticFacts selectSemanticFacts(long parseRunId) throws SQLException {
+        int mappingsUnaccounted = countForParse(parseRunId, """
+                SELECT COUNT(*) FROM cost_head_mapping m
+                WHERE m.parse_run_id = ?
+                AND NOT (
+                  (m.match_method IN ('exact_alias', 'carried')
+                   AND instr(COALESCE(m.reasons, ''), 'AMBIGUOUS') = 0)
+                  OR EXISTS (
+                    SELECT 1 FROM review_queue q
+                    WHERE q.parse_run_id = m.parse_run_id
+                    AND q.category = 'cost_head_mapping'
+                    AND CAST(json_extract(q.detail, '$.mappingId') AS INTEGER) = m.cost_head_mapping_id
+                  )
+                )
+                """);
+        int contributionsUnaccounted = countForParse(parseRunId, """
+                SELECT COUNT(*) FROM cost_head_contribution c
+                JOIN cost_head_candidate cand ON cand.cost_head_candidate_id = c.cost_head_candidate_id
+                WHERE cand.parse_run_id = ?
+                AND (
+                  c.basis IS NULL OR trim(c.basis) = ''
+                  OR c.reasons IS NULL OR trim(c.reasons) = '' OR c.reasons = '[]'
+                  OR (c.basis <> 'manual' AND NOT EXISTS (
+                    SELECT 1 FROM cost_head_contribution_cell cc
+                    WHERE cc.cost_head_contribution_id = c.cost_head_contribution_id
+                  ))
+                )
+                """);
+        int contributionArithmeticMismatches = countContributionArithmeticMismatches(parseRunId);
+        int candidatesUnaccounted = countForParse(parseRunId, """
+                SELECT COUNT(*) FROM (
+                  SELECT DISTINCT m.cost_head_id
+                  FROM cost_head_mapping m
+                  JOIN cost_head h ON h.cost_head_id = m.cost_head_id
+                  WHERE m.parse_run_id = ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM cost_head_candidate c
+                    WHERE c.parse_run_id = m.parse_run_id AND c.cost_head_id = m.cost_head_id
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM review_queue q
+                    WHERE q.parse_run_id = m.parse_run_id
+                    AND q.category = 'cost_head_candidate'
+                    AND json_extract(q.detail, '$.costHeadCode') = h.code
+                  )
+                )
+                """);
+        int duplicatesUnaccounted = countForParse(parseRunId, """
+                SELECT COUNT(*) FROM duplicate_proposal p
+                WHERE p.parse_run_id = ?
+                AND (
+                  p.reasons IS NULL OR trim(p.reasons) = '' OR p.reasons = '[]'
+                  OR (
+                    NOT EXISTS (
+                      SELECT 1 FROM review_queue q
+                      WHERE q.parse_run_id = p.parse_run_id
+                      AND q.category = 'duplicate'
+                      AND CAST(json_extract(q.detail, '$.proposalId') AS INTEGER)
+                          = p.duplicate_proposal_id
+                    )
+                    AND NOT EXISTS (
+                      SELECT 1 FROM duplicate_decision d
+                      JOIN region lr ON lr.region_id = p.left_region_id
+                      JOIN region rr ON rr.region_id = p.right_region_id
+                      WHERE d.source_file_id = (
+                        SELECT source_file_id FROM parse_run WHERE parse_run_id = p.parse_run_id
+                      )
+                      AND ((d.left_region_key = lr.region_key AND d.right_region_key = rr.region_key)
+                        OR (d.left_region_key = rr.region_key AND d.right_region_key = lr.region_key))
+                    )
+                  )
+                )
+                """);
+        int scratchUnaccounted = countForParse(parseRunId, """
+                SELECT COUNT(*) FROM cell c
+                JOIN worksheet w ON w.worksheet_id = c.worksheet_id
+                WHERE w.parse_run_id = ?
+                AND (
+                  (c.is_scratch = 1 AND (c.scratch_reason IS NULL OR trim(c.scratch_reason) = ''))
+                  OR (c.is_support = 1 AND (c.support_reason IS NULL OR trim(c.support_reason) = ''))
+                )
+                """);
+        int worksheetRolesUnaccounted = countForParse(parseRunId, """
+                SELECT COUNT(*) FROM worksheet w
+                WHERE w.parse_run_id = ?
+                AND (w.role IS NULL OR trim(w.role) = '')
+                """);
+        List<String> observed = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT DISTINCT h.code FROM cost_head_mapping m"
+                        + " JOIN cost_head h ON h.cost_head_id = m.cost_head_id"
+                        + " WHERE m.parse_run_id = ? ORDER BY h.code")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    observed.add(rs.getString(1));
+                }
+            }
+        }
+        int mappingsExact = countForParse(parseRunId,
+                "SELECT COUNT(*) FROM cost_head_mapping WHERE parse_run_id = ?"
+                        + " AND match_method = 'exact_alias'"
+                        + " AND instr(COALESCE(reasons, ''), 'AMBIGUOUS') = 0");
+        int mappingsPending = countForParse(parseRunId,
+                "SELECT COUNT(*) FROM cost_head_mapping WHERE parse_run_id = ?"
+                        + " AND (match_method = 'fuzzy_proposal'"
+                        + " OR instr(COALESCE(reasons, ''), 'AMBIGUOUS') > 0)");
+        int mappingsCarried = countForParse(parseRunId,
+                "SELECT COUNT(*) FROM cost_head_mapping WHERE parse_run_id = ?"
+                        + " AND match_method = 'carried'");
+        Map<String, Integer> bases = new LinkedHashMap<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT c.basis, COUNT(*) FROM cost_head_contribution c"
+                        + " JOIN cost_head_candidate cand ON cand.cost_head_candidate_id"
+                        + " = c.cost_head_candidate_id"
+                        + " WHERE cand.parse_run_id = ? GROUP BY c.basis ORDER BY c.basis")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    bases.put(rs.getString(1), rs.getInt(2));
+                }
+            }
+        }
+        int unitCurrencyUnknowns = countForParse(parseRunId,
+                "SELECT COUNT(*) FROM region r WHERE r.parse_run_id = ?"
+                        + " AND (r.inferred_unit = 'unknown' OR r.inferred_currency = 'unknown'"
+                        + " OR r.inferred_unit IS NULL OR r.inferred_currency = 'unknown')");
+        int scratch = countForParse(parseRunId,
+                "SELECT COUNT(*) FROM cell c JOIN worksheet w ON w.worksheet_id = c.worksheet_id"
+                        + " WHERE w.parse_run_id = ? AND c.is_scratch = 1");
+        int support = countForParse(parseRunId,
+                "SELECT COUNT(*) FROM cell c JOIN worksheet w ON w.worksheet_id = c.worksheet_id"
+                        + " WHERE w.parse_run_id = ? AND c.is_support = 1");
+        int orphan = countForParse(parseRunId,
+                "SELECT COUNT(*) FROM cell c JOIN worksheet w ON w.worksheet_id = c.worksheet_id"
+                        + " WHERE w.parse_run_id = ? AND c.is_orphan = 1");
+        int promotions = 0;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COALESCE(SUM(CAST(json_extract(detail, '$.promotions') AS INTEGER)), 0)"
+                        + " FROM review_queue WHERE parse_run_id = ? AND category = 'semantic_accounting'")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    promotions = rs.getInt(1);
+                }
+            }
+        }
+        int duplicatesProposed = countForParse(parseRunId,
+                "SELECT COUNT(*) FROM duplicate_proposal WHERE parse_run_id = ?");
+        int duplicatesDuplicate = countForParse(parseRunId, """
+                SELECT COUNT(*) FROM duplicate_decision d
+                WHERE d.decision = 'Duplicate'
+                AND d.source_file_id = (SELECT source_file_id FROM parse_run WHERE parse_run_id = ?)
+                """);
+        int duplicatesDistinct = countForParse(parseRunId, """
+                SELECT COUNT(*) FROM duplicate_decision d
+                WHERE d.decision = 'Distinct'
+                AND d.source_file_id = (SELECT source_file_id FROM parse_run WHERE parse_run_id = ?)
+                """);
+        return new SemanticFacts(
+                new SemanticQaStats(
+                        mappingsUnaccounted,
+                        contributionsUnaccounted,
+                        contributionArithmeticMismatches,
+                        candidatesUnaccounted,
+                        duplicatesUnaccounted,
+                        scratchUnaccounted,
+                        worksheetRolesUnaccounted),
+                List.copyOf(observed),
+                mappingsExact,
+                mappingsPending,
+                mappingsCarried,
+                Map.copyOf(bases),
+                unitCurrencyUnknowns,
+                scratch,
+                support,
+                orphan,
+                promotions,
+                duplicatesProposed,
+                duplicatesDuplicate,
+                duplicatesDistinct);
+    }
+
+    public Set<String> findAcceptedTotalFingerprints(long sourceFileId) throws SQLException {
+        Set<String> fingerprints = new HashSet<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT DISTINCT candidate_fingerprint FROM cost_head_total_decision"
+                        + " WHERE source_file_id = ? AND decision = 'Accepted'")) {
+            ps.setLong(1, sourceFileId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    fingerprints.add(rs.getString(1));
+                }
+            }
+        }
+        return Set.copyOf(fingerprints);
+    }
+
+    private int countContributionArithmeticMismatches(long parseRunId) throws SQLException {
+        int mismatches = 0;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT c.cost_head_contribution_id, c.basis, c.source_amount, c.reasons"
+                        + " FROM cost_head_contribution c"
+                        + " JOIN cost_head_candidate cand ON cand.cost_head_candidate_id"
+                        + " = c.cost_head_candidate_id"
+                        + " WHERE cand.parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String basis = rs.getString("basis");
+                    if ("manual".equals(basis)) {
+                        continue;
+                    }
+                    String reasons = rs.getString("reasons");
+                    if (reasons != null && reasons.contains("AMOUNT_MISMATCH")) {
+                        // Recorded mismatch is pending accounted work, not an unaccounted break.
+                        continue;
+                    }
+                    long contributionId = rs.getLong("cost_head_contribution_id");
+                    BigDecimal expected = rs.getBigDecimal("source_amount");
+                    BigDecimal included = includedAmount(contributionId);
+                    if (expected != null && included != null
+                            && expected.compareTo(included) != 0) {
+                        mismatches++;
+                    }
+                }
+            }
+        }
+        return mismatches;
+    }
+
+    private BigDecimal includedAmount(long contributionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT SUM(cell.numeric_value) FROM cost_head_contribution_cell cc"
+                        + " JOIN cell ON cell.cell_id = cc.cell_id"
+                        + " WHERE cc.cost_head_contribution_id = ?"
+                        + " AND cc.participation = 'included'")) {
+            ps.setLong(1, contributionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                return rs.getBigDecimal(1);
+            }
+        }
+    }
+
+    private int countForParse(long parseRunId, String sql) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getInt(1);
             }
         }
     }

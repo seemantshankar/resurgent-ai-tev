@@ -22,7 +22,8 @@ final class IngestMetrics {
             int referencesTotal, int referencesResolved, int referencesUnresolved,
             int formulaCellsTotal, int formulaCellsTokenized, int formulaCellsParseError,
             int formulaCellsUnavailable, RegionQaStats regionQa, QaGateResult qa,
-            List<WorksheetRoleScorer.Score> worksheetRoles, List<CostHeadTrust> costHeads) {
+            List<WorksheetRoleScorer.Score> worksheetRoles, List<CostHeadTrust> costHeads,
+            SemanticReport semantic) {
         ObjectNode metrics = MAPPER.createObjectNode();
         metrics.put("fileName", fileName);
         metrics.put("fileHash", fileHash);
@@ -90,6 +91,36 @@ final class IngestMetrics {
                 gates.put(gate.name(), gate.passed());
             }
         }
+        ObjectNode vocabulary = metrics.putObject("vocabulary");
+        ArrayNode observed = vocabulary.putArray("observed");
+        semantic.observedCodes().forEach(observed::add);
+        ArrayNode unobserved = vocabulary.putArray("unobserved");
+        semantic.unobservedCodes().forEach(unobserved::add);
+        ObjectNode mappings = metrics.putObject("mappings");
+        mappings.put("exact", semantic.mappingsExact());
+        mappings.put("pending", semantic.mappingsPending());
+        mappings.put("carried", semantic.mappingsCarried());
+        ObjectNode totals = metrics.putObject("totals");
+        totals.put("candidate", semantic.totalStates().getOrDefault("candidate", 0));
+        totals.put("trusted", semantic.totalStates().getOrDefault("trusted", 0));
+        totals.put("stale", semantic.totalStates().getOrDefault("stale", 0));
+        ObjectNode bases = metrics.putObject("bases");
+        bases.put("explicit_total_anchor", semantic.bases().getOrDefault("explicit_total_anchor", 0));
+        bases.put("structural_total", semantic.bases().getOrDefault("structural_total", 0));
+        bases.put("leaf_sum", semantic.bases().getOrDefault("leaf_sum", 0));
+        bases.put("manual", semantic.bases().getOrDefault("manual", 0));
+        ArrayNode blockers = metrics.putArray("blockers");
+        semantic.blockers().forEach(blockers::add);
+        metrics.put("unitCurrencyUnknowns", semantic.unitCurrencyUnknowns());
+        ObjectNode scratch = metrics.putObject("scratch");
+        scratch.put("scratch", semantic.scratch());
+        scratch.put("support", semantic.support());
+        scratch.put("orphan", semantic.orphan());
+        scratch.put("promotions", semantic.promotions());
+        ObjectNode duplicates = metrics.putObject("duplicates");
+        duplicates.put("proposed", semantic.duplicatesProposed());
+        duplicates.put("duplicate", semantic.duplicatesDuplicate());
+        duplicates.put("distinct", semantic.duplicatesDistinct());
         return metrics.toString();
     }
 }
