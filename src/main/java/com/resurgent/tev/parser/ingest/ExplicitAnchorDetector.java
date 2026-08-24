@@ -32,6 +32,7 @@ final class ExplicitAnchorDetector {
     static final String HEADER = "HEADER";
     static final String TOTAL_ANCHOR = "TOTAL_ANCHOR";
     static final String NOT_AMOUNT = "NOT_AMOUNT";
+    static final String PERIOD = "PERIOD";
 
     private static final Pattern TOTAL_LABEL = Pattern.compile(
             "(?i)^(grand\\s+)?total(\\s+(project\\s+)?cost)?$");
@@ -105,7 +106,7 @@ final class ExplicitAnchorDetector {
         List<Candidate> candidates = new ArrayList<>();
         for (Map.Entry<String, List<Contribution>> entry : byHead.entrySet()) {
             List<Contribution> contributions = entry.getValue();
-            contributions.sort(Comparator.comparing(Contribution::regionId));
+            contributions.sort(Comparator.comparing(Contribution::regionKey));
             boolean review = contributions.stream().anyMatch(item -> !EXPLICIT.equals(item.basis()));
             BigDecimal amount = contributions.stream()
                     .map(item -> item.normalizedAmount() != null ? item.normalizedAmount() : item.sourceAmount())
@@ -117,8 +118,8 @@ final class ExplicitAnchorDetector {
                     entry.getKey(),
                     fingerprint,
                     amount,
-                    first.sourceCurrency(),
-                    first.sourceUnit(),
+                    first.normalizedCurrency(),
+                    first.normalizedUnit(),
                     review ? 0.4 : 0.9,
                     review ? List.of("LABELED_LITERAL_GEOMETRIC_ONLY") : List.of("EXPLICIT_TOTAL_ANCHOR"),
                     review,
@@ -128,7 +129,8 @@ final class ExplicitAnchorDetector {
     }
 
     private Contribution contributionFor(RegionSnapshot region, Map<Long, List<Long>> precedents) {
-        Set<Integer> amountCols = amountColumns(region.schemaJson());
+        Set<Integer> amountCols = columnsWithRole(region.schemaJson(), RegionSchemaInferencer.AMOUNT);
+        Set<Integer> periodCols = columnsWithRole(region.schemaJson(), RegionSchemaInferencer.PERIOD);
         if (amountCols.isEmpty()) {
             return null;
         }
@@ -143,7 +145,7 @@ final class ExplicitAnchorDetector {
                 amountIds.add(cell.cellId());
             }
         }
-        boolean connected = hasFormulaLink(anchor, amountIds, precedents);
+        boolean connected = reachesAmount(anchor.cellId(), amountIds, precedents, null);
         String basis = connected ? EXPLICIT : LEAF_SUM;
         List<String> reasons = new ArrayList<>();
         reasons.add(connected ? "EXPLICIT_TOTAL_ANCHOR" : "LABELED_LITERAL_GEOMETRIC_ONLY");
@@ -152,20 +154,24 @@ final class ExplicitAnchorDetector {
         }
         List<CellParticipation> participation = new ArrayList<>();
         for (CellSnapshot cell : region.cells()) {
-            if (!amountCols.contains(cell.col())) {
+            if (!amountCols.contains(cell.col()) && !periodCols.contains(cell.col())) {
                 continue;
             }
-            String exclusion = exclusionReason(cell, headerRows, amountIds, precedents, anchor.cellId());
+            String exclusion = exclusionReason(
+                    cell, headerRows, amountCols, periodCols, amountIds, precedents, anchor.cellId());
             if (exclusion == null) {
                 participation.add(new CellParticipation(cell.cellId(), cell.coord(), "included", null));
             } else {
                 participation.add(new CellParticipation(cell.cellId(), cell.coord(), "excluded", exclusion));
             }
         }
-        BigDecimal amount = anchor.numeric() == null ? BigDecimal.ZERO : anchor.numeric();
-        BigDecimal normalized = normalize(amount, region.unit(), region.currency());
-        String normalizedUnit = normalized != null && !normalized.equals(amount) ? "rs" : region.unit();
-        String normalizedCurrency = normalized != null ? "INR" : region.currency();
+        BigDecimal amount = connected
+                ? (anchor.numeric() == null ? BigDecimal.ZERO : anchor.numeric())
+                : includedSum(participation, region.cells());
+        BigDecimal normalized = RegionSchemaInferencer.rupees(amount, region.unit(), region.currency());
+        boolean converted = normalized != null && amount != null && normalized.compareTo(amount) != 0;
+        String normalizedUnit = converted ? RegionSchemaInferencer.UNIT_RS : region.unit();
+        String normalizedCurrency = converted ? RegionSchemaInferencer.CURRENCY_INR : region.currency();
         return new Contribution(
                 region.regionId(),
                 region.regionKey(),
@@ -209,6 +215,8 @@ final class ExplicitAnchorDetector {
     private static String exclusionReason(
             CellSnapshot cell,
             Set<Integer> headerRows,
+            Set<Integer> amountCols,
+            Set<Integer> periodCols,
             Set<Long> amountIds,
             Map<Long, List<Long>> precedents,
             long anchorId) {
@@ -221,13 +229,17 @@ final class ExplicitAnchorDetector {
         if (headerRows.contains(cell.row())) {
             return HEADER;
         }
+        if (periodCols.contains(cell.col()) && !amountCols.contains(cell.col())) {
+            return PERIOD;
+        }
         if (cell.error() || cell.errorDescendant()) {
             return ERROR;
         }
         if (cell.scratch()) {
             return SCRATCH;
         }
-        if (aggregatesAmount(cell, amountIds, precedents, anchorId)) {
+        if (cell.formula() != null && !cell.formula().isBlank()
+                && reachesAmount(cell.cellId(), amountIds, precedents, anchorId)) {
             return SUBTOTAL;
         }
         if (cell.numeric() == null && (cell.formula() == null || cell.formula().isBlank())) {
@@ -236,30 +248,33 @@ final class ExplicitAnchorDetector {
         return null;
     }
 
-    private static boolean aggregatesAmount(
-            CellSnapshot cell, Set<Long> amountIds, Map<Long, List<Long>> precedents, long anchorId) {
-        if (cell.formula() == null || cell.formula().isBlank()) {
-            return false;
-        }
-        for (long id : reachable(cell.cellId(), precedents)) {
-            if (id != cell.cellId() && id != anchorId && amountIds.contains(id)) {
+    private static boolean reachesAmount(
+            long fromId, Set<Long> amountIds, Map<Long, List<Long>> precedents, Long ignoreId) {
+        for (long id : reachable(fromId, precedents)) {
+            if (id != fromId && (ignoreId == null || id != ignoreId) && amountIds.contains(id)) {
                 return true;
             }
         }
         return false;
     }
 
-    private static boolean hasFormulaLink(
-            CellSnapshot anchor, Set<Long> amountIds, Map<Long, List<Long>> precedents) {
-        if (anchor.formula() == null || anchor.formula().isBlank()) {
-            return false;
-        }
-        for (long id : reachable(anchor.cellId(), precedents)) {
-            if (id != anchor.cellId() && amountIds.contains(id)) {
-                return true;
+    private static BigDecimal includedSum(List<CellParticipation> participation, List<CellSnapshot> cells) {
+        Map<Long, BigDecimal> byId = new LinkedHashMap<>();
+        for (CellSnapshot cell : cells) {
+            if (cell.numeric() != null) {
+                byId.put(cell.cellId(), cell.numeric());
             }
         }
-        return false;
+        BigDecimal sum = BigDecimal.ZERO;
+        for (CellParticipation cell : participation) {
+            if ("included".equals(cell.participation())) {
+                BigDecimal numeric = byId.get(cell.cellId());
+                if (numeric != null) {
+                    sum = sum.add(numeric);
+                }
+            }
+        }
+        return sum;
     }
 
     private static Set<Long> reachable(long start, Map<Long, List<Long>> precedents) {
@@ -278,7 +293,7 @@ final class ExplicitAnchorDetector {
         return seen;
     }
 
-    private static Set<Integer> amountColumns(String schemaJson) {
+    private static Set<Integer> columnsWithRole(String schemaJson, String role) {
         Set<Integer> columns = new LinkedHashSet<>();
         if (schemaJson == null || schemaJson.isBlank()) {
             return columns;
@@ -286,12 +301,12 @@ final class ExplicitAnchorDetector {
         try {
             List<Map<String, Object>> schema = Jsonb.fromJson(schemaJson, new com.fasterxml.jackson.core.type.TypeReference<>() {});
             for (Map<String, Object> column : schema) {
-                if ("amount".equals(String.valueOf(column.get("role")))) {
+                if (role.equals(String.valueOf(column.get("role")))) {
                     columns.add(((Number) column.get("col")).intValue());
                 }
             }
-        } catch (Exception ignored) {
-            return columns;
+        } catch (Exception e) {
+            throw new IllegalStateException("invalid schema_json", e);
         }
         return columns;
     }
@@ -307,8 +322,8 @@ final class ExplicitAnchorDetector {
                         declared.add(number.intValue());
                     }
                 }
-            } catch (Exception ignored) {
-                declared.clear();
+            } catch (Exception e) {
+                throw new IllegalStateException("invalid header_rows json", e);
             }
         }
         Set<Integer> rows = new LinkedHashSet<>();
@@ -326,19 +341,6 @@ final class ExplicitAnchorDetector {
             }
         }
         return rows;
-    }
-
-    private static BigDecimal normalize(BigDecimal amount, String unit, String currency) {
-        if (amount == null || !"INR".equals(currency)) {
-            return amount;
-        }
-        if ("lakh".equals(unit)) {
-            return amount.multiply(new BigDecimal("100000"));
-        }
-        if ("crore".equals(unit)) {
-            return amount.multiply(new BigDecimal("10000000"));
-        }
-        return amount;
     }
 
     static String fingerprint(String fileHash, String costHeadCode, List<Contribution> contributions) {

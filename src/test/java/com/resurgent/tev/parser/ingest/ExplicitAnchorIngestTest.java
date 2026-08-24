@@ -32,10 +32,21 @@ class ExplicitAnchorIngestTest {
 
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
             try (ResultSet rs = c.createStatement().executeQuery(
-                    "SELECT basis, source_amount FROM cost_head_contribution")) {
+                    "SELECT basis, source_amount, source_unit, source_currency, region_id,"
+                            + " anchor_cell_id, confidence, reasons FROM cost_head_contribution")) {
                 assertThat(rs.next()).isTrue();
                 assertThat(rs.getString("basis")).isEqualTo("explicit_total_anchor");
                 assertThat(rs.getDouble("source_amount")).isEqualTo(150.0);
+                assertThat(rs.getLong("region_id")).isPositive();
+                assertThat(rs.getLong("anchor_cell_id")).isPositive();
+                assertThat(rs.getDouble("confidence")).isGreaterThan(0);
+                assertThat(rs.getString("reasons")).contains("EXPLICIT_TOTAL_ANCHOR");
+            }
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT c.coord FROM cell c WHERE c.cell_id = ("
+                            + "SELECT anchor_cell_id FROM cost_head_contribution)")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString(1)).isEqualTo("B4");
             }
             try (ResultSet rs = c.createStatement().executeQuery(
                     "SELECT c.coord, cc.participation FROM cost_head_contribution_cell cc"
@@ -61,9 +72,10 @@ class ExplicitAnchorIngestTest {
 
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
             try (ResultSet rs = c.createStatement().executeQuery(
-                    "SELECT basis FROM cost_head_contribution")) {
+                    "SELECT basis, source_amount FROM cost_head_contribution")) {
                 assertThat(rs.next()).isTrue();
-                assertThat(rs.getString(1)).isNotEqualTo("explicit_total_anchor");
+                assertThat(rs.getString("basis")).isEqualTo("leaf_sum");
+                assertThat(rs.getDouble("source_amount")).isEqualTo(150.0);
             }
             try (ResultSet rs = c.createStatement().executeQuery(
                     "SELECT COUNT(*) FROM review_queue WHERE category = 'cost_head_candidate'")) {
@@ -239,6 +251,58 @@ class ExplicitAnchorIngestTest {
         Path db2 = tempDir.resolve("fp2.db");
         new IngestService().ingest(changedFile, 1L, db2);
         assertThat(fingerprint(db2)).isNotEqualTo(fingerprint);
+    }
+
+    @Test
+    void explicitAnchorAmount_equalsSumOfIncludedSourceCells() throws Exception {
+        Path db = ingest(civilTotalWorkbook(true), "provenance.xlsx");
+
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            double persisted;
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT source_amount FROM cost_head_contribution")) {
+                assertThat(rs.next()).isTrue();
+                persisted = rs.getDouble(1);
+            }
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT SUM(c.numeric_value) FROM cost_head_contribution_cell cc"
+                            + " JOIN cell c ON c.cell_id = cc.cell_id"
+                            + " WHERE cc.participation = 'included'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getDouble(1)).isEqualTo(persisted);
+                assertThat(persisted).isEqualTo(150.0);
+            }
+        }
+    }
+
+    @Test
+    void periodColumnNumeric_isExcludedWithPeriodReason() throws Exception {
+        Path db;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Capex");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Civil works");
+            header.createCell(1).setCellValue("Amount");
+            header.createCell(2).setCellValue("Year 1");
+            sheet.createRow(1).createCell(0).setCellValue("Foundation");
+            sheet.getRow(1).createCell(1).setCellValue(100.0);
+            sheet.getRow(1).createCell(2).setCellValue(10.0);
+            sheet.createRow(2).createCell(0).setCellValue("Finishes");
+            sheet.getRow(2).createCell(1).setCellValue(50.0);
+            sheet.getRow(2).createCell(2).setCellValue(20.0);
+            sheet.createRow(3).createCell(0).setCellValue("Total");
+            sheet.getRow(3).createCell(1).setCellFormula("SUM(B2:B3)");
+            db = ingest(workbook, "period.xlsx");
+        }
+
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT cc.participation, cc.reason FROM cost_head_contribution_cell cc"
+                                + " JOIN cell c ON c.cell_id = cc.cell_id WHERE c.coord = 'C2'")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("participation")).isEqualTo("excluded");
+            assertThat(rs.getString("reason")).isEqualTo("PERIOD");
+        }
     }
 
     private XSSFWorkbook civilTotalWorkbook(boolean formulaTotal) {
