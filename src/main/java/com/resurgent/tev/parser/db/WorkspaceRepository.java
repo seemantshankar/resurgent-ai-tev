@@ -1014,7 +1014,8 @@ public final class WorkspaceRepository {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT c.cell_id, c.region_id, c.coord, c.row_num, c.col_num, c.text_value,"
                         + " c.numeric_value, c.formula_text, c.is_error, c.error_descendant,"
-                        + " c.is_scratch, c.is_merged_participant"
+                        + " c.is_scratch, c.is_merged_participant, c.cache_state, c.number_format,"
+                        + " w.sheet_name"
                         + " FROM cell c JOIN worksheet w ON c.worksheet_id = w.worksheet_id"
                         + " WHERE w.parse_run_id = ? AND c.region_id IS NOT NULL")) {
             ps.setLong(1, parseRunId);
@@ -1033,7 +1034,10 @@ public final class WorkspaceRepository {
                             rs.getInt("is_error") == 1,
                             rs.getInt("error_descendant") == 1,
                             rs.getInt("is_scratch") == 1,
-                            rs.getInt("is_merged_participant") == 1));
+                            rs.getInt("is_merged_participant") == 1,
+                            rs.getString("cache_state"),
+                            rs.getString("number_format"),
+                            rs.getString("sheet_name")));
                 }
             }
         }
@@ -1068,7 +1072,7 @@ public final class WorkspaceRepository {
     }
 
     public long insertCostHeadContribution(long candidateId, Long mappingId, long regionId,
-            long anchorCellId, String basis, BigDecimal sourceAmount, String sourceCurrency,
+            Long anchorCellId, String basis, BigDecimal sourceAmount, String sourceCurrency,
             String sourceUnit, BigDecimal normalizedAmount, String normalizedCurrency,
             String normalizedUnit, double confidence, String reasonsJson) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
@@ -1084,7 +1088,7 @@ public final class WorkspaceRepository {
                 ps.setLong(2, mappingId);
             }
             ps.setLong(3, regionId);
-            ps.setLong(4, anchorCellId);
+            setLong(ps, 4, anchorCellId);
             ps.setString(5, basis);
             ps.setBigDecimal(6, sourceAmount);
             ps.setString(7, sourceCurrency);
@@ -1226,7 +1230,10 @@ public final class WorkspaceRepository {
             boolean error,
             boolean errorDescendant,
             boolean scratch,
-            boolean mergedParticipant) {}
+            boolean mergedParticipant,
+            String cacheState,
+            String numberFormat,
+            String sheetName) {}
 
     public record RegionMappingInput(long regionId, String regionKey, String label, String existingCode) {}
 
