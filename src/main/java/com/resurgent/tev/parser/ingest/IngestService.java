@@ -229,17 +229,17 @@ public final class IngestService {
         persistRegions(repo, worksheetId, parseRunId, sheet.sheetName(), fileName, cellsById, config);
         persistCellSemantics(repo, parseRunId);
         persistCostHeadMappings(repo, parseRunId, sourceFileId, mandateId);
-        persistExplicitAnchors(repo, parseRunId, sourceFileId, fileHash);
+        List<CostHeadTrust> costHeads = persistExplicitAnchors(repo, parseRunId, sourceFileId, fileHash);
         List<WorksheetRoleScorer.Score> worksheetRoles = persistWorksheetRoles(repo, parseRunId);
 
         // CSV has no formulas or structural references, so those reconciliation buckets
         // are trivially 0/0/0 and never force a partial/failed status on their own.
         RegionQaStats regionQa = repo.selectRegionQaStats(parseRunId, CLASSIFICATION_REVIEW_CONFIDENCE);
-        QaGateResult qa = QaGate.evaluate(cellCount, cellsWritten, 0, 0, 0, 0, 0, 0, 0,
-                regionQa.cellsWithoutRegion(), regionQa.regionsUnaccounted());
+        QaGateResult qa = withTrustQa(QaGate.evaluate(cellCount, cellsWritten, 0, 0, 0, 0, 0, 0, 0,
+                regionQa.cellsWithoutRegion(), regionQa.regionsUnaccounted()), costHeads);
         String metricsJson = IngestMetrics.toJson(fileName, fileHash, sheet.sheetName(), rowCount,
                 cellCount, cellsWritten, coercedCount(enriched), errorCount(enriched),
-                0, 0, 0, 0, 0, 0, 0, regionQa, qa, worksheetRoles);
+                0, 0, 0, 0, 0, 0, 0, regionQa, qa, worksheetRoles, costHeads);
         repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
         repo.insertAuditLog(parseRunId, "parse_run_completed", Timestamps.now(),
                 Jsonb.toJson(Map.of("status", qa.status(), "cellsWritten", cellsWritten)),
@@ -421,7 +421,7 @@ public final class IngestService {
         errorEngine.processErrorCascades(parseRunId, adjacency);
         persistCellSemantics(repo, parseRunId);
         persistCostHeadMappings(repo, parseRunId, sourceFileId, mandateId);
-        persistExplicitAnchors(repo, parseRunId, sourceFileId, fileHash);
+        List<CostHeadTrust> costHeads = persistExplicitAnchors(repo, parseRunId, sourceFileId, fileHash);
         List<WorksheetRoleScorer.Score> worksheetRoles = persistWorksheetRoles(repo, parseRunId);
 
         // Calc metadata persistence (#19 / C5): cellsError is only known now that the
@@ -431,15 +431,15 @@ public final class IngestService {
                 metadata.iterativeCount(), cellsError);
 
         RegionQaStats regionQa = repo.selectRegionQaStats(parseRunId, CLASSIFICATION_REVIEW_CONFIDENCE);
-        QaGateResult qa = QaGate.evaluate(cellCount, cellsWritten,
+        QaGateResult qa = withTrustQa(QaGate.evaluate(cellCount, cellsWritten,
                 refStats.total(), refStats.resolved(), refStats.unresolved(),
                 formulaCellsTotal, formulaCellsTokenized, formulaCellsParseError, formulaCellsUnavailable,
-                regionQa.cellsWithoutRegion(), regionQa.regionsUnaccounted());
+                regionQa.cellsWithoutRegion(), regionQa.regionsUnaccounted()), costHeads);
         String metricsJson = IngestMetrics.toJson(fileName, fileHash, primarySheetName(sheets),
                 rowCount, cellCount, cellsWritten, cellsCoerced, cellsError,
                 refStats.total(), refStats.resolved(), refStats.unresolved(),
                 formulaCellsTotal, formulaCellsTokenized, formulaCellsParseError, formulaCellsUnavailable,
-                regionQa, qa, worksheetRoles);
+                regionQa, qa, worksheetRoles, costHeads);
         repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
         repo.insertAuditLog(parseRunId, "parse_run_completed", Timestamps.now(),
                 Jsonb.toJson(Map.of("status", qa.status(), "cellsWritten", cellsWritten)),
@@ -686,11 +686,22 @@ public final class IngestService {
                 "Pending", false, Timestamps.now(), null);
     }
 
-    private void persistExplicitAnchors(WorkspaceRepository repo, long parseRunId, long sourceFileId,
-            String fileHash) throws SQLException, IOException {
+    private static QaGateResult withTrustQa(QaGateResult qa, List<CostHeadTrust> costHeads) {
+        List<String> extra = TrustQa.reportReasons(costHeads);
+        if (extra.isEmpty()) {
+            return qa;
+        }
+        List<String> reasons = new ArrayList<>(qa.reasons());
+        reasons.addAll(extra);
+        String status = "success".equals(qa.status()) ? "partial" : qa.status();
+        return new QaGateResult(status, qa.cellsRejected(), List.copyOf(reasons));
+    }
+
+    private List<CostHeadTrust> persistExplicitAnchors(WorkspaceRepository repo, long parseRunId,
+            long sourceFileId, String fileHash) throws SQLException, IOException {
         List<WorkspaceRepository.RegionAnchorRow> regions = repo.findRegionAnchorRows(parseRunId);
         if (regions.isEmpty()) {
-            return;
+            return List.of();
         }
         Map<Long, List<ExplicitAnchorDetector.CellSnapshot>> cellsByRegion = new HashMap<>();
         for (WorkspaceRepository.CellAnchorRow cell : repo.findRegionAnchorCells(parseRunId)) {
@@ -702,12 +713,15 @@ public final class IngestService {
                             cell.numberFormat(), cell.sheetName()));
         }
         List<ExplicitAnchorDetector.RegionSnapshot> snapshots = new ArrayList<>();
+        Map<Long, TrustEvaluator.MappingFact> mappings = new LinkedHashMap<>();
         for (WorkspaceRepository.RegionAnchorRow region : regions) {
             snapshots.add(new ExplicitAnchorDetector.RegionSnapshot(
                     region.regionId(), region.regionKey(), region.mappingId(), region.costHeadId(),
                     region.costHeadCode(), region.schemaJson(), region.headerRowsJson(),
                     region.unit(), region.currency(),
                     cellsByRegion.getOrDefault(region.regionId(), List.of())));
+            mappings.put(region.regionId(), new TrustEvaluator.MappingFact(
+                    region.matchMethod(), region.mappingReasons()));
         }
         Map<Long, List<Long>> precedents = ReferenceGraphLoader.loadAdjacency(repo, parseRunId);
         List<DuplicateDetector.Proposal> proposals = DuplicateDetector.detect(snapshots);
@@ -718,15 +732,25 @@ public final class IngestService {
         }
         persistDuplicateProposals(repo, parseRunId, proposals, decisions);
         List<ExplicitAnchorDetector.AcceptedManual> manuals = loadAcceptedManuals(repo, sourceFileId);
+        Set<String> pendingManuals = repo.findPendingManualCostHeads(sourceFileId);
         List<ExplicitAnchorDetector.Candidate> detected = CandidateComposer.compose(
                 fileHash, explicitAnchorDetector.detect(snapshots, precedents, fileHash),
                 proposals, decisions, precedents);
+        List<CostHeadTrust> reports = new ArrayList<>();
         for (ExplicitAnchorDetector.Candidate raw : detected) {
             ExplicitAnchorDetector.Candidate candidate = raw.withAcceptedManuals(fileHash, manuals);
+            String acceptedFingerprint = repo.findLatestAcceptedTotalFingerprint(
+                    sourceFileId, candidate.costHeadCode());
+            TrustEvaluator.Verdict verdict = TrustEvaluator.evaluate(
+                    candidate, mappings, pendingManuals.contains(candidate.costHeadCode()),
+                    acceptedFingerprint);
+            List<String> reasons = new ArrayList<>(candidate.reasons());
+            reasons.addAll(verdict.evidence());
+            int automatic = verdict.automatic() ? 1 : 0;
             long candidateId = repo.insertCostHeadCandidate(
                     parseRunId, sourceFileId, candidate.costHeadId(), candidate.fingerprint(),
-                    candidate.amount(), candidate.currency(), candidate.unit(), 0,
-                    candidate.confidence(), Jsonb.toJson(candidate.reasons()));
+                    candidate.amount(), candidate.currency(), candidate.unit(), automatic,
+                    candidate.confidence(), Jsonb.toJson(reasons));
             for (ExplicitAnchorDetector.Contribution contribution : candidate.contributions()) {
                 boolean manual = "manual".equals(contribution.basis());
                 long contributionId = repo.insertCostHeadContribution(
@@ -745,7 +769,8 @@ public final class IngestService {
                             contributionId, cell.cellId(), cell.participation(), cell.reason());
                 }
             }
-            if (candidate.review()) {
+            String reviewStatus = "none";
+            if (candidate.review() && !verdict.automatic()) {
                 Map<String, Object> detail = new LinkedHashMap<>();
                 detail.put("candidateId", candidateId);
                 detail.put("costHeadCode", candidate.costHeadCode());
@@ -755,14 +780,24 @@ public final class IngestService {
                 detail.put("currency", candidate.currency() == null ? "" : candidate.currency());
                 detail.put("bases", candidate.contributions().stream()
                         .map(ExplicitAnchorDetector.Contribution::basis).toList());
+                detail.put("trustState", verdict.state());
+                detail.put("trustSource", verdict.source() == null ? "" : verdict.source());
                 long reviewQueueId = repo.insertReviewQueue(parseRunId, "cost_head_candidate",
                         "Cost-head candidate requires review: " + candidate.costHeadCode(),
                         Jsonb.toJson(detail),
                         "Pending", false, Timestamps.now(), null,
                         "candidate", candidate.costHeadCode(), candidate.confidence());
                 carryTotalDecision(repo, reviewQueueId, sourceFileId, candidate);
+                reviewStatus = acceptedFingerprint != null
+                        && acceptedFingerprint.equals(candidate.fingerprint()) ? "Accepted" : "Pending";
             }
+            reports.add(new CostHeadTrust(
+                    candidate.costHeadCode(), verdict.state(), verdict.source(),
+                    candidate.amount(), candidate.unit(), candidate.currency(),
+                    candidate.confidence(), reasons, reviewStatus, candidate.fingerprint(),
+                    verdict.gates()));
         }
+        return reports;
     }
 
     private static void persistDuplicateProposals(

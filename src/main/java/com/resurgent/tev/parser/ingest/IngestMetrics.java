@@ -22,7 +22,7 @@ final class IngestMetrics {
             int referencesTotal, int referencesResolved, int referencesUnresolved,
             int formulaCellsTotal, int formulaCellsTokenized, int formulaCellsParseError,
             int formulaCellsUnavailable, RegionQaStats regionQa, QaGateResult qa,
-            List<WorksheetRoleScorer.Score> worksheetRoles) {
+            List<WorksheetRoleScorer.Score> worksheetRoles, List<CostHeadTrust> costHeads) {
         ObjectNode metrics = MAPPER.createObjectNode();
         metrics.put("fileName", fileName);
         metrics.put("fileHash", fileHash);
@@ -61,6 +61,33 @@ final class IngestMetrics {
                 reasonNode.put("weight", reason.weight());
                 ObjectNode params = reasonNode.putObject("params");
                 reason.params().forEach(params::put);
+            }
+        }
+        ArrayNode costHeadNodes = metrics.putArray("costHeads");
+        for (CostHeadTrust head : costHeads) {
+            ObjectNode node = costHeadNodes.addObject();
+            node.put("code", head.code());
+            node.put("state", head.state());
+            if (head.source() == null) {
+                node.putNull("source");
+            } else {
+                node.put("source", head.source());
+            }
+            if (head.amount() == null) {
+                node.putNull("amount");
+            } else {
+                node.put("amount", head.amount().doubleValue());
+            }
+            node.put("unit", head.unit());
+            node.put("currency", head.currency());
+            node.put("confidence", head.confidence());
+            ArrayNode headReasons = node.putArray("reasons");
+            head.reasons().forEach(headReasons::add);
+            node.put("reviewStatus", head.reviewStatus());
+            node.put("fingerprint", head.fingerprint());
+            ObjectNode gates = node.putObject("gates");
+            for (TrustEvaluator.Gate gate : head.gates()) {
+                gates.put(gate.name(), gate.passed());
             }
         }
         return metrics.toString();

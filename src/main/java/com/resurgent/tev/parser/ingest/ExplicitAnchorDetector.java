@@ -736,15 +736,20 @@ final class ExplicitAnchorDetector {
             List<Contribution> amountFrom,
             List<String> extraReasons,
             boolean forceReview) {
+        if (persisted.isEmpty()) {
+            throw new IllegalArgumentException("persisted contributions must not be empty");
+        }
         List<Contribution> sorted = new ArrayList<>(persisted);
         sorted.sort(Comparator.comparing(Contribution::regionKey));
         List<Contribution> amountSorted = new ArrayList<>(amountFrom);
         amountSorted.sort(Comparator.comparing(Contribution::regionKey));
-        boolean review = forceReview || sorted.stream().anyMatch(item -> LEAF_SUM.equals(item.basis())
-                || item.reasons().contains("STRUCTURAL_AMOUNT_MISMATCH")
-                || item.reasons().contains("STRUCTURAL_AMBIGUOUS")
+        boolean review = forceReview
                 || extraReasons.contains("UNRESOLVED_DUPLICATE")
-                || extraReasons.contains("PARTIAL_OVERLAP"));
+                || extraReasons.contains("PARTIAL_OVERLAP")
+                || extraReasons.contains("ALL_CONTRIBUTIONS_SUPERSEDED")
+                || sorted.stream().anyMatch(item -> LEAF_SUM.equals(item.basis())
+                        || item.reasons().contains("STRUCTURAL_AMOUNT_MISMATCH")
+                        || item.reasons().contains("STRUCTURAL_AMBIGUOUS"));
         BigDecimal amount = amountSorted.stream()
                 .map(item -> item.normalizedAmount() != null ? item.normalizedAmount() : item.sourceAmount())
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
