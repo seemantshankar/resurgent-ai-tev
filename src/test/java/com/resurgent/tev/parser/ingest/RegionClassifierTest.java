@@ -79,6 +79,17 @@ class RegionClassifierTest {
     }
 
     @Test
+    void yearHeaderAloneStaysUnknownWithHeaderTokenScoreBelowTheEvidenceFloor() {
+        RegionClassification result = classifier.classify(bounds(), List.of(),
+                new RegionClassifier.HeaderContext(List.of(1), List.of("Year 1")));
+
+        assertThat(result.type()).isEqualTo(RegionType.UNKNOWN);
+        assertThat(result.reasons()).extracting(DetectionReason::code)
+                .containsExactly(DetectionReason.Code.INSUFFICIENT_EVIDENCE);
+        assertThat(result.reasons().getFirst().params()).containsEntry("top_score", 2L);
+    }
+
+    @Test
     void requiresARealSerialSequenceRatherThanTwoSerialLookingValues() {
         RegionClassification result = classifier.classify(bounds(), List.of(
                 new RegionClassifier.RegionCell(2, 1, "1", false, true),

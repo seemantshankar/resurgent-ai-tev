@@ -9,7 +9,7 @@
   "detection_reasons" : [ {
     "code" : "INSUFFICIENT_EVIDENCE",
     "params" : {
-      "top_score" : 0
+      "top_score" : 2
     },
     "weight" : 0
   } ],
