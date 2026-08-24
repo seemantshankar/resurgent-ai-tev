@@ -3,6 +3,7 @@ package com.resurgent.tev.parser.ingest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.util.List;
 
 /**
  * Builds the deterministic {@code parse_run.metrics} payload: for identical
@@ -20,7 +21,8 @@ final class IngestMetrics {
             int cellsIn, int cellsWritten, int cellsCoerced, int cellsError,
             int referencesTotal, int referencesResolved, int referencesUnresolved,
             int formulaCellsTotal, int formulaCellsTokenized, int formulaCellsParseError,
-            int formulaCellsUnavailable, RegionQaStats regionQa, QaGateResult qa) {
+            int formulaCellsUnavailable, RegionQaStats regionQa, QaGateResult qa,
+            List<WorksheetRoleScorer.Score> worksheetRoles) {
         ObjectNode metrics = MAPPER.createObjectNode();
         metrics.put("fileName", fileName);
         metrics.put("fileHash", fileHash);
@@ -46,6 +48,21 @@ final class IngestMetrics {
         metrics.put("qaStatus", qa.status());
         ArrayNode reasons = metrics.putArray("qaFailureReasons");
         qa.reasons().forEach(reasons::add);
+        ArrayNode worksheets = metrics.putArray("worksheets");
+        for (WorksheetRoleScorer.Score score : worksheetRoles) {
+            ObjectNode sheet = worksheets.addObject();
+            sheet.put("sheetName", score.sheetName());
+            sheet.put("role", score.role());
+            sheet.put("roleConf", score.confidence());
+            ArrayNode sheetReasons = sheet.putArray("reasons");
+            for (WorksheetRoleScorer.RoleReason reason : score.reasons()) {
+                ObjectNode reasonNode = sheetReasons.addObject();
+                reasonNode.put("code", reason.code().name());
+                reasonNode.put("weight", reason.weight());
+                ObjectNode params = reasonNode.putObject("params");
+                reason.params().forEach(params::put);
+            }
+        }
         return metrics.toString();
     }
 }

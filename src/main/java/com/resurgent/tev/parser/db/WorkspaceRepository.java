@@ -151,6 +151,18 @@ public final class WorkspaceRepository {
         }
     }
 
+    public void updateWorksheetRole(long worksheetId, String role, double confidence, String reasonsJson)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE worksheet SET role = ?, role_conf = ?, role_reasons = ? WHERE worksheet_id = ?")) {
+            ps.setString(1, role);
+            ps.setDouble(2, confidence);
+            ps.setString(3, reasonsJson);
+            ps.setLong(4, worksheetId);
+            ps.executeUpdate();
+        }
+    }
+
     private static void setInteger(PreparedStatement ps, int index, Integer value)
             throws SQLException {
         if (value == null) {
