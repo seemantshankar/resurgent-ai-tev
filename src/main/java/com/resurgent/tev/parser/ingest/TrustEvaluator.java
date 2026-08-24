@@ -97,6 +97,10 @@ final class TrustEvaluator {
                     && !ExplicitAnchorDetector.STRUCTURAL.equals(contribution.basis())) {
                 return false;
             }
+            if (contribution.reasons().contains("STRUCTURAL_AMBIGUOUS")
+                    || contribution.reasons().contains("STRUCTURAL_AMOUNT_MISMATCH")) {
+                return false;
+            }
         }
         return true;
     }
