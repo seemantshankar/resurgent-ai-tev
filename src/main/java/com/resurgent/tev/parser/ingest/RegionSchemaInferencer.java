@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.ingest;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -34,8 +35,21 @@ final class RegionSchemaInferencer {
     private static final double LABEL_CONF = 0.95;
     private static final double FORMAT_CONF = 0.8;
     private static final double WORKSHEET_CONF = 0.7;
-    private static final long LAKH_TO_RS = 100_000L;
-    private static final long CRORE_TO_RS = 10_000_000L;
+    static final long LAKH_TO_RS = 100_000L;
+    static final long CRORE_TO_RS = 10_000_000L;
+
+    static BigDecimal rupees(BigDecimal amount, String unit, String currency) {
+        if (amount == null || !CURRENCY_INR.equals(currency)) {
+            return amount;
+        }
+        if (UNIT_LAKH.equals(unit)) {
+            return amount.multiply(BigDecimal.valueOf(LAKH_TO_RS));
+        }
+        if (UNIT_CRORE.equals(unit)) {
+            return amount.multiply(BigDecimal.valueOf(CRORE_TO_RS));
+        }
+        return amount;
+    }
 
     private static final Pattern SERIAL_HEADER = Pattern.compile(
             "(?i)(?:^|\\s)(?:s\\.?\\s*no|sr\\.?\\s*no|sl\\.?\\s*no|sno|serial(?:\\s*no)?|#)(?:\\s|$)");
@@ -341,7 +355,7 @@ final class RegionSchemaInferencer {
         return text != null && BANNER.matcher(text).find();
     }
 
-    private static Hint parse(String raw) {
+    static Hint parse(String raw) {
         if (raw == null || raw.isBlank()) {
             return Hint.EMPTY;
         }
@@ -388,7 +402,7 @@ final class RegionSchemaInferencer {
         return name.reverse().toString();
     }
 
-    private record Hint(String unit, String currency) {
+    record Hint(String unit, String currency) {
         static final Hint EMPTY = new Hint(null, null);
     }
 

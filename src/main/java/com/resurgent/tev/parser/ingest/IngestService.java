@@ -52,6 +52,7 @@ public final class IngestService {
     private final RegionDetector regionDetector = new RegionDetector();
     private final RegionHeaderAnalyzer regionHeaderAnalyzer = new RegionHeaderAnalyzer();
     private final RegionSchemaInferencer regionSchemaInferencer = new RegionSchemaInferencer();
+    private final ExplicitAnchorDetector explicitAnchorDetector = new ExplicitAnchorDetector();
     private static final double CLASSIFICATION_REVIEW_CONFIDENCE = 0.5;
 
     /** Convenience overload that uses embedded defaults. */
@@ -228,6 +229,7 @@ public final class IngestService {
         persistRegions(repo, worksheetId, parseRunId, sheet.sheetName(), fileName, cellsById, config);
         persistCellSemantics(repo, parseRunId);
         persistCostHeadMappings(repo, parseRunId, sourceFileId, mandateId);
+        persistExplicitAnchors(repo, parseRunId, sourceFileId, fileHash);
 
         // CSV has no formulas or structural references, so those reconciliation buckets
         // are trivially 0/0/0 and never force a partial/failed status on their own.
@@ -418,6 +420,7 @@ public final class IngestService {
         errorEngine.processErrorCascades(parseRunId, adjacency);
         persistCellSemantics(repo, parseRunId);
         persistCostHeadMappings(repo, parseRunId, sourceFileId, mandateId);
+        persistExplicitAnchors(repo, parseRunId, sourceFileId, fileHash);
 
         // Calc metadata persistence (#19 / C5): cellsError is only known now that the
         // sheet loop above has finished, so this can't happen right after insertWorkbook.
@@ -679,6 +682,61 @@ public final class IngestService {
                 "Locked vocabulary codes not observed in this parse",
                 Jsonb.toJson(Map.of("codes", unobserved)),
                 "Pending", false, Timestamps.now(), null);
+    }
+
+    private void persistExplicitAnchors(WorkspaceRepository repo, long parseRunId, long sourceFileId,
+            String fileHash) throws SQLException, IOException {
+        List<WorkspaceRepository.RegionAnchorRow> regions = repo.findRegionAnchorRows(parseRunId);
+        if (regions.isEmpty()) {
+            return;
+        }
+        Map<Long, List<ExplicitAnchorDetector.CellSnapshot>> cellsByRegion = new HashMap<>();
+        for (WorkspaceRepository.CellAnchorRow cell : repo.findRegionAnchorCells(parseRunId)) {
+            cellsByRegion.computeIfAbsent(cell.regionId(), key -> new ArrayList<>()).add(
+                    new ExplicitAnchorDetector.CellSnapshot(
+                            cell.cellId(), cell.coord(), cell.row(), cell.col(), cell.text(),
+                            cell.numeric(), cell.formula(), cell.error(), cell.errorDescendant(),
+                            cell.scratch(), cell.mergedParticipant()));
+        }
+        List<ExplicitAnchorDetector.RegionSnapshot> snapshots = new ArrayList<>();
+        for (WorkspaceRepository.RegionAnchorRow region : regions) {
+            snapshots.add(new ExplicitAnchorDetector.RegionSnapshot(
+                    region.regionId(), region.regionKey(), region.mappingId(), region.costHeadId(),
+                    region.costHeadCode(), region.schemaJson(), region.headerRowsJson(),
+                    region.unit(), region.currency(),
+                    cellsByRegion.getOrDefault(region.regionId(), List.of())));
+        }
+        Map<Long, List<Long>> precedents = ReferenceGraphLoader.loadAdjacency(repo, parseRunId);
+        for (ExplicitAnchorDetector.Candidate candidate : explicitAnchorDetector.detect(
+                snapshots, precedents, fileHash)) {
+            long candidateId = repo.insertCostHeadCandidate(
+                    parseRunId, sourceFileId, candidate.costHeadId(), candidate.fingerprint(),
+                    candidate.amount(), candidate.currency(), candidate.unit(), 0,
+                    candidate.confidence(), Jsonb.toJson(candidate.reasons()));
+            for (ExplicitAnchorDetector.Contribution contribution : candidate.contributions()) {
+                long contributionId = repo.insertCostHeadContribution(
+                        candidateId, contribution.mappingId(), contribution.regionId(),
+                        contribution.anchorCellId(), contribution.basis(), contribution.sourceAmount(),
+                        contribution.sourceCurrency(), contribution.sourceUnit(),
+                        contribution.normalizedAmount(), contribution.normalizedCurrency(),
+                        contribution.normalizedUnit(), contribution.confidence(),
+                        Jsonb.toJson(contribution.reasons()));
+                for (ExplicitAnchorDetector.CellParticipation cell : contribution.cells()) {
+                    repo.insertCostHeadContributionCell(
+                            contributionId, cell.cellId(), cell.participation(), cell.reason());
+                }
+            }
+            if (candidate.review()) {
+                repo.insertReviewQueue(parseRunId, "cost_head_candidate",
+                        "Cost-head candidate requires review: " + candidate.costHeadCode(),
+                        Jsonb.toJson(Map.of(
+                                "candidateId", candidateId,
+                                "costHeadCode", candidate.costHeadCode(),
+                                "fingerprint", candidate.fingerprint())),
+                        "Pending", false, Timestamps.now(), null,
+                        "candidate", candidate.costHeadCode(), candidate.confidence());
+            }
+        }
     }
 
     private static void recordCellProvenance(WorkspaceRepository repo, long cellId,
