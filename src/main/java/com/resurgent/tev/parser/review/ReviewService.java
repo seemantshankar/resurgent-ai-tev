@@ -110,14 +110,41 @@ public final class ReviewService {
         }
     }
 
-    public void acceptManual(Path db, long manualId, String actor)
+    public void acceptManual(Path db, long manualId, String actor, String reason)
             throws SQLException, JsonProcessingException {
-        updateManual(db, manualId, actor, null, "Accepted", "Pending");
+        updateManual(db, manualId, actor, requiredReason(reason), "Accepted", true, "Pending");
+    }
+
+    public void changeManual(Path db, long manualId, BigDecimal amount, String unit, String currency,
+            String actor, String reason) throws SQLException, JsonProcessingException {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            WorkspaceRepository.ManualContributionRow manual = repo.findManualContribution(manualId);
+            if (!"Pending".equals(manual.status()) && !"Accepted".equals(manual.status())) {
+                throw new SQLException("manual contribution " + manualId + " is " + manual.status());
+            }
+            String now = Timestamps.now();
+            repo.updateManualValues(manualId, amount, unit, currency);
+            repo.insertAuditLog(repo.findLatestParseRunId(), "manual_changed",
+                    now, Jsonb.toJson(Map.of(
+                            "manualId", manualId,
+                            "actor", actor,
+                            "reason", requiredReason(reason),
+                            "amount", amount.toPlainString(),
+                            "unit", unit,
+                            "currency", currency,
+                            "status", manual.status())),
+                    "info");
+            if ("Accepted".equals(manual.status())) {
+                reopenCostHeadReviews(repo, manual.costHeadId());
+            }
+        }
     }
 
     public void withdrawManual(Path db, long manualId, String actor, String reason)
             throws SQLException, JsonProcessingException {
-        updateManual(db, manualId, actor, reason, "Withdrawn", "Accepted", "Pending");
+        updateManual(db, manualId, actor, requiredReason(reason), "Withdrawn", true,
+                "Accepted", "Pending");
     }
 
     public void addCostHead(Path db, long mandateId, String code) throws SQLException {
@@ -149,7 +176,7 @@ public final class ReviewService {
     }
 
     private void updateManual(Path db, long manualId, String actor, String reason, String status,
-            String... allowedCurrent) throws SQLException, JsonProcessingException {
+            boolean reopen, String... allowedCurrent) throws SQLException, JsonProcessingException {
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
             WorkspaceRepository.ManualContributionRow manual = repo.findManualContribution(manualId);
@@ -169,10 +196,26 @@ public final class ReviewService {
                     now, Jsonb.toJson(Map.of(
                             "manualId", manualId,
                             "actor", actor,
-                            "reason", reason == null ? "" : reason,
+                            "reason", reason,
                             "status", status)),
                     "info");
+            if (reopen) {
+                reopenCostHeadReviews(repo, manual.costHeadId());
+            }
         }
+    }
+
+    private static void reopenCostHeadReviews(WorkspaceRepository repo, long costHeadId)
+            throws SQLException {
+        repo.reopenCostHeadCandidateReviews(
+                repo.findLatestParseRunId(), repo.findCostHeadCode(costHeadId));
+    }
+
+    private static String requiredReason(String reason) throws SQLException {
+        if (reason == null || reason.isBlank()) {
+            throw new SQLException("reason is required");
+        }
+        return reason;
     }
 
     private void decideTotal(Path db, long reviewId, String actor, String reason, String decision)
@@ -202,7 +245,7 @@ public final class ReviewService {
     private List<TotalReviewItem> listPendingTotals(WorkspaceRepository repo) throws SQLException {
         long parseRunId = repo.findLatestParseRunId();
         List<TotalReviewItem> items = new ArrayList<>();
-        for (WorkspaceRepository.MappingReviewRow row : repo.findPendingTotalReviews(parseRunId)) {
+        for (WorkspaceRepository.ReviewQueueRow row : repo.findPendingTotalReviews(parseRunId)) {
             Map<String, Object> detail = parseDetail(row.detail());
             items.add(new TotalReviewItem(
                     row.reviewQueueId(),
@@ -218,7 +261,7 @@ public final class ReviewService {
     private List<MappingReviewItem> listPending(WorkspaceRepository repo) throws SQLException {
         long parseRunId = repo.findLatestParseRunId();
         List<MappingReviewItem> items = new ArrayList<>();
-        for (WorkspaceRepository.MappingReviewRow row : repo.findPendingMappingReviews(parseRunId)) {
+        for (WorkspaceRepository.ReviewQueueRow row : repo.findPendingMappingReviews(parseRunId)) {
             Map<String, Object> detail = parseDetail(row.detail());
             items.add(new MappingReviewItem(
                     row.reviewQueueId(),

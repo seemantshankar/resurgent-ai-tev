@@ -36,6 +36,7 @@ class ReviewServiceTest {
         assertThat(total.costHeadCode()).isEqualTo("CIVIL");
         assertThat(total.fingerprint()).isNotBlank();
         assertThat(total.candidateId()).isPositive();
+        assertThat(total.detail()).contains("\"amount\"").contains("\"bases\"").contains("\"unit\"");
         assertThat(review.showTotal(db, total.reviewQueueId())).contains(total);
 
         assertThat(review.listPendingMappings(db)).isEmpty();
@@ -255,9 +256,10 @@ class ReviewServiceTest {
                 "analyst", "missing contingency", contributionId(db));
         CandidateSnapshot calculated = candidateSnapshot(db, pending.candidateId());
 
-        review.acceptManual(db, manualId, "analyst");
+        review.acceptManual(db, manualId, "analyst", "missing contingency");
 
         assertThat(candidateSnapshot(db, pending.candidateId())).isEqualTo(calculated);
+        assertThat(review.listPendingTotals(db)).isNotEmpty();
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
             try (ResultSet rs = c.createStatement().executeQuery(
                     "SELECT status, decided_at FROM manual_contribution WHERE manual_contribution_id = "
@@ -267,9 +269,9 @@ class ReviewServiceTest {
                 assertThat(rs.getString("decided_at")).isNotBlank();
             }
             try (ResultSet rs = c.createStatement().executeQuery(
-                    "SELECT COUNT(*) FROM audit_log WHERE event_type = 'manual_accepted'")) {
+                    "SELECT payload FROM audit_log WHERE event_type = 'manual_accepted'")) {
                 assertThat(rs.next()).isTrue();
-                assertThat(rs.getInt(1)).isEqualTo(1);
+                assertThat(rs.getString(1)).contains("missing contingency");
             }
             try (ResultSet rs = c.createStatement().executeQuery(
                     "SELECT decision FROM cost_head_total_decision")) {
@@ -277,12 +279,63 @@ class ReviewServiceTest {
                 assertThat(rs.getString(1)).isEqualTo("Accepted");
                 assertThat(rs.next()).isFalse();
             }
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT status, carried_from_decision_id FROM review_queue"
+                            + " WHERE category = 'cost_head_candidate'"
+                            + " ORDER BY review_queue_id DESC LIMIT 1")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("status")).isEqualTo("Pending");
+                assertThat(rs.getObject("carried_from_decision_id")).isNull();
+            }
         }
 
         new IngestService().ingest(xlsx, 1L, db, reparseConfig());
         List<ReviewService.TotalReviewItem> reopened = review.listPendingTotals(db);
         assertThat(reopened).isNotEmpty();
         assertThat(reopened.getFirst().fingerprint()).isNotEqualTo(originalFingerprint);
+        assertThat(reopened.getFirst().detail()).contains("manual");
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT amount FROM cost_head_candidate ORDER BY cost_head_candidate_id DESC LIMIT 1")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getBigDecimal(1)).isEqualByComparingTo("175");
+            }
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT COUNT(*) FROM cost_head_contribution WHERE basis = 'manual'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getInt(1)).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
+    void changeManual_updatesAcceptedAmountAndFingerprint() throws Exception {
+        Path db = tempDir.resolve("manual-change.db");
+        Path xlsx = writeLiteralCivil("manual-change.xlsx", "Civil works", 100.0, 50.0);
+        new IngestService().ingest(xlsx, 1L, db);
+        ReviewService review = new ReviewService();
+        long manualId = review.addManual(db, "CIVIL", new BigDecimal("25.00"), "rs", "INR",
+                "analyst", "missing contingency", null);
+        review.acceptManual(db, manualId, "analyst", "include contingency");
+        new IngestService().ingest(xlsx, 1L, db, reparseConfig());
+        String withTwentyFive = review.listPendingTotals(db).getFirst().fingerprint();
+
+        review.changeManual(db, manualId, new BigDecimal("40.00"), "rs", "INR", "analyst",
+                "revised contingency");
+        ParserConfig third = new ParserConfig(
+                100L * 1024 * 1024, 200, 1_000_000, 16_384, 5_000_000L, 100,
+                false, true, true, 4, 5);
+        new IngestService().ingest(xlsx, 1L, db, third);
+
+        List<ReviewService.TotalReviewItem> changed = review.listPendingTotals(db);
+        assertThat(changed).isNotEmpty();
+        assertThat(changed.getFirst().fingerprint()).isNotEqualTo(withTwentyFive);
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT amount FROM cost_head_candidate ORDER BY cost_head_candidate_id DESC LIMIT 1")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getBigDecimal(1)).isEqualByComparingTo("190");
+        }
     }
 
     @Test
@@ -293,7 +346,7 @@ class ReviewServiceTest {
         ReviewService review = new ReviewService();
         long manualId = review.addManual(db, "CIVIL", new BigDecimal("25.00"), "rs", "INR",
                 "analyst", "missing contingency", null);
-        review.acceptManual(db, manualId, "analyst");
+        review.acceptManual(db, manualId, "analyst", "include contingency");
         new IngestService().ingest(xlsx, 1L, db, reparseConfig());
         String withManual = review.listPendingTotals(db).getFirst().fingerprint();
         review.acceptTotal(db, review.listPendingTotals(db).getFirst().reviewQueueId(), "analyst", "ok");
@@ -383,8 +436,16 @@ class ReviewServiceTest {
         int acceptManual = Main.commandLine().setOut(new PrintWriter(out, true))
                 .setErr(new PrintWriter(err, true))
                 .execute("review", "accept-manual", "--db", db.toString(), "--actor", "analyst",
-                        String.valueOf(manualId));
+                        "--reason", "include contingency", String.valueOf(manualId));
         assertThat(acceptManual).as(err.toString()).isZero();
+
+        int change = Main.commandLine().setOut(new PrintWriter(out, true))
+                .setErr(new PrintWriter(err, true))
+                .execute("review", "change-manual", "--db", db.toString(), "--amount", "40.00",
+                        "--unit", "rs", "--currency", "INR", "--actor", "analyst",
+                        "--reason", "revised", String.valueOf(manualId));
+        assertThat(change).as(err.toString()).isZero();
+        assertThat(out.toString()).contains("Changed");
 
         int withdraw = Main.commandLine().setOut(new PrintWriter(out, true))
                 .setErr(new PrintWriter(err, true))

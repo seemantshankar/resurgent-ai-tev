@@ -1071,6 +1071,16 @@ public final class WorkspaceRepository {
             long anchorCellId, String basis, BigDecimal sourceAmount, String sourceCurrency,
             String sourceUnit, BigDecimal normalizedAmount, String normalizedCurrency,
             String normalizedUnit, double confidence, String reasonsJson) throws SQLException {
+        return insertCostHeadContribution(candidateId, mappingId, regionId, anchorCellId, basis,
+                sourceAmount, sourceCurrency, sourceUnit, normalizedAmount, normalizedCurrency,
+                normalizedUnit, confidence, reasonsJson, false);
+    }
+
+    public long insertCostHeadContribution(long candidateId, Long mappingId, long regionId,
+            long anchorCellId, String basis, BigDecimal sourceAmount, String sourceCurrency,
+            String sourceUnit, BigDecimal normalizedAmount, String normalizedCurrency,
+            String normalizedUnit, double confidence, String reasonsJson, boolean locationOptional)
+            throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO cost_head_contribution (cost_head_candidate_id, cost_head_mapping_id, region_id,"
                         + " anchor_cell_id, basis, source_amount, source_currency, source_unit,"
@@ -1083,8 +1093,13 @@ public final class WorkspaceRepository {
             } else {
                 ps.setLong(2, mappingId);
             }
-            ps.setLong(3, regionId);
-            ps.setLong(4, anchorCellId);
+            if (locationOptional) {
+                ps.setNull(3, java.sql.Types.INTEGER);
+                ps.setNull(4, java.sql.Types.INTEGER);
+            } else {
+                ps.setLong(3, regionId);
+                ps.setLong(4, anchorCellId);
+            }
             ps.setString(5, basis);
             ps.setBigDecimal(6, sourceAmount);
             ps.setString(7, sourceCurrency);
@@ -1130,8 +1145,8 @@ public final class WorkspaceRepository {
         }
     }
 
-    public List<MappingReviewRow> findPendingMappingReviews(long parseRunId) throws SQLException {
-        List<MappingReviewRow> rows = new ArrayList<>();
+    public List<ReviewQueueRow> findPendingMappingReviews(long parseRunId) throws SQLException {
+        List<ReviewQueueRow> rows = new ArrayList<>();
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT review_queue_id, summary, detail FROM review_queue"
                         + " WHERE parse_run_id = ? AND category = 'cost_head_mapping'"
@@ -1139,7 +1154,7 @@ public final class WorkspaceRepository {
             ps.setLong(1, parseRunId);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    rows.add(new MappingReviewRow(
+                    rows.add(new ReviewQueueRow(
                             rs.getLong("review_queue_id"),
                             rs.getString("summary"),
                             rs.getString("detail")));
@@ -1201,8 +1216,8 @@ public final class WorkspaceRepository {
         }
     }
 
-    public List<MappingReviewRow> findPendingTotalReviews(long parseRunId) throws SQLException {
-        List<MappingReviewRow> rows = new ArrayList<>();
+    public List<ReviewQueueRow> findPendingTotalReviews(long parseRunId) throws SQLException {
+        List<ReviewQueueRow> rows = new ArrayList<>();
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT review_queue_id, summary, detail FROM review_queue"
                         + " WHERE parse_run_id = ? AND category = 'cost_head_candidate'"
@@ -1210,7 +1225,7 @@ public final class WorkspaceRepository {
             ps.setLong(1, parseRunId);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    rows.add(new MappingReviewRow(
+                    rows.add(new ReviewQueueRow(
                             rs.getLong("review_queue_id"),
                             rs.getString("summary"),
                             rs.getString("detail")));
@@ -1379,6 +1394,43 @@ public final class WorkspaceRepository {
         }
     }
 
+    public void updateManualValues(long manualId, BigDecimal amount, String unit, String currency)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE manual_contribution SET amount = ?, unit = ?, currency = ?"
+                        + " WHERE manual_contribution_id = ?")) {
+            ps.setBigDecimal(1, amount);
+            ps.setString(2, unit);
+            ps.setString(3, currency);
+            ps.setLong(4, manualId);
+            ps.executeUpdate();
+        }
+    }
+
+    public String findCostHeadCode(long costHeadId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT code FROM cost_head WHERE cost_head_id = ?")) {
+            ps.setLong(1, costHeadId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    throw new SQLException("cost head not found: " + costHeadId);
+                }
+                return rs.getString(1);
+            }
+        }
+    }
+
+    public void reopenCostHeadCandidateReviews(long parseRunId, String costHeadCode) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE review_queue SET status = 'Pending', carried_from_decision_id = NULL"
+                        + " WHERE parse_run_id = ? AND category = 'cost_head_candidate'"
+                        + " AND subject_key = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.setString(2, costHeadCode);
+            ps.executeUpdate();
+        }
+    }
+
     public List<AcceptedManualRow> findAcceptedManuals(long sourceFileId) throws SQLException {
         List<AcceptedManualRow> rows = new ArrayList<>();
         try (PreparedStatement ps = connection.prepareStatement(
@@ -1469,7 +1521,7 @@ public final class WorkspaceRepository {
 
     public record RegionMappingInput(long regionId, String regionKey, String label, String existingCode) {}
 
-    public record MappingReviewRow(long reviewQueueId, String summary, String detail) {}
+    public record ReviewQueueRow(long reviewQueueId, String summary, String detail) {}
 
     public record CellSemanticRow(
             long cellId,

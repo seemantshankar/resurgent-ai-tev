@@ -710,31 +710,42 @@ public final class IngestService {
         List<ExplicitAnchorDetector.AcceptedManual> manuals = loadAcceptedManuals(repo, sourceFileId);
         for (ExplicitAnchorDetector.Candidate detected : explicitAnchorDetector.detect(
                 snapshots, precedents, fileHash)) {
-            ExplicitAnchorDetector.Candidate candidate = applyAcceptedManuals(detected, fileHash, manuals);
+            ExplicitAnchorDetector.Candidate candidate = detected.withAcceptedManuals(fileHash, manuals);
             long candidateId = repo.insertCostHeadCandidate(
                     parseRunId, sourceFileId, candidate.costHeadId(), candidate.fingerprint(),
                     candidate.amount(), candidate.currency(), candidate.unit(), 0,
                     candidate.confidence(), Jsonb.toJson(candidate.reasons()));
             for (ExplicitAnchorDetector.Contribution contribution : candidate.contributions()) {
+                boolean manual = "manual".equals(contribution.basis());
                 long contributionId = repo.insertCostHeadContribution(
-                        candidateId, contribution.mappingId(), contribution.regionId(),
-                        contribution.anchorCellId(), contribution.basis(), contribution.sourceAmount(),
+                        candidateId,
+                        manual ? null : contribution.mappingId(),
+                        manual ? 0L : contribution.regionId(),
+                        manual ? 0L : contribution.anchorCellId(),
+                        contribution.basis(), contribution.sourceAmount(),
                         contribution.sourceCurrency(), contribution.sourceUnit(),
                         contribution.normalizedAmount(), contribution.normalizedCurrency(),
                         contribution.normalizedUnit(), contribution.confidence(),
-                        Jsonb.toJson(contribution.reasons()));
+                        Jsonb.toJson(contribution.reasons()),
+                        manual);
                 for (ExplicitAnchorDetector.CellParticipation cell : contribution.cells()) {
                     repo.insertCostHeadContributionCell(
                             contributionId, cell.cellId(), cell.participation(), cell.reason());
                 }
             }
             if (candidate.review()) {
+                Map<String, Object> detail = new LinkedHashMap<>();
+                detail.put("candidateId", candidateId);
+                detail.put("costHeadCode", candidate.costHeadCode());
+                detail.put("fingerprint", candidate.fingerprint());
+                detail.put("amount", candidate.amount() == null ? "" : candidate.amount().toPlainString());
+                detail.put("unit", candidate.unit() == null ? "" : candidate.unit());
+                detail.put("currency", candidate.currency() == null ? "" : candidate.currency());
+                detail.put("bases", candidate.contributions().stream()
+                        .map(ExplicitAnchorDetector.Contribution::basis).toList());
                 long reviewQueueId = repo.insertReviewQueue(parseRunId, "cost_head_candidate",
                         "Cost-head candidate requires review: " + candidate.costHeadCode(),
-                        Jsonb.toJson(Map.of(
-                                "candidateId", candidateId,
-                                "costHeadCode", candidate.costHeadCode(),
-                                "fingerprint", candidate.fingerprint())),
+                        Jsonb.toJson(detail),
                         "Pending", false, Timestamps.now(), null,
                         "candidate", candidate.costHeadCode(), candidate.confidence());
                 carryTotalDecision(repo, reviewQueueId, sourceFileId, candidate);
@@ -751,27 +762,6 @@ public final class IngestService {
                     row.adjustsKey()));
         }
         return manuals;
-    }
-
-    private static ExplicitAnchorDetector.Candidate applyAcceptedManuals(
-            ExplicitAnchorDetector.Candidate detected,
-            String fileHash,
-            List<ExplicitAnchorDetector.AcceptedManual> manuals) {
-        if (manuals.isEmpty()) {
-            return detected;
-        }
-        return new ExplicitAnchorDetector.Candidate(
-                detected.costHeadId(),
-                detected.costHeadCode(),
-                ExplicitAnchorDetector.fingerprint(
-                        fileHash, detected.costHeadCode(), detected.contributions(), manuals),
-                detected.amount(),
-                detected.currency(),
-                detected.unit(),
-                detected.confidence(),
-                detected.reasons(),
-                detected.review(),
-                detected.contributions());
     }
 
     private static void carryTotalDecision(WorkspaceRepository repo, long reviewQueueId,

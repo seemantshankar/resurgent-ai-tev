@@ -18,7 +18,7 @@ import picocli.CommandLine.Spec;
                 ReviewCommand.ListTotals.class, ReviewCommand.ShowTotal.class,
                 ReviewCommand.AcceptTotal.class, ReviewCommand.RejectTotal.class,
                 ReviewCommand.AddManual.class, ReviewCommand.AcceptManual.class,
-                ReviewCommand.WithdrawManual.class})
+                ReviewCommand.ChangeManual.class, ReviewCommand.WithdrawManual.class})
 public final class ReviewCommand implements Callable<Integer> {
 
     @Spec
@@ -188,14 +188,39 @@ public final class ReviewCommand implements Callable<Integer> {
     public static final class AcceptManual implements Callable<Integer> {
         @Option(names = "--db", required = true) Path db;
         @Option(names = "--actor", required = true) String actor;
+        @Option(names = "--reason", required = true) String reason;
         @Parameters(index = "0") long manualId;
         @Spec CommandSpec spec;
 
         @Override
         public Integer call() throws Exception {
             try {
-                new ReviewService().acceptManual(db, manualId, actor);
+                new ReviewService().acceptManual(db, manualId, actor, reason);
                 spec.commandLine().getOut().println("Accepted");
+                return 0;
+            } catch (SQLException e) {
+                spec.commandLine().getErr().println(e.getMessage());
+                return 1;
+            }
+        }
+    }
+
+    @Command(name = "change-manual", description = "Change a pending or accepted manual contribution")
+    public static final class ChangeManual implements Callable<Integer> {
+        @Option(names = "--db", required = true) Path db;
+        @Option(names = "--amount", required = true) BigDecimal amount;
+        @Option(names = "--unit", required = true) String unit;
+        @Option(names = "--currency", required = true) String currency;
+        @Option(names = "--actor", required = true) String actor;
+        @Option(names = "--reason", required = true) String reason;
+        @Parameters(index = "0") long manualId;
+        @Spec CommandSpec spec;
+
+        @Override
+        public Integer call() throws Exception {
+            try {
+                new ReviewService().changeManual(db, manualId, amount, unit, currency, actor, reason);
+                spec.commandLine().getOut().println("Changed");
                 return 0;
             } catch (SQLException e) {
                 spec.commandLine().getErr().println(e.getMessage());
@@ -208,7 +233,7 @@ public final class ReviewCommand implements Callable<Integer> {
     public static final class WithdrawManual implements Callable<Integer> {
         @Option(names = "--db", required = true) Path db;
         @Option(names = "--actor", required = true) String actor;
-        @Option(names = "--reason") String reason;
+        @Option(names = "--reason", required = true) String reason;
         @Parameters(index = "0") long manualId;
         @Spec CommandSpec spec;
 

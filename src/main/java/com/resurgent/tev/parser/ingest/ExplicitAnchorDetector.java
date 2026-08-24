@@ -93,7 +93,52 @@ final class ExplicitAnchorDetector {
             double confidence,
             List<String> reasons,
             boolean review,
-            List<Contribution> contributions) {}
+            List<Contribution> contributions) {
+
+        Candidate withAcceptedManuals(String fileHash, List<AcceptedManual> manuals) {
+            List<Contribution> combined = new ArrayList<>(contributions);
+            BigDecimal total = amount == null ? BigDecimal.ZERO : amount;
+            boolean matched = false;
+            for (AcceptedManual manual : manuals) {
+                if (!costHeadCode.equals(manual.costHeadCode())) {
+                    continue;
+                }
+                matched = true;
+                BigDecimal manualAmount = new BigDecimal(manual.amount());
+                total = total.add(manualAmount);
+                combined.add(new Contribution(
+                        0L,
+                        "manual:" + manual.id(),
+                        0L,
+                        0L,
+                        "manual",
+                        manualAmount,
+                        manual.unit(),
+                        manual.currency(),
+                        manualAmount,
+                        manual.unit(),
+                        manual.currency(),
+                        1.0,
+                        List.of("MANUAL_CONTRIBUTION"),
+                        List.of()));
+            }
+            if (!matched) {
+                return this;
+            }
+            combined.sort(Comparator.comparing(Contribution::regionKey).thenComparing(Contribution::basis));
+            return new Candidate(
+                    costHeadId,
+                    costHeadCode,
+                    fingerprint(fileHash, costHeadCode, combined),
+                    total,
+                    currency,
+                    unit,
+                    confidence,
+                    reasons,
+                    true,
+                    List.copyOf(combined));
+        }
+    }
 
     List<Candidate> detect(List<RegionSnapshot> regions, Map<Long, List<Long>> precedents, String fileHash) {
         Map<String, List<Contribution>> byHead = new LinkedHashMap<>();
