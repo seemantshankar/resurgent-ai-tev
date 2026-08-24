@@ -18,7 +18,9 @@ import picocli.CommandLine.Spec;
                 ReviewCommand.ListTotals.class, ReviewCommand.ShowTotal.class,
                 ReviewCommand.AcceptTotal.class, ReviewCommand.RejectTotal.class,
                 ReviewCommand.AddManual.class, ReviewCommand.AcceptManual.class,
-                ReviewCommand.ChangeManual.class, ReviewCommand.WithdrawManual.class})
+                ReviewCommand.ChangeManual.class, ReviewCommand.WithdrawManual.class,
+                ReviewCommand.ListDuplicates.class, ReviewCommand.ShowDuplicate.class,
+                ReviewCommand.MarkDuplicate.class, ReviewCommand.MarkDistinct.class})
 public final class ReviewCommand implements Callable<Integer> {
 
     @Spec
@@ -242,6 +244,84 @@ public final class ReviewCommand implements Callable<Integer> {
             try {
                 new ReviewService().withdrawManual(db, manualId, actor, reason);
                 spec.commandLine().getOut().println("Withdrawn");
+                return 0;
+            } catch (SQLException e) {
+                spec.commandLine().getErr().println(e.getMessage());
+                return 1;
+            }
+        }
+    }
+
+    @Command(name = "list-duplicates", description = "List pending duplicate proposals")
+    public static final class ListDuplicates implements Callable<Integer> {
+        @Option(names = "--db", required = true) Path db;
+        @Spec CommandSpec spec;
+
+        @Override
+        public Integer call() throws Exception {
+            for (ReviewService.DuplicateReviewItem item : new ReviewService().listPendingDuplicates(db)) {
+                spec.commandLine().getOut().printf("%d %s%n", item.reviewQueueId(), item.summary());
+            }
+            return 0;
+        }
+    }
+
+    @Command(name = "show-duplicate", description = "Show one duplicate proposal")
+    public static final class ShowDuplicate implements Callable<Integer> {
+        @Option(names = "--db", required = true) Path db;
+        @Parameters(index = "0") long reviewId;
+        @Spec CommandSpec spec;
+
+        @Override
+        public Integer call() throws Exception {
+            return new ReviewService().showDuplicate(db, reviewId)
+                    .map(item -> {
+                        spec.commandLine().getOut().println(item.summary());
+                        spec.commandLine().getOut().println(item.detail());
+                        return 0;
+                    })
+                    .orElseGet(() -> {
+                        spec.commandLine().getErr().println("review item not found: " + reviewId);
+                        return 1;
+                    });
+        }
+    }
+
+    @Command(name = "mark-duplicate", description = "Mark a proposal as Duplicate")
+    public static final class MarkDuplicate implements Callable<Integer> {
+        @Option(names = "--db", required = true) Path db;
+        @Option(names = "--actor", required = true) String actor;
+        @Option(names = "--reason", required = true) String reason;
+        @Option(names = "--supersede") String supersede;
+        @Parameters(index = "0") long reviewId;
+        @Spec CommandSpec spec;
+
+        @Override
+        public Integer call() throws Exception {
+            try {
+                new ReviewService().markDuplicate(db, reviewId, actor, reason, supersede);
+                spec.commandLine().getOut().println("Duplicate");
+                return 0;
+            } catch (SQLException e) {
+                spec.commandLine().getErr().println(e.getMessage());
+                return 1;
+            }
+        }
+    }
+
+    @Command(name = "mark-distinct", description = "Mark a proposal as Distinct")
+    public static final class MarkDistinct implements Callable<Integer> {
+        @Option(names = "--db", required = true) Path db;
+        @Option(names = "--actor", required = true) String actor;
+        @Option(names = "--reason", required = true) String reason;
+        @Parameters(index = "0") long reviewId;
+        @Spec CommandSpec spec;
+
+        @Override
+        public Integer call() throws Exception {
+            try {
+                new ReviewService().markDistinct(db, reviewId, actor, reason);
+                spec.commandLine().getOut().println("Distinct");
                 return 0;
             } catch (SQLException e) {
                 spec.commandLine().getErr().println(e.getMessage());
