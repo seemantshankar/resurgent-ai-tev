@@ -49,7 +49,7 @@ class StructuralTotalIngestTest {
                 assertThat(rs.next()).isTrue();
                 assertThat(rs.getString("basis")).isEqualTo("structural_total");
                 assertThat(rs.getDouble("source_amount")).isEqualTo(150.0);
-                assertThat(rs.getInt("automatic_trust_eligible")).isEqualTo(0);
+                assertThat(rs.getInt("automatic_trust_eligible")).isEqualTo(1);
                 assertThat(rs.getString("reasons")).contains("STRUCTURAL_TOTAL");
                 assertThat(rs.next()).isFalse();
             }

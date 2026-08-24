@@ -171,6 +171,18 @@ class ReviewServiceTest {
                 assertThat(rs.next()).isTrue();
                 assertThat(rs.getInt(1)).isEqualTo(1);
             }
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT automatic_trust_eligible FROM cost_head_candidate"
+                            + " ORDER BY cost_head_candidate_id DESC LIMIT 1")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getInt(1)).isZero();
+            }
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT metrics FROM parse_run ORDER BY parse_run_id DESC LIMIT 1")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString(1)).contains("\"state\":\"trusted\"");
+                assertThat(rs.getString(1)).contains("\"source\":\"analyst\"");
+            }
         }
     }
 
@@ -199,6 +211,30 @@ class ReviewServiceTest {
             assertThat(rs.getString("status")).isEqualTo("Pending");
             assertThat(rs.getObject("carried_from_decision_id")).isNull();
         }
+    }
+
+    @Test
+    void acceptedManualAfterTotalAcceptance_projectsStaleOnReingest() throws Exception {
+        Path db = tempDir.resolve("stale-manual.db");
+        Path xlsx = writeLiteralCivil("stale-manual.xlsx", "Civil works", 100.0, 50.0);
+        new IngestService().ingest(xlsx, 1L, db);
+        ReviewService review = new ReviewService();
+        ReviewService.TotalReviewItem pending = review.listPendingTotals(db).getFirst();
+        review.acceptTotal(db, pending.reviewQueueId(), "analyst", "ok");
+        long manualId = review.addManual(db, "CIVIL", new BigDecimal("25.00"), "rs", "INR",
+                "analyst", "contingency", contributionId(db));
+        review.acceptManual(db, manualId, "analyst", "include contingency");
+
+        new IngestService().ingest(xlsx, 1L, db, reparseConfig());
+
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT metrics FROM parse_run ORDER BY parse_run_id DESC LIMIT 1")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString(1)).contains("\"state\":\"stale\"");
+            assertThat(rs.getString(1)).contains("\"source\":\"analyst\"");
+        }
+        assertThat(review.listPendingTotals(db)).isNotEmpty();
     }
 
     @Test

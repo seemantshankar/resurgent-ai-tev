@@ -1082,7 +1082,8 @@ public final class WorkspaceRepository {
         List<RegionAnchorRow> rows = new ArrayList<>();
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT r.region_id, r.region_key, r.schema_json, r.header_rows, r.inferred_unit,"
-                        + " r.inferred_currency, m.cost_head_mapping_id, m.cost_head_id, h.code"
+                        + " r.inferred_currency, m.cost_head_mapping_id, m.cost_head_id, h.code,"
+                        + " m.match_method, m.reasons AS mapping_reasons"
                         + " FROM region r"
                         + " JOIN cost_head_mapping m ON m.region_id = r.region_id"
                         + " JOIN cost_head h ON h.cost_head_id = m.cost_head_id"
@@ -1099,7 +1100,9 @@ public final class WorkspaceRepository {
                             rs.getString("inferred_currency"),
                             rs.getLong("cost_head_mapping_id"),
                             rs.getLong("cost_head_id"),
-                            rs.getString("code")));
+                            rs.getString("code"),
+                            rs.getString("match_method"),
+                            rs.getString("mapping_reasons")));
                 }
             }
         }
@@ -1367,6 +1370,36 @@ public final class WorkspaceRepository {
                 return rs.next() ? rs.getLong(1) : null;
             }
         }
+    }
+
+    public String findLatestAcceptedTotalFingerprint(long sourceFileId, String costHeadCode)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT candidate_fingerprint FROM cost_head_total_decision"
+                        + " WHERE source_file_id = ? AND cost_head_code = ? AND decision = 'Accepted'"
+                        + " ORDER BY total_decision_id DESC LIMIT 1")) {
+            ps.setLong(1, sourceFileId);
+            ps.setString(2, costHeadCode);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString(1) : null;
+            }
+        }
+    }
+
+    public Set<String> findPendingManualCostHeads(long sourceFileId) throws SQLException {
+        Set<String> codes = new HashSet<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT DISTINCT h.code FROM manual_contribution m"
+                        + " JOIN cost_head h ON h.cost_head_id = m.cost_head_id"
+                        + " WHERE m.source_file_id = ? AND m.status = 'Pending'")) {
+            ps.setLong(1, sourceFileId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    codes.add(rs.getString(1));
+                }
+            }
+        }
+        return codes;
     }
 
     public Long findLatestAcceptedTotalDecisionId(long sourceFileId, String costHeadCode,
@@ -1729,7 +1762,9 @@ public final class WorkspaceRepository {
             String currency,
             long mappingId,
             long costHeadId,
-            String costHeadCode) {}
+            String costHeadCode,
+            String matchMethod,
+            String mappingReasons) {}
 
     public record CellAnchorRow(
             long cellId,
