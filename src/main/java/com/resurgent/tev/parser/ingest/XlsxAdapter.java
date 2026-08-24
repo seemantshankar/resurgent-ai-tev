@@ -15,7 +15,11 @@ import java.util.Map;
 import java.util.Set;
 import org.apache.poi.ooxml.POIXMLProperties;
 import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellStyle;
 import org.apache.poi.ss.usermodel.CellType;
+import org.apache.poi.ss.usermodel.BorderStyle;
+import org.apache.poi.ss.usermodel.FillPatternType;
+import org.apache.poi.ss.usermodel.Font;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
@@ -310,16 +314,28 @@ public final class XlsxAdapter {
             return null;
         }
 
+        // Read the style once: it is the source for all presentation signals on this cell.
+        CellStyle style = formulaCell.getCellStyle();
+        Font font = formulaCell.getSheet().getWorkbook().getFontAt(style.getFontIndexAsInt());
+        boolean hasBorder = style.getBorderTop() != BorderStyle.NONE
+                || style.getBorderRight() != BorderStyle.NONE
+                || style.getBorderBottom() != BorderStyle.NONE
+                || style.getBorderLeft() != BorderStyle.NONE;
+        NormalizedCell normalized;
+
         if (formulaType == CellType.FORMULA) {
             boolean hasCachedValue = valueCell instanceof XSSFCell xssfCell
                     && xssfCell.getCTCell().isSetV();
-            return FormulaCellNormalizer.normalizeFormulaCell(formulaCell.getCellFormula(), valueCell,
+            normalized = FormulaCellNormalizer.normalizeFormulaCell(formulaCell.getCellFormula(), valueCell,
                     coord, rowNum, colNum, rowHidden, colHidden, sheetHidden,
                     cacheFresh, definedNames, hasCachedValue);
+        } else {
+            normalized = LiteralCellNormalizer.normalizeLiteralCell(valueCell, coord, rowNum, colNum,
+                    rowHidden, colHidden, sheetHidden);
         }
-
-        return LiteralCellNormalizer.normalizeLiteralCell(valueCell, coord, rowNum, colNum,
-                rowHidden, colHidden, sheetHidden);
+        return normalized == null ? null : normalized.withStyle(font.getBold(),
+                style.getFillPattern() != FillPatternType.NO_FILL, hasBorder,
+                style.getDataFormatString());
     }
 
     private static String dimensionsDeclared(Sheet formulaSheet) {

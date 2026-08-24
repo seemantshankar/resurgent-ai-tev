@@ -64,7 +64,8 @@ final class NormalizedCellFactory {
                 cell.rowLabel(),
                 cell.colLabel(),
                 true, false, range, "cell",
-                cell.rowHidden(), cell.colHidden(), cell.sheetHidden());
+                cell.rowHidden(), cell.colHidden(), cell.sheetHidden(),
+                cell.isBold(), cell.hasFill(), cell.hasBorder(), cell.numberFormat());
     }
 
     static NormalizedCell createParticipant(NormalizedCell anchor, CellRangeAddress region,

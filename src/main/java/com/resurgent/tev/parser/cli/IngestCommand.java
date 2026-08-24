@@ -3,6 +3,8 @@ package com.resurgent.tev.parser.cli;
 import com.resurgent.tev.parser.config.ConfigLoader;
 import com.resurgent.tev.parser.config.ConfigValidationException;
 import com.resurgent.tev.parser.config.ParserConfig;
+import com.resurgent.tev.parser.db.DestructiveResetRequiredException;
+import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.ingest.IngestRejectionException;
 import com.resurgent.tev.parser.ingest.IngestService;
 import com.resurgent.tev.parser.ingest.IngestSummary;
@@ -33,6 +35,10 @@ public final class IngestCommand implements Callable<Integer> {
     @Option(names = "--config", description = "Optional config.json overriding embedded defaults")
     Path config;
 
+    @Option(names = "--allow-destructive-reset",
+            description = "Allow Sprint 3b to erase parser-owned operational data in a populated pre-live workspace")
+    boolean allowDestructiveReset;
+
     @Spec
     CommandSpec spec;
 
@@ -51,7 +57,10 @@ public final class IngestCommand implements Callable<Integer> {
             return 2;
         }
         try {
-            IngestSummary summary = new IngestService().ingest(input, mandateId, db, parserConfig);
+            WorkspaceDatabase.OpenOptions openOptions = allowDestructiveReset
+                    ? WorkspaceDatabase.OpenOptions.allowDestructiveReset()
+                    : WorkspaceDatabase.OpenOptions.defaults();
+            IngestSummary summary = new IngestService().ingest(input, mandateId, db, parserConfig, openOptions);
             if (summary.existingRun()) {
                 out.printf("Reused existing parse run for %s (worksheet '%s': %d cells from"
                         + " %d rows; source_file %d, parse_run %d, sha256 %s).%n",
@@ -75,6 +84,9 @@ public final class IngestCommand implements Callable<Integer> {
                 err.println("parse report written to " + report);
             }
             return 0;
+        } catch (DestructiveResetRequiredException e) {
+            err.println(e.getMessage());
+            return 1;
         } catch (IngestRejectionException e) {
             err.println("ingest rejected: " + e.getMessage());
             return 3;
@@ -82,7 +94,8 @@ public final class IngestCommand implements Callable<Integer> {
             err.println("invalid config: " + e.getMessage());
             return 2;
         } catch (Exception e) {
-            err.println("ingest failed: " + e.getMessage());
+            String msg = e.getMessage() != null ? e.getMessage() : e.toString();
+            err.println("ingest failed: " + msg);
             return 1;
         }
     }

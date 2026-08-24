@@ -22,6 +22,8 @@ import org.apache.poi.openxml4j.opc.PackagePart;
 import org.apache.poi.openxml4j.opc.PackagePartName;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
+import org.apache.poi.ss.usermodel.BorderStyle;
+import org.apache.poi.ss.usermodel.FillPatternType;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.SheetVisibility;
@@ -338,6 +340,33 @@ class XlsxAdapterTest {
             assertThat(a1.valueType()).isEqualTo("date");
             assertThat(a1.dateValue()).isEqualTo(LocalDateTime.of(2024, 3, 15, 0, 0));
             assertThat(a1.rawValue()).isNotNull();
+        }
+    }
+
+    @Test
+    void styledTitleCapturesCellStyleAtTheAdapterOutput() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Model");
+            Cell title = sheet.createRow(0).createCell(0);
+            title.setCellValue("Project cost summary");
+            org.apache.poi.ss.usermodel.CellStyle style = workbook.createCellStyle();
+            style.setDataFormat(workbook.createDataFormat().getFormat("$#,##0.00"));
+            style.setFillForegroundColor(org.apache.poi.ss.usermodel.IndexedColors.YELLOW.getIndex());
+            style.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+            style.setBorderBottom(BorderStyle.THIN);
+            org.apache.poi.ss.usermodel.Font font = workbook.createFont();
+            font.setBold(true);
+            style.setFont(font);
+            title.setCellStyle(style);
+
+            Map<String, NormalizedCell> cells = cellsByCoord(
+                    new XlsxAdapter().parse(writeWorkbook(workbook, "styled-title.xlsx")));
+
+            NormalizedCell a1 = cells.get("A1");
+            assertThat(a1.isBold()).isTrue();
+            assertThat(a1.hasFill()).isTrue();
+            assertThat(a1.hasBorder()).isTrue();
+            assertThat(a1.numberFormat()).isEqualTo("$#,##0.00");
         }
     }
 

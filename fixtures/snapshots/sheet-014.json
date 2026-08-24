@@ -1,0 +1,161 @@
+[ {
+  "bbox" : {
+    "end_col" : 10,
+    "end_row" : 10,
+    "start_col" : 1,
+    "start_row" : 4
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "STATEMENT_SHAPE",
+    "params" : {
+      "row_span" : 7
+    },
+    "weight" : 4
+  } ],
+  "region_conf" : 0.5,
+  "region_key" : "sheet-014!A4",
+  "region_type" : "capacity",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-014"
+}, {
+  "bbox" : {
+    "end_col" : 10,
+    "end_row" : 26,
+    "start_col" : 1,
+    "start_row" : 15
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-014!A15",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-014"
+}, {
+  "bbox" : {
+    "end_col" : 9,
+    "end_row" : 50,
+    "start_col" : 1,
+    "start_row" : 47
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-014!A47",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-014"
+}, {
+  "bbox" : {
+    "end_col" : 10,
+    "end_row" : 98,
+    "start_col" : 2,
+    "start_row" : 98
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-014!B98",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-014"
+}, {
+  "bbox" : {
+    "end_col" : 10,
+    "end_row" : 100,
+    "start_col" : 2,
+    "start_row" : 100
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-014!B100",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-014"
+}, {
+  "bbox" : {
+    "end_col" : 10,
+    "end_row" : 102,
+    "start_col" : 2,
+    "start_row" : 102
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-014!B102",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-014"
+}, {
+  "bbox" : {
+    "end_col" : 10,
+    "end_row" : 104,
+    "start_col" : 2,
+    "start_row" : 104
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-014!B104",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-014"
+}, {
+  "bbox" : {
+    "end_col" : 10,
+    "end_row" : 106,
+    "start_col" : 2,
+    "start_row" : 106
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-014!B106",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-014"
+} ]

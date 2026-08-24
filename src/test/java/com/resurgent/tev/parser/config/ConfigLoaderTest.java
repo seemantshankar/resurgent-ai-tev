@@ -24,10 +24,12 @@ class ConfigLoaderTest {
 
     @Test
     void validOverride_applies() throws IOException {
-        ParserConfig config = ConfigLoader.load("{\"maxFileSizeBytes\": 52428800}");
+        ParserConfig config = ConfigLoader.load("{\"maxFileSizeBytes\": 52428800, \"regionBreakThreshold\": 6, \"classificationEvidenceFloor\": 5}");
 
         assertThat(config.maxFileSizeBytes()).isEqualTo(52_428_800L);
         assertThat(config.maxSheetCount()).isEqualTo(ParserConfig.embeddedDefaults().maxSheetCount());
+        assertThat(config.regionBreakThreshold()).isEqualTo(6);
+        assertThat(config.classificationEvidenceFloor()).isEqualTo(5);
     }
 
     @Test
@@ -57,5 +59,19 @@ class ConfigLoaderTest {
         assertThatThrownBy(() -> ConfigLoader.load("{\"maxFileSizeBytes\": \"large\"}"))
                 .isInstanceOf(ConfigValidationException.class)
                 .hasMessageContaining("maxFileSizeBytes has invalid type");
+    }
+
+    @Test
+    void nonPositiveRegionBreakThreshold_rejected() {
+        assertThatThrownBy(() -> ConfigLoader.load("{\"regionBreakThreshold\": 0}"))
+                .isInstanceOf(ConfigValidationException.class)
+                .hasMessageContaining("regionBreakThreshold must be positive");
+    }
+
+    @Test
+    void nonPositiveClassificationEvidenceFloor_rejected() {
+        assertThatThrownBy(() -> ConfigLoader.load("{\"classificationEvidenceFloor\": 0}"))
+                .isInstanceOf(ConfigValidationException.class)
+                .hasMessageContaining("classificationEvidenceFloor must be positive");
     }
 }

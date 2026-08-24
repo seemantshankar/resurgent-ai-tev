@@ -19,6 +19,8 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.resurgent.tev.parser.db.LegacyWorkspaceFactory;
+
 import picocli.CommandLine;
 
 /**
@@ -316,6 +318,45 @@ class IngestCommandTest {
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
             assertThat(count(c, "source_file")).isEqualTo(1);
             assertThat(count(c, "parse_run")).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void ingestIntoPopulatedV10WithoutOptIn_exits1AndNamesDatabasePath() throws Exception {
+        Path db = tempDir.resolve("legacy.db");
+        LegacyWorkspaceFactory.writePopulatedV10(db);
+        Path csv = writeCsv("next.csv", "a,b\n1,2\n");
+
+        RunResult result = run("ingest", "--input", csv.toString(),
+                "--mandate-id", "1", "--db", db.toString());
+
+        assertThat(result.exitCode()).isEqualTo(1);
+        assertThat(result.stderr()).contains(db.toAbsolutePath().normalize().toString());
+        assertThat(result.stderr()).contains("parser-owned operational data");
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            assertThat(count(c, "cell")).isEqualTo(1);
+            assertThat(count(c, "schema_migration")).isEqualTo(10);
+        }
+    }
+
+    @Test
+    void ingestIntoPopulatedV10WithOptIn_resetsThenIngests() throws Exception {
+        Path db = tempDir.resolve("legacy-reset.db");
+        LegacyWorkspaceFactory.writePopulatedV10(db);
+        Path csv = writeCsv("next.csv", "a,b\n1,2\n");
+
+        RunResult result = run("ingest", "--input", csv.toString(),
+                "--mandate-id", "1", "--db", db.toString(),
+                "--allow-destructive-reset");
+
+        assertThat(result.exitCode()).isZero();
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            assertThat(count(c, "schema_migration")).isEqualTo(11);
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT coord FROM cell WHERE coord = 'Z9'")) {
+                assertThat(rs.next()).isFalse();
+            }
+            assertThat(count(c, "cell")).isGreaterThan(0);
         }
     }
 }

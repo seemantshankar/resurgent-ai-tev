@@ -2,12 +2,15 @@ package com.resurgent.tev.parser.db;
 
 import com.resurgent.tev.parser.ingest.NormalizedCell;
 import com.resurgent.tev.parser.ingest.ParsedQuantity;
+import com.resurgent.tev.parser.ingest.RegionQaStats;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -183,9 +186,10 @@ public final class WorkspaceRepository {
                         + " cached_value, cache_state, coerced_from_text, parsed_quantity,"
                         + " is_error, error_type, row_label, col_label,"
                         + " is_merged_anchor, is_merged_participant, merged_range, value_source,"
-                        + " row_hidden, col_hidden, sheet_hidden)"
+                        + " row_hidden, col_hidden, sheet_hidden,"
+                        + " is_bold, has_fill, has_border, number_format)"
                         + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-                        + " ?, ?, ?, ?, ?, ?)",
+                        + " ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, worksheetId);
             ps.setString(2, cell.coord());
@@ -221,8 +225,117 @@ public final class WorkspaceRepository {
             ps.setInt(28, cell.rowHidden() ? 1 : 0);
             ps.setInt(29, cell.colHidden() ? 1 : 0);
             ps.setInt(30, cell.sheetHidden() ? 1 : 0);
+            setBoolean(ps, 31, cell.isBold());
+            setBoolean(ps, 32, cell.hasFill());
+            setBoolean(ps, 33, cell.hasBorder());
+            ps.setString(34, cell.numberFormat());
             ps.executeUpdate();
             return generatedId(ps);
+        }
+    }
+
+    /** Persists a geometry-only region; classification fields remain at their schema defaults. */
+    public long insertRegion(long worksheetId, long parseRunId, String regionKey,
+            int startRow, int endRow, int startCol, int endCol) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO region (worksheet_id, parse_run_id, region_key, start_row, end_row,"
+                        + " start_col, end_col, region_type, region_conf) VALUES (?, ?, ?, ?, ?, ?, ?, 'unknown', 0)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, worksheetId);
+            ps.setLong(2, parseRunId);
+            ps.setString(3, regionKey);
+            ps.setInt(4, startRow);
+            ps.setInt(5, endRow);
+            ps.setInt(6, startCol);
+            ps.setInt(7, endCol);
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    /** Persists the complete Sprint 3a classification and header facts for a detected region. */
+    public long insertRegion(long worksheetId, long parseRunId, String regionKey,
+            int startRow, int endRow, int startCol, int endCol, String headerRows,
+            String regionType, double regionConf, String costHeadCode, String periodAxis,
+            String detectionReasons) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO region (worksheet_id, parse_run_id, region_key, start_row, end_row,"
+                        + " start_col, end_col, header_rows, region_type, region_conf, cost_head_code,"
+                        + " period_axis, detection_reasons) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, worksheetId);
+            ps.setLong(2, parseRunId);
+            ps.setString(3, regionKey);
+            ps.setInt(4, startRow);
+            ps.setInt(5, endRow);
+            ps.setInt(6, startCol);
+            ps.setInt(7, endCol);
+            ps.setString(8, headerRows);
+            ps.setString(9, regionType);
+            ps.setDouble(10, regionConf);
+            ps.setString(11, costHeadCode);
+            ps.setString(12, periodAxis);
+            ps.setString(13, detectionReasons);
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    /** Assigns one occupied cell to its detector-produced region. */
+    public void updateCellRegion(long cellId, long regionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cell SET region_id = ? WHERE cell_id = ?")) {
+            ps.setLong(1, regionId);
+            ps.setLong(2, cellId);
+            ps.executeUpdate();
+        }
+    }
+
+    /**
+     * Returns the region coverage and classification-accounting facts for one
+     * parse run. Classification review rows carry the durable region id in
+     * their JSON detail, so this query can prove that each low-confidence or
+     * unknown region has a corresponding review item rather than merely
+     * counting unrelated queue entries.
+     */
+    public RegionQaStats selectRegionQaStats(long parseRunId, double confidenceFloor)
+            throws SQLException {
+        String sql = "SELECT "
+                + "(SELECT COUNT(*) FROM cell c JOIN worksheet w ON w.worksheet_id = c.worksheet_id "
+                + " WHERE w.parse_run_id = ? AND c.region_id IS NULL"
+                + " AND (c.is_merged_participant = 1 OR c.is_error = 1 OR c.formula_text IS NOT NULL"
+                + " OR (c.raw_value IS NOT NULL AND trim(c.raw_value) <> ''))), "
+                + "COUNT(r.region_id), "
+                + "COALESCE(SUM(CASE WHEN r.region_type <> 'unknown' AND r.region_conf >= ? THEN 1 ELSE 0 END), 0), "
+                + "COALESCE(SUM(CASE WHEN q.region_id IS NOT NULL THEN 1 ELSE 0 END), 0), "
+                + "COALESCE(SUM(CASE WHEN (r.region_type = 'unknown' OR r.region_conf < ?) "
+                + " AND q.region_id IS NULL THEN 1 ELSE 0 END), 0) "
+                + "FROM region r LEFT JOIN ("
+                + " SELECT DISTINCT CAST(json_extract(detail, '$.regionId') AS INTEGER) AS region_id "
+                + " FROM review_queue WHERE parse_run_id = ? AND category = 'region_classification'"
+                + ") q ON q.region_id = r.region_id WHERE r.parse_run_id = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setLong(1, parseRunId);
+            ps.setDouble(2, confidenceFloor);
+            ps.setDouble(3, confidenceFloor);
+            ps.setLong(4, parseRunId);
+            ps.setLong(5, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return new RegionQaStats(rs.getInt(2), rs.getInt(1), rs.getInt(3),
+                        rs.getInt(4), rs.getInt(5));
+            }
+        }
+    }
+
+    /** Replaces the provisional generic labels with labels inferred from the cell's region headers. */
+    public void updateCellLabels(long cellId, String rowLabel, String colLabel) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cell SET row_label = ?, col_label = ? WHERE cell_id = ?")) {
+            ps.setString(1, rowLabel);
+            ps.setString(2, colLabel);
+            ps.setLong(3, cellId);
+            ps.executeUpdate();
         }
     }
 
@@ -390,7 +503,8 @@ public final class WorkspaceRepository {
             String resolvedAt) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO review_queue (parse_run_id, category, summary, detail, status,"
-                        + " is_escalated, created_at, resolved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        + " is_escalated, created_at, resolved_at, subject_kind, subject_key, confidence)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, parseRunId);
             ps.setString(2, category);
@@ -400,6 +514,38 @@ public final class WorkspaceRepository {
             ps.setInt(6, isEscalated ? 1 : 0);
             ps.setString(7, createdAt);
             ps.setString(8, resolvedAt);
+            ps.setNull(9, java.sql.Types.VARCHAR);
+            ps.setNull(10, java.sql.Types.VARCHAR);
+            ps.setNull(11, java.sql.Types.REAL);
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    public long insertReviewQueue(long parseRunId, String category, String summary,
+            String detail, String status, boolean isEscalated, String createdAt,
+            String resolvedAt, String subjectKind, String subjectKey, Double confidence)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO review_queue (parse_run_id, category, summary, detail, status,"
+                        + " is_escalated, created_at, resolved_at, subject_kind, subject_key, confidence)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, parseRunId);
+            ps.setString(2, category);
+            ps.setString(3, summary);
+            ps.setString(4, detail);
+            ps.setString(5, status);
+            ps.setInt(6, isEscalated ? 1 : 0);
+            ps.setString(7, createdAt);
+            ps.setString(8, resolvedAt);
+            ps.setString(9, subjectKind);
+            ps.setString(10, subjectKey);
+            if (confidence == null) {
+                ps.setNull(11, java.sql.Types.REAL);
+            } else {
+                ps.setDouble(11, confidence);
+            }
             ps.executeUpdate();
             return generatedId(ps);
         }
@@ -673,6 +819,250 @@ public final class WorkspaceRepository {
             ps.executeUpdate();
         }
     }
+
+    /** Stores the deterministic local formula-family evidence used by region scoring. */
+    public void updateCellCoherence(long cellId, Double coherenceScore, String coherenceDirs)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cell SET coherence_score = ?, coherence_dirs = ? WHERE cell_id = ?")) {
+            if (coherenceScore == null) {
+                ps.setNull(1, java.sql.Types.REAL);
+            } else {
+                ps.setDouble(1, coherenceScore);
+            }
+            ps.setString(2, coherenceDirs);
+            ps.setLong(3, cellId);
+            ps.executeUpdate();
+        }
+    }
+
+    public List<CellSemanticRow> findSemanticCells(long parseRunId) throws SQLException {
+        List<CellSemanticRow> rows = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT c.cell_id, c.region_id, c.formula_text, c.row_label, c.col_label,"
+                        + " c.text_value, c.numeric_value"
+                        + " FROM cell c JOIN worksheet w ON c.worksheet_id = w.worksheet_id"
+                        + " WHERE w.parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    long regionId = rs.getLong("region_id");
+                    Long region = rs.wasNull() ? null : regionId;
+                    String numeric = rs.getString("numeric_value");
+                    rows.add(new CellSemanticRow(
+                            rs.getLong("cell_id"),
+                            region,
+                            rs.getString("formula_text"),
+                            rs.getString("row_label"),
+                            rs.getString("col_label"),
+                            rs.getString("text_value"),
+                            numeric == null ? null : new java.math.BigDecimal(numeric)));
+                }
+            }
+        }
+        return rows;
+    }
+
+    public record CellSemanticUpdate(boolean scratch, String scratchReason, boolean support,
+            String supportReason, boolean orphan) {}
+
+    public void updateCellSemantics(long cellId, CellSemanticUpdate update) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cell SET is_scratch = ?, scratch_reason = ?, is_support = ?,"
+                        + " support_reason = ?, is_orphan = ? WHERE cell_id = ?")) {
+            ps.setInt(1, update.scratch() ? 1 : 0);
+            ps.setString(2, update.scratchReason());
+            ps.setInt(3, update.support() ? 1 : 0);
+            ps.setString(4, update.supportReason());
+            ps.setInt(5, update.orphan() ? 1 : 0);
+            ps.setLong(6, cellId);
+            ps.executeUpdate();
+        }
+    }
+
+    public void updateSemanticRegionType(long regionId, String semanticRegionType) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE region SET semantic_region_type = ? WHERE region_id = ?")) {
+            ps.setString(1, semanticRegionType);
+            ps.setLong(2, regionId);
+            ps.executeUpdate();
+        }
+    }
+
+    public List<RegionMappingInput> findRegionMappingInputs(long parseRunId) throws SQLException {
+        List<RegionMappingInput> rows = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT r.region_id, r.region_key, r.cost_head_code,"
+                        + " (SELECT c.text_value FROM cell c WHERE c.region_id = r.region_id"
+                        + " AND c.text_value IS NOT NULL AND TRIM(c.text_value) != ''"
+                        + " ORDER BY c.row_num, c.col_num LIMIT 1) AS label"
+                        + " FROM region r WHERE r.parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String label = rs.getString("label");
+                    if (label == null || label.isBlank()) {
+                        String key = rs.getString("region_key");
+                        int bang = key.indexOf('!');
+                        label = bang >= 0 ? key.substring(bang + 1) : key;
+                    }
+                    String existing = rs.getString("cost_head_code");
+                    rows.add(new RegionMappingInput(
+                            rs.getLong("region_id"),
+                            rs.getString("region_key"),
+                            existing != null && !existing.isBlank() ? existing : label,
+                            existing));
+                }
+            }
+        }
+        return rows;
+    }
+
+    public long ensureCostHead(long mandateId, String code) throws SQLException {
+        try (PreparedStatement find = connection.prepareStatement(
+                "SELECT cost_head_id FROM cost_head WHERE mandate_id = ? AND code = ?")) {
+            find.setLong(1, mandateId);
+            find.setString(2, code);
+            try (ResultSet rs = find.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+            }
+        }
+        try (PreparedStatement insert = connection.prepareStatement(
+                "INSERT INTO cost_head (mandate_id, code, label) VALUES (?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            insert.setLong(1, mandateId);
+            insert.setString(2, code);
+            insert.setString(3, code);
+            insert.executeUpdate();
+            return generatedId(insert);
+        }
+    }
+
+    public long insertCostHeadMapping(long parseRunId, long sourceFileId, long costHeadId,
+            long regionId, String regionKey, String method, double score, double runnerUpMargin,
+            double confidence, String reasonsJson, String sourceLabel) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cost_head_mapping (parse_run_id, source_file_id, cost_head_id, region_id,"
+                        + " region_key, match_method, match_score, runner_up_margin, confidence, reasons, source_label)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, sourceFileId);
+            ps.setLong(3, costHeadId);
+            ps.setLong(4, regionId);
+            ps.setString(5, regionKey);
+            ps.setString(6, method);
+            ps.setDouble(7, score);
+            ps.setDouble(8, runnerUpMargin);
+            ps.setDouble(9, confidence);
+            ps.setString(10, reasonsJson);
+            ps.setString(11, sourceLabel);
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    public String findLatestAcceptedMappingCode(long sourceFileId, String regionKey)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT d.cost_head_code FROM cost_head_mapping_decision d"
+                        + " WHERE d.source_file_id = ? AND d.region_key = ? AND d.decision = 'Accepted'"
+                        + " ORDER BY d.decided_at DESC, d.mapping_decision_id DESC LIMIT 1")) {
+            ps.setLong(1, sourceFileId);
+            ps.setString(2, regionKey);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString(1) : null;
+            }
+        }
+    }
+
+    public List<MappingReviewRow> findPendingMappingReviews(long parseRunId) throws SQLException {
+        List<MappingReviewRow> rows = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT review_queue_id, summary, detail FROM review_queue"
+                        + " WHERE parse_run_id = ? AND category = 'cost_head_mapping'"
+                        + " AND status = 'Pending' ORDER BY review_queue_id")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(new MappingReviewRow(
+                            rs.getLong("review_queue_id"),
+                            rs.getString("summary"),
+                            rs.getString("detail")));
+                }
+            }
+        }
+        return rows;
+    }
+
+    public void insertMappingDecision(long sourceFileId, String regionKey, String code,
+            String sourceLabel, String decision, String actor, String reason, String decidedAt)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cost_head_mapping_decision (source_file_id, region_key, cost_head_code, source_label, decision, actor, reason, decided_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setLong(1, sourceFileId);
+            ps.setString(2, regionKey);
+            ps.setString(3, code);
+            ps.setString(4, sourceLabel);
+            ps.setString(5, decision);
+            ps.setString(6, actor);
+            ps.setString(7, reason);
+            ps.setString(8, decidedAt);
+            ps.executeUpdate();
+        }
+    }
+
+    public void resolveReviewQueue(long reviewQueueId, String status) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE review_queue SET status = ? WHERE review_queue_id = ?")) {
+            ps.setString(1, status);
+            ps.setLong(2, reviewQueueId);
+            ps.executeUpdate();
+        }
+    }
+
+    public long findLatestParseRunId() throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT parse_run_id FROM parse_run ORDER BY parse_run_id DESC LIMIT 1");
+                ResultSet rs = ps.executeQuery()) {
+            if (!rs.next()) {
+                throw new SQLException("no parse_run in workspace");
+            }
+            return rs.getLong(1);
+        }
+    }
+
+    public MappingIdentity findMappingIdentity(long mappingId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT source_file_id, region_key, source_label FROM cost_head_mapping WHERE cost_head_mapping_id = ?")) {
+            ps.setLong(1, mappingId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    throw new SQLException("cost_head_mapping not found: " + mappingId);
+                }
+                return new MappingIdentity(rs.getLong("source_file_id"), rs.getString("region_key"),
+                        rs.getString("source_label"));
+            }
+        }
+    }
+
+    public record MappingIdentity(long sourceFileId, String regionKey, String sourceLabel) {}
+
+    public record RegionMappingInput(long regionId, String regionKey, String label, String existingCode) {}
+
+    public record MappingReviewRow(long reviewQueueId, String summary, String detail) {}
+
+    public record CellSemanticRow(
+            long cellId,
+            Long regionId,
+            String formula,
+            String rowLabel,
+            String colLabel,
+            String text,
+            java.math.BigDecimal numeric) {}
 
     private long count(String sql) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(sql);

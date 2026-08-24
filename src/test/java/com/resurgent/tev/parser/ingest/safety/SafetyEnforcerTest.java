@@ -58,7 +58,7 @@ class SafetyEnforcerTest {
                 maxZipExpansionRatio,
                 false,
                 true,
-                true);
+                true, 4, 3);
     }
 
     @Test
@@ -272,7 +272,7 @@ class SafetyEnforcerTest {
     void csvIsNotChecked() throws Exception {
         Path csv = tempDir.resolve("data.csv");
         Files.writeString(csv, "a,b,c\n1,2,3\n");
-        ParserConfig config = new ParserConfig(1L, 1, 1, 1, 1L, 1, false, true, true);
+        ParserConfig config = new ParserConfig(1L, 1, 1, 1, 1L, 1, false, true, true, 4, 3);
 
         enforcer.check(csv, FileType.FM_CSV, config);
 
