@@ -355,7 +355,7 @@ final class RegionSchemaInferencer {
         return text != null && BANNER.matcher(text).find();
     }
 
-    private static Hint parse(String raw) {
+    static Hint parse(String raw) {
         if (raw == null || raw.isBlank()) {
             return Hint.EMPTY;
         }
@@ -402,7 +402,7 @@ final class RegionSchemaInferencer {
         return name.reverse().toString();
     }
 
-    private record Hint(String unit, String currency) {
+    record Hint(String unit, String currency) {
         static final Hint EMPTY = new Hint(null, null);
     }
 

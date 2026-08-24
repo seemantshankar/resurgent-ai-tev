@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.ingest;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.resurgent.tev.parser.db.Jsonb;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -33,6 +34,8 @@ final class ExplicitAnchorDetector {
     static final String TOTAL_ANCHOR = "TOTAL_ANCHOR";
     static final String NOT_AMOUNT = "NOT_AMOUNT";
     static final String PERIOD = "PERIOD";
+    static final String UNIT = "UNIT";
+    static final String CURRENCY = "CURRENCY";
 
     private static final Pattern TOTAL_LABEL = Pattern.compile(
             "(?i)^(grand\\s+)?total(\\s+(project\\s+)?cost)?$");
@@ -152,13 +155,16 @@ final class ExplicitAnchorDetector {
         if (connected) {
             reasons.add("FORMULA_CONNECTED");
         }
+        String expectedUnit = expectedScale(region.unit(), region.cells(), amountCols, headerRows, true);
+        String expectedCurrency = expectedScale(region.currency(), region.cells(), amountCols, headerRows, false);
         List<CellParticipation> participation = new ArrayList<>();
         for (CellSnapshot cell : region.cells()) {
             if (!amountCols.contains(cell.col()) && !periodCols.contains(cell.col())) {
                 continue;
             }
             String exclusion = exclusionReason(
-                    cell, headerRows, amountCols, periodCols, amountIds, precedents, anchor.cellId());
+                    cell, headerRows, amountCols, periodCols, amountIds, precedents, anchor.cellId(),
+                    region.cells(), expectedUnit, expectedCurrency);
             if (exclusion == null) {
                 participation.add(new CellParticipation(cell.cellId(), cell.coord(), "included", null));
             } else {
@@ -219,7 +225,10 @@ final class ExplicitAnchorDetector {
             Set<Integer> periodCols,
             Set<Long> amountIds,
             Map<Long, List<Long>> precedents,
-            long anchorId) {
+            long anchorId,
+            List<CellSnapshot> regionCells,
+            String expectedUnit,
+            String expectedCurrency) {
         if (cell.cellId() == anchorId) {
             return TOTAL_ANCHOR;
         }
@@ -231,6 +240,13 @@ final class ExplicitAnchorDetector {
         }
         if (periodCols.contains(cell.col()) && !amountCols.contains(cell.col())) {
             return PERIOD;
+        }
+        RegionSchemaInferencer.Hint hint = RegionSchemaInferencer.parse(rowText(cell, regionCells));
+        if (hint.unit() != null && (expectedUnit == null || !hint.unit().equals(expectedUnit))) {
+            return UNIT;
+        }
+        if (hint.currency() != null && (expectedCurrency == null || !hint.currency().equals(expectedCurrency))) {
+            return CURRENCY;
         }
         if (cell.error() || cell.errorDescendant()) {
             return ERROR;
@@ -305,7 +321,7 @@ final class ExplicitAnchorDetector {
                     columns.add(((Number) column.get("col")).intValue());
                 }
             }
-        } catch (Exception e) {
+        } catch (JsonProcessingException e) {
             throw new IllegalStateException("invalid schema_json", e);
         }
         return columns;
@@ -322,7 +338,7 @@ final class ExplicitAnchorDetector {
                         declared.add(number.intValue());
                     }
                 }
-            } catch (Exception e) {
+            } catch (JsonProcessingException e) {
                 throw new IllegalStateException("invalid header_rows json", e);
             }
         }
@@ -341,6 +357,53 @@ final class ExplicitAnchorDetector {
             }
         }
         return rows;
+    }
+
+    private static String rowText(CellSnapshot target, List<CellSnapshot> cells) {
+        StringBuilder text = new StringBuilder();
+        for (CellSnapshot cell : cells) {
+            if (cell.row() == target.row() && cell.text() != null && !cell.text().isBlank()) {
+                text.append(' ').append(cell.text());
+            }
+        }
+        return text.toString();
+    }
+
+    private static String expectedScale(
+            String regionValue,
+            List<CellSnapshot> cells,
+            Set<Integer> amountCols,
+            Set<Integer> headerRows,
+            boolean unit) {
+        if (regionValue != null
+                && !RegionSchemaInferencer.UNIT_UNKNOWN.equals(regionValue)
+                && !RegionSchemaInferencer.CURRENCY_UNKNOWN.equals(regionValue)) {
+            return regionValue;
+        }
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (CellSnapshot cell : cells) {
+            if (!amountCols.contains(cell.col()) || headerRows.contains(cell.row())) {
+                continue;
+            }
+            RegionSchemaInferencer.Hint hint = RegionSchemaInferencer.parse(rowText(cell, cells));
+            String value = unit ? hint.unit() : hint.currency();
+            if (value != null) {
+                counts.merge(value, 1, Integer::sum);
+            }
+        }
+        String best = null;
+        int bestCount = 0;
+        boolean tie = false;
+        for (Map.Entry<String, Integer> entry : counts.entrySet()) {
+            if (entry.getValue() > bestCount) {
+                best = entry.getKey();
+                bestCount = entry.getValue();
+                tie = false;
+            } else if (entry.getValue() == bestCount) {
+                tie = true;
+            }
+        }
+        return tie || bestCount == 0 ? null : best;
     }
 
     static String fingerprint(String fileHash, String costHeadCode, List<Contribution> contributions) {

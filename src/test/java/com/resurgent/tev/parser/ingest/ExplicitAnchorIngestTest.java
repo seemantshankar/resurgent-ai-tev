@@ -305,6 +305,37 @@ class ExplicitAnchorIngestTest {
         }
     }
 
+    @Test
+    void mixedLakhAndCroreRows_excludesConflictingUnitLeaves() throws Exception {
+        Path db;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Capex");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Civil works");
+            header.createCell(1).setCellValue("Amount");
+            sheet.createRow(1).createCell(0).setCellValue("Foundation (Rs. Lakh)");
+            sheet.getRow(1).createCell(1).setCellValue(10.0);
+            sheet.createRow(2).createCell(0).setCellValue("Plant (Rs. Crore)");
+            sheet.getRow(2).createCell(1).setCellValue(2.0);
+            sheet.createRow(3).createCell(0).setCellValue("Total");
+            sheet.getRow(3).createCell(1).setCellFormula("SUM(B2:B3)");
+            db = ingest(workbook, "mixed-unit.xlsx");
+        }
+
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT c.coord, cc.participation, cc.reason FROM cost_head_contribution_cell cc"
+                                + " JOIN cell c ON c.cell_id = cc.cell_id WHERE c.coord IN ('B2','B3')")) {
+            List<String> rows = new ArrayList<>();
+            while (rs.next()) {
+                rows.add(rs.getString("coord") + ":" + rs.getString("participation")
+                        + ":" + rs.getString("reason"));
+            }
+            assertThat(rows).anyMatch(value -> value.contains("UNIT"));
+            assertThat(rows.stream().allMatch(value -> value.contains(":included:"))).isFalse();
+        }
+    }
+
     private XSSFWorkbook civilTotalWorkbook(boolean formulaTotal) {
         XSSFWorkbook workbook = new XSSFWorkbook();
         Sheet sheet = workbook.createSheet("Capex");
