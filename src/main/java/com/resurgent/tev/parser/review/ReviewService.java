@@ -36,9 +36,18 @@ public final class ReviewService {
             String fingerprint,
             long candidateId) {}
 
+    public record DuplicateReviewItem(
+            long reviewQueueId,
+            String summary,
+            String detail,
+            String leftRegionKey,
+            String rightRegionKey,
+            String method,
+            long proposalId) {}
+
     public List<MappingReviewItem> listPendingMappings(Path db) throws SQLException {
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
-            return listPending(new WorkspaceRepository(workspace.connection()));
+            return listPendingMappings(new WorkspaceRepository(workspace.connection()));
         }
     }
 
@@ -78,6 +87,28 @@ public final class ReviewService {
     public void rejectTotal(Path db, long reviewId, String actor, String reason)
             throws SQLException, JsonProcessingException {
         decideTotal(db, reviewId, actor, reason == null ? "rejected" : reason, "Rejected");
+    }
+
+    public List<DuplicateReviewItem> listPendingDuplicates(Path db) throws SQLException {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            return listPendingDuplicates(new WorkspaceRepository(workspace.connection()));
+        }
+    }
+
+    public Optional<DuplicateReviewItem> showDuplicate(Path db, long reviewId) throws SQLException {
+        return listPendingDuplicates(db).stream()
+                .filter(item -> item.reviewQueueId() == reviewId)
+                .findFirst();
+    }
+
+    public void markDuplicate(Path db, long reviewId, String actor, String reason, String supersededRegionKey)
+            throws SQLException, JsonProcessingException {
+        decideDuplicate(db, reviewId, actor, requiredReason(reason), "Duplicate", supersededRegionKey);
+    }
+
+    public void markDistinct(Path db, long reviewId, String actor, String reason)
+            throws SQLException, JsonProcessingException {
+        decideDuplicate(db, reviewId, actor, requiredReason(reason), "Distinct", null);
     }
 
     public long addManual(Path db, String costHeadCode, BigDecimal amount, String unit, String currency,
@@ -156,7 +187,7 @@ public final class ReviewService {
     private void decide(Path db, long reviewId, String actor, String reason, String decision)
             throws SQLException, JsonProcessingException {
         transact(db, repo -> {
-            MappingReviewItem item = listPending(repo).stream()
+            MappingReviewItem item = listPendingMappings(repo).stream()
                     .filter(candidate -> candidate.reviewQueueId() == reviewId)
                     .findFirst()
                     .orElseThrow(() -> new SQLException("review item not found: " + reviewId));
@@ -244,6 +275,37 @@ public final class ReviewService {
         });
     }
 
+    private void decideDuplicate(Path db, long reviewId, String actor, String reason, String decision,
+            String supersededRegionKey) throws SQLException, JsonProcessingException {
+        transact(db, repo -> {
+            DuplicateReviewItem item = listPendingDuplicates(repo).stream()
+                    .filter(candidate -> candidate.reviewQueueId() == reviewId)
+                    .findFirst()
+                    .orElseThrow(() -> new SQLException("review item not found: " + reviewId));
+            WorkspaceRepository.ParseContext parse = repo.findLatestParseContext();
+            Long supersedesId = repo.findLatestDuplicateDecisionId(
+                    parse.sourceFileId(), item.leftRegionKey(), item.rightRegionKey());
+            repo.insertDuplicateDecision(parse.sourceFileId(), item.leftRegionKey(), item.rightRegionKey(),
+                    decision, supersededRegionKey, actor, reason, Timestamps.now(), supersedesId);
+            repo.resolveReviewQueue(reviewId, decision);
+            repo.insertAuditLog(parse.parseRunId(), "duplicate_" + decision.toLowerCase(),
+                    Timestamps.now(), Jsonb.toJson(Map.of(
+                            "reviewId", reviewId,
+                            "leftRegionKey", item.leftRegionKey(),
+                            "rightRegionKey", item.rightRegionKey(),
+                            "decision", decision,
+                            "supersededRegionKey", supersededRegionKey == null ? "" : supersededRegionKey,
+                            "actor", actor,
+                            "reason", reason)),
+                    "info");
+            for (String code : repo.findCostHeadCodesForRegionKeys(
+                    parse.sourceFileId(), item.leftRegionKey(), item.rightRegionKey())) {
+                repo.reopenCostHeadCandidateReviews(parse.parseRunId(), code);
+            }
+            return null;
+        });
+    }
+
     @FunctionalInterface
     private interface Write<T> {
         T run(WorkspaceRepository repo) throws SQLException, JsonProcessingException;
@@ -280,7 +342,24 @@ public final class ReviewService {
         return items;
     }
 
-    private List<MappingReviewItem> listPending(WorkspaceRepository repo) throws SQLException {
+    private List<DuplicateReviewItem> listPendingDuplicates(WorkspaceRepository repo) throws SQLException {
+        long parseRunId = repo.findLatestParseRunId();
+        List<DuplicateReviewItem> items = new ArrayList<>();
+        for (WorkspaceRepository.ReviewQueueRow row : repo.findPendingDuplicateReviews(parseRunId)) {
+            Map<String, Object> detail = parseDetail(row.detail());
+            items.add(new DuplicateReviewItem(
+                    row.reviewQueueId(),
+                    row.summary(),
+                    row.detail(),
+                    string(detail, "leftRegionKey"),
+                    string(detail, "rightRegionKey"),
+                    string(detail, "method"),
+                    number(detail, "proposalId")));
+        }
+        return items;
+    }
+
+    private List<MappingReviewItem> listPendingMappings(WorkspaceRepository repo) throws SQLException {
         long parseRunId = repo.findLatestParseRunId();
         List<MappingReviewItem> items = new ArrayList<>();
         for (WorkspaceRepository.ReviewQueueRow row : repo.findPendingMappingReviews(parseRunId)) {

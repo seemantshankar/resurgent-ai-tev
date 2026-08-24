@@ -710,10 +710,19 @@ public final class IngestService {
                     cellsByRegion.getOrDefault(region.regionId(), List.of())));
         }
         Map<Long, List<Long>> precedents = ReferenceGraphLoader.loadAdjacency(repo, parseRunId);
+        List<DuplicateDetector.Proposal> proposals = DuplicateDetector.detect(snapshots);
+        List<DuplicateDetector.Decision> decisions = new ArrayList<>();
+        for (WorkspaceRepository.DuplicateDecisionRow row : repo.findLatestDuplicateDecisions(sourceFileId)) {
+            decisions.add(new DuplicateDetector.Decision(
+                    row.leftRegionKey(), row.rightRegionKey(), row.decision(), row.supersededRegionKey()));
+        }
+        persistDuplicateProposals(repo, parseRunId, proposals, decisions);
         List<ExplicitAnchorDetector.AcceptedManual> manuals = loadAcceptedManuals(repo, sourceFileId);
-        for (ExplicitAnchorDetector.Candidate detected : explicitAnchorDetector.detect(
-                snapshots, precedents, fileHash)) {
-            ExplicitAnchorDetector.Candidate candidate = detected.withAcceptedManuals(fileHash, manuals);
+        List<ExplicitAnchorDetector.Candidate> detected = CandidateComposer.compose(
+                fileHash, explicitAnchorDetector.detect(snapshots, precedents, fileHash),
+                proposals, decisions, precedents);
+        for (ExplicitAnchorDetector.Candidate raw : detected) {
+            ExplicitAnchorDetector.Candidate candidate = raw.withAcceptedManuals(fileHash, manuals);
             long candidateId = repo.insertCostHeadCandidate(
                     parseRunId, sourceFileId, candidate.costHeadId(), candidate.fingerprint(),
                     candidate.amount(), candidate.currency(), candidate.unit(), 0,
@@ -753,6 +762,39 @@ public final class IngestService {
                         "candidate", candidate.costHeadCode(), candidate.confidence());
                 carryTotalDecision(repo, reviewQueueId, sourceFileId, candidate);
             }
+        }
+    }
+
+    private static void persistDuplicateProposals(
+            WorkspaceRepository repo,
+            long parseRunId,
+            List<DuplicateDetector.Proposal> proposals,
+            List<DuplicateDetector.Decision> decisions) throws SQLException, IOException {
+        for (DuplicateDetector.Proposal proposal : proposals) {
+            long proposalId = repo.insertDuplicateProposal(
+                    parseRunId, proposal.leftRegionId(), proposal.rightRegionId(),
+                    proposal.method(), proposal.score(), Jsonb.toJson(proposal.reasons()));
+            DuplicateDetector.Decision decision = DuplicateDetector.Decision.latest(
+                    decisions, proposal.leftRegionKey(), proposal.rightRegionKey());
+            if (decision != null && ("Distinct".equals(decision.decision())
+                    || "Duplicate".equals(decision.decision()))) {
+                continue;
+            }
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("proposalId", proposalId);
+            detail.put("leftRegionId", proposal.leftRegionId());
+            detail.put("rightRegionId", proposal.rightRegionId());
+            detail.put("leftRegionKey", proposal.leftRegionKey());
+            detail.put("rightRegionKey", proposal.rightRegionKey());
+            detail.put("method", proposal.method());
+            detail.put("score", proposal.score());
+            repo.insertReviewQueue(parseRunId, "duplicate",
+                    "Possible duplicate regions: " + proposal.leftRegionKey()
+                            + " / " + proposal.rightRegionKey(),
+                    Jsonb.toJson(detail),
+                    "Pending", false, Timestamps.now(), null,
+                    "duplicate", proposal.leftRegionKey() + "|" + proposal.rightRegionKey(),
+                    proposal.score());
         }
     }
 

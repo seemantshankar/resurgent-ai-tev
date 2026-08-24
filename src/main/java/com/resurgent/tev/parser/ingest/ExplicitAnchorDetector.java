@@ -725,15 +725,36 @@ final class ExplicitAnchorDetector {
 
     private Candidate toCandidate(String fileHash, Long costHeadId, String costHeadCode,
             List<Contribution> contributions) {
-        List<Contribution> sorted = new ArrayList<>(contributions);
+        return assemble(fileHash, costHeadId, costHeadCode, contributions, contributions, List.of(), false);
+    }
+
+    static Candidate assemble(
+            String fileHash,
+            long costHeadId,
+            String costHeadCode,
+            List<Contribution> persisted,
+            List<Contribution> amountFrom,
+            List<String> extraReasons,
+            boolean forceReview) {
+        List<Contribution> sorted = new ArrayList<>(persisted);
         sorted.sort(Comparator.comparing(Contribution::regionKey));
-        boolean review = sorted.stream().anyMatch(item -> LEAF_SUM.equals(item.basis())
+        List<Contribution> amountSorted = new ArrayList<>(amountFrom);
+        amountSorted.sort(Comparator.comparing(Contribution::regionKey));
+        boolean review = forceReview || sorted.stream().anyMatch(item -> LEAF_SUM.equals(item.basis())
                 || item.reasons().contains("STRUCTURAL_AMOUNT_MISMATCH")
-                || item.reasons().contains("STRUCTURAL_AMBIGUOUS"));
-        BigDecimal amount = sorted.stream()
+                || item.reasons().contains("STRUCTURAL_AMBIGUOUS")
+                || extraReasons.contains("UNRESOLVED_DUPLICATE")
+                || extraReasons.contains("PARTIAL_OVERLAP"));
+        BigDecimal amount = amountSorted.stream()
                 .map(item -> item.normalizedAmount() != null ? item.normalizedAmount() : item.sourceAmount())
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         Contribution first = sorted.getFirst();
+        List<String> reasons = new ArrayList<>(candidateReasons(sorted));
+        for (String extra : extraReasons) {
+            if (!reasons.contains(extra)) {
+                reasons.add(extra);
+            }
+        }
         return new Candidate(
                 costHeadId,
                 costHeadCode,
@@ -742,7 +763,7 @@ final class ExplicitAnchorDetector {
                 first.normalizedCurrency(),
                 first.normalizedUnit(),
                 review ? 0.4 : confidence(sorted),
-                candidateReasons(sorted),
+                List.copyOf(reasons),
                 review,
                 sorted);
     }

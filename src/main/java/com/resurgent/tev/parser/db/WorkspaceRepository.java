@@ -11,7 +11,9 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -1519,6 +1521,131 @@ public final class WorkspaceRepository {
         }
     }
 
+    public long insertDuplicateProposal(long parseRunId, long leftRegionId, long rightRegionId,
+            String method, double score, String reasonsJson) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO duplicate_proposal (parse_run_id, left_region_id, right_region_id,"
+                        + " method, score, reasons) VALUES (?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, leftRegionId);
+            ps.setLong(3, rightRegionId);
+            ps.setString(4, method);
+            ps.setDouble(5, score);
+            ps.setString(6, reasonsJson);
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    public long insertDuplicateDecision(long sourceFileId, String leftRegionKey, String rightRegionKey,
+            String decision, String supersededRegionKey, String actor, String reason, String decidedAt,
+            Long supersedesId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO duplicate_decision (source_file_id, left_region_key, right_region_key,"
+                        + " decision, superseded_region_key, actor, reason, decided_at, supersedes_id)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, sourceFileId);
+            ps.setString(2, leftRegionKey);
+            ps.setString(3, rightRegionKey);
+            ps.setString(4, decision);
+            ps.setString(5, supersededRegionKey);
+            ps.setString(6, actor);
+            ps.setString(7, reason);
+            ps.setString(8, decidedAt);
+            if (supersedesId == null) {
+                ps.setNull(9, java.sql.Types.INTEGER);
+            } else {
+                ps.setLong(9, supersedesId);
+            }
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    public List<DuplicateDecisionRow> findLatestDuplicateDecisions(long sourceFileId) throws SQLException {
+        Map<String, DuplicateDecisionRow> latest = new LinkedHashMap<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT left_region_key, right_region_key, decision, superseded_region_key"
+                        + " FROM duplicate_decision WHERE source_file_id = ?"
+                        + " ORDER BY duplicate_decision_id")) {
+            ps.setLong(1, sourceFileId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    DuplicateDecisionRow row = new DuplicateDecisionRow(
+                            rs.getString("left_region_key"),
+                            rs.getString("right_region_key"),
+                            rs.getString("decision"),
+                            rs.getString("superseded_region_key"));
+                    latest.put(canonicalPairKey(row.leftRegionKey(), row.rightRegionKey()), row);
+                }
+            }
+        }
+        return List.copyOf(latest.values());
+    }
+
+    private static String canonicalPairKey(String left, String right) {
+        return left.compareTo(right) <= 0 ? left + '\0' + right : right + '\0' + left;
+    }
+
+    public Long findLatestDuplicateDecisionId(long sourceFileId, String leftRegionKey, String rightRegionKey)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT duplicate_decision_id FROM duplicate_decision"
+                        + " WHERE source_file_id = ? AND ("
+                        + " (left_region_key = ? AND right_region_key = ?)"
+                        + " OR (left_region_key = ? AND right_region_key = ?))"
+                        + " ORDER BY duplicate_decision_id DESC LIMIT 1")) {
+            ps.setLong(1, sourceFileId);
+            ps.setString(2, leftRegionKey);
+            ps.setString(3, rightRegionKey);
+            ps.setString(4, rightRegionKey);
+            ps.setString(5, leftRegionKey);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : null;
+            }
+        }
+    }
+
+    public List<ReviewQueueRow> findPendingDuplicateReviews(long parseRunId) throws SQLException {
+        List<ReviewQueueRow> rows = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT review_queue_id, summary, detail FROM review_queue"
+                        + " WHERE parse_run_id = ? AND category = 'duplicate'"
+                        + " AND status = 'Pending' ORDER BY review_queue_id")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(new ReviewQueueRow(
+                            rs.getLong("review_queue_id"),
+                            rs.getString("summary"),
+                            rs.getString("detail")));
+                }
+            }
+        }
+        return rows;
+    }
+
+    public List<String> findCostHeadCodesForRegionKeys(long sourceFileId, String leftKey, String rightKey)
+            throws SQLException {
+        List<String> codes = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT DISTINCT h.code FROM cost_head_mapping m"
+                        + " JOIN cost_head h ON h.cost_head_id = m.cost_head_id"
+                        + " WHERE m.source_file_id = ? AND m.region_key IN (?, ?)")) {
+            ps.setLong(1, sourceFileId);
+            ps.setString(2, leftKey);
+            ps.setString(3, rightKey);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    codes.add(rs.getString(1));
+                }
+            }
+        }
+        return codes;
+    }
+
     public void reopenCostHeadCandidateReviews(long parseRunId, String costHeadCode) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "UPDATE review_queue SET status = 'Pending', carried_from_decision_id = NULL"
@@ -1624,6 +1751,9 @@ public final class WorkspaceRepository {
     public record RegionMappingInput(long regionId, String regionKey, String label, String existingCode) {}
 
     public record ReviewQueueRow(long reviewQueueId, String summary, String detail) {}
+
+    public record DuplicateDecisionRow(
+            String leftRegionKey, String rightRegionKey, String decision, String supersededRegionKey) {}
 
     public record CellSemanticRow(
             long cellId,
