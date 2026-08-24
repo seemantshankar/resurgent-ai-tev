@@ -39,6 +39,7 @@ final class ExplicitAnchorDetector {
 
     private static final Pattern TOTAL_LABEL = Pattern.compile(
             "(?i)^(grand\\s+)?total(\\s+(project\\s+)?cost)?$");
+    private static final Pattern DISABLED_LINE = Pattern.compile("(?i).*\\*\\s*0\\s*\\)?\\s*$");
 
     record CellSnapshot(
             long cellId,
@@ -567,6 +568,12 @@ final class ExplicitAnchorDetector {
                     blockers.add("STRUCTURAL_CROSS_REGION");
                     return new SumInspection(blockers, List.of());
                 }
+                if (located.cell.error() || located.cell.errorDescendant()) {
+                    blockers.add("STRUCTURAL_ERROR");
+                }
+                if (located.cell.scratch() || disabledLine(located.cell.formula())) {
+                    blockers.add("STRUCTURAL_SCRATCH");
+                }
                 deps.add(located.cell.cellId());
             }
         }
@@ -1008,6 +1015,7 @@ final class ExplicitAnchorDetector {
         for (Contribution contribution : contributions) {
             canonical.append(contribution.basis()).append('|')
                     .append(contribution.regionKey()).append('|')
+                    .append(contribution.anchorCellId() == null ? "" : contribution.anchorCellId()).append('|')
                     .append(contribution.sourceAmount()).append('|')
                     .append(nullToEmpty(contribution.sourceUnit())).append('|')
                     .append(nullToEmpty(contribution.sourceCurrency()));
@@ -1025,6 +1033,10 @@ final class ExplicitAnchorDetector {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    private static boolean disabledLine(String formula) {
+        return formula != null && DISABLED_LINE.matcher(formula.trim()).matches();
     }
 
     private static String nullToEmpty(String value) {
