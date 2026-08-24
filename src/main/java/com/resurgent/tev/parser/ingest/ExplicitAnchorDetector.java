@@ -129,7 +129,7 @@ final class ExplicitAnchorDetector {
             return new Candidate(
                     costHeadId,
                     costHeadCode,
-                    fingerprint(fileHash, costHeadCode, combined),
+                    ExplicitAnchorDetector.fingerprint(fileHash, costHeadCode, combined),
                     total,
                     currency,
                     unit,
