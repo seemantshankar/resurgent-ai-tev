@@ -20,7 +20,9 @@ final class RegionHeaderAnalyzer {
             "(?i)^(?:year\\s*\\d+|yr\\s*\\d+|fy\\s*'?\\d{2,4}(?:\\s*[-/]\\s*'?\\d{2,4})?|"
                     + "q[1-4]|quarter\\s*[1-4]|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|"
                     + "jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|"
-                    + "dec(?:ember)?|(?:19|20)\\d{2}(?:\\s*[-/]\\s*'?\\d{2,4})?)$");
+                    + "dec(?:ember)?|(?:19|20)\\d{2}(?:\\s*[-/]\\s*'?\\d{2,4})?|"
+                    + "opening(?:\\s+balance)?|closing(?:\\s+balance)?|"
+                    + "alternative(?:\\s*\\d+)?|scenario(?:\\s*\\d+)?|projection(?:s)?)$");
 
     RegionHeaderContext analyze(List<NormalizedCell> cells, Bounds bounds) {
         List<NormalizedCell> regionCells = cells.stream()

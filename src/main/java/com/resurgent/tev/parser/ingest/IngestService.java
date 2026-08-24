@@ -696,7 +696,8 @@ public final class IngestService {
                     new ExplicitAnchorDetector.CellSnapshot(
                             cell.cellId(), cell.coord(), cell.row(), cell.col(), cell.text(),
                             cell.numeric(), cell.formula(), cell.error(), cell.errorDescendant(),
-                            cell.scratch(), cell.mergedParticipant()));
+                            cell.scratch(), cell.mergedParticipant(), cell.cacheState(),
+                            cell.numberFormat(), cell.sheetName()));
         }
         List<ExplicitAnchorDetector.RegionSnapshot> snapshots = new ArrayList<>();
         for (WorkspaceRepository.RegionAnchorRow region : regions) {
@@ -721,7 +722,7 @@ public final class IngestService {
                         candidateId,
                         manual ? null : contribution.mappingId(),
                         manual ? 0L : contribution.regionId(),
-                        manual ? 0L : contribution.anchorCellId(),
+                        manual ? null : contribution.anchorCellId(),
                         contribution.basis(), contribution.sourceAmount(),
                         contribution.sourceCurrency(), contribution.sourceUnit(),
                         contribution.normalizedAmount(), contribution.normalizedCurrency(),
