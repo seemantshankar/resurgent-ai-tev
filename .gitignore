@@ -5,5 +5,7 @@ fixtures/private/*
 !fixtures/private/README.md
 
 .vscode/
+# Client financial models are never committed (parser-strategy-v2 §13 fixture policy)
 Project Docs/*.xls
 Project Docs/*.xlsx
+Project Docs/*.xlsm
