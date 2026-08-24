@@ -35,6 +35,17 @@ class LeafCoverageTest {
     }
 
     @Test
+    void laterRegionSuperset_supersedesEarlierSubset() {
+        LeafCoverage.Result result = LeafCoverage.compose(List.of(
+                member(1, Set.of(10L)),
+                member(2, Set.of(10L, 11L))));
+        assertThat(result.relation()).isEqualTo(LeafCoverage.Relation.SUPERSET);
+        assertThat(result.amountRegionIds()).containsExactly(2L);
+        assertThat(result.supersededRegionIds()).containsExactly(1L);
+        assertThat(result.blocksTrust()).isFalse();
+    }
+
+    @Test
     void identicalSets_areDuplicates() {
         LeafCoverage.Result result = LeafCoverage.compose(List.of(
                 member(1, Set.of(10L, 11L)),

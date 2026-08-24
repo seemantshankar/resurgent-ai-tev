@@ -292,7 +292,7 @@ public final class ReviewCommand implements Callable<Integer> {
         @Option(names = "--db", required = true) Path db;
         @Option(names = "--actor", required = true) String actor;
         @Option(names = "--reason", required = true) String reason;
-        @Option(names = "--supersede") String supersede;
+        @Option(names = "--supersede", required = true) String supersede;
         @Parameters(index = "0") long reviewId;
         @Spec CommandSpec spec;
 

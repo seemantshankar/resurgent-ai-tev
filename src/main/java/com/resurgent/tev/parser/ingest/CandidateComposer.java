@@ -74,6 +74,9 @@ final class CandidateComposer {
         if (coverage.blocksTrust()) {
             extra.add("PARTIAL_OVERLAP");
         }
+        if (coverage.relation() == LeafCoverage.Relation.IDENTICAL) {
+            extra.add("IDENTICAL_COVERAGE");
+        }
         if (!coverage.supersededRegionIds().isEmpty()) {
             extra.add("SUPERSEDED_SUBSET");
             persistIds.removeAll(coverage.supersededRegionIds());
@@ -99,7 +102,11 @@ final class CandidateComposer {
         amountFrom.addAll(manuals);
         if (persisted.isEmpty()) {
             persisted = new ArrayList<>(candidate.contributions());
-            amountFrom = persisted;
+            amountFrom = List.of();
+            forceReview = true;
+            if (!extra.contains("ALL_CONTRIBUTIONS_SUPERSEDED")) {
+                extra.add("ALL_CONTRIBUTIONS_SUPERSEDED");
+            }
         }
         return ExplicitAnchorDetector.assemble(
                 fileHash, candidate.costHeadId(), candidate.costHeadCode(),
@@ -129,13 +136,19 @@ final class CandidateComposer {
             if (decision != null && "Duplicate".equals(decision.decision())) {
                 String superseded = decision.supersededRegionKey();
                 if (superseded != null && !superseded.isBlank()) {
+                    boolean removed = false;
                     for (Map.Entry<Long, String> entry : keys.entrySet()) {
                         if (superseded.equals(entry.getValue())) {
                             amountIds.remove(entry.getKey());
                             persistIds.remove(entry.getKey());
+                            removed = true;
                         }
                     }
-                    extra.add("DUPLICATE_SUPERSEDED");
+                    if (removed) {
+                        extra.add("DUPLICATE_SUPERSEDED");
+                    } else {
+                        dropLaterFromAmount(calculated, proposal, amountIds);
+                    }
                 } else {
                     dropLaterFromAmount(calculated, proposal, amountIds);
                 }

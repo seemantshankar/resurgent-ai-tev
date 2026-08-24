@@ -251,6 +251,15 @@ public final class ReviewService {
         return reason;
     }
 
+    private static void requireSupersededRegionKey(DuplicateReviewItem item, String supersededRegionKey)
+            throws SQLException {
+        if (supersededRegionKey == null || supersededRegionKey.isBlank()
+                || (!supersededRegionKey.equals(item.leftRegionKey())
+                        && !supersededRegionKey.equals(item.rightRegionKey()))) {
+            throw new SQLException("superseded region key must be one of the reviewed pair");
+        }
+    }
+
     private void decideTotal(Path db, long reviewId, String actor, String reason, String decision)
             throws SQLException, JsonProcessingException {
         transact(db, repo -> {
@@ -282,6 +291,9 @@ public final class ReviewService {
                     .filter(candidate -> candidate.reviewQueueId() == reviewId)
                     .findFirst()
                     .orElseThrow(() -> new SQLException("review item not found: " + reviewId));
+            if ("Duplicate".equals(decision)) {
+                requireSupersededRegionKey(item, supersededRegionKey);
+            }
             WorkspaceRepository.ParseContext parse = repo.findLatestParseContext();
             Long supersedesId = repo.findLatestDuplicateDecisionId(
                     parse.sourceFileId(), item.leftRegionKey(), item.rightRegionKey());

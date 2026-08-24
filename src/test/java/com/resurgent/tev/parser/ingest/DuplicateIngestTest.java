@@ -1,6 +1,7 @@
 package com.resurgent.tev.parser.ingest;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.resurgent.tev.parser.Main;
 import com.resurgent.tev.parser.config.ParserConfig;
@@ -12,6 +13,7 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.poi.ss.usermodel.Row;
@@ -198,7 +200,10 @@ class DuplicateIngestTest {
 
     @Test
     void distinctDecision_allowsBothContributionsOnReingest() throws Exception {
-        Path file = writeWorkbook(identicalCivilSheets("Assets", "Details", 100.0, 50.0), "distinct.xlsx");
+        Path file;
+        try (XSSFWorkbook workbook = identicalCivilSheets("Assets", "Details", 100.0, 50.0)) {
+            file = writeWorkbook(workbook, "distinct.xlsx");
+        }
         Path db = tempDir.resolve("distinct.db");
         new IngestService().ingest(file, 1L, db);
         ReviewService review = new ReviewService();
@@ -226,7 +231,10 @@ class DuplicateIngestTest {
 
     @Test
     void duplicateDecision_supersedesOneContributionOnReingest() throws Exception {
-        Path file = writeWorkbook(identicalCivilSheets("Assets", "Details", 100.0, 50.0), "dup-dec.xlsx");
+        Path file;
+        try (XSSFWorkbook workbook = identicalCivilSheets("Assets", "Details", 100.0, 50.0)) {
+            file = writeWorkbook(workbook, "dup-dec.xlsx");
+        }
         Path db = tempDir.resolve("dup-dec.db");
         new IngestService().ingest(file, 1L, db);
         ReviewService review = new ReviewService();
@@ -252,9 +260,10 @@ class DuplicateIngestTest {
                 assertThat(rs.getDouble("amount")).isEqualTo(150.0);
                 assertThat(rs.getString("reasons")).doesNotContain("UNRESOLVED_DUPLICATE");
             }
-            assertThat(scalar(c, "SELECT COUNT(*) FROM cost_head_contribution ch"
-                    + " JOIN cost_head_candidate cand ON cand.cost_head_candidate_id = ch.cost_head_candidate_id"
-                    + " ORDER BY cand.cost_head_candidate_id DESC")).isGreaterThanOrEqualTo(1);
+            assertThat(scalar(c, "SELECT COUNT(*) FROM cost_head_contribution"
+                    + " WHERE cost_head_candidate_id ="
+                    + " (SELECT MAX(cost_head_candidate_id) FROM cost_head_candidate)"))
+                    .isEqualTo(1);
             assertThat(scalar(c, "SELECT COUNT(*) FROM audit_log WHERE event_type = 'duplicate_duplicate'"))
                     .isEqualTo(1);
         }
@@ -284,6 +293,18 @@ class DuplicateIngestTest {
                         "--reason", "two live copies", String.valueOf(reviewId));
         assertThat(distinct).as(err.toString()).isZero();
         assertThat(out.toString()).contains("Distinct");
+    }
+
+    @Test
+    void markDuplicate_rejectsSupersedeKeyOutsideReviewedPair() throws Exception {
+        Path db = ingest(identicalCivilSheets("Assets", "Details", 100.0, 50.0), "bad-supersede.xlsx");
+        ReviewService review = new ReviewService();
+        ReviewService.DuplicateReviewItem pending = review.listPendingDuplicates(db).getFirst();
+        assertThatThrownBy(() -> review.markDuplicate(
+                        db, pending.reviewQueueId(), "analyst", "copy", "not-a-region-key"))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("superseded region key");
+        assertThat(review.listPendingDuplicates(db)).isNotEmpty();
     }
 
     @Test
@@ -335,8 +356,9 @@ class DuplicateIngestTest {
 
     private Path ingest(XSSFWorkbook workbook, String name) throws Exception {
         Path db = tempDir.resolve(name.replace(".xlsx", ".db"));
-        new IngestService().ingest(writeWorkbook(workbook, name), 1L, db);
-        workbook.close();
+        try (workbook) {
+            new IngestService().ingest(writeWorkbook(workbook, name), 1L, db);
+        }
         return db;
     }
 

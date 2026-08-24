@@ -8,6 +8,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -60,6 +61,12 @@ final class DuplicateDetector {
 
     static List<Proposal> detect(List<ExplicitAnchorDetector.RegionSnapshot> regions) {
         List<Proposal> proposals = new ArrayList<>();
+        Map<Long, Signature> signatures = new LinkedHashMap<>();
+        Map<Long, List<String>> roles = new LinkedHashMap<>();
+        for (ExplicitAnchorDetector.RegionSnapshot region : regions) {
+            signatures.put(region.regionId(), signature(region));
+            roles.put(region.regionId(), significantRoles(region.schemaJson()));
+        }
         for (int i = 0; i < regions.size(); i++) {
             for (int j = i + 1; j < regions.size(); j++) {
                 ExplicitAnchorDetector.RegionSnapshot left = regions.get(i);
@@ -69,12 +76,12 @@ final class DuplicateDetector {
                     left = right;
                     right = swap;
                 }
-                if (!comparable(left, right)) {
+                if (!comparable(left, right, roles.get(left.regionId()), roles.get(right.regionId()))) {
                     continue;
                 }
-                Signature leftSig = signature(left);
-                Signature rightSig = signature(right);
-                if (leftSig.dataRows().isEmpty() || rightSig.dataRows().isEmpty()) {
+                Signature leftSig = signatures.get(left.regionId());
+                Signature rightSig = signatures.get(right.regionId());
+                if (leftSig.rowHashes().isEmpty() || rightSig.rowHashes().isEmpty()) {
                     continue;
                 }
                 if (leftSig.contentHash().equals(rightSig.contentHash())) {
@@ -97,11 +104,20 @@ final class DuplicateDetector {
 
     static boolean comparable(
             ExplicitAnchorDetector.RegionSnapshot left, ExplicitAnchorDetector.RegionSnapshot right) {
+        return comparable(
+                left, right, significantRoles(left.schemaJson()), significantRoles(right.schemaJson()));
+    }
+
+    private static boolean comparable(
+            ExplicitAnchorDetector.RegionSnapshot left,
+            ExplicitAnchorDetector.RegionSnapshot right,
+            List<String> leftRoles,
+            List<String> rightRoles) {
         return Objects.equals(left.costHeadCode(), right.costHeadCode())
                 && left.costHeadCode() != null && !left.costHeadCode().isBlank()
                 && compatibleScale(left.unit(), right.unit(), RegionSchemaInferencer.UNIT_UNKNOWN)
                 && compatibleScale(left.currency(), right.currency(), RegionSchemaInferencer.CURRENCY_UNKNOWN)
-                && significantRoles(left.schemaJson()).equals(significantRoles(right.schemaJson()));
+                && leftRoles.equals(rightRoles);
     }
 
     private static boolean compatibleScale(String left, String right, String unknown) {
@@ -284,5 +300,5 @@ final class DuplicateDetector {
     }
 
     private record Signature(
-            List<String> dataRows, List<String> skeletons, Set<String> descriptions, String contentHash) {}
+            List<String> rowHashes, List<String> skeletons, Set<String> descriptions, String contentHash) {}
 }
