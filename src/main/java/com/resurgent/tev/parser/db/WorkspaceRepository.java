@@ -151,6 +151,101 @@ public final class WorkspaceRepository {
         }
     }
 
+    public void updateWorksheetRole(long worksheetId, String role, double confidence, String reasonsJson)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE worksheet SET role = ?, role_conf = ?, role_reasons = ? WHERE worksheet_id = ?")) {
+            ps.setString(1, role);
+            ps.setDouble(2, confidence);
+            ps.setString(3, reasonsJson);
+            ps.setLong(4, worksheetId);
+            ps.executeUpdate();
+        }
+    }
+
+    public record WorksheetRoleSheetRow(long worksheetId, String sheetName) {}
+
+    public record WorksheetRoleCellRow(
+            long cellId, long worksheetId, Long regionId, boolean scratchOrOrphan) {}
+
+    public record WorksheetRoleRegionRow(long regionId, String regionType) {}
+
+    public record WorksheetRoleContributionRow(long contributionId, long worksheetId, Long cellId) {}
+
+    public List<WorksheetRoleSheetRow> findWorksheetRoleSheets(long parseRunId) throws SQLException {
+        List<WorksheetRoleSheetRow> rows = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT worksheet_id, sheet_name FROM worksheet WHERE parse_run_id = ?"
+                        + " ORDER BY sheet_index")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(new WorksheetRoleSheetRow(rs.getLong(1), rs.getString(2)));
+                }
+            }
+        }
+        return rows;
+    }
+
+    public List<WorksheetRoleCellRow> findWorksheetRoleCells(long parseRunId) throws SQLException {
+        List<WorksheetRoleCellRow> rows = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT c.cell_id, c.worksheet_id, c.region_id, c.is_scratch, c.is_orphan"
+                        + " FROM cell c JOIN worksheet w ON w.worksheet_id = c.worksheet_id"
+                        + " WHERE w.parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    long regionId = rs.getLong("region_id");
+                    rows.add(new WorksheetRoleCellRow(
+                            rs.getLong("cell_id"),
+                            rs.getLong("worksheet_id"),
+                            rs.wasNull() ? null : regionId,
+                            rs.getInt("is_scratch") == 1 || rs.getInt("is_orphan") == 1));
+                }
+            }
+        }
+        return rows;
+    }
+
+    public List<WorksheetRoleRegionRow> findWorksheetRoleRegions(long parseRunId) throws SQLException {
+        List<WorksheetRoleRegionRow> rows = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT region_id, region_type FROM region WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(new WorksheetRoleRegionRow(rs.getLong(1), rs.getString(2)));
+                }
+            }
+        }
+        return rows;
+    }
+
+    public List<WorksheetRoleContributionRow> findWorksheetRoleContributions(long parseRunId)
+            throws SQLException {
+        List<WorksheetRoleContributionRow> rows = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT contrib.cost_head_contribution_id, r.worksheet_id, cc.cell_id"
+                        + " FROM cost_head_contribution contrib"
+                        + " JOIN region r ON r.region_id = contrib.region_id"
+                        + " LEFT JOIN cost_head_contribution_cell cc"
+                        + " ON cc.cost_head_contribution_id = contrib.cost_head_contribution_id"
+                        + " WHERE r.parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    long cellId = rs.getLong("cell_id");
+                    rows.add(new WorksheetRoleContributionRow(
+                            rs.getLong("cost_head_contribution_id"),
+                            rs.getLong("worksheet_id"),
+                            rs.wasNull() ? null : cellId));
+                }
+            }
+        }
+        return rows;
+    }
+
     private static void setInteger(PreparedStatement ps, int index, Integer value)
             throws SQLException {
         if (value == null) {

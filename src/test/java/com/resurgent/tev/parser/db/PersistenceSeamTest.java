@@ -103,10 +103,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(11);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(12);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(11);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(12);
         }
     }
 
@@ -322,7 +322,7 @@ class PersistenceSeamTest {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(11);
+            assertThat(count(c, "schema_migration")).isEqualTo(12);
             assertThat(tableNames(c)).contains("cell_reference", "cell_error_root");
 
             long sourceFileId = repo.insertSourceFile(1L, "v8.xlsx", "hash8", "fm_xlsx",
@@ -365,7 +365,7 @@ class PersistenceSeamTest {
         try (WorkspaceDatabase db = openDb("v10.db")) {
             java.sql.Connection c = db.connection();
             assertThat(tableNames(c)).contains("region");
-            assertThat(count(c, "schema_migration")).isEqualTo(11);
+            assertThat(count(c, "schema_migration")).isEqualTo(12);
 
             try (ResultSet rs = c.createStatement().executeQuery("PRAGMA table_info(cell)")) {
                 java.util.Set<String> columns = new java.util.HashSet<>();
@@ -380,7 +380,7 @@ class PersistenceSeamTest {
                 while (rs.next()) {
                     columns.add(rs.getString("name"));
                 }
-                assertThat(columns).contains("role", "role_conf");
+                assertThat(columns).contains("role", "role_conf", "role_reasons");
             }
         }
     }
@@ -416,7 +416,7 @@ class PersistenceSeamTest {
     void v11MigrationAppliesAutomaticallyOnEmptyWorkspace() throws Exception {
         try (WorkspaceDatabase db = openDb("v11-empty.db")) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(11);
+            assertThat(count(c, "schema_migration")).isEqualTo(12);
             assertThat(tableNames(c)).contains(
                     "cost_head",
                     "cost_head_mapping",
@@ -465,7 +465,7 @@ class PersistenceSeamTest {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(
                 dbPath, WorkspaceDatabase.OpenOptions.allowDestructiveReset())) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(11);
+            assertThat(count(c, "schema_migration")).isEqualTo(12);
             assertThat(count(c, "cell")).isZero();
             assertThat(count(c, "source_file")).isZero();
             assertThat(tableNames(c)).contains("cost_head", "cost_head_candidate");

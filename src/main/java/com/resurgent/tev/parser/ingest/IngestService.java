@@ -230,6 +230,7 @@ public final class IngestService {
         persistCellSemantics(repo, parseRunId);
         persistCostHeadMappings(repo, parseRunId, sourceFileId, mandateId);
         persistExplicitAnchors(repo, parseRunId, sourceFileId, fileHash);
+        List<WorksheetRoleScorer.Score> worksheetRoles = persistWorksheetRoles(repo, parseRunId);
 
         // CSV has no formulas or structural references, so those reconciliation buckets
         // are trivially 0/0/0 and never force a partial/failed status on their own.
@@ -238,7 +239,7 @@ public final class IngestService {
                 regionQa.cellsWithoutRegion(), regionQa.regionsUnaccounted());
         String metricsJson = IngestMetrics.toJson(fileName, fileHash, sheet.sheetName(), rowCount,
                 cellCount, cellsWritten, coercedCount(enriched), errorCount(enriched),
-                0, 0, 0, 0, 0, 0, 0, regionQa, qa);
+                0, 0, 0, 0, 0, 0, 0, regionQa, qa, worksheetRoles);
         repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
         repo.insertAuditLog(parseRunId, "parse_run_completed", Timestamps.now(),
                 Jsonb.toJson(Map.of("status", qa.status(), "cellsWritten", cellsWritten)),
@@ -421,6 +422,7 @@ public final class IngestService {
         persistCellSemantics(repo, parseRunId);
         persistCostHeadMappings(repo, parseRunId, sourceFileId, mandateId);
         persistExplicitAnchors(repo, parseRunId, sourceFileId, fileHash);
+        List<WorksheetRoleScorer.Score> worksheetRoles = persistWorksheetRoles(repo, parseRunId);
 
         // Calc metadata persistence (#19 / C5): cellsError is only known now that the
         // sheet loop above has finished, so this can't happen right after insertWorkbook.
@@ -437,7 +439,7 @@ public final class IngestService {
                 rowCount, cellCount, cellsWritten, cellsCoerced, cellsError,
                 refStats.total(), refStats.resolved(), refStats.unresolved(),
                 formulaCellsTotal, formulaCellsTokenized, formulaCellsParseError, formulaCellsUnavailable,
-                regionQa, qa);
+                regionQa, qa, worksheetRoles);
         repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
         repo.insertAuditLog(parseRunId, "parse_run_completed", Timestamps.now(),
                 Jsonb.toJson(Map.of("status", qa.status(), "cellsWritten", cellsWritten)),
@@ -752,6 +754,16 @@ public final class IngestService {
                 carryTotalDecision(repo, reviewQueueId, sourceFileId, candidate);
             }
         }
+    }
+
+    private List<WorksheetRoleScorer.Score> persistWorksheetRoles(WorkspaceRepository repo, long parseRunId)
+            throws SQLException, IOException {
+        List<WorksheetRoleScorer.Score> scores = new WorksheetRoleScorer().score(repo, parseRunId);
+        for (WorksheetRoleScorer.Score score : scores) {
+            repo.updateWorksheetRole(score.worksheetId(), score.role(), score.confidence(),
+                    Jsonb.toJson(score.reasons()));
+        }
+        return scores;
     }
 
     private static List<ExplicitAnchorDetector.AcceptedManual> loadAcceptedManuals(

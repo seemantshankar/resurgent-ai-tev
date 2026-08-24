@@ -32,7 +32,8 @@ public final class WorkspaceDatabase implements AutoCloseable {
             "db/migration/V8__sprint2_schema.sql",
             "db/migration/V9__error_barriers.sql",
             "db/migration/V10__sprint3a_region_schema.sql",
-            "db/migration/V11__sprint3b_schema.sql"
+            "db/migration/V11__sprint3b_schema.sql",
+            "db/migration/V12__worksheet_role_reasons.sql"
     };
 
     private final Connection connection;
