@@ -1,9 +1,13 @@
 package com.resurgent.tev.parser.ingest;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /** Locked §11 cost-head aliases. Matching is normalized exact equality, never fuzzy or substring. */
 public final class CostHeadVocabulary {
@@ -12,10 +16,41 @@ public final class CostHeadVocabulary {
     private CostHeadVocabulary() {}
 
     public static Optional<String> exactMatch(String label) {
-        if (label == null) {
+        List<String> matches = exactMatches(label);
+        if (matches.size() != 1) {
             return Optional.empty();
         }
-        return Optional.ofNullable(CODE_BY_ALIAS.get(normalize(label)));
+        return Optional.of(matches.getFirst());
+    }
+
+    public static List<String> exactMatches(String label) {
+        if (label == null) {
+            return List.of();
+        }
+        String normalized = normalize(label);
+        if ("equipment".equals(normalized)) {
+            return List.of("KITCHEN_EQUIPMENT", "MISC_EQUIPMENT");
+        }
+        String code = CODE_BY_ALIAS.get(normalized);
+        return code == null ? List.of() : List.of(code);
+    }
+
+    public static Set<String> codes() {
+        return new LinkedHashSet<>(CODE_BY_ALIAS.values());
+    }
+
+    public static List<String> aliasesFor(String code) {
+        List<String> aliases = new ArrayList<>();
+        for (Map.Entry<String, String> entry : CODE_BY_ALIAS.entrySet()) {
+            if (entry.getValue().equals(code)) {
+                aliases.add(entry.getKey());
+            }
+        }
+        return aliases;
+    }
+
+    public static String normalizeLabel(String label) {
+        return label == null ? "" : normalize(label);
     }
 
     private static Map<String, String> aliases() {

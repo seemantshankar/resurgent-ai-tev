@@ -3,3 +3,7 @@ target/
 *.db
 fixtures/private/*
 !fixtures/private/README.md
+
+.vscode/
+Project Docs/*.xls
+Project Docs/*.xlsx

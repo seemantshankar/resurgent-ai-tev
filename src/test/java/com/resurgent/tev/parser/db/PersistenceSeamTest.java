@@ -103,10 +103,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(10);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(11);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(10);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(11);
         }
     }
 
@@ -322,7 +322,7 @@ class PersistenceSeamTest {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(10);
+            assertThat(count(c, "schema_migration")).isEqualTo(11);
             assertThat(tableNames(c)).contains("cell_reference", "cell_error_root");
 
             long sourceFileId = repo.insertSourceFile(1L, "v8.xlsx", "hash8", "fm_xlsx",
@@ -365,7 +365,7 @@ class PersistenceSeamTest {
         try (WorkspaceDatabase db = openDb("v10.db")) {
             java.sql.Connection c = db.connection();
             assertThat(tableNames(c)).contains("region");
-            assertThat(count(c, "schema_migration")).isEqualTo(10);
+            assertThat(count(c, "schema_migration")).isEqualTo(11);
 
             try (ResultSet rs = c.createStatement().executeQuery("PRAGMA table_info(cell)")) {
                 java.util.Set<String> columns = new java.util.HashSet<>();
@@ -396,14 +396,108 @@ class PersistenceSeamTest {
             statement.execute("INSERT INTO worksheet (parse_run_id, sheet_name, sheet_index) VALUES (1, 'Sheet1', 0)");
             statement.execute("INSERT INTO cell (worksheet_id, coord, row_num, col_num, raw_type, value_type, formula_skeleton, is_error_barrier) VALUES (1, 'A1', 1, 1, 'number', 'number', '=R', 1)");
         }
-        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath);
-                ResultSet rs = db.connection().createStatement().executeQuery(
+        assertThatThrownBy(() -> WorkspaceDatabase.open(dbPath))
+                .isInstanceOf(DestructiveResetRequiredException.class)
+                .hasMessageContaining(dbPath.toAbsolutePath().normalize().toString());
+
+        try (java.sql.Connection connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+                ResultSet rs = connection.createStatement().executeQuery(
                         "SELECT coord, formula_skeleton, is_error_barrier FROM cell")) {
             assertThat(rs.next()).isTrue();
             assertThat(rs.getString("coord")).isEqualTo("A1");
             assertThat(rs.getString("formula_skeleton")).isEqualTo("=R");
             assertThat(rs.getInt("is_error_barrier")).isEqualTo(1);
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(10);
+            assertThat(count(connection, "schema_migration")).isEqualTo(10);
+            assertThat(tableNames(connection)).doesNotContain("cost_head");
         }
+    }
+
+    @Test
+    void v11MigrationAppliesAutomaticallyOnEmptyWorkspace() throws Exception {
+        try (WorkspaceDatabase db = openDb("v11-empty.db")) {
+            java.sql.Connection c = db.connection();
+            assertThat(count(c, "schema_migration")).isEqualTo(11);
+            assertThat(tableNames(c)).contains(
+                    "cost_head",
+                    "cost_head_mapping",
+                    "cost_head_candidate",
+                    "cost_head_contribution",
+                    "cost_head_contribution_cell",
+                    "duplicate_proposal",
+                    "duplicate_decision",
+                    "manual_contribution",
+                    "cost_head_mapping_decision",
+                    "cost_head_total_decision");
+            assertThat(columnNames(c, "region")).contains(
+                    "inferred_currency_conf", "inferred_unit_conf", "semantic_region_type");
+            assertThat(columnNames(c, "cell")).contains("is_support", "support_reason");
+            assertThat(columnNames(c, "review_queue")).contains(
+                    "subject_kind", "subject_key", "confidence", "carried_from_decision_id");
+            try (ResultSet rs = c.createStatement().executeQuery("PRAGMA foreign_key_check")) {
+                assertThat(rs.next()).isFalse();
+            }
+        }
+    }
+
+    @Test
+    void v11MigrationRefusesPopulatedV10WorkspaceWithoutOptIn() throws Exception {
+        Path dbPath = tempDir.resolve("populated-v10.db");
+        LegacyWorkspaceFactory.writePopulatedV10(dbPath);
+
+        assertThatThrownBy(() -> WorkspaceDatabase.open(dbPath))
+                .isInstanceOf(DestructiveResetRequiredException.class)
+                .hasMessageContaining(dbPath.toAbsolutePath().normalize().toString())
+                .hasMessageContaining("parser-owned operational data");
+
+        try (java.sql.Connection connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
+            assertThat(count(connection, "cell")).isEqualTo(1);
+            assertThat(count(connection, "source_file")).isEqualTo(1);
+            assertThat(count(connection, "schema_migration")).isEqualTo(10);
+            assertThat(tableNames(connection)).doesNotContain("cost_head");
+        }
+    }
+
+    @Test
+    void v11MigrationResetsPopulatedWorkspaceWhenOptedIn() throws Exception {
+        Path dbPath = tempDir.resolve("reset-v10.db");
+        LegacyWorkspaceFactory.writePopulatedV10(dbPath);
+
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(
+                dbPath, WorkspaceDatabase.OpenOptions.allowDestructiveReset())) {
+            java.sql.Connection c = db.connection();
+            assertThat(count(c, "schema_migration")).isEqualTo(11);
+            assertThat(count(c, "cell")).isZero();
+            assertThat(count(c, "source_file")).isZero();
+            assertThat(tableNames(c)).contains("cost_head", "cost_head_candidate");
+            try (ResultSet rs = c.createStatement().executeQuery("PRAGMA foreign_key_check")) {
+                assertThat(rs.next()).isFalse();
+            }
+        }
+    }
+
+    @Test
+    void v11MigrationRollsBackWhenCommitIsInjectedToFail() throws Exception {
+        Path dbPath = tempDir.resolve("v11-fault.db");
+        LegacyWorkspaceFactory.writePopulatedV10(dbPath);
+        assertThatThrownBy(() -> WorkspaceDatabase.open(
+                dbPath, WorkspaceDatabase.OpenOptions.injectV11Failure()))
+                .isInstanceOf(java.sql.SQLException.class)
+                .hasMessageContaining("injected V11 failure");
+
+        try (java.sql.Connection connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
+            assertThat(count(connection, "cell")).isEqualTo(1);
+            assertThat(count(connection, "schema_migration")).isEqualTo(10);
+            assertThat(tableNames(connection)).doesNotContain("cost_head");
+        }
+    }
+
+    private static java.util.Set<String> columnNames(java.sql.Connection c, String table) throws Exception {
+        java.util.Set<String> columns = new java.util.HashSet<>();
+        try (ResultSet rs = c.createStatement().executeQuery("PRAGMA table_info(" + table + ")")) {
+            while (rs.next()) {
+                columns.add(rs.getString("name"));
+            }
+        }
+        return columns;
     }
 }

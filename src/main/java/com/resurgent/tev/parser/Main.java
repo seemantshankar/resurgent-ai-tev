@@ -1,11 +1,12 @@
 package com.resurgent.tev.parser;
 
 import com.resurgent.tev.parser.cli.IngestCommand;
+import com.resurgent.tev.parser.cli.ReviewCommand;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 
 /** tev-parse entry point. The CLI is only an adapter; logic lives in application services. */
-@Command(name = "tev-parse", subcommands = {IngestCommand.class})
+@Command(name = "tev-parse", subcommands = {IngestCommand.class, ReviewCommand.class})
 public final class Main {
 
     private Main() {}

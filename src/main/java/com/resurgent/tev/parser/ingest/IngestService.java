@@ -61,6 +61,11 @@ public final class IngestService {
 
     public IngestSummary ingest(Path input, long mandateId, Path dbPath, ParserConfig config)
             throws IOException, SQLException {
+        return ingest(input, mandateId, dbPath, config, WorkspaceDatabase.OpenOptions.defaults());
+    }
+
+    public IngestSummary ingest(Path input, long mandateId, Path dbPath, ParserConfig config,
+            WorkspaceDatabase.OpenOptions openOptions) throws IOException, SQLException {
         if (!Files.isRegularFile(input)) {
             throw new IOException("input file not found: " + input);
         }
@@ -68,9 +73,9 @@ public final class IngestService {
         String fileHash = sha256(input);
 
         FileType fileType = rejectIfPolicyViolation(input, mandateId, dbPath,
-                fileName, fileHash, config);
+                fileName, fileHash, config, openOptions);
 
-        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath, openOptions)) {
             safetyEnforcer.check(input, fileType, config);
 
             Connection connection = db.connection();
@@ -111,13 +116,14 @@ public final class IngestService {
                 throw e;
             }
         } catch (IngestRejectionException e) {
-            persistRejection(dbPath, mandateId, fileName, fileHash, e);
+            persistRejection(dbPath, mandateId, fileName, fileHash, e, openOptions);
             throw e;
         }
     }
 
     private FileType rejectIfPolicyViolation(Path input, long mandateId, Path dbPath,
-            String fileName, String fileHash, ParserConfig config) throws IOException, SQLException {
+            String fileName, String fileHash, ParserConfig config,
+            WorkspaceDatabase.OpenOptions openOptions) throws IOException, SQLException {
         long fileSize = Files.size(input);
         if (fileSize > config.maxFileSizeBytes()) {
             IngestRejectionException rejection = new IngestRejectionException(
@@ -125,7 +131,7 @@ public final class IngestService {
                     config.maxFileSizeBytes(), fileSize,
                     "file size " + fileSize + " bytes exceeds configured limit "
                             + config.maxFileSizeBytes() + " bytes");
-            persistRejection(dbPath, mandateId, fileName, fileHash, rejection);
+            persistRejection(dbPath, mandateId, fileName, fileHash, rejection, openOptions);
             throw rejection;
         }
 
@@ -135,15 +141,16 @@ public final class IngestService {
                     RejectionReason.XLS_DISABLED,
                     config.xlsEnabled(), fileType.value(),
                     ".xls intake is disabled by default; set xlsEnabled to true to enable");
-            persistRejection(dbPath, mandateId, fileName, fileHash, rejection);
+            persistRejection(dbPath, mandateId, fileName, fileHash, rejection, openOptions);
             throw rejection;
         }
         return fileType;
     }
 
     private void persistRejection(Path dbPath, long mandateId, String fileName,
-            String fileHash, IngestRejectionException rejection) throws SQLException {
-        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            String fileHash, IngestRejectionException rejection,
+            WorkspaceDatabase.OpenOptions openOptions) throws SQLException {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath, openOptions)) {
             Connection connection = db.connection();
             connection.setAutoCommit(false);
             try {
@@ -218,6 +225,8 @@ public final class IngestService {
             cellsWritten++;
         }
         persistRegions(repo, worksheetId, parseRunId, sheet.sheetName(), cellsById, config);
+        persistCellSemantics(repo, parseRunId);
+        persistCostHeadMappings(repo, parseRunId, sourceFileId, mandateId);
 
         // CSV has no formulas or structural references, so those reconciliation buckets
         // are trivially 0/0/0 and never force a partial/failed status on their own.
@@ -406,6 +415,8 @@ public final class IngestService {
         // Pass 4: Error cascade tracing — root error cells and their non-error descendants.
         ErrorCascadeEngine errorEngine = new ErrorCascadeEngine(repo);
         errorEngine.processErrorCascades(parseRunId, adjacency);
+        persistCellSemantics(repo, parseRunId);
+        persistCostHeadMappings(repo, parseRunId, sourceFileId, mandateId);
 
         // Calc metadata persistence (#19 / C5): cellsError is only known now that the
         // sheet loop above has finished, so this can't happen right after insertWorkbook.
@@ -556,6 +567,79 @@ public final class IngestService {
             Double score = average.isPresent() ? average.getAsDouble() : null;
             repo.updateCellCoherence(entry.getKey(), score, Jsonb.toJson(dirs));
         }
+    }
+
+    private void persistCellSemantics(WorkspaceRepository repo, long parseRunId)
+            throws SQLException, IOException {
+        List<WorkspaceRepository.CellSemanticRow> rows = repo.findSemanticCells(parseRunId);
+        List<CellSemanticClassifier.Snapshot> cells = new ArrayList<>(rows.size());
+        for (WorkspaceRepository.CellSemanticRow row : rows) {
+            cells.add(new CellSemanticClassifier.Snapshot(
+                    row.cellId(), row.regionId(), row.formula(), row.rowLabel(),
+                    row.colLabel(), row.text(), row.numeric()));
+        }
+        Map<Long, List<Long>> precedents = ReferenceGraphLoader.loadAdjacency(repo, parseRunId);
+        Map<Long, List<Long>> dependents = CellSemanticClassifier.reverse(precedents);
+        CellSemanticClassifier.Result result = new CellSemanticClassifier().classify(
+                cells, dependents, precedents);
+        for (Map.Entry<Long, CellSemanticClassifier.CellFlags> entry : result.cells().entrySet()) {
+            CellSemanticClassifier.CellFlags flags = entry.getValue();
+            repo.updateCellSemantics(entry.getKey(), new WorkspaceRepository.CellSemanticUpdate(
+                    flags.scratch(), flags.scratchReason(), flags.support(),
+                    flags.supportReason(), flags.orphan()));
+        }
+        for (long regionId : result.scratchRegions()) {
+            repo.updateSemanticRegionType(regionId, "scratch");
+        }
+        repo.insertReviewQueue(parseRunId, "semantic_accounting",
+                "Scratch/support/orphan accounting",
+                Jsonb.toJson(Map.of(
+                        "scratch", result.scratchCount(),
+                        "support", result.supportCount(),
+                        "orphan", result.orphanCount(),
+                        "promotions", result.promotions())),
+                "Pending", false, Timestamps.now(), null);
+    }
+
+    private void persistCostHeadMappings(WorkspaceRepository repo, long parseRunId,
+            long sourceFileId, long mandateId) throws SQLException, IOException {
+        CostHeadMapper mapper = new CostHeadMapper();
+        Set<String> observed = new HashSet<>();
+        for (WorkspaceRepository.RegionMappingInput region : repo.findRegionMappingInputs(parseRunId)) {
+            String carried = repo.findLatestAcceptedMappingCode(sourceFileId, region.regionKey());
+            for (CostHeadMapper.Proposal proposal : mapper.map(
+                    region.label(), region.regionId(), region.regionKey(), carried)) {
+                observed.add(proposal.code());
+                long costHeadId = repo.ensureCostHead(mandateId, proposal.code());
+                long mappingId = repo.insertCostHeadMapping(parseRunId, sourceFileId, costHeadId,
+                        region.regionId(), proposal.regionKey(), proposal.method(), proposal.score(),
+                        proposal.runnerUpMargin(), proposal.confidence(), proposal.reasonsJson(),
+                        proposal.sourceLabel());
+                if (proposal.pending()) {
+                    repo.insertReviewQueue(parseRunId, "cost_head_mapping",
+                            "Cost-head mapping requires review: " + proposal.regionKey(),
+                            Jsonb.toJson(Map.of(
+                                    "mappingId", mappingId,
+                                    "regionKey", proposal.regionKey(),
+                                    "code", proposal.code(),
+                                    "method", proposal.method(),
+                                    "sourceLabel", proposal.sourceLabel(),
+                                    "runnerUpMargin", proposal.runnerUpMargin())),
+                            "Pending", false, Timestamps.now(), null,
+                            "mapping", proposal.regionKey(), proposal.confidence());
+                }
+            }
+        }
+        List<String> unobserved = new ArrayList<>();
+        for (String code : CostHeadVocabulary.codes()) {
+            if (!observed.contains(code)) {
+                unobserved.add(code);
+            }
+        }
+        repo.insertReviewQueue(parseRunId, "unobserved_cost_heads",
+                "Locked vocabulary codes not observed in this parse",
+                Jsonb.toJson(Map.of("codes", unobserved)),
+                "Pending", false, Timestamps.now(), null);
     }
 
     private static void recordCellProvenance(WorkspaceRepository repo, long cellId,
