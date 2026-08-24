@@ -1258,7 +1258,7 @@ public final class WorkspaceRepository {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT total_decision_id FROM cost_head_total_decision"
                         + " WHERE source_file_id = ? AND cost_head_code = ? AND candidate_fingerprint = ?"
-                        + " ORDER BY decided_at DESC, total_decision_id DESC LIMIT 1")) {
+                        + " ORDER BY total_decision_id DESC LIMIT 1")) {
             ps.setLong(1, sourceFileId);
             ps.setString(2, costHeadCode);
             ps.setString(3, fingerprint);
@@ -1273,7 +1273,7 @@ public final class WorkspaceRepository {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT total_decision_id, decision FROM cost_head_total_decision"
                         + " WHERE source_file_id = ? AND cost_head_code = ? AND candidate_fingerprint = ?"
-                        + " ORDER BY decided_at DESC, total_decision_id DESC LIMIT 1")) {
+                        + " ORDER BY total_decision_id DESC LIMIT 1")) {
             ps.setLong(1, sourceFileId);
             ps.setString(2, costHeadCode);
             ps.setString(3, fingerprint);

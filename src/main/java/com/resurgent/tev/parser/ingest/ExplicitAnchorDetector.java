@@ -105,7 +105,11 @@ final class ExplicitAnchorDetector {
                 }
                 matched = true;
                 BigDecimal manualAmount = new BigDecimal(manual.amount());
-                total = total.add(manualAmount);
+                BigDecimal normalized = RegionSchemaInferencer.rupees(
+                        manualAmount, manual.unit(), manual.currency());
+                boolean converted = normalized != null && normalized.compareTo(manualAmount) != 0;
+                BigDecimal addend = normalized == null ? manualAmount : normalized;
+                total = total.add(addend);
                 combined.add(new Contribution(
                         0L,
                         "manual:" + manual.id(),
@@ -115,9 +119,9 @@ final class ExplicitAnchorDetector {
                         manualAmount,
                         manual.unit(),
                         manual.currency(),
-                        manualAmount,
-                        manual.unit(),
-                        manual.currency(),
+                        addend,
+                        converted ? RegionSchemaInferencer.UNIT_RS : manual.unit(),
+                        converted ? RegionSchemaInferencer.CURRENCY_INR : manual.currency(),
                         1.0,
                         List.of("MANUAL_CONTRIBUTION"),
                         List.of()));

@@ -369,6 +369,95 @@ class ReviewServiceTest {
     }
 
     @Test
+    void withdrawPendingManual_doesNotReopenAcceptedTotal() throws Exception {
+        Path db = ingestLiteralCivil("pending-withdraw.xlsx");
+        ReviewService review = new ReviewService();
+        ReviewService.TotalReviewItem pending = review.listPendingTotals(db).getFirst();
+        review.acceptTotal(db, pending.reviewQueueId(), "analyst", "ok");
+        long manualId = review.addManual(db, "CIVIL", new BigDecimal("25.00"), "rs", "INR",
+                "analyst", "maybe later", null);
+
+        review.withdrawManual(db, manualId, "analyst", "not needed");
+
+        assertThat(review.listPendingTotals(db)).isEmpty();
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT status FROM review_queue WHERE category = 'cost_head_candidate'"
+                                + " ORDER BY review_queue_id DESC LIMIT 1")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString(1)).isEqualTo("Accepted");
+        }
+    }
+
+    @Test
+    void acceptedLakhManual_isNormalizedIntoCandidateTotal() throws Exception {
+        Path db = tempDir.resolve("manual-lakh.db");
+        Path xlsx = writeLiteralCivil("manual-lakh.xlsx", "Civil works", 100.0, 50.0);
+        new IngestService().ingest(xlsx, 1L, db);
+        ReviewService review = new ReviewService();
+        long manualId = review.addManual(db, "CIVIL", BigDecimal.ONE, "lakh", "INR",
+                "analyst", "missing package", null);
+        review.acceptManual(db, manualId, "analyst", "include package");
+        new IngestService().ingest(xlsx, 1L, db, reparseConfig());
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT amount FROM cost_head_candidate ORDER BY cost_head_candidate_id DESC LIMIT 1")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getBigDecimal(1)).isEqualByComparingTo("100150");
+            }
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT source_amount, normalized_amount, normalized_unit FROM cost_head_contribution"
+                            + " WHERE basis = 'manual'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getBigDecimal("source_amount")).isEqualByComparingTo("1");
+                assertThat(rs.getBigDecimal("normalized_amount")).isEqualByComparingTo("100000");
+                assertThat(rs.getString("normalized_unit")).isEqualTo("rs");
+            }
+        }
+    }
+
+    @Test
+    void latestAcceptedTotalDecision_followsRowIdWhenTimestampsSortWrong() throws Exception {
+        Path db = ingestLiteralCivil("decision-order.xlsx");
+        Path xlsx = tempDir.resolve("decision-order.xlsx");
+        ReviewService.TotalReviewItem pending = new ReviewService().listPendingTotals(db).getFirst();
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                java.sql.PreparedStatement lookup = c.prepareStatement(
+                        "SELECT source_file_id, candidate_fingerprint FROM cost_head_candidate"
+                                + " WHERE cost_head_candidate_id = ?")) {
+            lookup.setLong(1, pending.candidateId());
+            try (ResultSet rs = lookup.executeQuery()) {
+                assertThat(rs.next()).isTrue();
+                long sourceFileId = rs.getLong(1);
+                String fingerprint = rs.getString(2);
+                try (java.sql.PreparedStatement insert = c.prepareStatement(
+                        "INSERT INTO cost_head_total_decision (source_file_id, cost_head_code,"
+                                + " candidate_fingerprint, decision, actor, reason, decided_at)"
+                                + " VALUES (?, 'CIVIL', ?, ?, 'analyst', 'order', ?)")) {
+                    insert.setLong(1, sourceFileId);
+                    insert.setString(2, fingerprint);
+                    insert.setString(3, "Rejected");
+                    insert.setString(4, "2026-01-01T10:00:00Z");
+                    insert.executeUpdate();
+                    insert.setString(3, "Accepted");
+                    insert.setString(4, "2026-01-01T10:00:00.500Z");
+                    insert.executeUpdate();
+                }
+            }
+        }
+        new IngestService().ingest(xlsx, 1L, db, reparseConfig());
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT status, carried_from_decision_id FROM review_queue"
+                                + " WHERE category = 'cost_head_candidate'"
+                                + " ORDER BY review_queue_id DESC LIMIT 1")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("status")).isEqualTo("Accepted");
+            assertThat(rs.getLong("carried_from_decision_id")).isPositive();
+        }
+    }
+
+    @Test
     void rejectThenAccept_preservesImmutableDecisionHistory() throws Exception {
         Path db = ingestLiteralCivil("history.xlsx");
         ReviewService review = new ReviewService();

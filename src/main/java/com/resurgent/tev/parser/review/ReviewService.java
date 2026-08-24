@@ -8,6 +8,7 @@ import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import java.math.BigDecimal;
 import java.nio.file.Path;
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
@@ -82,8 +83,7 @@ public final class ReviewService {
     public long addManual(Path db, String costHeadCode, BigDecimal amount, String unit, String currency,
             String actor, String reason, Long adjustsContributionId)
             throws SQLException, JsonProcessingException {
-        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
-            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+        return transact(db, repo -> {
             WorkspaceRepository.ParseContext parse = repo.findLatestParseContext();
             long costHeadId = repo.findCostHeadId(parse.mandateId(), costHeadCode);
             String regionKey = "";
@@ -107,18 +107,17 @@ public final class ReviewService {
                     "actor", actor,
                     "reason", reason)), "info");
             return manualId;
-        }
+        });
     }
 
     public void acceptManual(Path db, long manualId, String actor, String reason)
             throws SQLException, JsonProcessingException {
-        updateManual(db, manualId, actor, requiredReason(reason), "Accepted", true, "Pending");
+        updateManual(db, manualId, actor, requiredReason(reason), "Accepted", "Pending");
     }
 
     public void changeManual(Path db, long manualId, BigDecimal amount, String unit, String currency,
             String actor, String reason) throws SQLException, JsonProcessingException {
-        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
-            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+        transact(db, repo -> {
             WorkspaceRepository.ManualContributionRow manual = repo.findManualContribution(manualId);
             if (!"Pending".equals(manual.status()) && !"Accepted".equals(manual.status())) {
                 throw new SQLException("manual contribution " + manualId + " is " + manual.status());
@@ -138,12 +137,13 @@ public final class ReviewService {
             if ("Accepted".equals(manual.status())) {
                 reopenCostHeadReviews(repo, manual.costHeadId());
             }
-        }
+            return null;
+        });
     }
 
     public void withdrawManual(Path db, long manualId, String actor, String reason)
             throws SQLException, JsonProcessingException {
-        updateManual(db, manualId, actor, requiredReason(reason), "Withdrawn", true,
+        updateManual(db, manualId, actor, requiredReason(reason), "Withdrawn",
                 "Accepted", "Pending");
     }
 
@@ -155,8 +155,7 @@ public final class ReviewService {
 
     private void decide(Path db, long reviewId, String actor, String reason, String decision)
             throws SQLException, JsonProcessingException {
-        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
-            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+        transact(db, repo -> {
             MappingReviewItem item = listPending(repo).stream()
                     .filter(candidate -> candidate.reviewQueueId() == reviewId)
                     .findFirst()
@@ -172,13 +171,13 @@ public final class ReviewService {
                             "actor", actor,
                             "sourceLabel", identity.sourceLabel() == null ? "" : identity.sourceLabel())),
                     "info");
-        }
+            return null;
+        });
     }
 
     private void updateManual(Path db, long manualId, String actor, String reason, String status,
-            boolean reopen, String... allowedCurrent) throws SQLException, JsonProcessingException {
-        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
-            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            String... allowedCurrent) throws SQLException, JsonProcessingException {
+        transact(db, repo -> {
             WorkspaceRepository.ManualContributionRow manual = repo.findManualContribution(manualId);
             boolean allowed = false;
             for (String current : allowedCurrent) {
@@ -199,10 +198,13 @@ public final class ReviewService {
                             "reason", reason,
                             "status", status)),
                     "info");
+            boolean reopen = "Accepted".equals(status)
+                    || ("Withdrawn".equals(status) && "Accepted".equals(manual.status()));
             if (reopen) {
                 reopenCostHeadReviews(repo, manual.costHeadId());
             }
-        }
+            return null;
+        });
     }
 
     private static void reopenCostHeadReviews(WorkspaceRepository repo, long costHeadId)
@@ -220,8 +222,7 @@ public final class ReviewService {
 
     private void decideTotal(Path db, long reviewId, String actor, String reason, String decision)
             throws SQLException, JsonProcessingException {
-        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
-            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+        transact(db, repo -> {
             TotalReviewItem item = listPendingTotals(repo).stream()
                     .filter(candidate -> candidate.reviewQueueId() == reviewId)
                     .findFirst()
@@ -239,6 +240,27 @@ public final class ReviewService {
                             "fingerprint", identity.fingerprint(),
                             "actor", actor)),
                     "info");
+            return null;
+        });
+    }
+
+    @FunctionalInterface
+    private interface Write<T> {
+        T run(WorkspaceRepository repo) throws SQLException, JsonProcessingException;
+    }
+
+    private static <T> T transact(Path db, Write<T> write) throws SQLException, JsonProcessingException {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            Connection connection = workspace.connection();
+            connection.setAutoCommit(false);
+            try {
+                T result = write.run(new WorkspaceRepository(connection));
+                connection.commit();
+                return result;
+            } catch (SQLException | JsonProcessingException | RuntimeException e) {
+                connection.rollback();
+                throw e;
+            }
         }
     }
 
