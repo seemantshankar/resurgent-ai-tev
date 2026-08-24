@@ -3,6 +3,7 @@ package com.resurgent.tev.parser.db;
 import com.resurgent.tev.parser.ingest.NormalizedCell;
 import com.resurgent.tev.parser.ingest.ParsedQuantity;
 import com.resurgent.tev.parser.ingest.RegionQaStats;
+import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -980,6 +981,141 @@ public final class WorkspaceRepository {
         }
     }
 
+    public List<RegionAnchorRow> findRegionAnchorRows(long parseRunId) throws SQLException {
+        List<RegionAnchorRow> rows = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT r.region_id, r.region_key, r.schema_json, r.header_rows, r.inferred_unit,"
+                        + " r.inferred_currency, m.cost_head_mapping_id, m.cost_head_id, h.code"
+                        + " FROM region r"
+                        + " JOIN cost_head_mapping m ON m.region_id = r.region_id"
+                        + " JOIN cost_head h ON h.cost_head_id = m.cost_head_id"
+                        + " WHERE r.parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(new RegionAnchorRow(
+                            rs.getLong("region_id"),
+                            rs.getString("region_key"),
+                            rs.getString("schema_json"),
+                            rs.getString("header_rows"),
+                            rs.getString("inferred_unit"),
+                            rs.getString("inferred_currency"),
+                            rs.getLong("cost_head_mapping_id"),
+                            rs.getLong("cost_head_id"),
+                            rs.getString("code")));
+                }
+            }
+        }
+        return rows;
+    }
+
+    public List<CellAnchorRow> findRegionAnchorCells(long parseRunId) throws SQLException {
+        List<CellAnchorRow> rows = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT c.cell_id, c.region_id, c.coord, c.row_num, c.col_num, c.text_value,"
+                        + " c.numeric_value, c.formula_text, c.is_error, c.error_descendant,"
+                        + " c.is_scratch, c.is_merged_participant"
+                        + " FROM cell c JOIN worksheet w ON c.worksheet_id = w.worksheet_id"
+                        + " WHERE w.parse_run_id = ? AND c.region_id IS NOT NULL")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String numeric = rs.getString("numeric_value");
+                    rows.add(new CellAnchorRow(
+                            rs.getLong("cell_id"),
+                            rs.getLong("region_id"),
+                            rs.getString("coord"),
+                            rs.getInt("row_num"),
+                            rs.getInt("col_num"),
+                            rs.getString("text_value"),
+                            numeric == null ? null : new BigDecimal(numeric),
+                            rs.getString("formula_text"),
+                            rs.getInt("is_error") == 1,
+                            rs.getInt("error_descendant") == 1,
+                            rs.getInt("is_scratch") == 1,
+                            rs.getInt("is_merged_participant") == 1));
+                }
+            }
+        }
+        return rows;
+    }
+
+    public long insertCostHeadCandidate(long parseRunId, long sourceFileId, long costHeadId,
+            String fingerprint, BigDecimal amount, String currency, String unit, int automaticTrust,
+            double confidence, String reasonsJson) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cost_head_candidate (parse_run_id, source_file_id, cost_head_id,"
+                        + " candidate_fingerprint, amount, currency, unit, automatic_trust_eligible,"
+                        + " confidence, reasons) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, sourceFileId);
+            ps.setLong(3, costHeadId);
+            ps.setString(4, fingerprint);
+            if (amount == null) {
+                ps.setNull(5, java.sql.Types.NUMERIC);
+            } else {
+                ps.setBigDecimal(5, amount);
+            }
+            ps.setString(6, currency);
+            ps.setString(7, unit);
+            ps.setInt(8, automaticTrust);
+            ps.setDouble(9, confidence);
+            ps.setString(10, reasonsJson);
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    public long insertCostHeadContribution(long candidateId, Long mappingId, long regionId,
+            long anchorCellId, String basis, BigDecimal sourceAmount, String sourceCurrency,
+            String sourceUnit, BigDecimal normalizedAmount, String normalizedCurrency,
+            String normalizedUnit, double confidence, String reasonsJson) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cost_head_contribution (cost_head_candidate_id, cost_head_mapping_id, region_id,"
+                        + " anchor_cell_id, basis, source_amount, source_currency, source_unit,"
+                        + " normalized_amount, normalized_currency, normalized_unit, confidence, reasons)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, candidateId);
+            if (mappingId == null) {
+                ps.setNull(2, java.sql.Types.INTEGER);
+            } else {
+                ps.setLong(2, mappingId);
+            }
+            ps.setLong(3, regionId);
+            ps.setLong(4, anchorCellId);
+            ps.setString(5, basis);
+            ps.setBigDecimal(6, sourceAmount);
+            ps.setString(7, sourceCurrency);
+            ps.setString(8, sourceUnit);
+            if (normalizedAmount == null) {
+                ps.setNull(9, java.sql.Types.NUMERIC);
+            } else {
+                ps.setBigDecimal(9, normalizedAmount);
+            }
+            ps.setString(10, normalizedCurrency);
+            ps.setString(11, normalizedUnit);
+            ps.setDouble(12, confidence);
+            ps.setString(13, reasonsJson);
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    public void insertCostHeadContributionCell(long contributionId, long cellId, String participation,
+            String reason) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cost_head_contribution_cell (cost_head_contribution_id, cell_id,"
+                        + " participation, reason) VALUES (?, ?, ?, ?)")) {
+            ps.setLong(1, contributionId);
+            ps.setLong(2, cellId);
+            ps.setString(3, participation);
+            ps.setString(4, reason);
+            ps.executeUpdate();
+        }
+    }
+
     public String findLatestAcceptedMappingCode(long sourceFileId, String regionKey)
             throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
@@ -1066,6 +1202,31 @@ public final class WorkspaceRepository {
     }
 
     public record MappingIdentity(long sourceFileId, String regionKey, String sourceLabel) {}
+
+    public record RegionAnchorRow(
+            long regionId,
+            String regionKey,
+            String schemaJson,
+            String headerRowsJson,
+            String unit,
+            String currency,
+            long mappingId,
+            long costHeadId,
+            String costHeadCode) {}
+
+    public record CellAnchorRow(
+            long cellId,
+            long regionId,
+            String coord,
+            int row,
+            int col,
+            String text,
+            BigDecimal numeric,
+            String formula,
+            boolean error,
+            boolean errorDescendant,
+            boolean scratch,
+            boolean mergedParticipant) {}
 
     public record RegionMappingInput(long regionId, String regionKey, String label, String existingCode) {}
 
