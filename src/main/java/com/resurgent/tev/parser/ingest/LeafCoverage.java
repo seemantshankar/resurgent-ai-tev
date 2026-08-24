@@ -1,6 +1,5 @@
 package com.resurgent.tev.parser.ingest;
 
-import java.math.BigDecimal;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -22,15 +21,13 @@ final class LeafCoverage {
         PARTIAL
     }
 
-    record Member(long regionId, Set<Long> coverage, BigDecimal amount) {}
+    record Member(long regionId, Set<Long> coverage) {}
 
     record Result(
             Relation relation,
             List<Long> amountRegionIds,
             List<Long> supersededRegionIds,
-            List<Long> duplicateRegionIds,
-            boolean blocksTrust,
-            BigDecimal amount) {}
+            boolean blocksTrust) {}
 
     private LeafCoverage() {}
 
@@ -61,13 +58,12 @@ final class LeafCoverage {
 
     static Result compose(List<Member> members) {
         if (members.isEmpty()) {
-            return new Result(Relation.DISJOINT, List.of(), List.of(), List.of(), false, BigDecimal.ZERO);
+            return new Result(Relation.DISJOINT, List.of(), List.of(), false);
         }
         List<Member> ordered = new ArrayList<>(members);
         ordered.sort(Comparator.comparingLong(Member::regionId));
         Set<Long> amountIds = new LinkedHashSet<>();
         Set<Long> superseded = new LinkedHashSet<>();
-        Set<Long> duplicates = new LinkedHashSet<>();
         Relation relation = Relation.DISJOINT;
         boolean blocksTrust = false;
         for (Member member : ordered) {
@@ -87,7 +83,6 @@ final class LeafCoverage {
                         relation = Relation.IDENTICAL;
                     }
                     amountIds.remove(right.regionId());
-                    duplicates.add(right.regionId());
                 } else if (pair == Relation.SUPERSET) {
                     if (left.coverage().containsAll(right.coverage())
                             && left.coverage().size() > right.coverage().size()) {
@@ -103,19 +98,11 @@ final class LeafCoverage {
                 }
             }
         }
-        BigDecimal amount = BigDecimal.ZERO;
-        for (Member member : ordered) {
-            if (amountIds.contains(member.regionId()) && member.amount() != null) {
-                amount = amount.add(member.amount());
-            }
-        }
         return new Result(
                 relation,
                 List.copyOf(amountIds),
                 List.copyOf(superseded),
-                List.copyOf(duplicates),
-                blocksTrust,
-                amount);
+                blocksTrust);
     }
 
     static Relation relate(Set<Long> left, Set<Long> right) {

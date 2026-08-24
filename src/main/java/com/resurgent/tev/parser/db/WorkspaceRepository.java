@@ -11,7 +11,9 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -1563,7 +1565,7 @@ public final class WorkspaceRepository {
     }
 
     public List<DuplicateDecisionRow> findLatestDuplicateDecisions(long sourceFileId) throws SQLException {
-        List<DuplicateDecisionRow> rows = new ArrayList<>();
+        Map<String, DuplicateDecisionRow> latest = new LinkedHashMap<>();
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT left_region_key, right_region_key, decision, superseded_region_key"
                         + " FROM duplicate_decision WHERE source_file_id = ?"
@@ -1571,15 +1573,20 @@ public final class WorkspaceRepository {
             ps.setLong(1, sourceFileId);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    rows.add(new DuplicateDecisionRow(
+                    DuplicateDecisionRow row = new DuplicateDecisionRow(
                             rs.getString("left_region_key"),
                             rs.getString("right_region_key"),
                             rs.getString("decision"),
-                            rs.getString("superseded_region_key")));
+                            rs.getString("superseded_region_key"));
+                    latest.put(canonicalPairKey(row.leftRegionKey(), row.rightRegionKey()), row);
                 }
             }
         }
-        return rows;
+        return List.copyOf(latest.values());
+    }
+
+    private static String canonicalPairKey(String left, String right) {
+        return left.compareTo(right) <= 0 ? left + '\0' + right : right + '\0' + left;
     }
 
     public Long findLatestDuplicateDecisionId(long sourceFileId, String leftRegionKey, String rightRegionKey)

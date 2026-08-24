@@ -44,6 +44,16 @@ final class DuplicateDetector {
             return (leftRegionKey.equals(left) && rightRegionKey.equals(right))
                     || (leftRegionKey.equals(right) && rightRegionKey.equals(left));
         }
+
+        static Decision latest(List<Decision> decisions, String left, String right) {
+            Decision found = null;
+            for (Decision decision : decisions) {
+                if (decision.matches(left, right)) {
+                    found = decision;
+                }
+            }
+            return found;
+        }
     }
 
     private DuplicateDetector() {}

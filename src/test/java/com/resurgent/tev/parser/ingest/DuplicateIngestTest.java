@@ -141,6 +141,33 @@ class DuplicateIngestTest {
     }
 
     @Test
+    void formulaTotalOnAnotherSheet_composesByReachableLeavesNotBoundingBoxes() throws Exception {
+        Path db;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            writeCivilBlock(workbook.createSheet("Assets"), 0, "Civil works", "Foundation", "Finishes",
+                    100.0, 50.0, true);
+            Sheet summary = workbook.createSheet("Summary");
+            Row header = summary.createRow(0);
+            header.createCell(0).setCellValue("Civil works");
+            header.createCell(1).setCellValue("Amount");
+            summary.createRow(1).createCell(0).setCellValue("Total");
+            summary.getRow(1).createCell(1).setCellFormula("SUM(Assets!B2:B3)");
+            db = ingest(workbook, "formula-containment.xlsx");
+        }
+
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            assertThat(scalar(c, "SELECT COUNT(*) FROM region")).isEqualTo(2);
+            assertThat(scalar(c, "SELECT COUNT(*) FROM duplicate_proposal")).isZero();
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT amount, reasons FROM cost_head_candidate")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getDouble("amount")).isEqualTo(150.0);
+                assertThat(rs.getString("reasons")).doesNotContain("UNRESOLVED_DUPLICATE");
+            }
+        }
+    }
+
+    @Test
     void unresolvedDuplicate_blocksOnlyTheIntersectingCandidate() throws Exception {
         Path db;
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {

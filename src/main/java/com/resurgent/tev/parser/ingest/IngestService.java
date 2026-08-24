@@ -774,7 +774,7 @@ public final class IngestService {
             long proposalId = repo.insertDuplicateProposal(
                     parseRunId, proposal.leftRegionId(), proposal.rightRegionId(),
                     proposal.method(), proposal.score(), Jsonb.toJson(proposal.reasons()));
-            DuplicateDetector.Decision decision = latestDuplicateDecision(
+            DuplicateDetector.Decision decision = DuplicateDetector.Decision.latest(
                     decisions, proposal.leftRegionKey(), proposal.rightRegionKey());
             if (decision != null && ("Distinct".equals(decision.decision())
                     || "Duplicate".equals(decision.decision()))) {
@@ -796,17 +796,6 @@ public final class IngestService {
                     "duplicate", proposal.leftRegionKey() + "|" + proposal.rightRegionKey(),
                     proposal.score());
         }
-    }
-
-    private static DuplicateDetector.Decision latestDuplicateDecision(
-            List<DuplicateDetector.Decision> decisions, String left, String right) {
-        DuplicateDetector.Decision found = null;
-        for (DuplicateDetector.Decision decision : decisions) {
-            if (decision.matches(left, right)) {
-                found = decision;
-            }
-        }
-        return found;
     }
 
     private List<WorksheetRoleScorer.Score> persistWorksheetRoles(WorkspaceRepository repo, long parseRunId)

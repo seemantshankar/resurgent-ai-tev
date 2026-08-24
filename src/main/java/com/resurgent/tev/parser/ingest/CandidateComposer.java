@@ -1,6 +1,5 @@
 package com.resurgent.tev.parser.ingest;
 
-import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -57,19 +56,13 @@ final class CandidateComposer {
                     contribution.anchorCellId(),
                     precedents,
                     universe);
-            BigDecimal amount = contribution.normalizedAmount() != null
-                    ? contribution.normalizedAmount() : contribution.sourceAmount();
-            members.add(new LeafCoverage.Member(contribution.regionId(), coverage, amount));
+            members.add(new LeafCoverage.Member(contribution.regionId(), coverage));
         }
         LeafCoverage.Result coverage = calculated.size() < 2
                 ? new LeafCoverage.Result(
                         LeafCoverage.Relation.DISJOINT,
                         calculated.stream().map(ExplicitAnchorDetector.Contribution::regionId).toList(),
-                        List.of(), List.of(), false,
-                        calculated.isEmpty() ? BigDecimal.ZERO
-                                : (calculated.getFirst().normalizedAmount() != null
-                                        ? calculated.getFirst().normalizedAmount()
-                                        : calculated.getFirst().sourceAmount()))
+                        List.of(), false)
                 : LeafCoverage.compose(members);
         Set<Long> amountIds = new LinkedHashSet<>(coverage.amountRegionIds());
         Set<Long> persistIds = new LinkedHashSet<>();
@@ -128,7 +121,7 @@ final class CandidateComposer {
             if (!keys.containsKey(proposal.leftRegionId()) || !keys.containsKey(proposal.rightRegionId())) {
                 continue;
             }
-            DuplicateDetector.Decision decision = decisionFor(
+            DuplicateDetector.Decision decision = DuplicateDetector.Decision.latest(
                     decisions, proposal.leftRegionKey(), proposal.rightRegionKey());
             if (decision != null && "Distinct".equals(decision.decision())) {
                 continue;
@@ -172,17 +165,6 @@ final class CandidateComposer {
         ExplicitAnchorDetector.Contribution drop =
                 left.regionKey().compareTo(right.regionKey()) <= 0 ? right : left;
         amountIds.remove(drop.regionId());
-    }
-
-    private static DuplicateDetector.Decision decisionFor(
-            List<DuplicateDetector.Decision> decisions, String left, String right) {
-        DuplicateDetector.Decision found = null;
-        for (DuplicateDetector.Decision decision : decisions) {
-            if (decision.matches(left, right)) {
-                found = decision;
-            }
-        }
-        return found;
     }
 
     private static Set<Long> includedIds(ExplicitAnchorDetector.Contribution contribution) {
