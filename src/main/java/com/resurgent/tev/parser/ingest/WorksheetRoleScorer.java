@@ -1,8 +1,6 @@
 package com.resurgent.tev.parser.ingest;
 
 import com.resurgent.tev.parser.db.WorkspaceRepository;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -48,7 +46,7 @@ final class WorksheetRoleScorer {
     }
 
     List<Score> score(WorkspaceRepository repo, long parseRunId) throws SQLException {
-        List<SheetSnapshot> sheets = loadSheets(repo, parseRunId);
+        List<SheetSnapshot> sheets = loadSheets(repo.findWorksheetRoleSheets(parseRunId));
         if (sheets.isEmpty()) {
             return List.of();
         }
@@ -56,25 +54,25 @@ final class WorksheetRoleScorer {
         for (SheetSnapshot sheet : sheets) {
             byId.put(sheet.worksheetId, sheet);
         }
-        loadCells(repo, parseRunId, byId);
-        loadRegions(repo, parseRunId, byId);
-        loadContributions(repo, parseRunId, byId);
-        Map<Long, Long> cellSheet = cellSheetIndex(sheets);
+        loadCells(repo.findWorksheetRoleCells(parseRunId), byId);
+        loadRegions(repo.findWorksheetRoleRegions(parseRunId), byId);
+        loadContributions(repo.findWorksheetRoleContributions(parseRunId), byId);
+        Map<Long, Long> worksheetIdByCellId = worksheetIdByCellId(sheets);
         Set<Long> primaryIds = new HashSet<>();
         for (SheetSnapshot sheet : sheets) {
             if (sheet.primaryMass() > 0 && !sheet.conflictingIdentity()) {
                 primaryIds.add(sheet.worksheetId);
             }
         }
-        Map<Long, Integer> feederMass = feederMassBySheet(repo, parseRunId, cellSheet, primaryIds);
+        Map<Long, Integer> feederMass = feederMassBySheet(repo, parseRunId, worksheetIdByCellId, primaryIds);
         boolean grew = true;
-        Set<Long> live = new HashSet<>(primaryIds);
+        Set<Long> primaryAndSupportIds = new HashSet<>(primaryIds);
         while (grew) {
             grew = false;
-            Map<Long, Integer> next = feederMassBySheet(repo, parseRunId, cellSheet, live);
+            Map<Long, Integer> next = feederMassBySheet(repo, parseRunId, worksheetIdByCellId, primaryAndSupportIds);
             for (Map.Entry<Long, Integer> entry : next.entrySet()) {
                 feederMass.merge(entry.getKey(), entry.getValue(), Math::max);
-                if (entry.getValue() > 0 && live.add(entry.getKey())) {
+                if (entry.getValue() > 0 && primaryAndSupportIds.add(entry.getKey())) {
                     grew = true;
                 }
             }
@@ -142,17 +140,17 @@ final class WorksheetRoleScorer {
     }
 
     private static Map<Long, Integer> feederMassBySheet(
-            WorkspaceRepository repo, long parseRunId, Map<Long, Long> cellSheet, Set<Long> live)
+            WorkspaceRepository repo, long parseRunId, Map<Long, Long> worksheetIdByCellId, Set<Long> sinks)
             throws SQLException {
         Map<Long, Integer> mass = new HashMap<>();
         Map<Long, List<Long>> adjacency = ReferenceGraphLoader.loadAdjacency(repo, parseRunId);
         for (Map.Entry<Long, List<Long>> entry : adjacency.entrySet()) {
-            Long fromSheet = cellSheet.get(entry.getKey());
-            if (fromSheet == null || !live.contains(fromSheet)) {
+            Long fromSheet = worksheetIdByCellId.get(entry.getKey());
+            if (fromSheet == null || !sinks.contains(fromSheet)) {
                 continue;
             }
             for (Long precedent : entry.getValue()) {
-                Long toSheet = cellSheet.get(precedent);
+                Long toSheet = worksheetIdByCellId.get(precedent);
                 if (toSheet != null && !toSheet.equals(fromSheet)) {
                     mass.merge(toSheet, 1, Integer::sum);
                 }
@@ -161,7 +159,7 @@ final class WorksheetRoleScorer {
         return mass;
     }
 
-    private static Map<Long, Long> cellSheetIndex(List<SheetSnapshot> sheets) {
+    private static Map<Long, Long> worksheetIdByCellId(List<SheetSnapshot> sheets) {
         Map<Long, Long> index = new HashMap<>();
         for (SheetSnapshot sheet : sheets) {
             for (long cellId : sheet.cells) {
@@ -171,60 +169,36 @@ final class WorksheetRoleScorer {
         return index;
     }
 
-    private static List<SheetSnapshot> loadSheets(WorkspaceRepository repo, long parseRunId)
-            throws SQLException {
+    private static List<SheetSnapshot> loadSheets(List<WorkspaceRepository.WorksheetRoleSheetRow> rows) {
         List<SheetSnapshot> sheets = new ArrayList<>();
-        try (PreparedStatement ps = repo.connection().prepareStatement(
-                "SELECT worksheet_id, sheet_name FROM worksheet WHERE parse_run_id = ?"
-                        + " ORDER BY sheet_index")) {
-            ps.setLong(1, parseRunId);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    sheets.add(new SheetSnapshot(rs.getLong(1), rs.getString(2)));
-                }
-            }
+        for (WorkspaceRepository.WorksheetRoleSheetRow row : rows) {
+            sheets.add(new SheetSnapshot(row.worksheetId(), row.sheetName()));
         }
         return sheets;
     }
 
-    private static void loadCells(WorkspaceRepository repo, long parseRunId, Map<Long, SheetSnapshot> byId)
-            throws SQLException {
-        try (PreparedStatement ps = repo.connection().prepareStatement(
-                "SELECT c.cell_id, c.worksheet_id, c.region_id, c.is_scratch, c.is_orphan"
-                        + " FROM cell c JOIN worksheet w ON w.worksheet_id = c.worksheet_id"
-                        + " WHERE w.parse_run_id = ?")) {
-            ps.setLong(1, parseRunId);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    SheetSnapshot sheet = byId.get(rs.getLong("worksheet_id"));
-                    if (sheet == null) {
-                        continue;
-                    }
-                    long cellId = rs.getLong("cell_id");
-                    sheet.cells.add(cellId);
-                    long regionId = rs.getLong("region_id");
-                    if (!rs.wasNull()) {
-                        sheet.cellRegion.put(cellId, regionId);
-                    }
-                    if (rs.getInt("is_scratch") == 1 || rs.getInt("is_orphan") == 1) {
-                        sheet.scratchCells.add(cellId);
-                    }
-                }
+    private static void loadCells(
+            List<WorkspaceRepository.WorksheetRoleCellRow> rows, Map<Long, SheetSnapshot> byId) {
+        for (WorkspaceRepository.WorksheetRoleCellRow row : rows) {
+            SheetSnapshot sheet = byId.get(row.worksheetId());
+            if (sheet == null) {
+                continue;
+            }
+            sheet.cells.add(row.cellId());
+            if (row.regionId() != null) {
+                sheet.cellRegion.put(row.cellId(), row.regionId());
+            }
+            if (row.scratchOrOrphan()) {
+                sheet.scratchCells.add(row.cellId());
             }
         }
     }
 
-    private static void loadRegions(WorkspaceRepository repo, long parseRunId, Map<Long, SheetSnapshot> byId)
-            throws SQLException {
+    private static void loadRegions(
+            List<WorkspaceRepository.WorksheetRoleRegionRow> rows, Map<Long, SheetSnapshot> byId) {
         Map<Long, String> types = new HashMap<>();
-        try (PreparedStatement ps = repo.connection().prepareStatement(
-                "SELECT region_id, worksheet_id, region_type FROM region WHERE parse_run_id = ?")) {
-            ps.setLong(1, parseRunId);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    types.put(rs.getLong("region_id"), rs.getString("region_type"));
-                }
-            }
+        for (WorkspaceRepository.WorksheetRoleRegionRow row : rows) {
+            types.put(row.regionId(), row.regionType());
         }
         for (SheetSnapshot sheet : byId.values()) {
             for (Map.Entry<Long, Long> entry : sheet.cellRegion.entrySet()) {
@@ -242,32 +216,19 @@ final class WorksheetRoleScorer {
         }
     }
 
-    private static void loadContributions(WorkspaceRepository repo, long parseRunId,
-            Map<Long, SheetSnapshot> byId) throws SQLException {
-        try (PreparedStatement ps = repo.connection().prepareStatement(
-                "SELECT contrib.cost_head_contribution_id, r.worksheet_id, cc.cell_id"
-                        + " FROM cost_head_contribution contrib"
-                        + " JOIN region r ON r.region_id = contrib.region_id"
-                        + " LEFT JOIN cost_head_contribution_cell cc"
-                        + " ON cc.cost_head_contribution_id = contrib.cost_head_contribution_id"
-                        + " WHERE r.parse_run_id = ?")) {
-            ps.setLong(1, parseRunId);
-            try (ResultSet rs = ps.executeQuery()) {
-                Set<Long> seenContrib = new HashSet<>();
-                while (rs.next()) {
-                    SheetSnapshot sheet = byId.get(rs.getLong("worksheet_id"));
-                    if (sheet == null) {
-                        continue;
-                    }
-                    long contribId = rs.getLong("cost_head_contribution_id");
-                    if (seenContrib.add(contribId)) {
-                        sheet.contributionCount++;
-                    }
-                    long cellId = rs.getLong("cell_id");
-                    if (!rs.wasNull()) {
-                        sheet.contribCells.add(cellId);
-                    }
-                }
+    private static void loadContributions(
+            List<WorkspaceRepository.WorksheetRoleContributionRow> rows, Map<Long, SheetSnapshot> byId) {
+        Set<Long> seenContrib = new HashSet<>();
+        for (WorkspaceRepository.WorksheetRoleContributionRow row : rows) {
+            SheetSnapshot sheet = byId.get(row.worksheetId());
+            if (sheet == null) {
+                continue;
+            }
+            if (seenContrib.add(row.contributionId())) {
+                sheet.contributionCount++;
+            }
+            if (row.cellId() != null) {
+                sheet.contribCells.add(row.cellId());
             }
         }
     }
@@ -300,7 +261,9 @@ final class WorksheetRoleScorer {
         }
 
         boolean conflictingIdentity() {
-            return !statementCells.isEmpty() && scratchMass() >= 2;
+            int primary = primaryMass();
+            int scratch = scratchMass();
+            return primary > 0 && scratch > 0 && primary <= scratch;
         }
     }
 }

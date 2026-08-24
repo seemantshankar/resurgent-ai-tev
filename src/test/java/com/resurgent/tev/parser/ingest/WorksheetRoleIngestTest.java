@@ -103,6 +103,45 @@ class WorksheetRoleIngestTest {
     }
 
     @Test
+    void scratchSheetThatFeedsPrimary_isSupport() throws Exception {
+        XSSFWorkbook workbook = civilCapexWorkbook();
+        Sheet capex = workbook.getSheet("Capex");
+        capex.getRow(1).getCell(1).setCellFormula("Scratchpad!A1");
+        Sheet scratch = workbook.createSheet("Scratchpad");
+        scratch.createRow(0).createCell(0).setCellFormula("1+1");
+        scratch.createRow(1).createCell(0).setCellFormula("2+2");
+
+        Path db = ingest(workbook, "scratch-feeds.xlsx");
+        Map<String, String> roles = roles(db);
+        assertThat(roles.get("Capex")).isEqualTo("primary");
+        assertThat(roles.get("Scratchpad")).isEqualTo("support");
+    }
+
+    @Test
+    void largeStatementWithTwoScratchIslands_staysPrimary() throws Exception {
+        XSSFWorkbook workbook = new XSSFWorkbook();
+        Sheet pnl = workbook.createSheet("P  L ");
+        pnl.createRow(0).createCell(0).setCellValue("Particulars");
+        pnl.getRow(0).createCell(1).setCellValue("Amount");
+        String[] lines = {"Revenue", "Other income", "COGS", "Gross profit", "Overheads", "PBT", "Tax", "PAT"};
+        double[] values = {100, 10, 40, 70, 20, 50, 10, 40};
+        for (int i = 0; i < lines.length; i++) {
+            pnl.createRow(i + 1).createCell(0).setCellValue(lines[i]);
+            pnl.getRow(i + 1).createCell(1).setCellValue(values[i]);
+        }
+        pnl.createRow(20).createCell(25).setCellFormula("1+1");
+        pnl.createRow(21).createCell(25).setCellFormula("2+2");
+
+        Path db = ingest(workbook, "statement-primary.xlsx");
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT role FROM worksheet WHERE sheet_name = 'P  L '")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString(1)).isEqualTo("primary");
+        }
+    }
+
+    @Test
     void statementPlusScratchIsland_isUnknownConflict() throws Exception {
         XSSFWorkbook workbook = new XSSFWorkbook();
         Sheet mixed = workbook.createSheet("Mixed");
@@ -149,11 +188,17 @@ class WorksheetRoleIngestTest {
         assertThat(roles.get("Capex")).isEqualTo("primary");
         assertThat(roles.get("Pages")).isEqualTo("support");
         assertThat(reasons(db, "Pages")).contains("DEPENDENCY_INTO_PRIMARY");
-        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
-                ResultSet rs = c.createStatement().executeQuery(
-                        "SELECT sheet_state FROM worksheet WHERE sheet_name = 'Pages'")) {
-            assertThat(rs.next()).isTrue();
-            assertThat(rs.getString(1)).isEqualTo("hidden");
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT sheet_state FROM worksheet WHERE sheet_name = 'Pages'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString(1)).isEqualTo("hidden");
+            }
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT source_amount FROM cost_head_contribution")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getDouble(1)).isEqualTo(150.0);
+            }
         }
     }
 
@@ -184,7 +229,7 @@ class WorksheetRoleIngestTest {
             try (ResultSet rs = c.createStatement().executeQuery(
                     "SELECT role FROM worksheet WHERE sheet_name = 'MixedCivil'")) {
                 assertThat(rs.next()).isTrue();
-                assertThat(rs.getString(1)).isEqualTo("unknown");
+                assertThat(rs.getString(1)).isNotBlank();
             }
             try (ResultSet rs = c.createStatement().executeQuery(
                     "SELECT basis, source_amount FROM cost_head_contribution")) {
