@@ -1,0 +1,80 @@
+{
+  "candidates" : [ ],
+  "contributions" : [ ],
+  "duplicates" : [ ],
+  "regions" : [ {
+    "bbox" : {
+      "end_col" : 8,
+      "end_row" : 18,
+      "start_col" : 1,
+      "start_row" : 1
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 6,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 7,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 8,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  } ],
+  "role" : "support",
+  "role_conf" : 1.0,
+  "role_reasons" : [ {
+    "code" : "DEPENDENCY_INTO_PRIMARY",
+    "params" : {
+      "cell_count" : 6
+    },
+    "weight" : 6
+  } ],
+  "scratch_cells" : [ ],
+  "sheet_id" : "sheet-037"
+}

@@ -1,0 +1,851 @@
+{
+  "candidates" : [ ],
+  "contributions" : [ ],
+  "duplicates" : [ ],
+  "regions" : [ {
+    "bbox" : {
+      "end_col" : 10,
+      "end_row" : 10,
+      "start_col" : 1,
+      "start_row" : 4
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 6,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 7,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 8,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 9,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 10,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 10,
+      "end_row" : 26,
+      "start_col" : 1,
+      "start_row" : 15
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 6,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 7,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 8,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 9,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 10,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 9,
+      "end_row" : 50,
+      "start_col" : 1,
+      "start_row" : 47
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 7,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 8,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 9,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 10,
+      "end_row" : 98,
+      "start_col" : 2,
+      "start_row" : 98
+    },
+    "columns" : [ {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 7,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 8,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 9,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 10,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 10,
+      "end_row" : 100,
+      "start_col" : 2,
+      "start_row" : 100
+    },
+    "columns" : [ {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 7,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 8,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 9,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 10,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 10,
+      "end_row" : 102,
+      "start_col" : 2,
+      "start_row" : 102
+    },
+    "columns" : [ {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 7,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 8,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 9,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 10,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 10,
+      "end_row" : 104,
+      "start_col" : 2,
+      "start_row" : 104
+    },
+    "columns" : [ {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 7,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 8,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 9,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 10,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 10,
+      "end_row" : 106,
+      "start_col" : 2,
+      "start_row" : 106
+    },
+    "columns" : [ {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 7,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 8,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 9,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 10,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  } ],
+  "role" : "unknown",
+  "role_conf" : 0.0,
+  "role_reasons" : [ {
+    "code" : "SCRATCH_ORPHAN_CONTENT",
+    "params" : {
+      "cell_count" : 45
+    },
+    "weight" : 45
+  } ],
+  "scratch_cells" : [ {
+    "coord" : "B98",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "C98",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "D98",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "E98",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "F98",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "G98",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "H98",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "I98",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "J98",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "B100",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "C100",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "D100",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "E100",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "F100",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "G100",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "H100",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "I100",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "J100",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "B102",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "C102",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "D102",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "E102",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "F102",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "G102",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "H102",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "I102",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "J102",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "B104",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "C104",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "D104",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "E104",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "F104",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "G104",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "H104",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "I104",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "J104",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "B106",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "C106",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "D106",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "E106",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "F106",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "G106",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "H106",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "I106",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  }, {
+    "coord" : "J106",
+    "orphan" : false,
+    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
+    "scratch" : true,
+    "support" : false
+  } ],
+  "sheet_id" : "sheet-014"
+}

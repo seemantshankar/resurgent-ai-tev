@@ -1,0 +1,1224 @@
+{
+  "candidates" : [ {
+    "automatic_trust_eligible" : true,
+    "cost_head_code" : "CIVIL",
+    "reasons" : [ "EXPLICIT_TOTAL_ANCHOR", "STRUCTURAL_AGREEMENT", "GATE_MAPPING_PASS", "GATE_BASIS_PASS", "GATE_UNIT_CURRENCY_PASS", "GATE_COVERAGE_PASS", "GATE_CACHE_NUMERIC_PASS", "GATE_BLOCKERS_PASS" ],
+    "trust_state" : "trusted"
+  }, {
+    "automatic_trust_eligible" : true,
+    "cost_head_code" : "HVAC",
+    "reasons" : [ "STRUCTURAL_TOTAL", "GATE_MAPPING_PASS", "GATE_BASIS_PASS", "GATE_UNIT_CURRENCY_PASS", "GATE_COVERAGE_PASS", "GATE_CACHE_NUMERIC_PASS", "GATE_BLOCKERS_PASS" ],
+    "trust_state" : "trusted"
+  } ],
+  "contributions" : [ {
+    "basis" : "explicit_total_anchor",
+    "cost_head_code" : "CIVIL",
+    "reasons" : [ "EXPLICIT_TOTAL_ANCHOR", "FORMULA_CONNECTED", "STRUCTURAL_AGREEMENT" ]
+  }, {
+    "basis" : "structural_total",
+    "cost_head_code" : "HVAC",
+    "reasons" : [ "STRUCTURAL_TOTAL" ]
+  } ],
+  "duplicates" : [ ],
+  "regions" : [ {
+    "bbox" : {
+      "end_col" : 5,
+      "end_row" : 13,
+      "start_col" : 1,
+      "start_row" : 1
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_SERIAL" ],
+      "role" : "serial",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 4,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_RATE" ],
+      "role" : "rate",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.95,
+      "currency" : "INR",
+      "reasons" : [ "HEADER_AMOUNT" ],
+      "role" : "amount",
+      "type" : "number",
+      "unit" : "rs"
+    } ],
+    "cost_head_code" : "CIVIL",
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.95,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.95,
+    "mapping_method" : "exact_alias",
+    "mapping_reasons" : [ "EXACT_ALIAS" ]
+  }, {
+    "bbox" : {
+      "end_col" : 2,
+      "end_row" : 15,
+      "start_col" : 1,
+      "start_row" : 15
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 5,
+      "end_row" : 15,
+      "start_col" : 5,
+      "start_row" : 15
+    },
+    "columns" : [ {
+      "col" : 5,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 2,
+      "end_row" : 25,
+      "start_col" : 1,
+      "start_row" : 18
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 2,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_DESCRIPTION" ],
+      "role" : "description",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 5,
+      "end_row" : 21,
+      "start_col" : 5,
+      "start_row" : 21
+    },
+    "columns" : [ {
+      "col" : 5,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 5,
+      "end_row" : 26,
+      "start_col" : 5,
+      "start_row" : 23
+    },
+    "columns" : [ {
+      "col" : 5,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 6,
+      "end_row" : 35,
+      "start_col" : 1,
+      "start_row" : 29
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 6,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 6,
+      "end_row" : 37,
+      "start_col" : 2,
+      "start_row" : 37
+    },
+    "columns" : [ {
+      "col" : 2,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 6,
+      "end_row" : 39,
+      "start_col" : 1,
+      "start_row" : 39
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 6,
+      "end_row" : 42,
+      "start_col" : 1,
+      "start_row" : 41
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 9,
+      "end_row" : 52,
+      "start_col" : 1,
+      "start_row" : 44
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_SERIAL" ],
+      "role" : "serial",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_QUANTITY" ],
+      "role" : "quantity",
+      "type" : "number"
+    }, {
+      "col" : 7,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 8,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 9,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : "PLANT_MACHINERY",
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : "fuzzy_proposal",
+    "mapping_reasons" : [ "FUZZY_RANK" ]
+  }, {
+    "bbox" : {
+      "end_col" : 7,
+      "end_row" : 130,
+      "start_col" : 1,
+      "start_row" : 54
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_DESCRIPTION" ],
+      "role" : "description",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_QUANTITY" ],
+      "role" : "quantity",
+      "type" : "number"
+    }, {
+      "col" : 6,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 7,
+      "conf" : 0.95,
+      "currency" : "INR",
+      "reasons" : [ "HEADER_AMOUNT" ],
+      "role" : "amount",
+      "type" : "number",
+      "unit" : "rs"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 1,
+      "end_row" : 143,
+      "start_col" : 1,
+      "start_row" : 143
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 5,
+      "end_row" : 149,
+      "start_col" : 1,
+      "start_row" : 144
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_DESCRIPTION" ],
+      "role" : "description",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_QUANTITY" ],
+      "role" : "quantity",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.4,
+      "reasons" : [ "AMBIGUOUS_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.95,
+      "currency" : "INR",
+      "reasons" : [ "HEADER_AMOUNT" ],
+      "role" : "amount",
+      "type" : "number",
+      "unit" : "rs"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 2,
+      "end_row" : 151,
+      "start_col" : 1,
+      "start_row" : 151
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 2,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 5,
+      "end_row" : 151,
+      "start_col" : 5,
+      "start_row" : 151
+    },
+    "columns" : [ {
+      "col" : 5,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 6,
+      "end_row" : 160,
+      "start_col" : 1,
+      "start_row" : 154
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_SERIAL" ],
+      "role" : "serial",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_DESCRIPTION" ],
+      "role" : "description",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_QUANTITY" ],
+      "role" : "quantity",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_RATE" ],
+      "role" : "rate",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.95,
+      "currency" : "INR",
+      "reasons" : [ "HEADER_AMOUNT" ],
+      "role" : "amount",
+      "type" : "number",
+      "unit" : "rs"
+    } ],
+    "cost_head_code" : "HVAC",
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : "exact_alias",
+    "mapping_reasons" : [ "EXACT_ALIAS" ]
+  }, {
+    "bbox" : {
+      "end_col" : 10,
+      "end_row" : 155,
+      "start_col" : 10,
+      "start_row" : 155
+    },
+    "columns" : [ {
+      "col" : 10,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 7,
+      "end_row" : 163,
+      "start_col" : 1,
+      "start_row" : 163
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 7,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 7,
+      "end_row" : 171,
+      "start_col" : 1,
+      "start_row" : 167
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_DESCRIPTION" ],
+      "role" : "description",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_RATE" ],
+      "role" : "rate",
+      "type" : "text"
+    }, {
+      "col" : 7,
+      "conf" : 0.95,
+      "currency" : "INR",
+      "reasons" : [ "HEADER_AMOUNT" ],
+      "role" : "amount",
+      "type" : "number",
+      "unit" : "rs"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 1,
+      "end_row" : 173,
+      "start_col" : 1,
+      "start_row" : 173
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 6,
+      "end_row" : 179,
+      "start_col" : 1,
+      "start_row" : 174
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_QUANTITY" ],
+      "role" : "quantity",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.95,
+      "currency" : "INR",
+      "reasons" : [ "HEADER_AMOUNT" ],
+      "role" : "amount",
+      "type" : "text",
+      "unit" : "rs"
+    }, {
+      "col" : 6,
+      "conf" : 0.95,
+      "currency" : "INR",
+      "reasons" : [ "HEADER_AMOUNT" ],
+      "role" : "amount",
+      "type" : "number",
+      "unit" : "rs"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 9,
+      "end_row" : 187,
+      "start_col" : 1,
+      "start_row" : 181
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_SERIAL" ],
+      "role" : "serial",
+      "type" : "number"
+    }, {
+      "col" : 2,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_DESCRIPTION" ],
+      "role" : "description",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_QUANTITY" ],
+      "role" : "quantity",
+      "type" : "number"
+    }, {
+      "col" : 5,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_RATE" ],
+      "role" : "rate",
+      "type" : "number"
+    }, {
+      "col" : 6,
+      "conf" : 0.95,
+      "currency" : "INR",
+      "reasons" : [ "HEADER_AMOUNT" ],
+      "role" : "amount",
+      "type" : "number",
+      "unit" : "rs"
+    }, {
+      "col" : 7,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 8,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 9,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 9,
+      "end_row" : 196,
+      "start_col" : 1,
+      "start_row" : 193
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_SERIAL" ],
+      "role" : "serial",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_DESCRIPTION" ],
+      "role" : "description",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_QUANTITY" ],
+      "role" : "quantity",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_RATE" ],
+      "role" : "rate",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.95,
+      "currency" : "INR",
+      "reasons" : [ "HEADER_AMOUNT" ],
+      "role" : "amount",
+      "type" : "text",
+      "unit" : "rs"
+    }, {
+      "col" : 7,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 8,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 9,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : "ELECTRICAL",
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : "fuzzy_proposal",
+    "mapping_reasons" : [ "FUZZY_RANK" ]
+  }, {
+    "bbox" : {
+      "end_col" : 6,
+      "end_row" : 222,
+      "start_col" : 1,
+      "start_row" : 198
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "GBP",
+    "inferred_currency_conf" : 0.95,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 6,
+      "end_row" : 231,
+      "start_col" : 2,
+      "start_row" : 225
+    },
+    "columns" : [ {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.95,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.95,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 2,
+      "end_row" : 233,
+      "start_col" : 1,
+      "start_row" : 232
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 6,
+      "end_row" : 234,
+      "start_col" : 5,
+      "start_row" : 233
+    },
+    "columns" : [ {
+      "col" : 5,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 6,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "rs",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  } ],
+  "role" : "primary",
+  "role_conf" : 0.9272727272727272,
+  "role_reasons" : [ {
+    "code" : "COST_HEAD_CONTRIBUTION",
+    "params" : {
+      "cell_count" : 20,
+      "contribution_count" : 2
+    },
+    "weight" : 160
+  }, {
+    "code" : "DEPENDENCY_INTO_PRIMARY",
+    "params" : {
+      "cell_count" : 12
+    },
+    "weight" : 12
+  }, {
+    "code" : "SCRATCH_ORPHAN_CONTENT",
+    "params" : {
+      "cell_count" : 2
+    },
+    "weight" : 2
+  } ],
+  "scratch_cells" : [ {
+    "coord" : "J155",
+    "orphan" : true,
+    "reasons" : [ ],
+    "scratch" : false,
+    "support" : false
+  }, {
+    "coord" : "A233",
+    "orphan" : false,
+    "reasons" : [ "PAGE_CONSTANT" ],
+    "scratch" : true,
+    "support" : false
+  } ],
+  "sheet_id" : "sheet-046"
+}
