@@ -889,6 +889,22 @@ public final class WorkspaceRepository {
         }
     }
 
+    public void updateRegionSchema(long regionId, String schemaJson, String inferredUnit,
+            double inferredUnitConf, String inferredCurrency, double inferredCurrencyConf)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE region SET schema_json = ?, inferred_unit = ?, inferred_unit_conf = ?,"
+                        + " inferred_currency = ?, inferred_currency_conf = ? WHERE region_id = ?")) {
+            ps.setString(1, schemaJson);
+            ps.setString(2, inferredUnit);
+            ps.setDouble(3, inferredUnitConf);
+            ps.setString(4, inferredCurrency);
+            ps.setDouble(5, inferredCurrencyConf);
+            ps.setLong(6, regionId);
+            ps.executeUpdate();
+        }
+    }
+
     public List<RegionMappingInput> findRegionMappingInputs(long parseRunId) throws SQLException {
         List<RegionMappingInput> rows = new ArrayList<>();
         try (PreparedStatement ps = connection.prepareStatement(

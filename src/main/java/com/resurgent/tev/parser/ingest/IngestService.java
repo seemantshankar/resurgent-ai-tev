@@ -51,6 +51,7 @@ public final class IngestService {
     private final SafetyEnforcer safetyEnforcer = new SafetyEnforcer();
     private final RegionDetector regionDetector = new RegionDetector();
     private final RegionHeaderAnalyzer regionHeaderAnalyzer = new RegionHeaderAnalyzer();
+    private final RegionSchemaInferencer regionSchemaInferencer = new RegionSchemaInferencer();
     private static final double CLASSIFICATION_REVIEW_CONFIDENCE = 0.5;
 
     /** Convenience overload that uses embedded defaults. */
@@ -224,7 +225,7 @@ public final class IngestService {
             cellsById.put(cellId, new RegionDetector.RegionCell(cell, null));
             cellsWritten++;
         }
-        persistRegions(repo, worksheetId, parseRunId, sheet.sheetName(), cellsById, config);
+        persistRegions(repo, worksheetId, parseRunId, sheet.sheetName(), fileName, cellsById, config);
         persistCellSemantics(repo, parseRunId);
         persistCostHeadMappings(repo, parseRunId, sourceFileId, mandateId);
 
@@ -391,7 +392,7 @@ public final class IngestService {
                     cellsError++;
                 }
             }
-            persistRegions(repo, worksheetId, parseRunId, sheet.sheetName(), cellsById, config);
+            persistRegions(repo, worksheetId, parseRunId, sheet.sheetName(), fileName, cellsById, config);
             sheetIndex++;
         }
 
@@ -481,8 +482,8 @@ public final class IngestService {
     }
 
     private void persistRegions(WorkspaceRepository repo, long worksheetId, long parseRunId,
-            String sheetName, Map<Long, RegionDetector.RegionCell> cellsById, ParserConfig config)
-            throws SQLException, IOException {
+            String sheetName, String fileName, Map<Long, RegionDetector.RegionCell> cellsById,
+            ParserConfig config) throws SQLException, IOException {
         for (RegionDetector.DetectedRegion region : regionDetector.detect(sheetName, cellsById,
                 config.regionBreakThreshold())) {
             List<Map.Entry<Long, RegionDetector.RegionCell>> regionEntries = region.cellIds().stream()
@@ -511,6 +512,8 @@ public final class IngestService {
                 repo.updateCellRegion(cellId, regionId);
             }
             persistRegionLabels(repo, regionEntries, headerContext);
+            persistRegionSchema(repo, parseRunId, regionId, region, regionCells, headerContext,
+                    sheetCells(cellsById), fileName, sheetName);
             queueClassificationReview(repo, parseRunId, regionId, region, classification);
             persistCoherence(repo, region, cellsById);
         }
@@ -519,6 +522,42 @@ public final class IngestService {
     private static RegionClassifier.RegionCell classifierCell(NormalizedCell cell) {
         return new RegionClassifier.RegionCell(cell.rowNum(), cell.colNum(), cell.displayValue(),
                 cell.formulaText() != null && !cell.formulaText().isBlank(), cell.numericValue() != null);
+    }
+
+    private void persistRegionSchema(
+            WorkspaceRepository repo,
+            long parseRunId,
+            long regionId,
+            RegionDetector.DetectedRegion region,
+            List<NormalizedCell> regionCells,
+            RegionHeaderContext headerContext,
+            List<NormalizedCell> sheetCells,
+            String fileName,
+            String sheetName) throws SQLException, IOException {
+        RegionSchemaInferencer.Result schema = regionSchemaInferencer.infer(
+                regionCells, headerContext, sheetCells, fileName, sheetName);
+        repo.updateRegionSchema(regionId, Jsonb.toJson(schema.columns()),
+                schema.unit(), schema.unitConf(), schema.currency(), schema.currencyConf());
+        if (schema.needsReview()) {
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("regionId", regionId);
+            detail.put("regionKey", region.key());
+            detail.put("unit", schema.unit());
+            detail.put("currency", schema.currency());
+            detail.put("reasons", schema.reviewReasons());
+            repo.insertReviewQueue(parseRunId, "unit_currency",
+                    "Unit/currency requires review: " + region.key(), Jsonb.toJson(detail),
+                    "Pending", false, Timestamps.now(), null,
+                    "region", region.key(), schema.unitConf());
+        }
+    }
+
+    private static List<NormalizedCell> sheetCells(Map<Long, RegionDetector.RegionCell> cellsById) {
+        List<NormalizedCell> cells = new ArrayList<>(cellsById.size());
+        for (RegionDetector.RegionCell regionCell : cellsById.values()) {
+            cells.add(regionCell.cell());
+        }
+        return cells;
     }
 
     private static void persistRegionLabels(WorkspaceRepository repo,
