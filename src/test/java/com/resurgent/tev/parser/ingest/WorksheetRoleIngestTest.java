@@ -123,8 +123,9 @@ class WorksheetRoleIngestTest {
         Sheet pnl = workbook.createSheet("P  L ");
         pnl.createRow(0).createCell(0).setCellValue("Particulars");
         pnl.getRow(0).createCell(1).setCellValue("Amount");
-        String[] lines = {"Revenue", "Other income", "COGS", "Gross profit", "Overheads", "PBT", "Tax", "PAT"};
-        double[] values = {100, 10, 40, 70, 20, 50, 10, 40};
+        String[] lines = {
+                "Revenue", "Other income", "Expense", "COGS", "Gross profit", "Overheads", "PBT", "Tax", "PAT"};
+        double[] values = {100, 10, 30, 40, 70, 20, 50, 10, 40};
         for (int i = 0; i < lines.length; i++) {
             pnl.createRow(i + 1).createCell(0).setCellValue(lines[i]);
             pnl.getRow(i + 1).createCell(1).setCellValue(values[i]);
