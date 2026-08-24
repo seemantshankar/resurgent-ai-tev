@@ -17,6 +17,8 @@ final class SumCoverage {
                     + "(?:\\s*,\\s*(?:(?:'[^']+'|[A-Za-z0-9_]+)!)?\\$?[A-Z]+\\$?\\d+"
                     + "(?::\\$?[A-Z]+\\$?\\d+)?)*\\s*\\)$");
 
+    record CellRef(int row, int col) {}
+
     private SumCoverage() {}
 
     static boolean allowlisted(String formula, List<String> functionTokens) {
@@ -32,7 +34,7 @@ final class SumCoverage {
         return SUM_SHAPE.matcher(clean).matches();
     }
 
-    static List<int[]> expand(String targetRange) {
+    static List<CellRef> expand(String targetRange) {
         if (targetRange == null || targetRange.isBlank()) {
             return List.of();
         }
@@ -41,13 +43,13 @@ final class SumCoverage {
             if (ref.getCol() < 0 || ref.getRow() < 0) {
                 return List.of();
             }
-            return List.of(new int[] {ref.getRow() + 1, ref.getCol() + 1});
+            return List.of(new CellRef(ref.getRow() + 1, ref.getCol() + 1));
         }
         CellRangeAddress area = CellRangeAddress.valueOf(targetRange);
-        List<int[]> cells = new ArrayList<>();
+        List<CellRef> cells = new ArrayList<>();
         for (int row = area.getFirstRow(); row <= area.getLastRow(); row++) {
             for (int col = area.getFirstColumn(); col <= area.getLastColumn(); col++) {
-                cells.add(new int[] {row + 1, col + 1});
+                cells.add(new CellRef(row + 1, col + 1));
             }
         }
         return cells;

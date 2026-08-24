@@ -204,7 +204,7 @@ class StructuralTotalIngestTest {
             disabled.createCell(0).setCellValue("Dropped line");
             disabled.createCell(1).setCellFormula("12117678.83*0");
             sheet.createRow(4).createCell(0).setCellValue("All works");
-            sheet.getRow(4).createCell(1).setCellFormula("SUM(B2:B3)");
+            sheet.getRow(4).createCell(1).setCellFormula("SUM(B2:B4)");
             db = ingest(workbook, "error-scratch.xlsx");
         }
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
@@ -213,12 +213,14 @@ class StructuralTotalIngestTest {
             assertThat(rs.next()).isTrue();
             assertThat(rs.getString("basis")).isEqualTo("leaf_sum");
             assertThat(rs.getString("reasons")).contains("LEAF_SUM_FALLBACK");
+            assertThat(rs.getString("reasons")).contains("STRUCTURAL_ERROR");
+            assertThat(rs.getString("reasons")).contains("STRUCTURAL_SCRATCH");
         }
     }
 
     @Test
     void numberFormatPrecision_allowsDisplayRoundingWithoutGlobalTolerance() throws Exception {
-        Path db;
+        Path xlsx;
         try (XSSFWorkbook workbook = civilAmountHeader()) {
             Sheet sheet = workbook.getSheetAt(0);
             var style = workbook.createCellStyle();
@@ -232,14 +234,21 @@ class StructuralTotalIngestTest {
             sheet.createRow(3).createCell(0).setCellValue("All works");
             sheet.getRow(3).createCell(1).setCellFormula("SUM(B2:B3)");
             sheet.getRow(3).getCell(1).setCellStyle(style);
-            db = ingest(workbook, "precision.xlsx");
+            workbook.getCreationHelper().createFormulaEvaluator().evaluateAll();
+            ((org.apache.poi.xssf.usermodel.XSSFCell) sheet.getRow(3).getCell(1)).getCTCell().setV("30.89");
+            xlsx = tempDir.resolve("precision.xlsx");
+            try (FileOutputStream out = new FileOutputStream(xlsx.toFile())) {
+                workbook.write(out);
+            }
         }
+        Path db = tempDir.resolve("precision.db");
+        new IngestService().ingest(xlsx, 1L, db);
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
                 ResultSet rs = c.createStatement().executeQuery(
                         "SELECT basis, source_amount FROM cost_head_contribution")) {
             assertThat(rs.next()).isTrue();
             assertThat(rs.getString("basis")).isEqualTo("structural_total");
-            assertThat(rs.getDouble("source_amount")).isEqualTo(30.888);
+            assertThat(rs.getDouble("source_amount")).isEqualTo(30.89);
         }
     }
 
@@ -326,6 +335,91 @@ class StructuralTotalIngestTest {
                     assertThat(rs.getInt(1)).isEqualTo(0);
                 }
             }
+            try (ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT cand.reasons FROM cost_head_candidate cand"
+                            + " JOIN cost_head_contribution ch ON ch.cost_head_candidate_id"
+                            + " = cand.cost_head_candidate_id"
+                            + " WHERE ch.basis = 'explicit_total_anchor'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString(1)).contains("EXPLICIT_TOTAL_ANCHOR");
+                assertThat(rs.getString(1)).doesNotContain("LEAF_SUM_FALLBACK");
+            }
+        }
+    }
+
+    @Test
+    void labelledAnchorDisagreeingWithStructuralSum_retainsBothCandidates() throws Exception {
+        Path db;
+        try (XSSFWorkbook workbook = civilAmountHeader()) {
+            Sheet sheet = workbook.getSheetAt(0);
+            sheet.createRow(1).createCell(0).setCellValue("Foundation");
+            sheet.getRow(1).createCell(1).setCellValue(100.0);
+            sheet.createRow(2).createCell(0).setCellValue("Finishes");
+            sheet.getRow(2).createCell(1).setCellValue(50.0);
+            sheet.createRow(3).createCell(0).setCellValue("Roof");
+            sheet.getRow(3).createCell(1).setCellValue(10.0);
+            sheet.createRow(4).createCell(0).setCellValue("Total");
+            sheet.getRow(4).createCell(1).setCellFormula("B2+B3");
+            sheet.createRow(5).createCell(0).setCellValue("All works");
+            sheet.getRow(5).createCell(1).setCellFormula("SUM(B2:B4)");
+            db = ingest(workbook, "labelled-vs-structural.xlsx");
+        }
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT basis, source_amount FROM cost_head_contribution ORDER BY basis")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("basis")).isEqualTo("explicit_total_anchor");
+            assertThat(rs.getDouble("source_amount")).isEqualTo(150.0);
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("basis")).isEqualTo("structural_total");
+            assertThat(rs.getDouble("source_amount")).isEqualTo(160.0);
+            assertThat(rs.next()).isFalse();
+        }
+    }
+
+    @Test
+    void twoQualifyingSums_emitStructuralTotalsForReview() throws Exception {
+        Path db;
+        try (XSSFWorkbook workbook = civilAmountHeader()) {
+            Sheet sheet = workbook.getSheetAt(0);
+            sheet.createRow(1).createCell(0).setCellValue("Foundation");
+            sheet.getRow(1).createCell(1).setCellValue(100.0);
+            sheet.createRow(2).createCell(0).setCellValue("Finishes");
+            sheet.getRow(2).createCell(1).setCellValue(50.0);
+            sheet.createRow(3).createCell(0).setCellValue("All works");
+            sheet.getRow(3).createCell(1).setCellFormula("SUM(B2:B3)");
+            sheet.createRow(4).createCell(0).setCellValue("Also all works");
+            sheet.getRow(4).createCell(1).setCellFormula("SUM(B2:B3)");
+            db = ingest(workbook, "two-sums.xlsx");
+        }
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT COUNT(*) FROM cost_head_contribution WHERE basis = 'structural_total'")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getInt(1)).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void balancesAndAlternatives_areNotScalarSummed() throws Exception {
+        Path db;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Capex");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Civil works");
+            header.createCell(1).setCellValue("Opening");
+            header.createCell(2).setCellValue("Closing");
+            header.createCell(3).setCellValue("Alternative 1");
+            sheet.createRow(1).createCell(0).setCellValue("Foundation");
+            sheet.getRow(1).createCell(1).setCellValue(80.0);
+            sheet.getRow(1).createCell(2).setCellValue(100.0);
+            sheet.getRow(1).createCell(3).setCellValue(90.0);
+            db = ingest(workbook, "balances.xlsx");
+        }
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT source_amount FROM cost_head_contribution WHERE source_amount IN (270, 180)")) {
+            assertThat(rs.next()).isFalse();
         }
     }
 

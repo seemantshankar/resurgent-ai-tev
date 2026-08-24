@@ -18,9 +18,8 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * Builds explainable cost-head candidates from labelled totals. A formula that
- * reaches the region's line items becomes an explicit total anchor; a labelled
- * literal without that graph evidence stays a review candidate.
+ * Builds explainable cost-head candidates from labelled totals, unlabeled
+ * structural SUM formulas, and leaf-sum fallbacks.
  */
 final class ExplicitAnchorDetector {
 
@@ -107,11 +106,11 @@ final class ExplicitAnchorDetector {
         for (RegionSnapshot region : regions) {
             headIds.put(region.costHeadCode(), region.costHeadId());
             RegionOutcome outcome = outcomeFor(region, precedents, catalog);
-            if (outcome.composable() != null) {
+            if (outcome.composed() != null) {
                 byHead.computeIfAbsent(region.costHeadCode(), key -> new ArrayList<>())
-                        .add(outcome.composable());
+                        .add(outcome.composed());
             }
-            isolated.addAll(outcome.isolated());
+            isolated.addAll(outcome.reviewOnly());
         }
         List<Candidate> candidates = new ArrayList<>();
         for (Map.Entry<String, List<Contribution>> entry : byHead.entrySet()) {
@@ -128,21 +127,48 @@ final class ExplicitAnchorDetector {
     private RegionOutcome outcomeFor(
             RegionSnapshot region, Map<Long, List<Long>> precedents, Map<String, LocatedCell> catalog) {
         Contribution labelled = contributionFor(region, precedents);
-        Contribution structural = structuralContribution(region, precedents, catalog);
+        List<Contribution> structural = structuralContributions(region, precedents, catalog);
         Contribution leaf = leafSumContribution(region, precedents, catalog);
         if (labelled != null) {
-            if (structural != null && amountsAgree(labelled, structural, region)) {
+            Contribution labelledStructural = structural.stream()
+                    .filter(item -> labelled.anchorCellId() != null
+                            && labelled.anchorCellId().equals(item.anchorCellId()))
+                    .findFirst()
+                    .orElse(null);
+            if (labelledStructural != null && amountsAgree(labelled, labelledStructural, region)) {
                 return new RegionOutcome(withReason(labelled, "STRUCTURAL_AGREEMENT"), List.of());
             }
+            List<Contribution> disagreeing = new ArrayList<>();
+            for (Contribution item : structural) {
+                if (labelledStructural != null && item.anchorCellId().equals(labelledStructural.anchorCellId())) {
+                    continue;
+                }
+                if (!amountsAgree(labelled, item, region)) {
+                    disagreeing.add(withReason(item, "STRUCTURAL_AMOUNT_MISMATCH"));
+                }
+            }
+            if (!disagreeing.isEmpty()) {
+                List<Contribution> review = new ArrayList<>();
+                review.add(withReason(labelled, "STRUCTURAL_AMOUNT_MISMATCH"));
+                review.addAll(disagreeing);
+                return new RegionOutcome(null, review);
+            }
             if (leaf != null && !amountsAgree(labelled, leaf, region)) {
-                return new RegionOutcome(
+                return new RegionOutcome(null, List.of(
                         withReason(labelled, "STRUCTURAL_AMOUNT_MISMATCH"),
-                        List.of(withReason(leaf, "STRUCTURAL_AMOUNT_MISMATCH")));
+                        withReason(leaf, "STRUCTURAL_AMOUNT_MISMATCH")));
             }
             return new RegionOutcome(labelled, List.of());
         }
-        if (structural != null) {
-            return new RegionOutcome(structural, List.of());
+        if (structural.size() == 1) {
+            return new RegionOutcome(structural.getFirst(), List.of());
+        }
+        if (structural.size() > 1) {
+            List<Contribution> review = new ArrayList<>();
+            for (Contribution item : structural) {
+                review.add(withReason(item, "STRUCTURAL_AMBIGUOUS"));
+            }
+            return new RegionOutcome(null, review);
         }
         if (leaf != null) {
             return new RegionOutcome(leaf, List.of());
@@ -214,29 +240,29 @@ final class ExplicitAnchorDetector {
                 participation);
     }
 
-    private Contribution structuralContribution(
+    private List<Contribution> structuralContributions(
             RegionSnapshot region, Map<Long, List<Long>> precedents, Map<String, LocatedCell> catalog) {
         Set<Integer> amountCols = columnsWithRole(region.schemaJson(), RegionSchemaInferencer.AMOUNT);
         Set<Integer> periodCols = columnsWithRole(region.schemaJson(), RegionSchemaInferencer.PERIOD);
         if (amountCols.isEmpty()) {
-            return null;
+            return List.of();
         }
         Set<Integer> headerRows = headerRows(region.headerRowsJson(), region.cells(), amountCols);
         Set<Long> amountIds = amountIds(region.cells(), amountCols, headerRows);
         String expectedUnit = expectedScale(region.unit(), region.cells(), amountCols, headerRows, true);
         String expectedCurrency = expectedScale(region.currency(), region.cells(), amountCols, headerRows, false);
-        if (!known(region.unit(), RegionSchemaInferencer.UNIT_UNKNOWN)
-                || !known(region.currency(), RegionSchemaInferencer.CURRENCY_UNKNOWN)) {
-            return null;
+        if (!isKnown(region.unit(), RegionSchemaInferencer.UNIT_UNKNOWN)
+                || !isKnown(region.currency(), RegionSchemaInferencer.CURRENCY_UNKNOWN)) {
+            return List.of();
         }
         List<CellParticipation> leafParticipation = participation(
                 region, amountCols, periodCols, headerRows, amountIds, precedents, null,
                 expectedUnit, expectedCurrency);
         Set<Long> eligible = includedIds(leafParticipation);
         if (eligible.isEmpty()) {
-            return null;
+            return List.of();
         }
-        CellSnapshot sumCell = null;
+        List<Contribution> found = new ArrayList<>();
         for (CellSnapshot cell : region.cells()) {
             if (!amountCols.contains(cell.col()) || headerRows.contains(cell.row())) {
                 continue;
@@ -248,15 +274,24 @@ final class ExplicitAnchorDetector {
                 continue;
             }
             if (qualifiesAsStructural(cell, region, eligible, catalog)) {
-                if (sumCell != null) {
-                    return null;
-                }
-                sumCell = cell;
+                found.add(structuralContribution(
+                        region, amountCols, periodCols, headerRows, amountIds, precedents,
+                        expectedUnit, expectedCurrency, cell));
             }
         }
-        if (sumCell == null) {
-            return null;
-        }
+        return found;
+    }
+
+    private Contribution structuralContribution(
+            RegionSnapshot region,
+            Set<Integer> amountCols,
+            Set<Integer> periodCols,
+            Set<Integer> headerRows,
+            Set<Long> amountIds,
+            Map<Long, List<Long>> precedents,
+            String expectedUnit,
+            String expectedCurrency,
+            CellSnapshot sumCell) {
         List<CellParticipation> participation = participation(
                 region, amountCols, periodCols, headerRows, amountIds, precedents, sumCell.cellId(),
                 expectedUnit, expectedCurrency);
@@ -278,7 +313,7 @@ final class ExplicitAnchorDetector {
                 normalizedUnit,
                 normalizedCurrency,
                 0.8,
-                maybePartition(region, periodCols, amountCols, headerRows),
+                structuralReasons(region, periodCols, amountCols, headerRows),
                 participation);
     }
 
@@ -399,10 +434,10 @@ final class ExplicitAnchorDetector {
             Set<Long> amountIds,
             Map<Long, List<Long>> precedents) {
         List<String> reasons = new ArrayList<>();
-        if (!known(region.unit(), RegionSchemaInferencer.UNIT_UNKNOWN)) {
+        if (!isKnown(region.unit(), RegionSchemaInferencer.UNIT_UNKNOWN)) {
             reasons.add("STRUCTURAL_UNKNOWN_UNIT");
         }
-        if (!known(region.currency(), RegionSchemaInferencer.CURRENCY_UNKNOWN)) {
+        if (!isKnown(region.currency(), RegionSchemaInferencer.CURRENCY_UNKNOWN)) {
             reasons.add("STRUCTURAL_UNKNOWN_CURRENCY");
         }
         CellSnapshot aggregator = null;
@@ -421,46 +456,13 @@ final class ExplicitAnchorDetector {
         if (aggregator == null) {
             return reasons;
         }
-        if ("stale".equals(aggregator.cacheState())) {
-            reasons.add("STRUCTURAL_STALE_CACHE");
-        } else if (aggregator.cacheState() == null || "missing".equals(aggregator.cacheState())) {
-            reasons.add("STRUCTURAL_MISSING_CACHE");
-        }
-        FormulaTokenizerResult tokens = FormulaTokenizer.tokenize(
-                aggregator.formula(), aggregator.row(), aggregator.col(), Map.of());
-        if (!SumCoverage.allowlisted(aggregator.formula(), tokens.functionTokens())) {
-            reasons.add("STRUCTURAL_SHAPE_NOT_SUM");
+        SumInspection inspection = inspectSum(aggregator, region, catalog);
+        reasons.addAll(inspection.blockers());
+        if (inspection.deps().isEmpty() && !inspection.blockers().isEmpty()) {
             return reasons;
         }
-        List<Long> deps = new ArrayList<>();
-        String sheet = aggregator.sheetName();
-        for (FormulaToken token : tokens.tokens()) {
-            if ("external".equals(token.refKind())
-                    || (token.targetSheetName() != null && token.targetSheetName().startsWith("["))) {
-                reasons.add("STRUCTURAL_EXTERNAL");
-                return reasons;
-            }
-            if (token.targetSheetName() != null && sheet != null
-                    && !token.targetSheetName().equals(sheet)) {
-                reasons.add("STRUCTURAL_CROSS_REGION");
-                return reasons;
-            }
-            for (int[] rc : SumCoverage.expand(token.targetRange())) {
-                LocatedCell located = catalog.get(catalogKey(
-                        token.targetSheetName() != null ? token.targetSheetName() : sheet,
-                        rc[0], rc[1]));
-                if (located == null) {
-                    continue;
-                }
-                if (located.regionId != region.regionId()) {
-                    reasons.add("STRUCTURAL_CROSS_REGION");
-                    return reasons;
-                }
-                deps.add(located.cell.cellId());
-            }
-        }
-        Set<Long> unique = new LinkedHashSet<>(deps);
-        if (unique.size() != deps.size()) {
+        Set<Long> unique = inspection.unique();
+        if (inspection.duplicates()) {
             reasons.add("STRUCTURAL_DUPLICATE_LEAF");
         }
         if (!unique.equals(eligible)) {
@@ -496,7 +498,7 @@ final class ExplicitAnchorDetector {
         return notes;
     }
 
-    private static List<String> maybePartition(
+    private static List<String> structuralReasons(
             RegionSnapshot region,
             Set<Integer> periodCols,
             Set<Integer> amountCols,
@@ -514,48 +516,61 @@ final class ExplicitAnchorDetector {
             RegionSnapshot region,
             Set<Long> eligible,
             Map<String, LocatedCell> catalog) {
-        if (!"fresh".equals(cell.cacheState())) {
+        SumInspection inspection = inspectSum(cell, region, catalog);
+        if (!inspection.blockers().isEmpty() || inspection.duplicates()
+                || !inspection.unique().equals(eligible)) {
             return false;
+        }
+        BigDecimal leafSum = includedSum(eligibleParticipation(eligible, region.cells()), region.cells());
+        return NumberFormatPrecision.agree(cell.numeric(), leafSum, cell.numberFormat());
+    }
+
+    private static SumInspection inspectSum(
+            CellSnapshot cell, RegionSnapshot region, Map<String, LocatedCell> catalog) {
+        List<String> blockers = new ArrayList<>();
+        if (!"fresh".equals(cell.cacheState())) {
+            blockers.add("stale".equals(cell.cacheState()) ? "STRUCTURAL_STALE_CACHE" : "STRUCTURAL_MISSING_CACHE");
+            return new SumInspection(blockers, List.of());
         }
         FormulaTokenizerResult tokens = FormulaTokenizer.tokenize(
                 cell.formula(), cell.row(), cell.col(), Map.of());
         if (!"ok".equals(tokens.formulaState())
                 || !SumCoverage.allowlisted(cell.formula(), tokens.functionTokens())) {
-            return false;
+            blockers.add("STRUCTURAL_SHAPE_NOT_SUM");
+            return new SumInspection(blockers, List.of());
         }
         List<Long> deps = new ArrayList<>();
         String sheet = cell.sheetName();
         for (FormulaToken token : tokens.tokens()) {
             if ("external".equals(token.refKind())
                     || (token.targetSheetName() != null && token.targetSheetName().startsWith("["))) {
-                return false;
+                blockers.add("STRUCTURAL_EXTERNAL");
+                return new SumInspection(blockers, List.of());
             }
             if (token.targetSheetName() != null && sheet != null
                     && !token.targetSheetName().equals(sheet)) {
-                return false;
+                blockers.add("STRUCTURAL_CROSS_REGION");
+                return new SumInspection(blockers, List.of());
             }
             if ("defined_name".equals(token.refKind())) {
-                return false;
+                blockers.add("STRUCTURAL_SHAPE_NOT_SUM");
+                return new SumInspection(blockers, List.of());
             }
-            for (int[] rc : SumCoverage.expand(token.targetRange())) {
+            for (SumCoverage.CellRef ref : SumCoverage.expand(token.targetRange())) {
                 LocatedCell located = catalog.get(catalogKey(
                         token.targetSheetName() != null ? token.targetSheetName() : sheet,
-                        rc[0], rc[1]));
+                        ref.row(), ref.col()));
                 if (located == null) {
                     continue;
                 }
                 if (located.regionId != region.regionId()) {
-                    return false;
+                    blockers.add("STRUCTURAL_CROSS_REGION");
+                    return new SumInspection(blockers, List.of());
                 }
                 deps.add(located.cell.cellId());
             }
         }
-        Set<Long> unique = new LinkedHashSet<>(deps);
-        if (unique.size() != deps.size() || !unique.equals(eligible)) {
-            return false;
-        }
-        BigDecimal leafSum = includedSum(eligibleParticipation(eligible, region.cells()), region.cells());
-        return NumberFormatPrecision.agree(cell.numeric(), leafSum, cell.numberFormat());
+        return new SumInspection(blockers, deps);
     }
 
     private static List<CellParticipation> participation(
@@ -615,7 +630,7 @@ final class ExplicitAnchorDetector {
         return participation;
     }
 
-    private static boolean known(String value, String unknown) {
+    private static boolean isKnown(String value, String unknown) {
         return value != null && !value.isBlank() && !unknown.equals(value);
     }
 
@@ -640,14 +655,25 @@ final class ExplicitAnchorDetector {
 
     private record LocatedCell(long regionId, CellSnapshot cell) {}
 
-    private record RegionOutcome(Contribution composable, List<Contribution> isolated) {}
+    private record RegionOutcome(Contribution composed, List<Contribution> reviewOnly) {}
+
+    private record SumInspection(List<String> blockers, List<Long> deps) {
+        Set<Long> unique() {
+            return new LinkedHashSet<>(deps);
+        }
+
+        boolean duplicates() {
+            return unique().size() != deps.size();
+        }
+    }
 
     private Candidate toCandidate(String fileHash, Long costHeadId, String costHeadCode,
             List<Contribution> contributions) {
         List<Contribution> sorted = new ArrayList<>(contributions);
         sorted.sort(Comparator.comparing(Contribution::regionKey));
         boolean review = sorted.stream().anyMatch(item -> LEAF_SUM.equals(item.basis())
-                || item.reasons().contains("STRUCTURAL_AMOUNT_MISMATCH"));
+                || item.reasons().contains("STRUCTURAL_AMOUNT_MISMATCH")
+                || item.reasons().contains("STRUCTURAL_AMBIGUOUS"));
         BigDecimal amount = sorted.stream()
                 .map(item -> item.normalizedAmount() != null ? item.normalizedAmount() : item.sourceAmount())
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -660,7 +686,7 @@ final class ExplicitAnchorDetector {
                 first.normalizedCurrency(),
                 first.normalizedUnit(),
                 review ? 0.4 : confidence(sorted),
-                candidateReasons(sorted, review),
+                candidateReasons(sorted),
                 review,
                 sorted);
     }
@@ -741,19 +767,27 @@ final class ExplicitAnchorDetector {
         return true;
     }
 
-    private static List<String> candidateReasons(List<Contribution> contributions, boolean review) {
-        if (review) {
-            for (Contribution contribution : contributions) {
+    private static List<String> candidateReasons(List<Contribution> contributions) {
+        for (Contribution contribution : contributions) {
+            if (EXPLICIT.equals(contribution.basis())) {
+                List<String> reasons = new ArrayList<>();
+                reasons.add("EXPLICIT_TOTAL_ANCHOR");
+                if (contribution.reasons().contains("STRUCTURAL_AGREEMENT")) {
+                    reasons.add("STRUCTURAL_AGREEMENT");
+                }
+                if (contribution.reasons().contains("STRUCTURAL_AMOUNT_MISMATCH")) {
+                    reasons.add("STRUCTURAL_AMOUNT_MISMATCH");
+                }
                 if (contribution.reasons().contains("LABELED_LITERAL_GEOMETRIC_ONLY")) {
                     return List.of("LABELED_LITERAL_GEOMETRIC_ONLY");
                 }
+                return List.copyOf(reasons);
             }
-            return List.of("LEAF_SUM_FALLBACK");
         }
         if (contributions.stream().allMatch(item -> STRUCTURAL.equals(item.basis()))) {
             return List.of("STRUCTURAL_TOTAL");
         }
-        return List.of("EXPLICIT_TOTAL_ANCHOR");
+        return List.of("LEAF_SUM_FALLBACK");
     }
 
     private static CellSnapshot findAnchor(
