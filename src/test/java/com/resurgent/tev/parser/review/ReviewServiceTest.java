@@ -456,7 +456,7 @@ class ReviewServiceTest {
         int rejectMissing = Main.commandLine().setOut(new PrintWriter(out, true))
                 .setErr(new PrintWriter(err, true))
                 .execute("review", "reject-total", "--db", db.toString(), "--actor", "analyst",
-                        String.valueOf(reviewId));
+                        String.valueOf(reviewId + 999));
         assertThat(rejectMissing).isEqualTo(1);
     }
 
