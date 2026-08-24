@@ -1015,7 +1015,7 @@ final class ExplicitAnchorDetector {
         for (Contribution contribution : contributions) {
             canonical.append(contribution.basis()).append('|')
                     .append(contribution.regionKey()).append('|')
-                    .append(contribution.anchorCellId() == null ? "" : contribution.anchorCellId()).append('|')
+                    .append(anchorCoord(contribution)).append('|')
                     .append(contribution.sourceAmount()).append('|')
                     .append(nullToEmpty(contribution.sourceUnit())).append('|')
                     .append(nullToEmpty(contribution.sourceCurrency()));
@@ -1033,6 +1033,19 @@ final class ExplicitAnchorDetector {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    private static String anchorCoord(Contribution contribution) {
+        Long anchorId = contribution.anchorCellId();
+        if (anchorId == null) {
+            return "";
+        }
+        for (CellParticipation cell : contribution.cells()) {
+            if (cell.cellId() == anchorId) {
+                return cell.coord();
+            }
+        }
+        return "";
     }
 
     private static boolean disabledLine(String formula) {
