@@ -707,8 +707,10 @@ public final class IngestService {
                     cellsByRegion.getOrDefault(region.regionId(), List.of())));
         }
         Map<Long, List<Long>> precedents = ReferenceGraphLoader.loadAdjacency(repo, parseRunId);
-        for (ExplicitAnchorDetector.Candidate candidate : explicitAnchorDetector.detect(
+        List<ExplicitAnchorDetector.AcceptedManual> manuals = loadAcceptedManuals(repo, sourceFileId);
+        for (ExplicitAnchorDetector.Candidate detected : explicitAnchorDetector.detect(
                 snapshots, precedents, fileHash)) {
+            ExplicitAnchorDetector.Candidate candidate = applyAcceptedManuals(detected, fileHash, manuals);
             long candidateId = repo.insertCostHeadCandidate(
                     parseRunId, sourceFileId, candidate.costHeadId(), candidate.fingerprint(),
                     candidate.amount(), candidate.currency(), candidate.unit(), 0,
@@ -727,7 +729,7 @@ public final class IngestService {
                 }
             }
             if (candidate.review()) {
-                repo.insertReviewQueue(parseRunId, "cost_head_candidate",
+                long reviewQueueId = repo.insertReviewQueue(parseRunId, "cost_head_candidate",
                         "Cost-head candidate requires review: " + candidate.costHeadCode(),
                         Jsonb.toJson(Map.of(
                                 "candidateId", candidateId,
@@ -735,7 +737,49 @@ public final class IngestService {
                                 "fingerprint", candidate.fingerprint())),
                         "Pending", false, Timestamps.now(), null,
                         "candidate", candidate.costHeadCode(), candidate.confidence());
+                carryTotalDecision(repo, reviewQueueId, sourceFileId, candidate);
             }
+        }
+    }
+
+    private static List<ExplicitAnchorDetector.AcceptedManual> loadAcceptedManuals(
+            WorkspaceRepository repo, long sourceFileId) throws SQLException {
+        List<ExplicitAnchorDetector.AcceptedManual> manuals = new ArrayList<>();
+        for (WorkspaceRepository.AcceptedManualRow row : repo.findAcceptedManuals(sourceFileId)) {
+            manuals.add(new ExplicitAnchorDetector.AcceptedManual(
+                    row.id(), row.costHeadCode(), row.amount(), row.unit(), row.currency(),
+                    row.adjustsKey()));
+        }
+        return manuals;
+    }
+
+    private static ExplicitAnchorDetector.Candidate applyAcceptedManuals(
+            ExplicitAnchorDetector.Candidate detected,
+            String fileHash,
+            List<ExplicitAnchorDetector.AcceptedManual> manuals) {
+        if (manuals.isEmpty()) {
+            return detected;
+        }
+        return new ExplicitAnchorDetector.Candidate(
+                detected.costHeadId(),
+                detected.costHeadCode(),
+                ExplicitAnchorDetector.fingerprint(
+                        fileHash, detected.costHeadCode(), detected.contributions(), manuals),
+                detected.amount(),
+                detected.currency(),
+                detected.unit(),
+                detected.confidence(),
+                detected.reasons(),
+                detected.review(),
+                detected.contributions());
+    }
+
+    private static void carryTotalDecision(WorkspaceRepository repo, long reviewQueueId,
+            long sourceFileId, ExplicitAnchorDetector.Candidate candidate) throws SQLException {
+        Long decisionId = repo.findLatestAcceptedTotalDecisionId(
+                sourceFileId, candidate.costHeadCode(), candidate.fingerprint());
+        if (decisionId != null) {
+            repo.carryReviewQueue(reviewQueueId, decisionId, "Accepted");
         }
     }
 

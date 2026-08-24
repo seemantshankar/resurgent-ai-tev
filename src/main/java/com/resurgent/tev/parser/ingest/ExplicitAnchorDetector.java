@@ -407,6 +407,11 @@ final class ExplicitAnchorDetector {
     }
 
     static String fingerprint(String fileHash, String costHeadCode, List<Contribution> contributions) {
+        return fingerprint(fileHash, costHeadCode, contributions, List.of());
+    }
+
+    static String fingerprint(String fileHash, String costHeadCode, List<Contribution> contributions,
+            List<AcceptedManual> manuals) {
         StringBuilder canonical = new StringBuilder();
         canonical.append(fileHash == null ? "" : fileHash).append('\n');
         canonical.append(costHeadCode).append('\n');
@@ -423,6 +428,25 @@ final class ExplicitAnchorDetector {
             }
             canonical.append('\n');
         }
+        List<AcceptedManual> relevant = new ArrayList<>();
+        for (AcceptedManual manual : manuals) {
+            if (costHeadCode.equals(manual.costHeadCode())) {
+                relevant.add(manual);
+            }
+        }
+        relevant.sort(Comparator.comparingLong(AcceptedManual::id)
+                .thenComparing(AcceptedManual::amount)
+                .thenComparing(manual -> nullToEmpty(manual.unit()))
+                .thenComparing(manual -> nullToEmpty(manual.currency()))
+                .thenComparing(manual -> nullToEmpty(manual.adjustsKey())));
+        for (AcceptedManual manual : relevant) {
+            canonical.append("manual|").append(manual.id()).append('|')
+                    .append(manual.amount()).append('|')
+                    .append(nullToEmpty(manual.unit())).append('|')
+                    .append(nullToEmpty(manual.currency())).append('|')
+                    .append(nullToEmpty(manual.adjustsKey()))
+                    .append('\n');
+        }
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")
                     .digest(canonical.toString().getBytes(StandardCharsets.UTF_8));
@@ -431,6 +455,14 @@ final class ExplicitAnchorDetector {
             throw new IllegalStateException(e);
         }
     }
+
+    record AcceptedManual(
+            long id,
+            String costHeadCode,
+            String amount,
+            String unit,
+            String currency,
+            String adjustsKey) {}
 
     private static String nullToEmpty(String value) {
         return value == null ? "" : value;

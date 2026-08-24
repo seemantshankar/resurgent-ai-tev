@@ -1201,7 +1201,246 @@ public final class WorkspaceRepository {
         }
     }
 
+    public List<MappingReviewRow> findPendingTotalReviews(long parseRunId) throws SQLException {
+        List<MappingReviewRow> rows = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT review_queue_id, summary, detail FROM review_queue"
+                        + " WHERE parse_run_id = ? AND category = 'cost_head_candidate'"
+                        + " AND status = 'Pending' ORDER BY review_queue_id")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(new MappingReviewRow(
+                            rs.getLong("review_queue_id"),
+                            rs.getString("summary"),
+                            rs.getString("detail")));
+                }
+            }
+        }
+        return rows;
+    }
+
+    public CandidateIdentity findCandidateIdentity(long candidateId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT c.source_file_id, h.code, c.candidate_fingerprint"
+                        + " FROM cost_head_candidate c JOIN cost_head h ON h.cost_head_id = c.cost_head_id"
+                        + " WHERE c.cost_head_candidate_id = ?")) {
+            ps.setLong(1, candidateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    throw new SQLException("cost_head_candidate not found: " + candidateId);
+                }
+                return new CandidateIdentity(
+                        rs.getLong("source_file_id"),
+                        rs.getString("code"),
+                        rs.getString("candidate_fingerprint"));
+            }
+        }
+    }
+
+    public Long findLatestTotalDecisionId(long sourceFileId, String costHeadCode, String fingerprint)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT total_decision_id FROM cost_head_total_decision"
+                        + " WHERE source_file_id = ? AND cost_head_code = ? AND candidate_fingerprint = ?"
+                        + " ORDER BY decided_at DESC, total_decision_id DESC LIMIT 1")) {
+            ps.setLong(1, sourceFileId);
+            ps.setString(2, costHeadCode);
+            ps.setString(3, fingerprint);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : null;
+            }
+        }
+    }
+
+    public Long findLatestAcceptedTotalDecisionId(long sourceFileId, String costHeadCode,
+            String fingerprint) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT total_decision_id, decision FROM cost_head_total_decision"
+                        + " WHERE source_file_id = ? AND cost_head_code = ? AND candidate_fingerprint = ?"
+                        + " ORDER BY decided_at DESC, total_decision_id DESC LIMIT 1")) {
+            ps.setLong(1, sourceFileId);
+            ps.setString(2, costHeadCode);
+            ps.setString(3, fingerprint);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next() && "Accepted".equals(rs.getString("decision"))) {
+                    return rs.getLong("total_decision_id");
+                }
+                return null;
+            }
+        }
+    }
+
+    public void carryReviewQueue(long reviewQueueId, long decisionId, String status)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE review_queue SET status = ?, carried_from_decision_id = ? WHERE review_queue_id = ?")) {
+            ps.setString(1, status);
+            ps.setLong(2, decisionId);
+            ps.setLong(3, reviewQueueId);
+            ps.executeUpdate();
+        }
+    }
+
+    public ParseContext findLatestParseContext() throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT parse_run_id, source_file_id, mandate_id FROM parse_run"
+                        + " ORDER BY parse_run_id DESC LIMIT 1");
+                ResultSet rs = ps.executeQuery()) {
+            if (!rs.next()) {
+                throw new SQLException("no parse_run in workspace");
+            }
+            return new ParseContext(rs.getLong("parse_run_id"), rs.getLong("source_file_id"),
+                    rs.getLong("mandate_id"));
+        }
+    }
+
+    public long findCostHeadId(long mandateId, String code) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT cost_head_id FROM cost_head WHERE mandate_id = ? AND code = ?")) {
+            ps.setLong(1, mandateId);
+            ps.setString(2, code);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    throw new SQLException("cost head not found: " + code);
+                }
+                return rs.getLong(1);
+            }
+        }
+    }
+
+    public String findContributionRegionKey(long contributionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT r.region_key FROM cost_head_contribution c"
+                        + " JOIN region r ON r.region_id = c.region_id"
+                        + " WHERE c.cost_head_contribution_id = ?")) {
+            ps.setLong(1, contributionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    throw new SQLException("contribution not found: " + contributionId);
+                }
+                return rs.getString(1);
+            }
+        }
+    }
+
+    public long insertManualContribution(long sourceFileId, long costHeadId, Long adjustsContributionId,
+            BigDecimal amount, String currency, String unit, String reason, String actor,
+            String status, String createdAt) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO manual_contribution (source_file_id, cost_head_id, adjusts_contribution_id,"
+                        + " amount, currency, unit, reason, actor, status, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, sourceFileId);
+            ps.setLong(2, costHeadId);
+            if (adjustsContributionId == null) {
+                ps.setNull(3, java.sql.Types.INTEGER);
+            } else {
+                ps.setLong(3, adjustsContributionId);
+            }
+            ps.setBigDecimal(4, amount);
+            ps.setString(5, currency);
+            ps.setString(6, unit);
+            ps.setString(7, reason);
+            ps.setString(8, actor);
+            ps.setString(9, status);
+            ps.setString(10, createdAt);
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    public ManualContributionRow findManualContribution(long manualId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT manual_contribution_id, source_file_id, cost_head_id, status"
+                        + " FROM manual_contribution WHERE manual_contribution_id = ?")) {
+            ps.setLong(1, manualId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    throw new SQLException("manual contribution not found: " + manualId);
+                }
+                return new ManualContributionRow(
+                        rs.getLong("manual_contribution_id"),
+                        rs.getLong("source_file_id"),
+                        rs.getLong("cost_head_id"),
+                        rs.getString("status"));
+            }
+        }
+    }
+
+    public void updateManualStatus(long manualId, String status, String decidedAt) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE manual_contribution SET status = ?, decided_at = ? WHERE manual_contribution_id = ?")) {
+            ps.setString(1, status);
+            ps.setString(2, decidedAt);
+            ps.setLong(3, manualId);
+            ps.executeUpdate();
+        }
+    }
+
+    public List<AcceptedManualRow> findAcceptedManuals(long sourceFileId) throws SQLException {
+        List<AcceptedManualRow> rows = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT m.manual_contribution_id, h.code, m.amount, m.unit, m.currency,"
+                        + " COALESCE(p.location, '') AS adjusts_key"
+                        + " FROM manual_contribution m"
+                        + " JOIN cost_head h ON h.cost_head_id = m.cost_head_id"
+                        + " LEFT JOIN provenance p ON p.entity_type = 'manual_contribution'"
+                        + " AND p.entity_id = m.manual_contribution_id"
+                        + " WHERE m.source_file_id = ? AND m.status = 'Accepted'"
+                        + " ORDER BY m.manual_contribution_id")) {
+            ps.setLong(1, sourceFileId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(new AcceptedManualRow(
+                            rs.getLong("manual_contribution_id"),
+                            rs.getString("code"),
+                            rs.getString("amount"),
+                            rs.getString("unit"),
+                            rs.getString("currency"),
+                            rs.getString("adjusts_key")));
+                }
+            }
+        }
+        return rows;
+    }
+
+    public long insertTotalDecision(long sourceFileId, String costHeadCode, String fingerprint,
+            String decision, String actor, String reason, String decidedAt, Long supersedesId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cost_head_total_decision (source_file_id, cost_head_code, candidate_fingerprint,"
+                        + " decision, actor, reason, decided_at, supersedes_id)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, sourceFileId);
+            ps.setString(2, costHeadCode);
+            ps.setString(3, fingerprint);
+            ps.setString(4, decision);
+            ps.setString(5, actor);
+            ps.setString(6, reason);
+            ps.setString(7, decidedAt);
+            if (supersedesId == null) {
+                ps.setNull(8, java.sql.Types.INTEGER);
+            } else {
+                ps.setLong(8, supersedesId);
+            }
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
     public record MappingIdentity(long sourceFileId, String regionKey, String sourceLabel) {}
+
+    public record CandidateIdentity(long sourceFileId, String costHeadCode, String fingerprint) {}
+
+    public record ParseContext(long parseRunId, long sourceFileId, long mandateId) {}
+
+    public record ManualContributionRow(long id, long sourceFileId, long costHeadId, String status) {}
+
+    public record AcceptedManualRow(
+            long id, String costHeadCode, String amount, String unit, String currency, String adjustsKey) {}
 
     public record RegionAnchorRow(
             long regionId,
