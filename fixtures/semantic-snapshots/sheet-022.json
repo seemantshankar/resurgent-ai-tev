@@ -89,7 +89,7 @@
   }, {
     "bbox" : {
       "end_col" : 9,
-      "end_row" : 10,
+      "end_row" : 12,
       "start_col" : 1,
       "start_row" : 9
     },
@@ -101,14 +101,14 @@
       "type" : "text"
     }, {
       "col" : 2,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
       "type" : "text"
     }, {
       "col" : 3,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
       "type" : "text"
     }, {
@@ -116,7 +116,7 @@
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 5,
       "conf" : 0.3,
@@ -150,28 +150,7 @@
     } ],
     "cost_head_code" : null,
     "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "unknown",
-    "inferred_unit_conf" : 0.0,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 4,
-      "end_row" : 12,
-      "start_col" : 4,
-      "start_row" : 12
-    },
-    "columns" : [ {
-      "col" : 4,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
+    "inferred_currency_conf" : 0.95,
     "inferred_unit" : "unknown",
     "inferred_unit_conf" : 0.0,
     "mapping_method" : null,
@@ -326,60 +305,9 @@
   }, {
     "bbox" : {
       "end_col" : 11,
-      "end_row" : 37,
-      "start_col" : 6,
-      "start_row" : 33
-    },
-    "columns" : [ {
-      "col" : 6,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 7,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 8,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 9,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 10,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 11,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "unknown",
-    "inferred_unit_conf" : 0.0,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 11,
       "end_row" : 42,
       "start_col" : 6,
-      "start_row" : 38
+      "start_row" : 33
     },
     "columns" : [ {
       "col" : 6,
@@ -449,7 +377,7 @@
   }, {
     "bbox" : {
       "end_col" : 12,
-      "end_row" : 46,
+      "end_row" : 47,
       "start_col" : 7,
       "start_row" : 45
     },
@@ -521,57 +449,6 @@
   }, {
     "bbox" : {
       "end_col" : 12,
-      "end_row" : 47,
-      "start_col" : 7,
-      "start_row" : 47
-    },
-    "columns" : [ {
-      "col" : 7,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 8,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 9,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 10,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 11,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 12,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "unknown",
-    "inferred_unit_conf" : 0.0,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 12,
       "end_row" : 49,
       "start_col" : 7,
       "start_row" : 49
@@ -622,8 +499,8 @@
     "mapping_reasons" : [ ]
   }, {
     "bbox" : {
-      "end_col" : 5,
-      "end_row" : 52,
+      "end_col" : 12,
+      "end_row" : 54,
       "start_col" : 5,
       "start_row" : 52
     },
@@ -633,27 +510,6 @@
       "reasons" : [ "MISSING_HEADER" ],
       "role" : "other",
       "type" : "number"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "unknown",
-    "inferred_unit_conf" : 0.0,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 12,
-      "end_row" : 54,
-      "start_col" : 5,
-      "start_row" : 54
-    },
-    "columns" : [ {
-      "col" : 5,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
     }, {
       "col" : 6,
       "conf" : 0.2,
@@ -952,7 +808,7 @@
     "mapping_reasons" : [ ]
   } ],
   "role" : "support",
-  "role_conf" : 0.9250936329588015,
+  "role_conf" : 0.951310861423221,
   "role_reasons" : [ {
     "code" : "DEPENDENCY_INTO_PRIMARY",
     "params" : {
@@ -962,9 +818,9 @@
   }, {
     "code" : "SCRATCH_ORPHAN_CONTENT",
     "params" : {
-      "cell_count" : 20
+      "cell_count" : 13
     },
-    "weight" : 20
+    "weight" : 13
   } ],
   "scratch_cells" : [ {
     "coord" : "E2",
@@ -978,84 +834,6 @@
     "reasons" : [ ],
     "scratch" : false,
     "support" : false
-  }, {
-    "coord" : "F38",
-    "orphan" : false,
-    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
-    "scratch" : true,
-    "support" : false
-  }, {
-    "coord" : "G38",
-    "orphan" : false,
-    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
-    "scratch" : true,
-    "support" : false
-  }, {
-    "coord" : "H38",
-    "orphan" : false,
-    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
-    "scratch" : true,
-    "support" : false
-  }, {
-    "coord" : "I38",
-    "orphan" : false,
-    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
-    "scratch" : true,
-    "support" : false
-  }, {
-    "coord" : "J38",
-    "orphan" : false,
-    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
-    "scratch" : true,
-    "support" : false
-  }, {
-    "coord" : "K38",
-    "orphan" : false,
-    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
-    "scratch" : true,
-    "support" : false
-  }, {
-    "coord" : "K40",
-    "orphan" : true,
-    "reasons" : [ ],
-    "scratch" : false,
-    "support" : false
-  }, {
-    "coord" : "F42",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "G42",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "H42",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "I42",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "J42",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "K42",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
   }, {
     "coord" : "O45",
     "orphan" : true,

@@ -230,7 +230,7 @@ class TrustIngestTest {
     private static ParserConfig reparseConfig() {
         return new ParserConfig(
                 100L * 1024 * 1024, 200, 1_000_000, 16_384, 5_000_000L, 100,
-                false, true, true, 4, 4);
+                false, true, true, 4);
     }
 
     private static long contributionId(Path db) throws Exception {

@@ -10,9 +10,9 @@ import java.util.regex.Pattern;
 /**
  * Derives header facts from cells that belong to a single detected region.
  *
- * <p>This is deliberately independent of persistence and region detection. It gives their
- * integration point one deterministic source for header rows, period ordering, and the labels
- * which can be denormalized onto cells later in the ingestion pipeline.
+ * <p>Period-label matching is shared with region cutting so a column-header row
+ * means the same thing in both places. Persistence still consumes this analyzer
+ * only after detection.
  */
 final class RegionHeaderAnalyzer {
 
@@ -95,9 +95,25 @@ final class RegionHeaderAnalyzer {
         return result;
     }
 
+    static boolean isPeriodLikeLabel(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        String trimmed = value.trim();
+        return PERIOD.matcher(trimmed).matches() || trimmed.equalsIgnoreCase("construction");
+    }
+
+    /** Period axis labels that identify a column-header row, not opening/closing stubs. */
+    static boolean isColumnHeaderPeriodLabel(String value) {
+        if (!isPeriodLikeLabel(value)) {
+            return false;
+        }
+        return !value.trim().matches("(?i)opening(?:\\s+balance)?|closing(?:\\s+balance)?");
+    }
+
     private boolean isPeriodHeader(NormalizedCell cell) {
         String value = text(cell);
-        return value != null && PERIOD.matcher(value).matches();
+        return value != null && isPeriodLikeLabel(value);
     }
 
     private boolean isHeaderRow(int row, List<NormalizedCell> cells,

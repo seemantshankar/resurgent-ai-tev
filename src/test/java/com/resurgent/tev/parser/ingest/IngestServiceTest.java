@@ -1,7 +1,9 @@
 package com.resurgent.tev.parser.ingest;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.resurgent.tev.parser.config.ConfigLoader;
 import com.resurgent.tev.parser.config.ParserConfig;
 import com.resurgent.tev.parser.db.Jsonb;
@@ -14,8 +16,6 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.util.List;
 import java.util.Map;
-
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.usermodel.Name;
 import org.apache.poi.ss.usermodel.Row;
@@ -184,10 +184,13 @@ class IngestServiceTest {
                 try (ResultSet rs = c.createStatement().executeQuery(
                         "SELECT header_rows, period_axis, detection_reasons FROM region")) {
                     assertThat(rs.next()).isTrue();
-                    assertThat(Jsonb.fromJson(rs.getString("header_rows"), List.class)).containsExactly(1);
-                    assertThat(Jsonb.fromJson(rs.getString("period_axis"), Map.class))
+                    assertThat(Jsonb.fromJson(rs.getString("header_rows"),
+                            new TypeReference<List<Integer>>() {})).containsExactly(1);
+                    assertThat(Jsonb.fromJson(rs.getString("period_axis"),
+                            new TypeReference<Map<String, Integer>>() {}))
                             .containsEntry("B", 1).containsEntry("C", 2);
-                    assertThat(Jsonb.fromJson(rs.getString("detection_reasons"), List.class)).isNotEmpty();
+                    assertThat(Jsonb.fromJson(rs.getString("detection_reasons"),
+                            new TypeReference<List<Object>>() {})).isNotEmpty();
                 }
                 try (ResultSet rs = c.createStatement().executeQuery(
                         "SELECT row_label, col_label FROM cell WHERE coord = 'B2'")) {
@@ -198,13 +201,15 @@ class IngestServiceTest {
                 try (ResultSet rs = c.createStatement().executeQuery(
                         "SELECT category, detail FROM review_queue WHERE category = 'region_classification'")) {
                     assertThat(rs.next()).isTrue();
-                    assertThat(Jsonb.fromJson(rs.getString("detail"), Map.class))
+                    assertThat(Jsonb.fromJson(rs.getString("detail"),
+                            new TypeReference<Map<String, Object>>() {}))
                             .containsEntry("regionType", "unknown")
                             .containsKey("regionId")
                             .containsKey("reasonCodes");
                 }
             }
-            Map<String, Object> metrics = Jsonb.fromJson(summary.metricsJson(), Map.class);
+            Map<String, Object> metrics = Jsonb.fromJson(summary.metricsJson(),
+                    new TypeReference<Map<String, Object>>() {});
             assertThat(metrics).containsEntry("regionsTotal", 1)
                     .containsEntry("cellsWithoutRegion", 0)
                     .containsEntry("regionsClassified", 0)
@@ -249,7 +254,7 @@ class IngestServiceTest {
     }
 
     @Test
-    void regionBreakScoringSplitsPersistentStyledSchemaChange() throws Exception {
+    void regionBreakDoesNotSplitOnStyledTitleWithoutNewHeader() throws Exception {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Model");
             for (int row = 0; row < 3; row++) {
@@ -267,8 +272,35 @@ class IngestServiceTest {
                 sheet.getRow(row).createCell(1).setCellValue(row);
             }
 
-            Path xlsx = writeWorkbook(workbook, "scored-region-break.xlsx");
-            Path db = tempDir.resolve("scored-region-break.db");
+            Path xlsx = writeWorkbook(workbook, "styled-title-is-not-break.xlsx");
+            Path db = tempDir.resolve("styled-title-is-not-break.db");
+            new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                assertThat(count(c, "region")).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
+    void regionBreakSplitsStackedTablesOnNewColumnHeaderRow() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Model");
+            Row headerA = sheet.createRow(0);
+            headerA.createCell(0).setCellValue("Particulars");
+            headerA.createCell(1).setCellValue("Year 1");
+            Row dataA = sheet.createRow(1);
+            dataA.createCell(0).setCellValue("Revenue");
+            dataA.createCell(1).setCellValue(100.0);
+            Row headerB = sheet.createRow(3);
+            headerB.createCell(0).setCellValue("Particulars");
+            headerB.createCell(1).setCellValue("Year 1");
+            Row dataB = sheet.createRow(4);
+            dataB.createCell(0).setCellValue("Cost");
+            dataB.createCell(1).setCellValue(200.0);
+
+            Path xlsx = writeWorkbook(workbook, "stacked-header-break.xlsx");
+            Path db = tempDir.resolve("stacked-header-break.db");
             new IngestService().ingest(xlsx, 1L, db);
 
             try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {

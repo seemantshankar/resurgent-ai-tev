@@ -28,7 +28,6 @@ public final class ConfigLoader {
             "xlsEnabled",
             "rejectPasswordProtected",
             "rejectActiveXOleDde",
-            "regionBreakThreshold",
             "classificationEvidenceFloor");
 
     private ConfigLoader() {}
@@ -78,15 +77,13 @@ public final class ConfigLoader {
                 defaults.rejectPasswordProtected(), v -> (Boolean) v);
         boolean rejectActiveXOleDde = value(user, "rejectActiveXOleDde",
                 defaults.rejectActiveXOleDde(), v -> (Boolean) v);
-        int regionBreakThreshold = value(user, "regionBreakThreshold", defaults.regionBreakThreshold(),
-                v -> ((Number) v).intValue());
         int classificationEvidenceFloor = value(user, "classificationEvidenceFloor",
                 defaults.classificationEvidenceFloor(), v -> ((Number) v).intValue());
 
         ParserConfig effective = new ParserConfig(
                 maxFileSizeBytes, maxSheetCount, maxRowCount, maxColumnCount, maxCellCount,
                 maxZipExpansionRatio, xlsEnabled, rejectPasswordProtected, rejectActiveXOleDde,
-                regionBreakThreshold, classificationEvidenceFloor);
+                classificationEvidenceFloor);
 
         validate(effective);
         return effective;
@@ -110,9 +107,6 @@ public final class ConfigLoader {
                 config.rejectPasswordProtected());
         assertSecurityProtectionEnabled(ParserConfig.PROTECTION_ACTIVE_X_OLE_DDE,
                 config.rejectActiveXOleDde());
-        if (config.regionBreakThreshold() < 1) {
-            throw new ConfigValidationException("regionBreakThreshold must be positive");
-        }
         if (config.classificationEvidenceFloor() < 1) {
             throw new ConfigValidationException("classificationEvidenceFloor must be positive");
         }

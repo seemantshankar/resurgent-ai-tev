@@ -25,7 +25,6 @@ public record ParserConfig(
         boolean xlsEnabled,
         boolean rejectPasswordProtected,
         boolean rejectActiveXOleDde,
-        int regionBreakThreshold,
         int classificationEvidenceFloor) {
 
     /** Embedded defaults used when no --config file is supplied. */
@@ -40,7 +39,6 @@ public record ParserConfig(
                 false,                 // xls adapter disabled by default
                 true,                  // reject password-protected files
                 true,                  // reject ActiveX/OLE/DDE payloads
-                4,                     // region break score
                 3);                    // minimum classification evidence
     }
 

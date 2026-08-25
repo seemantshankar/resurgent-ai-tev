@@ -360,7 +360,7 @@ class ReviewServiceTest {
                 "revised contingency");
         ParserConfig third = new ParserConfig(
                 100L * 1024 * 1024, 200, 1_000_000, 16_384, 5_000_000L, 100,
-                false, true, true, 4, 5);
+                false, true, true, 5);
         new IngestService().ingest(xlsx, 1L, db, third);
 
         List<ReviewService.TotalReviewItem> changed = review.listPendingTotals(db);
@@ -397,7 +397,7 @@ class ReviewServiceTest {
         }
         ParserConfig third = new ParserConfig(
                 100L * 1024 * 1024, 200, 1_000_000, 16_384, 5_000_000L, 100,
-                false, true, true, 4, 5);
+                false, true, true, 5);
         new IngestService().ingest(xlsx, 1L, db, third);
         List<ReviewService.TotalReviewItem> afterWithdraw = review.listPendingTotals(db);
         assertThat(afterWithdraw).isNotEmpty();
@@ -594,7 +594,7 @@ class ReviewServiceTest {
     private static ParserConfig reparseConfig() {
         return new ParserConfig(
                 100L * 1024 * 1024, 200, 1_000_000, 16_384, 5_000_000L, 100,
-                false, true, true, 4, 4);
+                false, true, true, 4);
     }
 
     private Path writeLiteralCivil(String name, String label, double foundation, double finishes)

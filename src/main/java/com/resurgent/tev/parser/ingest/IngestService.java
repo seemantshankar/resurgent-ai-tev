@@ -496,8 +496,7 @@ public final class IngestService {
     private void persistRegions(WorkspaceRepository repo, long worksheetId, long parseRunId,
             String sheetName, String fileName, Map<Long, RegionDetector.RegionCell> cellsById,
             ParserConfig config) throws SQLException, IOException {
-        for (RegionDetector.DetectedRegion region : regionDetector.detect(sheetName, cellsById,
-                config.regionBreakThreshold())) {
+        for (RegionDetector.DetectedRegion region : regionDetector.detect(sheetName, cellsById)) {
             List<Map.Entry<Long, RegionDetector.RegionCell>> regionEntries = region.cellIds().stream()
                     .map(id -> Map.entry(id, cellsById.get(id)))
                     .toList();
