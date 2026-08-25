@@ -62,49 +62,9 @@
 }, {
   "bbox" : {
     "end_col" : 14,
-    "end_row" : 18,
-    "start_col" : 11,
-    "start_row" : 5
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-039!K5",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-039"
-}, {
-  "bbox" : {
-    "end_col" : 2,
-    "end_row" : 11,
-    "start_col" : 2,
-    "start_row" : 11
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-039!B11",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-039"
-}, {
-  "bbox" : {
-    "end_col" : 9,
-    "end_row" : 16,
+    "end_row" : 22,
     "start_col" : 1,
-    "start_row" : 13
+    "start_row" : 5
   },
   "cost_head_code" : null,
   "detection_reasons" : [ {
@@ -116,28 +76,8 @@
     "weight" : 3
   } ],
   "region_conf" : 1.0,
-  "region_key" : "sheet-039!A13",
+  "region_key" : "sheet-039!A5",
   "region_type" : "vendor_block",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-039"
-}, {
-  "bbox" : {
-    "end_col" : 14,
-    "end_row" : 22,
-    "start_col" : 11,
-    "start_row" : 20
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-039!K20",
-  "region_type" : "unknown",
   "serial_pattern" : null,
   "sheet_id" : "sheet-039"
 }, {
@@ -184,29 +124,9 @@
 }, {
   "bbox" : {
     "end_col" : 13,
-    "end_row" : 23,
-    "start_col" : 12,
-    "start_row" : 23
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-039!L23",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-039"
-}, {
-  "bbox" : {
-    "end_col" : 13,
     "end_row" : 25,
     "start_col" : 12,
-    "start_row" : 25
+    "start_row" : 23
   },
   "cost_head_code" : null,
   "detection_reasons" : [ {
@@ -217,7 +137,7 @@
     "weight" : 3
   } ],
   "region_conf" : 1.0,
-  "region_key" : "sheet-039!L25",
+  "region_key" : "sheet-039!L23",
   "region_type" : "vertical_form",
   "serial_pattern" : null,
   "sheet_id" : "sheet-039"

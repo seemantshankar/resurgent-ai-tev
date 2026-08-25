@@ -201,7 +201,7 @@
 }, {
   "bbox" : {
     "end_col" : 11,
-    "end_row" : 38,
+    "end_row" : 42,
     "start_col" : 6,
     "start_row" : 38
   },
@@ -215,26 +215,6 @@
   } ],
   "region_conf" : 0.0,
   "region_key" : "sheet-022!F38",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-022"
-}, {
-  "bbox" : {
-    "end_col" : 11,
-    "end_row" : 42,
-    "start_col" : 6,
-    "start_row" : 40
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-022!F40",
   "region_type" : "unknown",
   "serial_pattern" : null,
   "sheet_id" : "sheet-022"
@@ -261,7 +241,7 @@
 }, {
   "bbox" : {
     "end_col" : 12,
-    "end_row" : 47,
+    "end_row" : 46,
     "start_col" : 7,
     "start_row" : 45
   },
@@ -296,6 +276,26 @@
   "region_conf" : 1.0,
   "region_key" : "sheet-022!O45",
   "region_type" : "vertical_form",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-022"
+}, {
+  "bbox" : {
+    "end_col" : 12,
+    "end_row" : 47,
+    "start_col" : 7,
+    "start_row" : 47
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-022!G47",
+  "region_type" : "unknown",
   "serial_pattern" : null,
   "sheet_id" : "sheet-022"
 }, {
@@ -360,7 +360,7 @@
   "sheet_id" : "sheet-022"
 }, {
   "bbox" : {
-    "end_col" : 1,
+    "end_col" : 14,
     "end_row" : 83,
     "start_col" : 1,
     "start_row" : 56
@@ -475,26 +475,6 @@
   } ],
   "region_conf" : 0.0,
   "region_key" : "sheet-022!E71",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-022"
-}, {
-  "bbox" : {
-    "end_col" : 14,
-    "end_row" : 81,
-    "start_col" : 3,
-    "start_row" : 74
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-022!C74",
   "region_type" : "unknown",
   "serial_pattern" : null,
   "sheet_id" : "sheet-022"

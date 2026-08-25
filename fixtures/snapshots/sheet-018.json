@@ -41,7 +41,7 @@
 }, {
   "bbox" : {
     "end_col" : 14,
-    "end_row" : 11,
+    "end_row" : 18,
     "start_col" : 2,
     "start_row" : 9
   },
@@ -61,46 +61,6 @@
 }, {
   "bbox" : {
     "end_col" : 14,
-    "end_row" : 17,
-    "start_col" : 2,
-    "start_row" : 12
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-018!B12",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-018"
-}, {
-  "bbox" : {
-    "end_col" : 14,
-    "end_row" : 18,
-    "start_col" : 2,
-    "start_row" : 18
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-018!B18",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-018"
-}, {
-  "bbox" : {
-    "end_col" : 2,
     "end_row" : 45,
     "start_col" : 2,
     "start_row" : 20
@@ -113,89 +73,9 @@
     },
     "weight" : 8
   } ],
-  "region_conf" : 1.0,
+  "region_conf" : 0.75,
   "region_key" : "sheet-018!B20",
   "region_type" : "cost_head",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-018"
-}, {
-  "bbox" : {
-    "end_col" : 14,
-    "end_row" : 20,
-    "start_col" : 4,
-    "start_row" : 20
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-018!D20",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-018"
-}, {
-  "bbox" : {
-    "end_col" : 14,
-    "end_row" : 39,
-    "start_col" : 4,
-    "start_row" : 24
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-018!D24",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-018"
-}, {
-  "bbox" : {
-    "end_col" : 14,
-    "end_row" : 41,
-    "start_col" : 4,
-    "start_row" : 41
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-018!D41",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-018"
-}, {
-  "bbox" : {
-    "end_col" : 14,
-    "end_row" : 45,
-    "start_col" : 4,
-    "start_row" : 43
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-018!D43",
-  "region_type" : "unknown",
   "serial_pattern" : null,
   "sheet_id" : "sheet-018"
 }, {

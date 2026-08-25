@@ -641,15 +641,18 @@ For each worksheet:
 
 1. Compute real bbox from occupied cells, merged ranges, comments, and same-sheet formula precedents.
 2. Create a grid mask of “semantic occupancy”: non-empty cells, merged participants, error cells, and hidden cells count as occupied.
-3. Dilate the mask by one row/column **only across label/formula-compatible neighbors**, then find connected components using **8-connectivity**.
+3. Dilate the mask by one row/column **across compatible neighbors**, then find connected
+   components using **8-connectivity**. Touching cells (Chebyshev distance ≤ 1) always join.
 4. A component may be a full statement, a vendor block, a side scratch island, or a repeated inline summary.
 
-**Compatibility (Sprint 3a).** A one-cell gap is bridged only when the cells on both sides are
-either (a) formula cells whose §7.4 skeletons have non-zero similarity, or (b) text labels in the
-same column. This reuses the Sprint 2 skeleton rather than inventing a second notion of sameness,
-and it is what keeps `depreciation`'s every-other-row spacers inside one component: the cells above
-and below a spacer are the same formula family. Bare value-class agreement is *not* compatibility —
-two unrelated numeric blocks separated by a blank row stay separate.
+**Compatibility (Sprint 3a).** A one-cell gap (Chebyshev distance 2) is bridged when the cells on
+both sides are (a) formula cells whose §7.4 skeletons have non-zero similarity, (b) plain text
+labels in the same column, or (c) **axis-aligned stub-to-value**: one cell is a text stub and the
+other is a number or formula, on the same row (one empty column between — `name | (blank) | number`)
+or the same column (one empty row between). (c) is how cash-flow and cost tables join a stub in
+column B to amounts in column D across an empty spacer column. Bare value-class agreement is *not*
+compatibility — two unrelated numeric blocks separated by a blank row or column stay separate.
+Formula-family skip-one still keeps `depreciation`'s every-other-row spacers inside one component.
 
 **Connectivity is 8-way** because financial blocks are routinely ragged at the top-left: a merged
 title, an indented header row, then data. 4-connectivity splits those into a title fragment and a

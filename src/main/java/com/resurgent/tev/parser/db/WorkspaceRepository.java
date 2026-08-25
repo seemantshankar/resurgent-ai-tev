@@ -287,9 +287,9 @@ public final class WorkspaceRepository {
                         + " is_error, error_type, row_label, col_label,"
                         + " is_merged_anchor, is_merged_participant, merged_range, value_source,"
                         + " row_hidden, col_hidden, sheet_hidden,"
-                        + " is_bold, has_fill, has_border, number_format)"
+                        + " is_bold, has_fill, has_border, number_format, tags)"
                         + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-                        + " ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        + " ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, worksheetId);
             ps.setString(2, cell.coord());
@@ -329,6 +329,7 @@ public final class WorkspaceRepository {
             setBoolean(ps, 32, cell.hasFill());
             setBoolean(ps, 33, cell.hasBorder());
             ps.setString(34, cell.numberFormat());
+            ps.setString(35, cell.tagsJson() == null ? "{}" : cell.tagsJson());
             ps.executeUpdate();
             return generatedId(ps);
         }
@@ -1283,7 +1284,7 @@ public final class WorkspaceRepository {
                     rows.add(new RegionMappingInput(
                             rs.getLong("region_id"),
                             rs.getString("region_key"),
-                            existing != null && !existing.isBlank() ? existing : label,
+                            label,
                             existing));
                 }
             }

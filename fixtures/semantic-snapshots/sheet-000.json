@@ -1,6 +1,24 @@
 {
-  "candidates" : [ ],
-  "contributions" : [ ],
+  "candidates" : [ {
+    "automatic_trust_eligible" : false,
+    "cost_head_code" : "CONTINGENCY",
+    "reasons" : [ "EXPLICIT_TOTAL_ANCHOR", "STRUCTURAL_AMOUNT_MISMATCH", "GATE_MAPPING_PASS", "GATE_BASIS_FAIL", "GATE_UNIT_CURRENCY_PASS", "GATE_COVERAGE_PASS", "GATE_CACHE_NUMERIC_FAIL", "GATE_BLOCKERS_PASS" ],
+    "trust_state" : "candidate"
+  }, {
+    "automatic_trust_eligible" : false,
+    "cost_head_code" : "CONTINGENCY",
+    "reasons" : [ "LEAF_SUM_FALLBACK", "GATE_MAPPING_PASS", "GATE_BASIS_FAIL", "GATE_UNIT_CURRENCY_PASS", "GATE_COVERAGE_PASS", "GATE_CACHE_NUMERIC_FAIL", "GATE_BLOCKERS_FAIL" ],
+    "trust_state" : "candidate"
+  } ],
+  "contributions" : [ {
+    "basis" : "explicit_total_anchor",
+    "cost_head_code" : "CONTINGENCY",
+    "reasons" : [ "EXPLICIT_TOTAL_ANCHOR", "FORMULA_CONNECTED", "STRUCTURAL_AMOUNT_MISMATCH" ]
+  }, {
+    "basis" : "leaf_sum",
+    "cost_head_code" : "CONTINGENCY",
+    "reasons" : [ "LEAF_SUM_FALLBACK", "STRUCTURAL_ERROR", "STRUCTURAL_ERROR", "STRUCTURAL_AMOUNT_MISMATCH" ]
+  } ],
   "duplicates" : [ ],
   "regions" : [ {
     "bbox" : {
@@ -654,8 +672,8 @@
     "mapping_reasons" : [ ]
   }, {
     "bbox" : {
-      "end_col" : 3,
-      "end_row" : 111,
+      "end_col" : 5,
+      "end_row" : 113,
       "start_col" : 2,
       "start_row" : 103
     },
@@ -664,86 +682,29 @@
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
-      "type" : "number"
+      "type" : "text"
     }, {
       "col" : 3,
       "conf" : 0.95,
       "reasons" : [ "HEADER_DESCRIPTION" ],
       "role" : "description",
       "type" : "text"
-    } ],
-    "cost_head_code" : "CONTINGENCY",
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "unknown",
-    "inferred_unit_conf" : 0.0,
-    "mapping_method" : "exact_alias",
-    "mapping_reasons" : [ "EXACT_ALIAS" ]
-  }, {
-    "bbox" : {
-      "end_col" : 5,
-      "end_row" : 111,
-      "start_col" : 5,
-      "start_row" : 103
-    },
-    "columns" : [ {
+    }, {
       "col" : 5,
       "conf" : 0.95,
       "currency" : "INR",
       "reasons" : [ "HEADER_AMOUNT" ],
       "role" : "amount",
-      "type" : "number",
+      "type" : "text",
       "unit" : "lakh"
     } ],
-    "cost_head_code" : null,
+    "cost_head_code" : "CONTINGENCY",
     "inferred_currency" : "INR",
     "inferred_currency_conf" : 0.7,
     "inferred_unit" : "lakh",
     "inferred_unit_conf" : 0.95,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 3,
-      "end_row" : 113,
-      "start_col" : 3,
-      "start_row" : 113
-    },
-    "columns" : [ {
-      "col" : 3,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "unknown",
-    "inferred_unit_conf" : 0.0,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 5,
-      "end_row" : 113,
-      "start_col" : 5,
-      "start_row" : 113
-    },
-    "columns" : [ {
-      "col" : 5,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "unknown",
-    "inferred_unit_conf" : 0.0,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
+    "mapping_method" : "exact_alias",
+    "mapping_reasons" : [ "EXACT_ALIAS" ]
   }, {
     "bbox" : {
       "end_col" : 2,
@@ -767,8 +728,15 @@
     "mapping_reasons" : [ ]
   } ],
   "role" : "primary",
-  "role_conf" : 0.9730337078651685,
+  "role_conf" : 0.9736842105263158,
   "role_reasons" : [ {
+    "code" : "COST_HEAD_CONTRIBUTION",
+    "params" : {
+      "cell_count" : 10,
+      "contribution_count" : 2
+    },
+    "weight" : 80
+  }, {
     "code" : "STATEMENT_CONTENT",
     "params" : {
       "cell_count" : 427

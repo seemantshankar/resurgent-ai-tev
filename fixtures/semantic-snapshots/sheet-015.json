@@ -382,7 +382,7 @@
     "mapping_reasons" : [ ]
   }, {
     "bbox" : {
-      "end_col" : 13,
+      "end_col" : 15,
       "end_row" : 51,
       "start_col" : 1,
       "start_row" : 33
@@ -465,6 +465,12 @@
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
       "type" : "number"
+    }, {
+      "col" : 15,
+      "conf" : 0.2,
+      "reasons" : [ "MISSING_HEADER" ],
+      "role" : "other",
+      "type" : "text"
     } ],
     "cost_head_code" : "CIVIL",
     "inferred_currency" : "INR",
@@ -542,27 +548,6 @@
     },
     "columns" : [ {
       "col" : 22,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "lakh",
-    "inferred_unit_conf" : 0.7,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 15,
-      "end_row" : 51,
-      "start_col" : 15,
-      "start_row" : 51
-    },
-    "columns" : [ {
-      "col" : 15,
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
@@ -1682,9 +1667,9 @@
   }, {
     "code" : "SCRATCH_ORPHAN_CONTENT",
     "params" : {
-      "cell_count" : 24
+      "cell_count" : 23
     },
-    "weight" : 24
+    "weight" : 23
   } ],
   "scratch_cells" : [ {
     "coord" : "D2",
@@ -1781,12 +1766,6 @@
     "orphan" : false,
     "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
     "scratch" : true,
-    "support" : false
-  }, {
-    "coord" : "O51",
-    "orphan" : true,
-    "reasons" : [ ],
-    "scratch" : false,
     "support" : false
   }, {
     "coord" : "D60",

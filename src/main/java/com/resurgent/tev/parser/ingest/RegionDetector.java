@@ -504,7 +504,10 @@ final class RegionDetector {
         return result;
     }
 
-    /** 8-connectivity, with a single-cell dilation restricted to coherent formulas or labels. */
+    /**
+     * 8-connectivity, plus a one-cell skip: similar formulas, same-column labels, or an
+     * axis-aligned stub-to-value spacer ({@code name | blank | number}).
+     */
     private static boolean connected(OccupiedCell left, OccupiedCell right) {
         int rowGap = Math.abs(left.cell().rowNum() - right.cell().rowNum());
         int colGap = Math.abs(left.cell().colNum() - right.cell().colNum());
@@ -514,8 +517,28 @@ final class RegionDetector {
         if (rowGap > 2 || colGap > 2) {
             return false;
         }
-        return skeletonSimilarity(left.formulaSkeleton(), right.formulaSkeleton()) > 0
+        return axisAlignedStubToValue(left.cell(), right.cell(), rowGap, colGap)
+                || skeletonSimilarity(left.formulaSkeleton(), right.formulaSkeleton()) > 0
                 || sameColumnTextLabels(left.cell(), right.cell());
+    }
+
+    private static boolean axisAlignedStubToValue(
+            NormalizedCell left, NormalizedCell right, int rowGap, int colGap) {
+        if (!((rowGap == 0 && colGap == 2) || (rowGap == 2 && colGap == 0))) {
+            return false;
+        }
+        return (isTextStub(left) && isValueCell(right)) || (isTextStub(right) && isValueCell(left));
+    }
+
+    private static boolean isTextStub(NormalizedCell cell) {
+        return cell.formulaText() == null
+                && "text".equals(cell.valueType())
+                && cell.textValue() != null
+                && !cell.textValue().isBlank();
+    }
+
+    private static boolean isValueCell(NormalizedCell cell) {
+        return "number".equals(cell.valueType()) || cell.formulaText() != null;
     }
 
     /**

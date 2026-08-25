@@ -250,7 +250,7 @@
     "mapping_reasons" : [ ]
   }, {
     "bbox" : {
-      "end_col" : 2,
+      "end_col" : 14,
       "end_row" : 19,
       "start_col" : 2,
       "start_row" : 11
@@ -261,22 +261,7 @@
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
       "type" : "text"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "lakh",
-    "inferred_unit_conf" : 0.7,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 14,
-      "end_row" : 19,
-      "start_col" : 4,
-      "start_row" : 11
-    },
-    "columns" : [ {
+    }, {
       "col" : 4,
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
@@ -352,7 +337,7 @@
     "mapping_reasons" : [ ]
   } ],
   "role" : "support",
-  "role_conf" : 0.2777777777777778,
+  "role_conf" : 0.3333333333333333,
   "role_reasons" : [ {
     "code" : "DEPENDENCY_INTO_PRIMARY",
     "params" : {
@@ -362,9 +347,9 @@
   }, {
     "code" : "SCRATCH_ORPHAN_CONTENT",
     "params" : {
-      "cell_count" : 13
+      "cell_count" : 12
     },
-    "weight" : 13
+    "weight" : 12
   } ],
   "scratch_cells" : [ {
     "coord" : "F2",
@@ -437,12 +422,6 @@
     "orphan" : true,
     "reasons" : [ ],
     "scratch" : false,
-    "support" : false
-  }, {
-    "coord" : "N19",
-    "orphan" : false,
-    "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
-    "scratch" : true,
     "support" : false
   } ],
   "sheet_id" : "sheet-025"

@@ -3045,10 +3045,16 @@
     "bbox" : {
       "end_col" : 8,
       "end_row" : 126,
-      "start_col" : 3,
+      "start_col" : 1,
       "start_row" : 122
     },
     "columns" : [ {
+      "col" : 1,
+      "conf" : 0.95,
+      "reasons" : [ "HEADER_RATE" ],
+      "role" : "rate",
+      "type" : "text"
+    }, {
       "col" : 3,
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
@@ -3085,27 +3091,6 @@
       "role" : "other",
       "type" : "number"
     } ],
-    "cost_head_code" : "PLANT_MACHINERY",
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "lakh",
-    "inferred_unit_conf" : 0.7,
-    "mapping_method" : "fuzzy_proposal",
-    "mapping_reasons" : [ "FUZZY_RANK" ]
-  }, {
-    "bbox" : {
-      "end_col" : 1,
-      "end_row" : 131,
-      "start_col" : 1,
-      "start_row" : 123
-    },
-    "columns" : [ {
-      "col" : 1,
-      "conf" : 0.95,
-      "reasons" : [ "HEADER_RATE" ],
-      "role" : "rate",
-      "type" : "text"
-    } ],
     "cost_head_code" : "CONTINGENCY",
     "inferred_currency" : "INR",
     "inferred_currency_conf" : 0.7,
@@ -3117,10 +3102,16 @@
     "bbox" : {
       "end_col" : 8,
       "end_row" : 129,
-      "start_col" : 4,
+      "start_col" : 1,
       "start_row" : 128
     },
     "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
       "col" : 4,
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
@@ -3181,6 +3172,27 @@
     "mapping_reasons" : [ ]
   }, {
     "bbox" : {
+      "end_col" : 1,
+      "end_row" : 131,
+      "start_col" : 1,
+      "start_row" : 131
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "INR",
+    "inferred_currency_conf" : 0.7,
+    "inferred_unit" : "lakh",
+    "inferred_unit_conf" : 0.7,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
       "end_col" : 8,
       "end_row" : 131,
       "start_col" : 4,
@@ -3227,7 +3239,7 @@
   }, {
     "bbox" : {
       "end_col" : 13,
-      "end_row" : 135,
+      "end_row" : 137,
       "start_col" : 4,
       "start_row" : 135
     },
@@ -3236,61 +3248,61 @@
       "conf" : 0.95,
       "reasons" : [ "HEADER_PERIOD" ],
       "role" : "period",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 5,
       "conf" : 0.95,
       "reasons" : [ "HEADER_PERIOD" ],
       "role" : "period",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 6,
       "conf" : 0.95,
       "reasons" : [ "HEADER_PERIOD" ],
       "role" : "period",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 7,
       "conf" : 0.95,
       "reasons" : [ "HEADER_PERIOD" ],
       "role" : "period",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 8,
       "conf" : 0.95,
       "reasons" : [ "HEADER_PERIOD" ],
       "role" : "period",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 9,
       "conf" : 0.95,
       "reasons" : [ "HEADER_PERIOD" ],
       "role" : "period",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 10,
       "conf" : 0.95,
       "reasons" : [ "HEADER_PERIOD" ],
       "role" : "period",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 11,
       "conf" : 0.95,
       "reasons" : [ "HEADER_PERIOD" ],
       "role" : "period",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 12,
       "conf" : 0.95,
       "reasons" : [ "HEADER_PERIOD" ],
       "role" : "period",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 13,
       "conf" : 0.95,
       "reasons" : [ "HEADER_PERIOD" ],
       "role" : "period",
-      "type" : "text"
+      "type" : "number"
     } ],
     "cost_head_code" : null,
     "inferred_currency" : "INR",
@@ -3312,81 +3324,6 @@
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
       "type" : "text"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "lakh",
-    "inferred_unit_conf" : 0.7,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 13,
-      "end_row" : 137,
-      "start_col" : 4,
-      "start_row" : 137
-    },
-    "columns" : [ {
-      "col" : 4,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 5,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 6,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 7,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 8,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 9,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 10,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 11,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 12,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 13,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
     } ],
     "cost_head_code" : null,
     "inferred_currency" : "INR",
@@ -3688,23 +3625,11 @@
     "scratch" : true,
     "support" : false
   }, {
-    "coord" : "C126",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
     "coord" : "N128",
     "orphan" : false,
     "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
     "scratch" : true,
     "support" : false
-  }, {
-    "coord" : "D129",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
   }, {
     "coord" : "D141",
     "orphan" : false,

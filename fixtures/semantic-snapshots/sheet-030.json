@@ -136,8 +136,8 @@
     "mapping_reasons" : [ ]
   }, {
     "bbox" : {
-      "end_col" : 5,
-      "end_row" : 20,
+      "end_col" : 4,
+      "end_row" : 15,
       "start_col" : 3,
       "start_row" : 11
     },
@@ -153,81 +153,6 @@
       "reasons" : [ "HEADER_DESCRIPTION" ],
       "role" : "description",
       "type" : "text"
-    }, {
-      "col" : 5,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "lakh",
-    "inferred_unit_conf" : 0.7,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 15,
-      "end_row" : 17,
-      "start_col" : 7,
-      "start_row" : 16
-    },
-    "columns" : [ {
-      "col" : 7,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 8,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 9,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 10,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 11,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 12,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 13,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 14,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 15,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
     } ],
     "cost_head_code" : null,
     "inferred_currency" : "INR",
@@ -240,10 +165,22 @@
     "bbox" : {
       "end_col" : 15,
       "end_row" : 20,
-      "start_col" : 7,
-      "start_row" : 19
+      "start_col" : 4,
+      "start_row" : 16
     },
     "columns" : [ {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
       "col" : 7,
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
@@ -307,8 +244,8 @@
     "mapping_reasons" : [ ]
   }, {
     "bbox" : {
-      "end_col" : 5,
-      "end_row" : 29,
+      "end_col" : 4,
+      "end_row" : 24,
       "start_col" : 3,
       "start_row" : 22
     },
@@ -324,81 +261,6 @@
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
       "type" : "text"
-    }, {
-      "col" : 5,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "lakh",
-    "inferred_unit_conf" : 0.7,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 15,
-      "end_row" : 26,
-      "start_col" : 7,
-      "start_row" : 25
-    },
-    "columns" : [ {
-      "col" : 7,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 8,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 9,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 10,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 11,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 12,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 13,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 14,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 15,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
     } ],
     "cost_head_code" : null,
     "inferred_currency" : "INR",
@@ -411,10 +273,22 @@
     "bbox" : {
       "end_col" : 15,
       "end_row" : 29,
-      "start_col" : 7,
-      "start_row" : 28
+      "start_col" : 4,
+      "start_row" : 25
     },
     "columns" : [ {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
       "col" : 7,
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
@@ -1885,114 +1759,6 @@
     "reasons" : [ ],
     "scratch" : false,
     "support" : false
-  }, {
-    "coord" : "G17",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "H17",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "I17",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "J17",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "K17",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "L17",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "M17",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "N17",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "O17",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "G26",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "H26",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "I26",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "J26",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "K26",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "L26",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "M26",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "N26",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "O26",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
   }, {
     "coord" : "G32",
     "orphan" : false,

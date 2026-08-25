@@ -1,29 +1,9 @@
 [ {
   "bbox" : {
     "end_col" : 5,
-    "end_row" : 3,
-    "start_col" : 1,
-    "start_row" : 2
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-043!A2",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-043"
-}, {
-  "bbox" : {
-    "end_col" : 5,
     "end_row" : 30,
     "start_col" : 1,
-    "start_row" : 4
+    "start_row" : 2
   },
   "cost_head_code" : "LIFTS",
   "detection_reasons" : [ {
@@ -34,7 +14,7 @@
     "weight" : 8
   } ],
   "region_conf" : 0.5,
-  "region_key" : "sheet-043!A4",
+  "region_key" : "sheet-043!A2",
   "region_type" : "cost_head",
   "serial_pattern" : null,
   "sheet_id" : "sheet-043"

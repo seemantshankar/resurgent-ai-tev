@@ -358,7 +358,8 @@ public final class IngestService {
                             cell.rowLabel(), cell.colLabel(), cell.isMergedAnchor(),
                             cell.isMergedParticipant(), cell.mergedRange(), cell.valueSource(),
                             cell.rowHidden(), cell.colHidden(), cell.sheetHidden(),
-                            cell.isBold(), cell.hasFill(), cell.hasBorder(), cell.numberFormat());
+                            cell.isBold(), cell.hasFill(), cell.hasBorder(), cell.numberFormat(),
+                            cell.tagsJson());
                 }
 
                 long cellId = repo.insertCell(worksheetId, cellToInsert);
@@ -657,14 +658,18 @@ public final class IngestService {
         Set<String> observed = new HashSet<>();
         for (WorkspaceRepository.RegionMappingInput region : repo.findRegionMappingInputs(parseRunId)) {
             String carried = repo.findLatestAcceptedMappingCode(sourceFileId, region.regionKey());
+            // Keep matching against a pre-classified code when present; persist the
+            // workbook label so review shows FM wording rather than the vocabulary code.
+            String matchLabel = region.existingCode() != null && !region.existingCode().isBlank()
+                    ? region.existingCode() : region.label();
             for (CostHeadMapper.Proposal proposal : mapper.map(
-                    region.label(), region.regionId(), region.regionKey(), carried)) {
+                    matchLabel, region.regionId(), region.regionKey(), carried)) {
                 observed.add(proposal.code());
                 long costHeadId = repo.ensureCostHead(mandateId, proposal.code());
                 long mappingId = repo.insertCostHeadMapping(parseRunId, sourceFileId, costHeadId,
                         region.regionId(), proposal.regionKey(), proposal.method(), proposal.score(),
                         proposal.runnerUpMargin(), proposal.confidence(), proposal.reasonsJson(),
-                        proposal.sourceLabel());
+                        region.label());
                 if (proposal.pending()) {
                     repo.insertReviewQueue(parseRunId, "cost_head_mapping",
                             "Cost-head mapping requires review: " + proposal.regionKey(),
@@ -673,7 +678,7 @@ public final class IngestService {
                                     "regionKey", proposal.regionKey(),
                                     "code", proposal.code(),
                                     "method", proposal.method(),
-                                    "sourceLabel", proposal.sourceLabel(),
+                                    "sourceLabel", region.label(),
                                     "runnerUpMargin", proposal.runnerUpMargin())),
                             "Pending", false, Timestamps.now(), null,
                             "mapping", proposal.regionKey(), proposal.confidence());
