@@ -211,65 +211,32 @@
   }, {
     "bbox" : {
       "end_col" : 7,
-      "end_row" : 53,
+      "end_row" : 55,
       "start_col" : 5,
       "start_row" : 53
     },
     "columns" : [ {
       "col" : 5,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
       "type" : "text"
     }, {
       "col" : 6,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
       "type" : "number"
     }, {
       "col" : 7,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
       "type" : "text"
     } ],
     "cost_head_code" : null,
     "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "unknown",
-    "inferred_unit_conf" : 0.0,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 7,
-      "end_row" : 55,
-      "start_col" : 5,
-      "start_row" : 55
-    },
-    "columns" : [ {
-      "col" : 5,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 6,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 7,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
+    "inferred_currency_conf" : 0.95,
     "inferred_unit" : "unknown",
     "inferred_unit_conf" : 0.0,
     "mapping_method" : null,
@@ -548,7 +515,7 @@
     "mapping_reasons" : [ ]
   } ],
   "role" : "primary",
-  "role_conf" : 0.9737991266375546,
+  "role_conf" : 0.9759825327510917,
   "role_reasons" : [ {
     "code" : "COST_HEAD_CONTRIBUTION",
     "params" : {
@@ -565,9 +532,9 @@
   }, {
     "code" : "SCRATCH_ORPHAN_CONTENT",
     "params" : {
-      "cell_count" : 12
+      "cell_count" : 11
     },
-    "weight" : 12
+    "weight" : 11
   } ],
   "scratch_cells" : [ {
     "coord" : "C1",
@@ -628,12 +595,6 @@
     "orphan" : false,
     "reasons" : [ "UNLABELED_FORMULA_ISLAND" ],
     "scratch" : true,
-    "support" : false
-  }, {
-    "coord" : "E53",
-    "orphan" : true,
-    "reasons" : [ ],
-    "scratch" : false,
     "support" : false
   }, {
     "coord" : "B99",

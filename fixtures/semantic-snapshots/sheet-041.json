@@ -203,9 +203,42 @@
   }, {
     "bbox" : {
       "end_col" : 3,
-      "end_row" : 14,
+      "end_row" : 12,
       "start_col" : 1,
       "start_row" : 12
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 3,
+      "end_row" : 14,
+      "start_col" : 1,
+      "start_row" : 13
     },
     "columns" : [ {
       "col" : 1,
@@ -593,9 +626,174 @@
   }, {
     "bbox" : {
       "end_col" : 3,
-      "end_row" : 44,
+      "end_row" : 34,
       "start_col" : 1,
       "start_row" : 34
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 3,
+      "end_row" : 35,
+      "start_col" : 1,
+      "start_row" : 35
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 3,
+      "end_row" : 36,
+      "start_col" : 1,
+      "start_row" : 36
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 3,
+      "end_row" : 37,
+      "start_col" : 1,
+      "start_row" : 37
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 3,
+      "end_row" : 39,
+      "start_col" : 1,
+      "start_row" : 38
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 3,
+      "end_row" : 40,
+      "start_col" : 1,
+      "start_row" : 40
     },
     "columns" : [ {
       "col" : 1,
@@ -623,6 +821,138 @@
     "inferred_unit_conf" : 0.0,
     "mapping_method" : "exact_alias",
     "mapping_reasons" : [ "EXACT_ALIAS" ]
+  }, {
+    "bbox" : {
+      "end_col" : 3,
+      "end_row" : 41,
+      "start_col" : 1,
+      "start_row" : 41
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : "PLANT_MACHINERY",
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : "fuzzy_proposal",
+    "mapping_reasons" : [ "FUZZY_RANK" ]
+  }, {
+    "bbox" : {
+      "end_col" : 3,
+      "end_row" : 42,
+      "start_col" : 1,
+      "start_row" : 42
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : "MISC_EQUIPMENT",
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : "fuzzy_proposal",
+    "mapping_reasons" : [ "FUZZY_RANK" ]
+  }, {
+    "bbox" : {
+      "end_col" : 3,
+      "end_row" : 43,
+      "start_col" : 1,
+      "start_row" : 43
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
+  }, {
+    "bbox" : {
+      "end_col" : 3,
+      "end_row" : 44,
+      "start_col" : 1,
+      "start_row" : 44
+    },
+    "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 2,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
+      "col" : 3,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    } ],
+    "cost_head_code" : null,
+    "inferred_currency" : "unknown",
+    "inferred_currency_conf" : 0.0,
+    "inferred_unit" : "unknown",
+    "inferred_unit_conf" : 0.0,
+    "mapping_method" : null,
+    "mapping_reasons" : [ ]
   }, {
     "bbox" : {
       "end_col" : 3,
@@ -691,7 +1021,7 @@
     "mapping_reasons" : [ ]
   } ],
   "role" : "primary",
-  "role_conf" : 0.967741935483871,
+  "role_conf" : 0.6666666666666666,
   "role_reasons" : [ {
     "code" : "SCRATCH_ORPHAN_CONTENT",
     "params" : {

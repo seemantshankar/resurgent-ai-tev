@@ -89,7 +89,7 @@
   }, {
     "bbox" : {
       "end_col" : 18,
-      "end_row" : 8,
+      "end_row" : 10,
       "start_col" : 10,
       "start_row" : 8
     },
@@ -146,75 +146,6 @@
       "conf" : 0.95,
       "reasons" : [ "HEADER_PERIOD" ],
       "role" : "period",
-      "type" : "text"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "lakh",
-    "inferred_unit_conf" : 0.7,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 18,
-      "end_row" : 10,
-      "start_col" : 10,
-      "start_row" : 10
-    },
-    "columns" : [ {
-      "col" : 10,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 11,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 12,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 13,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 14,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 15,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 16,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 17,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 18,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
       "type" : "text"
     } ],
     "cost_head_code" : null,

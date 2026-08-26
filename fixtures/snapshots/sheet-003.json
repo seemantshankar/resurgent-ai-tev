@@ -41,21 +41,21 @@
 }, {
   "bbox" : {
     "end_col" : 12,
-    "end_row" : 32,
+    "end_row" : 51,
     "start_col" : 1,
     "start_row" : 8
   },
-  "cost_head_code" : null,
+  "cost_head_code" : "CIVIL",
   "detection_reasons" : [ {
-    "code" : "STATEMENT_SHAPE",
+    "code" : "COST_HEAD_ALIAS",
     "params" : {
-      "row_span" : 25
+      "match_count" : 1
     },
-    "weight" : 4
+    "weight" : 8
   } ],
-  "region_conf" : 1.0,
+  "region_conf" : 0.5,
   "region_key" : "sheet-003!A8",
-  "region_type" : "utility",
+  "region_type" : "cost_head",
   "serial_pattern" : null,
   "sheet_id" : "sheet-003"
 }, {
@@ -136,26 +136,6 @@
   "region_conf" : 0.0,
   "region_key" : "sheet-003!P31",
   "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-003"
-}, {
-  "bbox" : {
-    "end_col" : 12,
-    "end_row" : 51,
-    "start_col" : 1,
-    "start_row" : 33
-  },
-  "cost_head_code" : "CIVIL",
-  "detection_reasons" : [ {
-    "code" : "COST_HEAD_ALIAS",
-    "params" : {
-      "match_count" : 1
-    },
-    "weight" : 8
-  } ],
-  "region_conf" : 1.0,
-  "region_key" : "sheet-003!A33",
-  "region_type" : "cost_head",
   "serial_pattern" : null,
   "sheet_id" : "sheet-003"
 }, {

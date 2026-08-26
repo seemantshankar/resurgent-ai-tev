@@ -156,6 +156,75 @@ class RegionDetectorTest {
     }
 
     @Test
+    void stackedBoqAfterTotalPriceHeader_splitsAndDoesNotShredQuoteRows() {
+        Map<Long, RegionDetector.RegionCell> cells = cells(
+                text("A1", 1, 1, "S.No"),
+                text("B1", 1, 2, "Specification"),
+                text("C1", 1, 3, "Unit Price"),
+                quantityText("D1", 1, 4, "Qty"),
+                text("E1", 1, 5, "Total price"),
+                number("A2", 2, 1, "1"),
+                text("B2", 2, 2, "Lift"),
+                number("C2", 2, 3, "100"),
+                number("D2", 2, 4, "2"),
+                number("E2", 2, 5, "200"),
+                text("A3", 3, 1, "Total"),
+                formula("E3", 3, 5, "=SUM(E2:E2)", "200"),
+                text("A5", 5, 1, "S.NO."),
+                text("B5", 5, 2, "NAME OF ITEM"),
+                text("C5", 5, 3, "MAKE"),
+                quantityText("D5", 5, 4, "QTY"),
+                text("E5", 5, 5, "UNIT PRICE"),
+                text("B6", 6, 2, "STORE"),
+                text("A7", 7, 1, "ST.02"),
+                text("B7", 7, 2, "S.S. RACK"),
+                text("C7", 7, 3, "VSG"),
+                number("D7", 7, 4, "1"),
+                number("E7", 7, 5, "30600"),
+                text("A8", 8, 1, "HK.04"),
+                text("B8", 8, 2, "WORK TABLE"),
+                text("C8", 8, 3, "VSG"),
+                number("D8", 8, 4, "1"),
+                number("E8", 8, 5, "45900"),
+                text("D9", 9, 4, "Grand Total"),
+                number("E9", 9, 5, "76500"));
+
+        List<RegionDetector.DetectedRegion> regions = detector.detect("Details", cells);
+
+        assertThat(regions).hasSize(2);
+        assertThat(regions.get(0).key()).isEqualTo("Details!A1");
+        assertThat(regions.get(0).startRow()).isEqualTo(1);
+        assertThat(regions.get(0).endRow()).isEqualTo(3);
+        assertThat(regions.get(1).key()).isEqualTo("Details!A5");
+        assertThat(regions.get(1).startRow()).isEqualTo(5);
+        assertThat(regions.get(1).endRow()).isEqualTo(9);
+    }
+
+    @Test
+    void mixedQuoteRowsUnderSharedHeader_stayOneRegion() {
+        Map<Long, RegionDetector.RegionCell> cells = cells(
+                text("A1", 1, 1, "S.NO."),
+                text("B1", 1, 2, "NAME OF ITEM"),
+                text("C1", 1, 3, "MAKE"),
+                text("A2", 2, 1, "ST.02"),
+                text("B2", 2, 2, "S.S. RACK"),
+                text("C2", 2, 3, "VSG"),
+                number("D2", 2, 4, "1"),
+                number("E2", 2, 5, "30600"),
+                text("A3", 3, 1, "HK.04"),
+                text("B3", 3, 2, "WORK TABLE"),
+                text("C3", 3, 3, "VSG"),
+                number("D3", 3, 4, "1"),
+                number("E3", 3, 5, "45900"));
+
+        List<RegionDetector.DetectedRegion> regions = detector.detect("Details", cells);
+
+        assertThat(regions).hasSize(1);
+        assertThat(regions.getFirst().startRow()).isEqualTo(1);
+        assertThat(regions.getFirst().endRow()).isEqualTo(3);
+    }
+
+    @Test
     void openingBalanceAfterTotal_staysOneRegion() {
         Map<Long, RegionDetector.RegionCell> cells = cells(
                 text("B1", 1, 2, "Particulars"),
@@ -188,6 +257,13 @@ class RegionDetectorTest {
         return new NormalizedCell(coord, row, col, value, "text", "text", value, value,
                 null, null, null, null, null, null, null, null, false, null, false, null,
                 null, null, false, false, null, "cell", false, false, false);
+    }
+
+    private static NormalizedCell quantityText(String coord, int row, int col, String value) {
+        return new NormalizedCell(coord, row, col, value, "text", "quantity_text", value, value,
+                null, null, null, null, null, null, null, null, false,
+                new ParsedQuantity(null, value, value), false, null, null, null, false, false, null,
+                "cell", false, false, false);
     }
 
     private static NormalizedCell number(String coord, int row, int col, String value) {

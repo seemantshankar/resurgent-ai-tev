@@ -2405,7 +2405,7 @@
 }, {
   "bbox" : {
     "end_col" : 14,
-    "end_row" : 643,
+    "end_row" : 645,
     "start_col" : 5,
     "start_row" : 643
   },
@@ -2420,26 +2420,6 @@
   "region_conf" : 1.0,
   "region_key" : "sheet-027!E643",
   "region_type" : "cost_head",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-027"
-}, {
-  "bbox" : {
-    "end_col" : 14,
-    "end_row" : 645,
-    "start_col" : 5,
-    "start_row" : 644
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-027!E644",
-  "region_type" : "unknown",
   "serial_pattern" : null,
   "sheet_id" : "sheet-027"
 }, {
@@ -2645,7 +2625,7 @@
 }, {
   "bbox" : {
     "end_col" : 2,
-    "end_row" : 668,
+    "end_row" : 667,
     "start_col" : 1,
     "start_row" : 665
   },
@@ -2679,6 +2659,26 @@
   } ],
   "region_conf" : 0.0,
   "region_key" : "sheet-027!E665",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-027"
+}, {
+  "bbox" : {
+    "end_col" : 2,
+    "end_row" : 668,
+    "start_col" : 1,
+    "start_row" : 668
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-027!A668",
   "region_type" : "unknown",
   "serial_pattern" : null,
   "sheet_id" : "sheet-027"
@@ -2805,7 +2805,7 @@
 }, {
   "bbox" : {
     "end_col" : 2,
-    "end_row" : 683,
+    "end_row" : 681,
     "start_col" : 1,
     "start_row" : 681
   },
@@ -2819,6 +2819,26 @@
   } ],
   "region_conf" : 0.0,
   "region_key" : "sheet-027!A681",
+  "region_type" : "unknown",
+  "serial_pattern" : null,
+  "sheet_id" : "sheet-027"
+}, {
+  "bbox" : {
+    "end_col" : 2,
+    "end_row" : 683,
+    "start_col" : 1,
+    "start_row" : 683
+  },
+  "cost_head_code" : null,
+  "detection_reasons" : [ {
+    "code" : "INSUFFICIENT_EVIDENCE",
+    "params" : {
+      "top_score" : 0
+    },
+    "weight" : 0
+  } ],
+  "region_conf" : 0.0,
+  "region_key" : "sheet-027!A683",
   "region_type" : "unknown",
   "serial_pattern" : null,
   "sheet_id" : "sheet-027"

@@ -107,7 +107,7 @@
   }, {
     "bbox" : {
       "end_col" : 12,
-      "end_row" : 32,
+      "end_row" : 51,
       "start_col" : 1,
       "start_row" : 8
     },
@@ -184,13 +184,13 @@
       "role" : "other",
       "type" : "number"
     } ],
-    "cost_head_code" : null,
+    "cost_head_code" : "CIVIL",
     "inferred_currency" : "INR",
     "inferred_currency_conf" : 0.7,
     "inferred_unit" : "lakh",
     "inferred_unit_conf" : 0.7,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
+    "mapping_method" : "exact_alias",
+    "mapping_reasons" : [ "EXACT_ALIAS" ]
   }, {
     "bbox" : {
       "end_col" : 12,
@@ -407,93 +407,6 @@
     "inferred_unit_conf" : 0.7,
     "mapping_method" : null,
     "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 12,
-      "end_row" : 51,
-      "start_col" : 1,
-      "start_row" : 33
-    },
-    "columns" : [ {
-      "col" : 1,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 2,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 3,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 4,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 5,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 6,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 7,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 8,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 9,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 10,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 11,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 12,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    } ],
-    "cost_head_code" : "CIVIL",
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "lakh",
-    "inferred_unit_conf" : 0.7,
-    "mapping_method" : "exact_alias",
-    "mapping_reasons" : [ "EXACT_ALIAS" ]
   }, {
     "bbox" : {
       "end_col" : 17,
@@ -1288,7 +1201,7 @@
     "mapping_reasons" : [ ]
   } ],
   "role" : "primary",
-  "role_conf" : 0.5755813953488372,
+  "role_conf" : 0.6932773109243697,
   "role_reasons" : [ {
     "code" : "DEPENDENCY_INTO_PRIMARY",
     "params" : {

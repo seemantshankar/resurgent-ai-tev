@@ -41,40 +41,20 @@
 }, {
   "bbox" : {
     "end_col" : 5,
-    "end_row" : 41,
+    "end_row" : 46,
     "start_col" : 1,
     "start_row" : 40
   },
   "cost_head_code" : null,
   "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-043!A40",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-043"
-}, {
-  "bbox" : {
-    "end_col" : 5,
-    "end_row" : 46,
-    "start_col" : 1,
-    "start_row" : 42
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
     "code" : "STATEMENT_SHAPE",
     "params" : {
-      "row_span" : 5
+      "row_span" : 7
     },
     "weight" : 4
   } ],
-  "region_conf" : 0.25,
-  "region_key" : "sheet-043!A42",
+  "region_conf" : 1.0,
+  "region_key" : "sheet-043!A40",
   "region_type" : "capacity",
   "serial_pattern" : null,
   "sheet_id" : "sheet-043"

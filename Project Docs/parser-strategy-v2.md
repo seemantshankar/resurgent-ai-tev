@@ -700,9 +700,18 @@ After a geometrically connected component forms, consider each horizontal candid
 
 Otherwise select the cut: a new column-header row starts a new table.
 
-A **column-header row** has `valueType == text` and non-blank `textValue` (numeric `displayValue`
-is not header text), is not a total/subtotal row, and has at least two such text cells **or** at
-least one period-like label (`Year 1`, `Construction`, the PERIOD pattern plus `construction`).
+A **column-header row** is a schema row, not a body row. It is not a total/subtotal row, has at
+least two non-blank `valueType == text` cells **or** at least one period-like label (`Year 1`,
+`Construction`, the PERIOD pattern plus `construction`), and has **no** occupied cell that is
+`valueType == number` or that carries a formula. Numeric `displayValue` is not header text.
+`quantity_text` (for example a `Qty` / `QTY` heading) may sit on a header row; it is not a body
+veto. Qty/rate/amount **numbers** on the same row mean body, so a BOQ line such as
+`HK.04 | WORK TABLE | VSG | 1 | 45900` is not a new header.
+
+A **total/subtotal row** needs a total-like label (`total`, `subtotal`, `grand total`) **and** a
+numeric cell or a `SUM` formula. An all-text row whose column title is `Total price` is a header,
+not a total. `SUM`-only rows without the word “total” still count via the formula branch.
+
 `CASH INFLOW` / `CASH OUTFLOWS` is one stub, not a header, so it does not cut. `Opening Balance` /
 `Closing Balance` match the period-axis pattern as row stubs, not as a new column-header row. A
 stacked table with a new `Particulars` + `Year 1` row is a header and does cut, but only when this

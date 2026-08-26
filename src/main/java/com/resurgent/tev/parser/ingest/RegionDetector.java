@@ -180,7 +180,7 @@ final class RegionDetector {
     }
 
     private static boolean isColumnHeaderRow(List<OccupiedCell> row) {
-        if (row.isEmpty() || isTotalOrSubtotalRow(row)) {
+        if (row.isEmpty() || isTotalOrSubtotalRow(row) || hasNumberOrFormula(row)) {
             return false;
         }
         List<String> labels = new ArrayList<>();
@@ -234,8 +234,24 @@ final class RegionDetector {
     private static boolean isTotalOrSubtotalRow(List<OccupiedCell> cells) {
         boolean labelledTotal = cells.stream().map(c -> c.cell().textValue()).filter(java.util.Objects::nonNull)
                 .map(String::trim).anyMatch(v -> v.matches("(?i).*\\b(grand )?(sub)?total\\b.*"));
-        return labelledTotal || cells.stream().map(c -> c.cell().formulaText())
+        boolean hasNumber = cells.stream().anyMatch(c -> "number".equals(c.cell().valueType()));
+        boolean hasSum = cells.stream().map(c -> c.cell().formulaText())
                 .filter(java.util.Objects::nonNull).anyMatch(RegionDetector::isSumFormula);
+        return hasSum || (labelledTotal && hasNumber);
+    }
+
+    /** Qty/rate/amount numbers (or formulas) on the same row mean body, not a schema header. */
+    private static boolean hasNumberOrFormula(List<OccupiedCell> cells) {
+        for (OccupiedCell cell : cells) {
+            NormalizedCell n = cell.cell();
+            if ("number".equals(n.valueType())) {
+                return true;
+            }
+            if (n.formulaText() != null && !n.formulaText().isBlank()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isSumFormula(String formula) {
