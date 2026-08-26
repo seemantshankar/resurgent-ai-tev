@@ -42,7 +42,7 @@
 }, {
   "bbox" : {
     "end_col" : 14,
-    "end_row" : 22,
+    "end_row" : 25,
     "start_col" : 1,
     "start_row" : 5
   },
@@ -79,26 +79,6 @@
   "region_conf" : 1.0,
   "region_key" : "sheet-039!A21",
   "region_type" : "vendor_block",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-039"
-}, {
-  "bbox" : {
-    "end_col" : 13,
-    "end_row" : 25,
-    "start_col" : 12,
-    "start_row" : 23
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "VERTICAL_FORM",
-    "params" : {
-      "column_span" : 2
-    },
-    "weight" : 3
-  } ],
-  "region_conf" : 1.0,
-  "region_key" : "sheet-039!L23",
-  "region_type" : "vertical_form",
   "serial_pattern" : null,
   "sheet_id" : "sheet-039"
 }, {

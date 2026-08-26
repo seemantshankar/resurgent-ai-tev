@@ -10,9 +10,10 @@ import java.util.Map;
  * labels. The labels are inferred heuristically from the sheet itself so that
  * downstream queries can ask "PBIT for Year 5" without joining to other cells.
  *
- * <p>Row label: leftmost non-empty text cell in the same row (typically column
- * A). Column label: the topmost text cell in the same column above each cell.
- * Region-aware header labels replace these provisional values during ingestion.
+ * <p>Row label: leading text on the same row, joining a section stub such as
+ * {@code (A)} to the description beside it. Column label: the topmost text cell
+ * in the same column above each cell. Region-aware header labels replace these
+ * provisional values during ingestion.
  */
 public final class CellContextEnricher {
 
@@ -66,16 +67,7 @@ public final class CellContextEnricher {
     }
 
     private String findRowLabel(NormalizedCell cell, SheetIndex index) {
-        int row = cell.rowNum();
-        int col = 1;
-        while (col <= index.maxCol(row)) {
-            NormalizedCell candidate = index.get(row, col);
-            if (candidate != null && isText(candidate)) {
-                return candidate.displayValue();
-            }
-            col++;
-        }
-        return null;
+        return RowLabelComposer.compose(index.rowCells(cell.rowNum()));
     }
 
     private String findColLabel(NormalizedCell cell, SheetIndex index) {
@@ -100,15 +92,11 @@ public final class CellContextEnricher {
      */
     private static final class SheetIndex {
         private final Map<Integer, Map<Integer, NormalizedCell>> byRow = new HashMap<>();
-        private int maxRow = 0;
 
         SheetIndex(List<NormalizedCell> cells) {
             for (NormalizedCell cell : cells) {
                 byRow.computeIfAbsent(cell.rowNum(), r -> new HashMap<>())
                         .put(cell.colNum(), cell);
-                if (cell.rowNum() > maxRow) {
-                    maxRow = cell.rowNum();
-                }
             }
         }
 
@@ -117,22 +105,12 @@ public final class CellContextEnricher {
             return cols == null ? null : cols.get(col);
         }
 
-        int maxRow() {
-            return maxRow;
-        }
-
-        int maxCol(int row) {
+        List<NormalizedCell> rowCells(int row) {
             Map<Integer, NormalizedCell> cols = byRow.get(row);
-            if (cols == null) {
-                return 0;
+            if (cols == null || cols.isEmpty()) {
+                return List.of();
             }
-            int max = 0;
-            for (int c : cols.keySet()) {
-                if (c > max) {
-                    max = c;
-                }
-            }
-            return max;
+            return List.copyOf(cols.values());
         }
     }
 }

@@ -6,9 +6,24 @@ import java.math.BigDecimal;
 import org.junit.jupiter.api.Test;
 
 /**
- * Internal seam for source number-format precision. No global monetary epsilon.
+ * Internal seam for source number-format precision. Structural totals follow the
+ * cell's display scale. Cost-head money is compared at two decimal places (paise),
+ * not with a floating-point epsilon.
  */
 class NumberFormatPrecisionTest {
+
+    @Test
+    void monetaryAmounts_agreeAtTwoDecimalPlaces() {
+        assertThat(NumberFormatPrecision.agreePaise(
+                new BigDecimal("7524.93930806854"),
+                new BigDecimal("7524.93930806853"))).isTrue();
+        assertThat(NumberFormatPrecision.agreePaise(
+                new BigDecimal("11948.5844117557"),
+                new BigDecimal("11948.5844117556"))).isTrue();
+        assertThat(NumberFormatPrecision.agreePaise(
+                new BigDecimal("7251.45"),
+                new BigDecimal("7251.44"))).isFalse();
+    }
 
     @Test
     void missingFormat_requiresExactDecimalEquality() {

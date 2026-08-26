@@ -101,11 +101,17 @@
   }, {
     "bbox" : {
       "end_col" : 4,
-      "end_row" : 4,
-      "start_col" : 2,
+      "end_row" : 5,
+      "start_col" : 1,
       "start_row" : 4
     },
     "columns" : [ {
+      "col" : 1,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "text"
+    }, {
       "col" : 2,
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
@@ -134,7 +140,7 @@
   }, {
     "bbox" : {
       "end_col" : 7,
-      "end_row" : 14,
+      "end_row" : 21,
       "start_col" : 6,
       "start_row" : 4
     },
@@ -146,45 +152,6 @@
       "type" : "number"
     }, {
       "col" : 7,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "rs",
-    "inferred_unit_conf" : 0.7,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 4,
-      "end_row" : 5,
-      "start_col" : 1,
-      "start_row" : 5
-    },
-    "columns" : [ {
-      "col" : 1,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 2,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 3,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 4,
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
@@ -239,7 +206,7 @@
   }, {
     "bbox" : {
       "end_col" : 4,
-      "end_row" : 14,
+      "end_row" : 29,
       "start_col" : 1,
       "start_row" : 7
     },
@@ -248,7 +215,7 @@
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 2,
       "conf" : 0.3,
@@ -330,72 +297,6 @@
     "mapping_reasons" : [ ]
   }, {
     "bbox" : {
-      "end_col" : 4,
-      "end_row" : 29,
-      "start_col" : 1,
-      "start_row" : 15
-    },
-    "columns" : [ {
-      "col" : 1,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 2,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 3,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 4,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "rs",
-    "inferred_unit_conf" : 0.7,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 7,
-      "end_row" : 21,
-      "start_col" : 6,
-      "start_row" : 15
-    },
-    "columns" : [ {
-      "col" : 6,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 7,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "rs",
-    "inferred_unit_conf" : 0.7,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
       "end_col" : 6,
       "end_row" : 23,
       "start_col" : 6,
@@ -472,9 +373,9 @@
   "role_reasons" : [ {
     "code" : "SCRATCH_ORPHAN_CONTENT",
     "params" : {
-      "cell_count" : 3
+      "cell_count" : 2
     },
-    "weight" : 3
+    "weight" : 2
   } ],
   "scratch_cells" : [ {
     "coord" : "A2",
@@ -484,12 +385,6 @@
     "support" : false
   }, {
     "coord" : "B4",
-    "orphan" : true,
-    "reasons" : [ ],
-    "scratch" : false,
-    "support" : false
-  }, {
-    "coord" : "F4",
     "orphan" : true,
     "reasons" : [ ],
     "scratch" : false,

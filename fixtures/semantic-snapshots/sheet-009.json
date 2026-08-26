@@ -38,7 +38,7 @@
   }, {
     "bbox" : {
       "end_col" : 4,
-      "end_row" : 40,
+      "end_row" : 48,
       "start_col" : 2,
       "start_row" : 24
     },
@@ -47,7 +47,7 @@
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 3,
       "conf" : 0.4,
@@ -60,39 +60,6 @@
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
       "type" : "number"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "unknown",
-    "inferred_currency_conf" : 0.0,
-    "inferred_unit" : "unknown",
-    "inferred_unit_conf" : 0.0,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 4,
-      "end_row" : 48,
-      "start_col" : 2,
-      "start_row" : 41
-    },
-    "columns" : [ {
-      "col" : 2,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 3,
-      "conf" : 0.95,
-      "reasons" : [ "HEADER_DESCRIPTION" ],
-      "role" : "description",
-      "type" : "text"
-    }, {
-      "col" : 4,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
     } ],
     "cost_head_code" : null,
     "inferred_currency" : "unknown",

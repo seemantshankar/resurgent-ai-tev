@@ -1,6 +1,7 @@
 package com.resurgent.tev.parser.db;
 
 import com.resurgent.tev.parser.ingest.NormalizedCell;
+import com.resurgent.tev.parser.ingest.NumberFormatPrecision;
 import com.resurgent.tev.parser.ingest.ParsedQuantity;
 import com.resurgent.tev.parser.ingest.RegionQaStats;
 import com.resurgent.tev.parser.ingest.SemanticFacts;
@@ -651,7 +652,7 @@ public final class WorkspaceRepository {
                     BigDecimal expected = rs.getBigDecimal("source_amount");
                     BigDecimal included = includedAmount(contributionId);
                     if (expected != null && included != null
-                            && expected.compareTo(included) != 0) {
+                            && !NumberFormatPrecision.agreePaise(expected, included)) {
                         mismatches++;
                     }
                 }

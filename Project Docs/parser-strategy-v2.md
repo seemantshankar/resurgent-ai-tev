@@ -700,10 +700,12 @@ After a geometrically connected component forms, consider each horizontal candid
 
 Otherwise select the cut: a new column-header row starts a new table.
 
-A **column-header row** is a schema row, not a body row. It is not a total/subtotal row, has at
-least two non-blank `valueType == text` cells **or** at least one period-like label (`Year 1`,
-`Construction`, the PERIOD pattern plus `construction`), and has **no** occupied cell that is
-`valueType == number` or that carries a formula. Numeric `displayValue` is not header text.
+A **column-header row** is a schema row, not a body row. It is not a total/subtotal row, has
+**three or more** non-blank `valueType == text` cells **or** at least one period-like label
+(`Year 1`, `Construction`, the PERIOD pattern plus `construction`), and has **no** occupied cell
+that is `valueType == number` or that carries a formula. Two text cells with no period label is a
+section title (`D | AIR CONDITIONING`), not a schema, so it does not start a cut. Numeric
+`displayValue` is not header text.
 `quantity_text` (for example a `Qty` / `QTY` heading) may sit on a header row; it is not a body
 veto. Qty/rate/amount **numbers** on the same row mean body, so a BOQ line such as
 `HK.04 | WORK TABLE | VSG | 1 | 45900` is not a new header.
@@ -721,6 +723,18 @@ title rows that introduce it.
 Title style, column value-type profile, serial reset, formula-skeleton drift, section markers,
 blank-gap-with-header, coherent spacers, and hidden rows inside a summed range are **not** cut
 signals.
+
+After geometric components form, **membership follows the header row's columns and types**
+(not skip-N; overflow width is unknown):
+
+1. The header row's occupied columns are the schema; its cells are typically text (`Year 1`…).
+2. Keep following rows whose occupied schema cells match the **body** types (numbers/formulas;
+   blanks allowed), even if some schema columns are empty.
+3. A **section title** (`LAND COST & DEVELOPMENT`) may not match that signature. Keep it when
+   later rows resume the body signature.
+4. Stop at a new header (schema cells are text again, unlike the numeric body above) or at any
+   other row that does not match and is not a section title. Cells to the right of the schema
+   stay out.
 
 **Cuts are horizontal only.** Vertical separation is handled by connectivity, not cutting:
 `B  S !Q11:R18` is a separate component *because* O:P are empty (§7.1), and the one geometric

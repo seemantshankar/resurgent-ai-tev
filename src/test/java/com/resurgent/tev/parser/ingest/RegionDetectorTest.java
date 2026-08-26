@@ -28,6 +28,17 @@ class RegionDetectorTest {
     }
 
     @Test
+    void skipTwoSameRow_doesNotJoinTwoNumbers() {
+        Map<Long, RegionDetector.RegionCell> cells = cells(
+                number("B1", 1, 2, "10"),
+                number("E1", 1, 5, "20"));
+
+        List<RegionDetector.DetectedRegion> regions = detector.detect("Sheet", cells);
+
+        assertThat(regions).hasSize(2);
+    }
+
+    @Test
     void skipOneSameRow_doesNotJoinTwoNumbers() {
         Map<Long, RegionDetector.RegionCell> cells = cells(
                 number("B1", 1, 2, "10"),
@@ -156,6 +167,103 @@ class RegionDetectorTest {
     }
 
     @Test
+    void yearAxisHeaderGathersOverflowStubsAndSpacedValueRows() {
+        Map<Long, RegionDetector.RegionCell> cells = cells(
+                text("D1", 1, 4, "Year 1"),
+                text("E1", 1, 5, "Year 2"),
+                text("F1", 1, 6, "Year 3"),
+                text("H2", 2, 8, "Notes"),
+                text("A3", 3, 1, "LAND COST & DEVELOPMENT"),
+                text("A5", 5, 1, "Opening Balance (WDV)"),
+                number("D5", 5, 4, "100"),
+                number("E5", 5, 5, "90"),
+                number("F5", 5, 6, "80"),
+                text("A7", 7, 1, "Less: Depreciation @ 10%"),
+                number("D7", 7, 4, "10"),
+                number("E7", 7, 5, "10"),
+                number("F7", 7, 6, "10"),
+                number("H3", 3, 8, "99"));
+
+        List<RegionDetector.DetectedRegion> regions = detector.detect("depreciation", cells);
+
+        assertThat(regions).anySatisfy(region -> {
+            assertThat(region.startRow()).isEqualTo(1);
+            assertThat(region.endRow()).isEqualTo(7);
+            assertThat(region.startCol()).isEqualTo(1);
+            assertThat(region.endCol()).isEqualTo(6);
+        });
+        assertThat(regions).anySatisfy(region ->
+                assertThat(region.startCol()).isEqualTo(8));
+    }
+
+    @Test
+    void yearAxisStopsWhenRowTypesLeaveTheHeaderSchema() {
+        Map<Long, RegionDetector.RegionCell> cells = cells(
+                text("D1", 1, 4, "Year 1"),
+                text("E1", 1, 5, "Year 2"),
+                text("F1", 1, 6, "Year 3"),
+                text("A3", 3, 1, "LAND COST & DEVELOPMENT"),
+                text("A5", 5, 1, "Written Down Value"),
+                number("D5", 5, 4, "80"),
+                number("E5", 5, 5, "70"),
+                number("F5", 5, 6, "60"),
+                text("A7", 7, 1, "TOTAL WDV"),
+                number("D7", 7, 4, "80"),
+                number("E7", 7, 5, "70"),
+                number("F7", 7, 6, "60"),
+                number("F9", 9, 6, "44"),
+                text("F11", 11, 6, "APPENDIX 6"),
+                text("D13", 13, 4, "Year 1"),
+                text("E13", 13, 5, "Year 2"),
+                text("F13", 13, 6, "Year 3"),
+                text("A15", 15, 1, "BUILDING"),
+                number("D15", 15, 4, "10"),
+                number("E15", 15, 5, "9"),
+                number("F15", 15, 6, "8"));
+
+        List<RegionDetector.DetectedRegion> regions = detector.detect("depreciation", cells);
+
+        assertThat(regions).anySatisfy(region -> {
+            assertThat(region.startRow()).isEqualTo(1);
+            assertThat(region.endRow()).isEqualTo(7);
+        });
+        assertThat(regions).anySatisfy(region ->
+                assertThat(region.startRow()).isIn(11, 13));
+        assertThat(regions).noneSatisfy(region -> {
+            assertThat(region.startRow()).isLessThanOrEqualTo(1);
+            assertThat(region.endRow()).isGreaterThanOrEqualTo(9);
+        });
+    }
+
+    @Test
+    void headerlessBoqLineUnderTotal_attachesToTableAbove() {
+        Map<Long, RegionDetector.RegionCell> cells = cells(
+                text("A1", 1, 1, "S.No"),
+                text("B1", 1, 2, "Description"),
+                text("C1", 1, 3, "Quantity"),
+                text("D1", 1, 4, "Rate"),
+                text("E1", 1, 5, "Amount"),
+                number("A2", 2, 1, "1"),
+                text("B2", 2, 2, "MBBR STP 100 KLD"),
+                text("C2", 2, 3, "1Set"),
+                number("D2", 2, 4, "1300000"),
+                number("E2", 2, 5, "1300000"),
+                text("D4", 4, 4, "Total Amount"),
+                formula("E4", 4, 5, "=E2", "1300000"),
+                number("A6", 6, 1, "5"),
+                text("B6", 6, 2, "For Passanger Lifts (6 Nos)"),
+                number("E6", 6, 5, "7200000"));
+
+        List<RegionDetector.DetectedRegion> regions = detector.detect("Details", cells);
+
+        assertThat(regions).hasSize(1);
+        assertThat(regions.getFirst().key()).isEqualTo("Details!A1");
+        assertThat(regions.getFirst().startRow()).isEqualTo(1);
+        assertThat(regions.getFirst().endRow()).isEqualTo(6);
+        assertThat(regions.getFirst().endCol()).isEqualTo(5);
+    }
+
+    @Test
     void stackedBoqAfterTotalPriceHeader_splitsAndDoesNotShredQuoteRows() {
         Map<Long, RegionDetector.RegionCell> cells = cells(
                 text("A1", 1, 1, "S.No"),
@@ -198,6 +306,42 @@ class RegionDetectorTest {
         assertThat(regions.get(1).key()).isEqualTo("Details!A5");
         assertThat(regions.get(1).startRow()).isEqualTo(5);
         assertThat(regions.get(1).endRow()).isEqualTo(9);
+    }
+
+    @Test
+    void sectionLetterAndTitleAboveQuote_stayOneRegionWithTheTable() {
+        Map<Long, RegionDetector.RegionCell> cells = cells(
+                text("A1", 1, 1, "D"),
+                text("B1", 1, 2, "AIR CONDITIONING"),
+                text("A2", 2, 1, "FORECAST ESTIMATE"),
+                text("A3", 3, 1, "CLIENT:- OM ARHAM VENTURES"),
+                text("A5", 5, 1, "S no"),
+                text("B5", 5, 2, "Description"),
+                text("C5", 5, 3, "Unit"),
+                quantityText("D5", 5, 4, "Qty"),
+                text("E5", 5, 5, "Rate"),
+                text("F5", 5, 6, "Amount"),
+                number("A6", 6, 1, "1"),
+                text("B6", 6, 2, "SITC of VRV/VR"),
+                text("C6", 6, 3, "PER TR"),
+                number("D6", 6, 4, "610"),
+                number("E6", 6, 5, "33000"),
+                number("F6", 6, 6, "20130000"),
+                number("A7", 7, 1, "2"),
+                text("B7", 7, 2, "BASEMENT VENTILATION"),
+                text("C7", 7, 3, "PER CFM"),
+                number("D7", 7, 4, "62000"),
+                number("E7", 7, 5, "15"),
+                number("F7", 7, 6, "930000"),
+                text("B8", 8, 2, "TOTAL COST OF AIR CONDITIONING WORK IN Rs."),
+                formula("F8", 8, 6, "=SUM(F6:F7)", "21060000"));
+
+        List<RegionDetector.DetectedRegion> regions = detector.detect("Details", cells);
+
+        assertThat(regions).hasSize(1);
+        assertThat(regions.getFirst().key()).isEqualTo("Details!A1");
+        assertThat(regions.getFirst().startRow()).isEqualTo(1);
+        assertThat(regions.getFirst().endRow()).isEqualTo(8);
     }
 
     @Test

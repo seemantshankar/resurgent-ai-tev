@@ -113,6 +113,76 @@ class RegionHeaderAnalyzerTest {
     }
 
     @Test
+    void joinsSectionStubWithRowDescription() {
+        List<NormalizedCell> cells = List.of(
+                text("A15", 15, 1, "(A)"),
+                text("B15", 15, 2, "Grand Total Cost of Civil Works"),
+                number("E15", 15, 5, "242353576.58"),
+                text("F15", 15, 6, "see note"));
+
+        RegionHeaderContext context = analyzer.analyze(cells,
+                new RegionHeaderAnalyzer.Bounds(15, 15, 1, 6));
+
+        assertThat(context.rowLabelsByRow())
+                .containsEntry(15, "(A) Grand Total Cost of Civil Works");
+    }
+
+    @Test
+    void skipsNumericSerialsWhenLabellingARow() {
+        List<NormalizedCell> cells = List.of(
+                number("A3", 3, 1, "1.0"),
+                text("B3", 3, 2, "Basement Floor"),
+                number("E3", 3, 5, "63763632.66"));
+
+        RegionHeaderContext context = analyzer.analyze(cells,
+                new RegionHeaderAnalyzer.Bounds(3, 3, 1, 5));
+
+        assertThat(context.rowLabelsByRow()).containsEntry(3, "Basement Floor");
+    }
+
+    @Test
+    void doesNotFoldAmountRowsIntoColumnLabels() {
+        List<NormalizedCell> cells = List.of(
+                text("A1", 1, 1, "CIVIL Works"),
+                text("A2", 2, 1, "Sl.No"),
+                text("B2", 2, 2, "Floor"),
+                text("C2", 2, 3, "Area (In sqm.)"),
+                text("D2", 2, 4, "Rate Rs/Sqm"),
+                text("E2", 2, 5, "Amount in Rs"),
+                number("A3", 3, 1, "1.0"),
+                text("B3", 3, 2, "Basement Floor"),
+                number("C3", 3, 3, "3110.0"),
+                number("D3", 3, 4, "20502.775774919613"),
+                number("E3", 3, 5, "63763632.66"),
+                number("A4", 4, 1, "2.0"),
+                text("B4", 4, 2, "Ground Floor"),
+                number("C4", 4, 3, "3014.0"),
+                number("D4", 4, 4, "12200.774163901791"),
+                number("E4", 4, 5, "36773133.33"),
+                text("B13", 13, 2, "Total"),
+                number("C13", 13, 3, "17571.71"),
+                number("E13", 13, 5, "242353576.58"),
+                text("A15", 15, 1, "(A)"),
+                text("B15", 15, 2, "Grand Total Cost of Civil Works"),
+                number("E15", 15, 5, "242353576.58"));
+
+        RegionHeaderContext context = analyzer.analyze(cells,
+                new RegionHeaderAnalyzer.Bounds(1, 15, 1, 5));
+
+        assertThat(context.headerRows()).containsExactly(1, 2);
+        assertThat(context.columnLabelsByColumn())
+                .containsEntry(1, "CIVIL Works / Sl.No")
+                .containsEntry(2, "Floor")
+                .containsEntry(3, "Area (In sqm.)")
+                .containsEntry(4, "Rate Rs/Sqm")
+                .containsEntry(5, "Amount in Rs");
+        assertThat(context.rowLabelsByRow())
+                .containsEntry(3, "Basement Floor")
+                .containsEntry(13, "Total")
+                .containsEntry(15, "(A) Grand Total Cost of Civil Works");
+    }
+
+    @Test
     void recognizesOrdinaryTableHeadersWithoutPeriodLabels() {
         List<NormalizedCell> cells = List.of(
                 text("A1", 1, 1, "Particulars"),

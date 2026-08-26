@@ -86,6 +86,19 @@ class CellContextEnricherTest {
     }
 
     @Test
+    void rowLabelJoinsSectionStubWithDescription() {
+        List<NormalizedCell> cells = new ArrayList<>();
+        cells.add(textCell("A15", 15, 1, "(A)"));
+        cells.add(textCell("B15", 15, 2, "Grand Total Cost of Civil Works"));
+        cells.add(numberCell("E15", 15, 5, "242353576.58"));
+
+        List<NormalizedCell> enriched = enricher.enrich(cells);
+        Map<String, NormalizedCell> byCoord = byCoord(enriched);
+
+        assertThat(byCoord.get("E15").rowLabel()).isEqualTo("(A) Grand Total Cost of Civil Works");
+    }
+
+    @Test
     void rowLabelFallsBackToFirstNonEmptyTextCell() {
         List<NormalizedCell> cells = new ArrayList<>();
         // Column A blank, label in B

@@ -36,8 +36,13 @@ final class RegionHeaderAnalyzer {
             cellsByRow.computeIfAbsent(cell.rowNum(), ignored -> new ArrayList<>()).add(cell);
         }
 
+        Integer firstDataRow = cellsByRow.entrySet().stream()
+                .filter(entry -> entry.getValue().stream().anyMatch(this::isDataCell))
+                .map(Map.Entry::getKey)
+                .findFirst()
+                .orElse(null);
         List<Integer> headerRows = cellsByRow.entrySet().stream()
-                .filter(entry -> isHeaderRow(entry.getKey(), entry.getValue(), cellsByRow))
+                .filter(entry -> isHeaderRow(entry.getKey(), entry.getValue(), firstDataRow))
                 .map(Map.Entry::getKey)
                 .toList();
         Map<Integer, String> columnLabels = columnLabels(headerRows, cellsByRow, bounds);
@@ -51,7 +56,7 @@ final class RegionHeaderAnalyzer {
         Map<Integer, List<String>> labels = new LinkedHashMap<>();
         for (int row : headerRows) {
             for (NormalizedCell cell : distinctMergedCells(cellsByRow.get(row))) {
-                String label = text(cell);
+                String label = headerText(cell);
                 if (label != null) {
                     for (int column : coveredColumns(cell, bounds)) {
                         labels.computeIfAbsent(column, ignored -> new ArrayList<>()).add(label);
@@ -86,11 +91,10 @@ final class RegionHeaderAnalyzer {
             if (headerRows.contains(entry.getKey())) {
                 continue;
             }
-            entry.getValue().stream()
-                    .map(this::text)
-                    .filter(value -> value != null)
-                    .findFirst()
-                    .ifPresent(label -> result.put(entry.getKey(), label));
+            String label = RowLabelComposer.compose(entry.getValue());
+            if (label != null) {
+                result.put(entry.getKey(), label);
+            }
         }
         return result;
     }
@@ -112,30 +116,35 @@ final class RegionHeaderAnalyzer {
     }
 
     private boolean isPeriodHeader(NormalizedCell cell) {
-        String value = text(cell);
+        String value = headerText(cell);
         return value != null && isPeriodLikeLabel(value);
     }
 
-    private boolean isHeaderRow(int row, List<NormalizedCell> cells,
-            Map<Integer, List<NormalizedCell>> cellsByRow) {
+    private boolean isHeaderRow(int row, List<NormalizedCell> cells, Integer firstDataRow) {
         if (cells.stream().anyMatch(this::isPeriodHeader)) {
             return true;
         }
-        long textCells = cells.stream().map(this::text).filter(value -> value != null).count();
-        if (textCells < 2) {
+        if (cells.stream().anyMatch(this::isDataCell)) {
             return false;
         }
-        // An ordinary table header is a text-led row immediately followed by table data. This
-        // intentionally does not depend on a period label: cost and vendor tables often have none.
-        return cellsByRow.entrySet().stream()
-                .filter(entry -> entry.getKey() > row)
-                .findFirst()
-                .map(entry -> entry.getValue().stream().anyMatch(this::isDataCell))
-                .orElse(false);
+        if (cells.stream().map(this::headerText).noneMatch(value -> value != null)) {
+            return false;
+        }
+        // Text-only rows above the first amount or formula are headers, including
+        // stacked unit lines such as Amount / Rs. Lakh. Line items and totals sit
+        // on or after that first data row and must not join into col_label.
+        return firstDataRow != null && row < firstDataRow;
     }
 
     private boolean isDataCell(NormalizedCell cell) {
         return cell.numericValue() != null || (cell.formulaText() != null && !cell.formulaText().isBlank());
+    }
+
+    private String headerText(NormalizedCell cell) {
+        if (!"text".equals(cell.valueType())) {
+            return null;
+        }
+        return text(cell);
     }
 
     private String text(NormalizedCell cell) {

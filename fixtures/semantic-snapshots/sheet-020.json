@@ -1,9 +1,9 @@
 {
   "candidates" : [ {
-    "automatic_trust_eligible" : true,
+    "automatic_trust_eligible" : false,
     "cost_head_code" : "ELECTRICAL",
-    "reasons" : [ "STRUCTURAL_TOTAL", "GATE_MAPPING_PASS", "GATE_BASIS_PASS", "GATE_UNIT_CURRENCY_PASS", "GATE_COVERAGE_PASS", "GATE_CACHE_NUMERIC_PASS", "GATE_BLOCKERS_PASS" ],
-    "trust_state" : "trusted"
+    "reasons" : [ "STRUCTURAL_TOTAL", "GATE_MAPPING_FAIL", "GATE_BASIS_PASS", "GATE_UNIT_CURRENCY_PASS", "GATE_COVERAGE_PASS", "GATE_CACHE_NUMERIC_PASS", "GATE_BLOCKERS_PASS" ],
+    "trust_state" : "candidate"
   }, {
     "automatic_trust_eligible" : false,
     "cost_head_code" : "KITCHEN_EQUIPMENT",
@@ -44,7 +44,7 @@
   }, {
     "bbox" : {
       "end_col" : 6,
-      "end_row" : 9,
+      "end_row" : 34,
       "start_col" : 1,
       "start_row" : 7
     },
@@ -59,57 +59,6 @@
       "conf" : 0.95,
       "reasons" : [ "HEADER_DESCRIPTION" ],
       "role" : "description",
-      "type" : "text"
-    }, {
-      "col" : 3,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 4,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 5,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 6,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "rs",
-    "inferred_unit_conf" : 0.7,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 6,
-      "end_row" : 34,
-      "start_col" : 1,
-      "start_row" : 10
-    },
-    "columns" : [ {
-      "col" : 1,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 2,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
       "type" : "text"
     }, {
       "col" : 3,
@@ -828,9 +777,9 @@
   }, {
     "code" : "SCRATCH_ORPHAN_CONTENT",
     "params" : {
-      "cell_count" : 9
+      "cell_count" : 6
     },
-    "weight" : 9
+    "weight" : 6
   } ],
   "scratch_cells" : [ {
     "coord" : "C2",
@@ -840,24 +789,6 @@
     "support" : false
   }, {
     "coord" : "C4",
-    "orphan" : true,
-    "reasons" : [ ],
-    "scratch" : false,
-    "support" : false
-  }, {
-    "coord" : "B7",
-    "orphan" : true,
-    "reasons" : [ ],
-    "scratch" : false,
-    "support" : false
-  }, {
-    "coord" : "D8",
-    "orphan" : true,
-    "reasons" : [ ],
-    "scratch" : false,
-    "support" : false
-  }, {
-    "coord" : "A9",
     "orphan" : true,
     "reasons" : [ ],
     "scratch" : false,

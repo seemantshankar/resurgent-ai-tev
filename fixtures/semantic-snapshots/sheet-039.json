@@ -83,7 +83,7 @@
   }, {
     "bbox" : {
       "end_col" : 14,
-      "end_row" : 22,
+      "end_row" : 25,
       "start_col" : 1,
       "start_row" : 5
     },
@@ -212,33 +212,6 @@
       "type" : "number"
     }, {
       "col" : 6,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "unknown",
-    "inferred_currency_conf" : 0.0,
-    "inferred_unit" : "unknown",
-    "inferred_unit_conf" : 0.0,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 13,
-      "end_row" : 25,
-      "start_col" : 12,
-      "start_row" : 23
-    },
-    "columns" : [ {
-      "col" : 12,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 13,
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",

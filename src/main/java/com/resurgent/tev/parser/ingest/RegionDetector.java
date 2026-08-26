@@ -14,8 +14,8 @@ import java.util.regex.Pattern;
 import org.apache.poi.ss.util.CellReference;
 
 /**
- * Finds the coarse, geometry-only regions of one worksheet. Classification happens in a
- * later ticket; this detector deliberately emits every component as {@code unknown}.
+ * Finds worksheet regions: geometric components, then header-schema membership.
+ * Classification happens later; every region is emitted as {@code unknown} here.
  */
 final class RegionDetector {
 
@@ -46,6 +46,7 @@ final class RegionDetector {
                 split.addAll(splitHorizontal(sheetName, bannerSplit));
             }
         }
+        split = mergeUnderColumnHeaders(split);
         split.sort(Comparator.comparingInt((List<OccupiedCell> c) -> minRow(c))
                 .thenComparingInt(RegionDetector::minCol));
 
@@ -88,6 +89,259 @@ final class RegionDetector {
         }
         addRowBand(result, component, start, maxRow(component));
         return result;
+    }
+
+    private record SchemaHeader(int row, Set<Integer> cols, int minCol, int maxCol,
+            Set<Integer> valueCols) {}
+
+    /**
+     * Membership follows the header row's column span and types, not skip-N. Keep rows
+     * whose occupied schema cells match the body types (numbers, blanks allowed). A section
+     * title may not match, but is kept when body rows resume under it. Stop at a new
+     * header (schema cells are text again) or any row that does not match and is not such
+     * a section title. Cells to the right of the schema stay out.
+     */
+    private static List<List<OccupiedCell>> mergeUnderColumnHeaders(List<List<OccupiedCell>> bands) {
+        List<OccupiedCell> all = new ArrayList<>();
+        for (List<OccupiedCell> band : bands) {
+            all.addAll(band);
+        }
+        Map<Integer, List<OccupiedCell>> cellsByRow = byRow(all);
+        List<SchemaHeader> headers = new ArrayList<>();
+        for (Map.Entry<Integer, List<OccupiedCell>> row : cellsByRow.entrySet()) {
+            if (!isColumnHeaderRow(row.getValue())) {
+                continue;
+            }
+            Set<Integer> periodCols = new HashSet<>();
+            Set<Integer> cols = new HashSet<>();
+            for (OccupiedCell cell : row.getValue()) {
+                cols.add(cell.cell().colNum());
+                String text = cell.cell().textValue();
+                if (RegionHeaderAnalyzer.isColumnHeaderPeriodLabel(text)) {
+                    periodCols.add(cell.cell().colNum());
+                }
+            }
+            if (!periodCols.isEmpty()) {
+                cols = periodCols;
+            }
+            int minCol = cols.stream().mapToInt(Integer::intValue).min().orElse(1);
+            int maxCol = cols.stream().mapToInt(Integer::intValue).max().orElse(minCol);
+            headers.add(new SchemaHeader(row.getKey(), cols, minCol, maxCol, Set.of()));
+        }
+        if (headers.isEmpty()) {
+            return bands;
+        }
+        headers.sort(Comparator.comparingInt(SchemaHeader::row));
+        int sheetLastRow = 1;
+        for (OccupiedCell cell : all) {
+            sheetLastRow = Math.max(sheetLastRow, cell.cell().rowNum());
+        }
+        List<SchemaHeader> resolved = new ArrayList<>();
+        for (int i = 0; i < headers.size(); i++) {
+            SchemaHeader header = headers.get(i);
+            int before = i + 1 < headers.size() ? headers.get(i + 1).row() : sheetLastRow + 1;
+            resolved.add(new SchemaHeader(header.row(), header.cols(), header.minCol(),
+                    header.maxCol(), inferValueCols(cellsByRow, header, before)));
+        }
+        headers = resolved;
+        int[] lastBody = new int[headers.size()];
+        for (int i = 0; i < headers.size(); i++) {
+            int before = i + 1 < headers.size() ? headers.get(i + 1).row() : sheetLastRow + 1;
+            lastBody[i] = lastBodyRow(cellsByRow, headers.get(i), before);
+        }
+        int[] fromRow = new int[headers.size()];
+        for (int i = 0; i < headers.size(); i++) {
+            int lo = i == 0 ? 1 : lastBody[i - 1] + 1;
+            fromRow[i] = headers.get(i).row();
+            for (int row = headers.get(i).row() - 1; row >= lo; row--) {
+                List<OccupiedCell> cells = cellsByRow.get(row);
+                if (cells == null) {
+                    continue;
+                }
+                if (isPreambleTitle(cells, headers.get(i))) {
+                    fromRow[i] = row;
+                    continue;
+                }
+                break;
+            }
+        }
+
+        Set<Long> assigned = new HashSet<>();
+        List<List<OccupiedCell>> result = new ArrayList<>();
+        for (int i = 0; i < headers.size(); i++) {
+            SchemaHeader header = headers.get(i);
+            List<OccupiedCell> group = new ArrayList<>();
+            for (OccupiedCell cell : all) {
+                int row = cell.cell().rowNum();
+                int col = cell.cell().colNum();
+                if (row < fromRow[i] || row > lastBody[i]) {
+                    continue;
+                }
+                int right = header.maxCol();
+                for (int valueCol : header.valueCols()) {
+                    right = Math.max(right, valueCol);
+                }
+                if (col > right) {
+                    continue;
+                }
+                if (header.cols().contains(col) || header.valueCols().contains(col)
+                        || col < header.minCol()) {
+                    group.add(cell);
+                    assigned.add(cell.id());
+                }
+            }
+            if (!group.isEmpty()) {
+                result.add(group);
+            }
+        }
+        List<OccupiedCell> leftover = new ArrayList<>();
+        for (OccupiedCell cell : all) {
+            if (!assigned.contains(cell.id())) {
+                leftover.add(cell);
+            }
+        }
+        if (!leftover.isEmpty()) {
+            result.addAll(components(leftover));
+        }
+        return result;
+    }
+
+    private static int lastBodyRow(Map<Integer, List<OccupiedCell>> cellsByRow, SchemaHeader header,
+            int beforeRow) {
+        int last = header.row();
+        for (int row = header.row() + 1; row < beforeRow; row++) {
+            List<OccupiedCell> cells = cellsByRow.get(row);
+            if (cells == null) {
+                continue;
+            }
+            if (!rowTouchesSchema(cells, header)) {
+                continue;
+            }
+            if (isColumnHeaderRow(cells)) {
+                break;
+            }
+            if (isBodyRow(cells, header)) {
+                last = row;
+                continue;
+            }
+            if (isSectionTitle(cells, header)) {
+                continue;
+            }
+            break;
+        }
+        return last;
+    }
+
+    private static Set<Integer> inferValueCols(Map<Integer, List<OccupiedCell>> cellsByRow,
+            SchemaHeader header, int beforeRow) {
+        Set<Integer> periodCols = new HashSet<>();
+        List<OccupiedCell> headerRow = cellsByRow.get(header.row());
+        if (headerRow != null) {
+            for (OccupiedCell cell : headerRow) {
+                String text = cell.cell().textValue();
+                if (header.cols().contains(cell.cell().colNum())
+                        && RegionHeaderAnalyzer.isColumnHeaderPeriodLabel(text)) {
+                    periodCols.add(cell.cell().colNum());
+                }
+            }
+        }
+        if (!periodCols.isEmpty()) {
+            return periodCols;
+        }
+        for (int row = header.row() + 1; row < beforeRow; row++) {
+            List<OccupiedCell> cells = cellsByRow.get(row);
+            if (cells == null) {
+                continue;
+            }
+            Set<Integer> numericCols = new HashSet<>();
+            for (OccupiedCell cell : cells) {
+                if (isNumericCell(cell) && cell.cell().colNum() >= header.minCol()) {
+                    numericCols.add(cell.cell().colNum());
+                }
+            }
+            if (!numericCols.isEmpty()) {
+                return numericCols;
+            }
+        }
+        return header.cols();
+    }
+
+    private static boolean rowTouchesSchema(List<OccupiedCell> row, SchemaHeader header) {
+        for (OccupiedCell cell : row) {
+            int col = cell.cell().colNum();
+            if (header.cols().contains(col) || header.valueCols().contains(col)
+                    || col < header.minCol()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isBodyRow(List<OccupiedCell> row, SchemaHeader header) {
+        if (isTotalOrSubtotalRow(row)) {
+            return true;
+        }
+        Set<Integer> valueCols = header.valueCols().isEmpty() ? header.cols() : header.valueCols();
+        int numericInValue = 0;
+        boolean textInValue = false;
+        for (OccupiedCell cell : row) {
+            int col = cell.cell().colNum();
+            if (!valueCols.contains(col)) {
+                continue;
+            }
+            if (isTextCell(cell)) {
+                textInValue = true;
+            }
+            if (isNumericCell(cell)) {
+                numericInValue++;
+            }
+        }
+        if (textInValue) {
+            return false;
+        }
+        int needed = Math.min(2, Math.max(1, valueCols.size()));
+        if (valueCols.size() >= 2) {
+            needed = 2;
+        }
+        return numericInValue >= needed;
+    }
+
+    private static boolean isSectionTitle(List<OccupiedCell> row, SchemaHeader header) {
+        Set<Integer> valueCols = header.valueCols().isEmpty() ? header.cols() : header.valueCols();
+        boolean stub = false;
+        for (OccupiedCell cell : row) {
+            int col = cell.cell().colNum();
+            if (valueCols.contains(col) && (isTextCell(cell) || isNumericCell(cell))) {
+                return false;
+            }
+            if (isTextCell(cell) && !valueCols.contains(col)) {
+                stub = true;
+            }
+        }
+        return stub;
+    }
+
+    private static boolean isPreambleTitle(List<OccupiedCell> row, SchemaHeader header) {
+        if (isBodyRow(row, header) || isColumnHeaderRow(row)) {
+            return false;
+        }
+        for (OccupiedCell cell : row) {
+            if (isNumericCell(cell)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isTextCell(OccupiedCell cell) {
+        return "text".equals(cell.cell().valueType())
+                && cell.cell().textValue() != null
+                && !cell.cell().textValue().isBlank();
+    }
+
+    private static boolean isNumericCell(OccupiedCell cell) {
+        return "number".equals(cell.cell().valueType())
+                || (cell.cell().formulaText() != null && !cell.cell().formulaText().isBlank());
     }
 
     /** Package seam for #40: exposes accepted and rejected cut evidence. */
@@ -190,10 +444,10 @@ final class RegionDetector {
                 labels.add(n.textValue().trim());
             }
         }
-        if (labels.size() >= 2) {
-            return true;
-        }
-        return labels.stream().anyMatch(RegionHeaderAnalyzer::isColumnHeaderPeriodLabel);
+        boolean hasPeriod = labels.stream().anyMatch(RegionHeaderAnalyzer::isColumnHeaderPeriodLabel);
+        // Two text cells alone is a section title (`D | AIR CONDITIONING`), not a schema.
+        // A stacked period axis (`Particulars | Year 1`) still qualifies; a BOQ schema has 3+.
+        return labels.size() >= 3 || hasPeriod;
     }
 
     private static boolean hasColumnHeaderRowAtOrAbove(List<OccupiedCell> component, int cut) {
@@ -357,7 +611,9 @@ final class RegionDetector {
 
     private static boolean axisAlignedStubToValue(
             NormalizedCell left, NormalizedCell right, int rowGap, int colGap) {
-        if (!((rowGap == 0 && colGap == 2) || (rowGap == 2 && colGap == 0))) {
+        boolean skipOnRow = rowGap == 0 && colGap == 2;
+        boolean skipOnCol = colGap == 0 && rowGap == 2;
+        if (!(skipOnRow || skipOnCol)) {
             return false;
         }
         return (isTextStub(left) && isValueCell(right)) || (isTextStub(right) && isValueCell(left));

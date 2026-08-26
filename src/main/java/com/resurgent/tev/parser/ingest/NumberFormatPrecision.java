@@ -5,9 +5,10 @@ import java.math.RoundingMode;
 
 /**
  * Rounds full-precision decimals to the explicit display scale of an Excel
- * number format. Absent a display scale, callers must use exact compareTo.
+ * number format. Absent a display scale, callers must use exact compareTo
+ * unless they are comparing cost-head money, which is always two decimal places.
  */
-final class NumberFormatPrecision {
+public final class NumberFormatPrecision {
 
     private NumberFormatPrecision() {}
 
@@ -52,6 +53,11 @@ final class NumberFormatPrecision {
             return left.compareTo(right) == 0;
         }
         return round(left, scale).compareTo(round(right, scale)) == 0;
+    }
+
+    /** Cost-head amounts are money: paise, not IEEE remainder. */
+    public static boolean agreePaise(BigDecimal left, BigDecimal right) {
+        return agree(left, right, "0.00");
     }
 
     static BigDecimal round(BigDecimal value, int scale) {
