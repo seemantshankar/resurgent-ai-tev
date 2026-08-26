@@ -21,7 +21,7 @@
 }, {
   "bbox" : {
     "end_col" : 11,
-    "end_row" : 5,
+    "end_row" : 7,
     "start_col" : 1,
     "start_row" : 4
   },
@@ -35,26 +35,6 @@
   } ],
   "region_conf" : 0.0,
   "region_key" : "sheet-024!A4",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-024"
-}, {
-  "bbox" : {
-    "end_col" : 1,
-    "end_row" : 7,
-    "start_col" : 1,
-    "start_row" : 7
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-024!A7",
   "region_type" : "unknown",
   "serial_pattern" : null,
   "sheet_id" : "sheet-024"
@@ -481,41 +461,21 @@
 }, {
   "bbox" : {
     "end_col" : 6,
-    "end_row" : 60,
+    "end_row" : 64,
     "start_col" : 6,
     "start_row" : 60
   },
   "cost_head_code" : null,
   "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
+    "code" : "VERTICAL_FORM",
     "params" : {
-      "top_score" : 0
+      "column_span" : 1
     },
-    "weight" : 0
+    "weight" : 3
   } ],
-  "region_conf" : 0.0,
+  "region_conf" : 1.0,
   "region_key" : "sheet-024!F60",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-024"
-}, {
-  "bbox" : {
-    "end_col" : 6,
-    "end_row" : 64,
-    "start_col" : 6,
-    "start_row" : 62
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-024!F62",
-  "region_type" : "unknown",
+  "region_type" : "vertical_form",
   "serial_pattern" : null,
   "sheet_id" : "sheet-024"
 }, {
@@ -960,50 +920,10 @@
   "sheet_id" : "sheet-024"
 }, {
   "bbox" : {
-    "end_col" : 6,
-    "end_row" : 120,
-    "start_col" : 6,
-    "start_row" : 120
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-024!F120",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-024"
-}, {
-  "bbox" : {
     "end_col" : 8,
-    "end_row" : 126,
-    "start_col" : 3,
-    "start_row" : 122
-  },
-  "cost_head_code" : "PLANT_MACHINERY",
-  "detection_reasons" : [ {
-    "code" : "COST_HEAD_ALIAS",
-    "params" : {
-      "match_count" : 1
-    },
-    "weight" : 8
-  } ],
-  "region_conf" : 1.0,
-  "region_key" : "sheet-024!C122",
-  "region_type" : "cost_head",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-024"
-}, {
-  "bbox" : {
-    "end_col" : 1,
     "end_row" : 131,
     "start_col" : 1,
-    "start_row" : 123
+    "start_row" : 120
   },
   "cost_head_code" : "CONTINGENCY",
   "detection_reasons" : [ {
@@ -1013,29 +933,9 @@
     },
     "weight" : 8
   } ],
-  "region_conf" : 1.0,
-  "region_key" : "sheet-024!A123",
+  "region_conf" : 0.75,
+  "region_key" : "sheet-024!A120",
   "region_type" : "cost_head",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-024"
-}, {
-  "bbox" : {
-    "end_col" : 8,
-    "end_row" : 129,
-    "start_col" : 4,
-    "start_row" : 128
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-024!D128",
-  "region_type" : "unknown",
   "serial_pattern" : null,
   "sheet_id" : "sheet-024"
 }, {
@@ -1081,7 +981,7 @@
 }, {
   "bbox" : {
     "end_col" : 13,
-    "end_row" : 135,
+    "end_row" : 137,
     "start_col" : 4,
     "start_row" : 135
   },
@@ -1115,26 +1015,6 @@
   } ],
   "region_conf" : 0.0,
   "region_key" : "sheet-024!A137",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-024"
-}, {
-  "bbox" : {
-    "end_col" : 13,
-    "end_row" : 137,
-    "start_col" : 4,
-    "start_row" : 137
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-024!D137",
   "region_type" : "unknown",
   "serial_pattern" : null,
   "sheet_id" : "sheet-024"

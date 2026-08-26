@@ -1,7 +1,7 @@
 [ {
   "bbox" : {
     "end_col" : 9,
-    "end_row" : 5,
+    "end_row" : 12,
     "start_col" : 1,
     "start_row" : 4
   },
@@ -23,18 +23,18 @@
     "end_col" : 9,
     "end_row" : 22,
     "start_col" : 1,
-    "start_row" : 6
+    "start_row" : 13
   },
   "cost_head_code" : null,
   "detection_reasons" : [ {
     "code" : "STATEMENT_SHAPE",
     "params" : {
-      "row_span" : 17
+      "row_span" : 10
     },
     "weight" : 4
   } ],
   "region_conf" : 1.0,
-  "region_key" : "sheet-017!A6",
+  "region_key" : "sheet-017!A13",
   "region_type" : "bs",
   "serial_pattern" : null,
   "sheet_id" : "sheet-017"

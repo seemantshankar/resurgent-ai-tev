@@ -240,7 +240,7 @@ class ExplicitAnchorIngestTest {
 
         ParserConfig reparse = new ParserConfig(
                 100L * 1024 * 1024, 200, 1_000_000, 16_384, 5_000_000L, 100,
-                false, true, true, 4, 4);
+                false, true, true, 4);
         new IngestService().ingest(xlsx, 1L, db, reparse);
         assertThat(fingerprint(db, true)).isEqualTo(fingerprint);
 

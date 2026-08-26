@@ -10,7 +10,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Map;
 
-/** Versioned, classpath-backed tuning values for region boundary scoring. */
+/** Versioned, classpath-backed tuning values for region classification. */
 public final class RegionWeights {
 
     private static final String RESOURCE = "/region-weights.json";
@@ -29,14 +29,6 @@ public final class RegionWeights {
 
     public static RegionWeights defaults() {
         return DEFAULT;
-    }
-
-    public int signal(String name) {
-        Integer value = signals.get(name);
-        if (value == null) {
-            throw new IllegalStateException("missing region weight: " + name);
-        }
-        return value;
     }
 
     public String contentHash() {
@@ -64,13 +56,6 @@ public final class RegionWeights {
                 throw new IllegalStateException("region weights resource has no signals object");
             }
             Map<String, Integer> signals = numericMap(map, "signals");
-            for (String required : new String[] {"titleStyle", "columnProfileShift", "serialReset",
-                    "skeletonDrift", "sectionMarker", "formulaAnchorChange", "blankRowsWithHeader",
-                    "coherentSpacer", "hiddenRowsInSummedRange", "protectedTotalOrMerge"}) {
-                if (!signals.containsKey(required)) {
-                    throw new IllegalStateException("region weights resource missing " + required);
-                }
-            }
             Object rawClassification = root.get("classification");
             if (!(rawClassification instanceof Map<?, ?> classificationMap)) {
                 throw new IllegalStateException("region weights resource has no classification object");

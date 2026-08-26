@@ -641,15 +641,18 @@ For each worksheet:
 
 1. Compute real bbox from occupied cells, merged ranges, comments, and same-sheet formula precedents.
 2. Create a grid mask of “semantic occupancy”: non-empty cells, merged participants, error cells, and hidden cells count as occupied.
-3. Dilate the mask by one row/column **only across label/formula-compatible neighbors**, then find connected components using **8-connectivity**.
+3. Dilate the mask by one row/column **across compatible neighbors**, then find connected
+   components using **8-connectivity**. Touching cells (Chebyshev distance ≤ 1) always join.
 4. A component may be a full statement, a vendor block, a side scratch island, or a repeated inline summary.
 
-**Compatibility (Sprint 3a).** A one-cell gap is bridged only when the cells on both sides are
-either (a) formula cells whose §7.4 skeletons have non-zero similarity, or (b) text labels in the
-same column. This reuses the Sprint 2 skeleton rather than inventing a second notion of sameness,
-and it is what keeps `depreciation`'s every-other-row spacers inside one component: the cells above
-and below a spacer are the same formula family. Bare value-class agreement is *not* compatibility —
-two unrelated numeric blocks separated by a blank row stay separate.
+**Compatibility (Sprint 3a).** A one-cell gap (Chebyshev distance 2) is bridged when the cells on
+both sides are (a) formula cells whose §7.4 skeletons have non-zero similarity, (b) plain text
+labels in the same column, or (c) **axis-aligned stub-to-value**: one cell is a text stub and the
+other is a number or formula, on the same row (one empty column between — `name | (blank) | number`)
+or the same column (one empty row between). (c) is how cash-flow and cost tables join a stub in
+column B to amounts in column D across an empty spacer column. Bare value-class agreement is *not*
+compatibility — two unrelated numeric blocks separated by a blank row or column stay separate.
+Formula-family skip-one still keeps `depreciation`'s every-other-row spacers inside one component.
 
 **Connectivity is 8-way** because financial blocks are routinely ragged at the top-left: a merged
 title, an indented header row, then data. 4-connectivity splits those into a title fragment and a
@@ -663,10 +666,10 @@ presentation concern, never a graph one.
 
 **Banner split.** A merged title spanning several blocks (`A1:K1` above `A3:E20` and `G3:K20`) is
 occupied by step 2 and contiguous by definition, so it 8-connects both blocks into one component
-that §7.2's row-oriented scoring can never separate. After components form, therefore: if removing
+that §7.2's header-defined cuts can never separate. After components form, therefore: if removing
 rows that consist *solely* of a merged banner leaves ≥ 2 column-disjoint sub-components, split them
 vertically and emit the banner as its own one-row region. This is a connectivity-derived split
-proven by geometry, not a scored one — it does not introduce vertical break scoring (§7.2).
+proven by geometry, not a header-row cut — it does not introduce vertical break scoring (§7.2).
 
 **Every component becomes a region, regardless of size.** A one-cell component (`SALESPROJECTION!E2`,
 `depreciation!F2`) is a region typed `unknown` unless Sprint 3b finds affirmative semantic evidence.
@@ -681,47 +684,43 @@ This directly handles:
 - `B  S !Q11:R18`: side mini-analysis is its own component because columns O:P are empty.
 - `AT GLANCE`: vertical form is one component but classified `vertical_form`, not forced into a table.
 
-### 7.2 Break/merge scoring
+### 7.2 Header-defined cuts
 
-Never use blank rows alone. Score candidate breaks:
+A shared column-header row is the identity of a table. Never cut because values change, a section
+title is bold, or a blank sits above a total. Never use blank rows alone.
 
-```text
-+2  explicit section title style (bold/fill/border/merged title)
-+2  column schema changes materially
-+2  serial pattern resets (1,2,3 -> A. -> ST.01)
-+2  2D formula-skeleton drift (horizontal or vertical family changes)
-+1  label column changes from blank to non-blank section marker
-+1  formula anchor family changes
-+1  >=2 consecutive blank rows AND next rows introduce a new header-like row
--2  blank spacer row inside an otherwise coherent formula block
--2  hidden rows inside a summed range
--3  break would split a merged range or a known total from its members
-```
+After a geometrically connected component forms, consider each horizontal candidate cut. Reject it
+(keep the component together) when:
 
-Break only when score >= 4. Otherwise keep component and log reason.
+1. A merged range spans the cut (`merged_range`).
+2. The first populated row below the cut is computed from rows above (`computed_from_rows_above`):
+   a same-sheet formula on that row references a row `r <= cut` in this component. Cross-sheet
+   references do not count.
+3. The first populated row below is not a column-header row (`no_column_header_below`).
 
-**Cuts are horizontal only.** Every signal above with real weight is intrinsically row-oriented —
-there is no meaningful serial-pattern reset across columns. Vertical separation is handled by
-connectivity, not scoring: `B  S !Q11:R18` is a separate component *because* O:P are empty (§7.1),
-and the one geometric exception is the banner split. Symmetric column semantics would add tuning
-surface that no observed case demands; if one appears, it is a Sprint 3b amendment.
+Otherwise select the cut: a new column-header row starts a new table.
 
-**Two signals need data the parser did not previously capture** (both added in Sprint 3a):
+A **column-header row** has `valueType == text` and non-blank `textValue` (numeric `displayValue`
+is not header text), is not a total/subtotal row, and has at least two such text cells **or** at
+least one period-like label (`Year 1`, `Construction`, the PERIOD pattern plus `construction`).
+`CASH INFLOW` / `CASH OUTFLOWS` is one stub, not a header, so it does not cut. `Opening Balance` /
+`Closing Balance` match the period-axis pattern as row stubs, not as a new column-header row. A
+stacked table with a new `Particulars` + `Year 1` row is a header and does cut, but only when this
+component already has a column-header row above the cut — the first header does not detach the
+title rows that introduce it.
 
-- *Section title style* requires font/fill/border. No cell styling was captured before Sprint 3a;
-  only the "merged title" quarter of the signal was available. `is_bold`, `has_fill`, `has_border`
-  and `number_format` are read from POI's `CellStyle` during ingest.
-- *Column schema change* nominally requires `schema_json`, which is Sprint 3b. Break scoring instead
-  uses a **column value-type profile** — the fraction of each column that is numeric, text, formula
-  or blank — and fires when profiles diverge materially across a candidate break. The signal's job
-  is to notice that the columns *mean something different* below a row; semantic role names
-  (`description`/`qty`/`rate`/`amount`) add nothing to that and belong with rollup.
+Title style, column value-type profile, serial reset, formula-skeleton drift, section markers,
+blank-gap-with-header, coherent spacers, and hidden rows inside a summed range are **not** cut
+signals.
 
-**Weights and thresholds.** The weights above live in a versioned resource file
-(`region-weights.json`) whose content hash feeds `configHash`; the break threshold and the
-classification floors are `ParserConfig` fields. Both routes enter the parse-run identity, so two
-runs with different tuning are never mistaken for the same parse. Weights are not code constants:
-that would let a recompile change every region under an identical `configHash`.
+**Cuts are horizontal only.** Vertical separation is handled by connectivity, not cutting:
+`B  S !Q11:R18` is a separate component *because* O:P are empty (§7.1), and the one geometric
+exception is the banner split.
+
+**Weights.** Classification floors remain `ParserConfig` fields. Classification weights live in
+`region-weights.json`, whose content hash feeds `configHash`. There is no region-break score
+threshold. Weights are not code constants: that would let a recompile change every region under
+an identical `configHash`.
 
 ### 7.3 Region classification
 
@@ -852,16 +851,15 @@ Cells without formulas get `coherence_score = NULL` and are ignored by the score
 | Low coherence, surrounded by labels/constants | Header, assumption, or label cell | Ignore for table interior |
 | Low coherence, but row label says `Total` / `Grand Total` | Total/subtotal row | Mark as total, do not split |
 | Low coherence in an unlabeled island | Scratch / orphan formula | Scratch candidate |
-| Drift across several consecutive rows/columns | Probable schema or table boundary | Raise break score |
+| Drift across several consecutive rows/columns | Probable schema or table boundary | Not a cut; §7.2 cuts only on a new column-header row |
 
-#### 7.4.4 Integration with break scoring
+#### 7.4.4 Integration with region cuts
 
-From §7.2, the `+2  2D formula-skeleton drift` signal triggers when:
+Formula-skeleton drift is a scored coherence feature, not a cut signal. §7.2 cuts only when a new
+column-header row starts underneath, and never when the first populated row below is computed from
+rows above.
 
-- For ≥ 3 consecutive rows, the horizontal skeleton of the data columns changes materially (e.g. from `=$H$*R` to `=RANGE_VERTICAL`), **or**
-- For ≥ 3 consecutive columns, the vertical skeleton changes materially, **and** the change is not explained by a total/subtotal label.
-
-This is how the parser distinguishes:
+Coherence still distinguishes:
 
 - `P  L !D29` (a total inside the same table) from `P  L !D162` (a new scratch island).
 - `Details` block A (`=C*D`) from block B (`=E+F`) even when labels are sparse.
@@ -1364,7 +1362,7 @@ Keep v1 fixtures and add the gap-regression tests:
 | horizontal formula family | `P  L !D22:M22` | `D22:M22` share one skeleton — `=$ABS$*R` in Sprint 2, `=$H$*R` after Sprint 3 refinement (allow single-cell `$` drift) |
 | vertical formula family | `P  L !D22:D28` | `D22:D28` share one skeleton (except total row) |
 | total row not a boundary | `P  L !D29 = =SUM(D22:D28)` | `coherence_score` low but label `Total` prevents split |
-| 2D coherence boundary | `Details` rows 44–52 vs 55–130 | skeleton family change + label/serial change triggers region split |
+| 2D coherence boundary | `Details` stacked vendor quotes | a new column-header row cuts; skeleton drift and title style do not |
 | single-cell drift tolerated | `P  L !J23` drops `$` | region stays intact; `coherence_dirs` shows local 0.5 |
 | constant-formula outlier | `SALESPROJECTION!F41 = =200/2` | `formula_skeleton='=CONST'`, not a table boundary |
 
@@ -1424,7 +1422,7 @@ being right. Planning it now means writing tickets against an input that does no
 delivers regions that can be looked at; 3b's tickets get written against real observed output rather
 than this document's idealisation.
 
-**How heuristic output is held still.** All tuning enters `configHash` — thresholds as
+**How heuristic output is held still.** All tuning enters `configHash` — classification floors as
 `ParserConfig` fields, weights as a hashed resource file (§7.2) — so a re-tuned run is never
 mistaken for the same parse. Regions carry a `region_key` stable across re-parses (§4.3). And the
 full region output is captured as a committed, scrubbed golden snapshot (§13), because the ten

@@ -59,7 +59,8 @@ public final class CellContextEnricher {
                     cell.isBold(),
                     cell.hasFill(),
                     cell.hasBorder(),
-                    cell.numberFormat()));
+                    cell.numberFormat(),
+                    cell.tagsJson()));
         }
         return enriched;
     }

@@ -33,6 +33,36 @@ class CostHeadMappingIngestTest {
     }
 
     @Test
+    void classifiedRegion_persistsWorkbookLabelNotCostHeadCode() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("CASH FLOW");
+            Row row = sheet.createRow(0);
+            row.createCell(0).setCellValue("TOTAL INFLOWS");
+            row.createCell(1).setCellValue("Plant & Machinery");
+            row.createCell(2).setCellValue(100.0);
+
+            Path db = tempDir.resolve("classified-label.db");
+            new IngestService().ingest(writeWorkbook(workbook, "inflows.xlsx"), 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                    ResultSet rs = c.createStatement().executeQuery(
+                            "SELECT m.source_label, h.code, q.status, q.detail"
+                                    + " FROM cost_head_mapping m"
+                                    + " JOIN cost_head h ON h.cost_head_id = m.cost_head_id"
+                                    + " JOIN review_queue q ON q.category = 'cost_head_mapping'"
+                                    + " AND CAST(json_extract(q.detail, '$.mappingId') AS INTEGER)"
+                                    + " = m.cost_head_mapping_id"
+                                    + " WHERE h.code = 'PLANT_MACHINERY'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("source_label")).isEqualTo("TOTAL INFLOWS");
+                assertThat(rs.getString("code")).isEqualTo("PLANT_MACHINERY");
+                assertThat(rs.getString("status")).isEqualTo("Pending");
+                assertThat(rs.getString("detail")).contains("\"sourceLabel\":\"TOTAL INFLOWS\"");
+            }
+        }
+    }
+
+    @Test
     void uniqueExactAlias_createsCostHeadAndCalculatedMapping() throws Exception {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Capex");
@@ -127,7 +157,7 @@ class CostHeadMappingIngestTest {
 
         ParserConfig reparse = new ParserConfig(
                 100L * 1024 * 1024, 200, 1_000_000, 16_384, 5_000_000L, 100,
-                false, true, true, 4, 4);
+                false, true, true, 4);
         new IngestService().ingest(xlsx, 1L, db, reparse);
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
                 ResultSet rs = c.createStatement().executeQuery(
@@ -172,7 +202,7 @@ class CostHeadMappingIngestTest {
                 .rejectMapping(db, reviewId, "analyst", "not civil");
         ParserConfig reparse = new ParserConfig(
                 100L * 1024 * 1024, 200, 1_000_000, 16_384, 5_000_000L, 100,
-                false, true, true, 4, 4);
+                false, true, true, 4);
         new IngestService().ingest(xlsx, 1L, db, reparse);
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
             try (ResultSet rs = c.createStatement().executeQuery(

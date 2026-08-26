@@ -184,7 +184,7 @@
     "mapping_reasons" : [ ]
   }, {
     "bbox" : {
-      "end_col" : 2,
+      "end_col" : 14,
       "end_row" : 33,
       "start_col" : 2,
       "start_row" : 9
@@ -195,6 +195,72 @@
       "reasons" : [ "HEADER_DESCRIPTION" ],
       "role" : "description",
       "type" : "text"
+    }, {
+      "col" : 4,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 5,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 6,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 7,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 8,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 9,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 10,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 11,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 12,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 13,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
+    }, {
+      "col" : 14,
+      "conf" : 0.3,
+      "reasons" : [ "UNRECOGNIZED_HEADER" ],
+      "role" : "other",
+      "type" : "number"
     } ],
     "cost_head_code" : "WORKING_CAPITAL",
     "inferred_currency" : "INR",
@@ -203,168 +269,6 @@
     "inferred_unit_conf" : 0.7,
     "mapping_method" : "fuzzy_proposal",
     "mapping_reasons" : [ "FUZZY_RANK" ]
-  }, {
-    "bbox" : {
-      "end_col" : 14,
-      "end_row" : 12,
-      "start_col" : 4,
-      "start_row" : 12
-    },
-    "columns" : [ {
-      "col" : 4,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 5,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 6,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 7,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 8,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 9,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 10,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 11,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 12,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 13,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 14,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "lakh",
-    "inferred_unit_conf" : 0.7,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 14,
-      "end_row" : 15,
-      "start_col" : 4,
-      "start_row" : 15
-    },
-    "columns" : [ {
-      "col" : 4,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 5,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 6,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 7,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 8,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 9,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 10,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 11,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 12,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 13,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 14,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "lakh",
-    "inferred_unit_conf" : 0.7,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
   }, {
     "bbox" : {
       "end_col" : 14,
@@ -440,168 +344,6 @@
     "inferred_unit_conf" : 0.7,
     "mapping_method" : null,
     "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 14,
-      "end_row" : 22,
-      "start_col" : 4,
-      "start_row" : 22
-    },
-    "columns" : [ {
-      "col" : 4,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 5,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 6,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 7,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 8,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 9,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 10,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 11,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 12,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 13,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 14,
-      "conf" : 0.2,
-      "reasons" : [ "MISSING_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "lakh",
-    "inferred_unit_conf" : 0.7,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
-  }, {
-    "bbox" : {
-      "end_col" : 14,
-      "end_row" : 33,
-      "start_col" : 4,
-      "start_row" : 25
-    },
-    "columns" : [ {
-      "col" : 4,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "text"
-    }, {
-      "col" : 5,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 6,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 7,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 8,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 9,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 10,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 11,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 12,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 13,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    }, {
-      "col" : 14,
-      "conf" : 0.3,
-      "reasons" : [ "UNRECOGNIZED_HEADER" ],
-      "role" : "other",
-      "type" : "number"
-    } ],
-    "cost_head_code" : null,
-    "inferred_currency" : "INR",
-    "inferred_currency_conf" : 0.7,
-    "inferred_unit" : "lakh",
-    "inferred_unit_conf" : 0.7,
-    "mapping_method" : null,
-    "mapping_reasons" : [ ]
   } ],
   "role" : "primary",
   "role_conf" : 0.0,
@@ -614,9 +356,9 @@
   }, {
     "code" : "SCRATCH_ORPHAN_CONTENT",
     "params" : {
-      "cell_count" : 4
+      "cell_count" : 3
     },
-    "weight" : 4
+    "weight" : 3
   } ],
   "scratch_cells" : [ {
     "coord" : "F2",
@@ -636,108 +378,6 @@
     "reasons" : [ ],
     "scratch" : false,
     "support" : false
-  }, {
-    "coord" : "B9",
-    "orphan" : true,
-    "reasons" : [ ],
-    "scratch" : false,
-    "support" : false
-  }, {
-    "coord" : "E12",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "F12",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "G12",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "H12",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "I12",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "J12",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "M12",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "N12",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "E15",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "F15",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "G15",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "H15",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "I15",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "J15",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "M15",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "N15",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
   }, {
     "coord" : "E19",
     "orphan" : false,
@@ -782,54 +422,6 @@
     "support" : true
   }, {
     "coord" : "N19",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "E22",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "F22",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "G22",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "H22",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "I22",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "J22",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "M22",
-    "orphan" : false,
-    "reasons" : [ "SUPPORT_DEPENDENCY" ],
-    "scratch" : false,
-    "support" : true
-  }, {
-    "coord" : "N22",
     "orphan" : false,
     "reasons" : [ "SUPPORT_DEPENDENCY" ],
     "scratch" : false,

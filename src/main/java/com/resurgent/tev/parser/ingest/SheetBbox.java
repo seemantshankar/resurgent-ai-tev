@@ -26,6 +26,9 @@ final class SheetBbox {
         Integer maxRow = null;
         Integer maxCol = null;
         for (NormalizedCell cell : baseCells) {
+            if (cell.isPresentationOnlyEmpty()) {
+                continue;
+            }
             minRow = min(minRow, cell.rowNum());
             minCol = min(minCol, cell.colNum());
             maxRow = max(maxRow, cell.rowNum());
@@ -55,7 +58,7 @@ final class SheetBbox {
     static int countContentRows(List<NormalizedCell> cells) {
         Set<Integer> rows = new HashSet<>();
         for (NormalizedCell cell : cells) {
-            if ("cell".equals(cell.valueSource())) {
+            if ("cell".equals(cell.valueSource()) && !cell.isPresentationOnlyEmpty()) {
                 rows.add(cell.rowNum());
             }
         }

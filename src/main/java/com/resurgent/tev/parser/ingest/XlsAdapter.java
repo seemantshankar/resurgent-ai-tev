@@ -244,21 +244,28 @@ public final class XlsAdapter {
         int rowNum = cell.getRowIndex() + 1;
         int colNum = cell.getColumnIndex() + 1;
         String coord = CellGeometry.coord(cell.getRowIndex(), cell.getColumnIndex());
+        CellPresentation presentation = CellPresentationExtractor.extract(cell);
 
-        CellType type = cell.getCellType();
-        if (type == CellType.BLANK) {
+        if (CellPresentationExtractor.shouldPersistStyledBlank(cell)) {
+            return NormalizedCellFactory.buildStyledBlankCell(coord, rowNum, colNum, rowHidden,
+                    colHidden, sheetHidden, presentation);
+        }
+        if (CellPresentationExtractor.isBlankContent(cell)) {
             return null;
         }
 
+        CellType type = cell.getCellType();
         if (type == CellType.FORMULA) {
             String formulaText = readFormulaText(cell);
-            return FormulaCellNormalizer.normalizeFormulaCell(formulaText, cell,
+            NormalizedCell normalized = FormulaCellNormalizer.normalizeFormulaCell(formulaText, cell,
                     coord, rowNum, colNum, rowHidden, colHidden, sheetHidden,
                     cacheFresh, definedNames, true);
+            return normalized == null ? null : presentation.apply(normalized);
         }
 
-        return LiteralCellNormalizer.normalizeLiteralCell(cell, coord, rowNum, colNum,
+        NormalizedCell normalized = LiteralCellNormalizer.normalizeLiteralCell(cell, coord, rowNum, colNum,
                 rowHidden, colHidden, sheetHidden);
+        return normalized == null ? null : presentation.apply(normalized);
     }
 
     /**

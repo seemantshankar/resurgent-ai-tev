@@ -80,7 +80,7 @@
   "sheet_id" : "sheet-013"
 }, {
   "bbox" : {
-    "end_col" : 2,
+    "end_col" : 14,
     "end_row" : 33,
     "start_col" : 2,
     "start_row" : 9
@@ -101,46 +101,6 @@
 }, {
   "bbox" : {
     "end_col" : 14,
-    "end_row" : 12,
-    "start_col" : 4,
-    "start_row" : 12
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-013!D12",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-013"
-}, {
-  "bbox" : {
-    "end_col" : 14,
-    "end_row" : 15,
-    "start_col" : 4,
-    "start_row" : 15
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-013!D15",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-013"
-}, {
-  "bbox" : {
-    "end_col" : 14,
     "end_row" : 19,
     "start_col" : 5,
     "start_row" : 19
@@ -155,46 +115,6 @@
   } ],
   "region_conf" : 0.0,
   "region_key" : "sheet-013!E19",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-013"
-}, {
-  "bbox" : {
-    "end_col" : 14,
-    "end_row" : 22,
-    "start_col" : 4,
-    "start_row" : 22
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-013!D22",
-  "region_type" : "unknown",
-  "serial_pattern" : null,
-  "sheet_id" : "sheet-013"
-}, {
-  "bbox" : {
-    "end_col" : 14,
-    "end_row" : 33,
-    "start_col" : 4,
-    "start_row" : 25
-  },
-  "cost_head_code" : null,
-  "detection_reasons" : [ {
-    "code" : "INSUFFICIENT_EVIDENCE",
-    "params" : {
-      "top_score" : 0
-    },
-    "weight" : 0
-  } ],
-  "region_conf" : 0.0,
-  "region_key" : "sheet-013!D25",
   "region_type" : "unknown",
   "serial_pattern" : null,
   "sheet_id" : "sheet-013"

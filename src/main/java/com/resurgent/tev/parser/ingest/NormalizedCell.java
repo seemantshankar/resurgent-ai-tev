@@ -45,7 +45,16 @@ public record NormalizedCell(
         Boolean isBold,
         Boolean hasFill,
         Boolean hasBorder,
-        String numberFormat) {
+        String numberFormat,
+        String tagsJson) {
+
+    /** Empty cell kept only for layout/presentation signals, not semantic content. */
+    public boolean isPresentationOnlyEmpty() {
+        return "empty".equals(valueType)
+                && rawValue == null
+                && (formulaText == null || formulaText.isBlank())
+                && !isMergedParticipant();
+    }
 
     /**
      * Compatibility constructor for callers that do not have cell-style information.
@@ -63,14 +72,19 @@ public record NormalizedCell(
                 numericValue, boolValue, dateValue, formulaText, formulaNormalized, formulaState,
                 cachedValue, cacheState, coercedFromText, parsedQuantity, isError, errorType,
                 rowLabel, colLabel, isMergedAnchor, isMergedParticipant, mergedRange, valueSource,
-                rowHidden, colHidden, sheetHidden, null, null, null, null);
+                rowHidden, colHidden, sheetHidden, null, null, null, null, null);
     }
 
     NormalizedCell withStyle(Boolean bold, Boolean fill, Boolean border, String format) {
+        return withPresentation(bold, fill, border, format, tagsJson);
+    }
+
+    NormalizedCell withPresentation(Boolean bold, Boolean fill, Boolean border, String format,
+            String tags) {
         return new NormalizedCell(coord, rowNum, colNum, rawValue, rawType, valueType, textValue,
                 displayValue, numericValue, boolValue, dateValue, formulaText, formulaNormalized,
                 formulaState, cachedValue, cacheState, coercedFromText, parsedQuantity, isError,
                 errorType, rowLabel, colLabel, isMergedAnchor, isMergedParticipant, mergedRange,
-                valueSource, rowHidden, colHidden, sheetHidden, bold, fill, border, format);
+                valueSource, rowHidden, colHidden, sheetHidden, bold, fill, border, format, tags);
     }
 }

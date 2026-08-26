@@ -40,6 +40,38 @@ final class NormalizedCellFactory {
                 rowHidden, colHidden, sheetHidden);
     }
 
+    static NormalizedCell buildStyledBlankCell(String coord, int rowNum, int colNum,
+            boolean rowHidden, boolean colHidden, boolean sheetHidden, CellPresentation presentation) {
+        return new NormalizedCell(
+                coord, rowNum, colNum,
+                null,
+                "empty",
+                "empty",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                false,
+                null,
+                false,
+                null,
+                null,
+                null,
+                false, false, null, "cell",
+                rowHidden, colHidden, sheetHidden,
+                presentation.bold(),
+                presentation.hasFill(),
+                presentation.hasBorder(),
+                presentation.numberFormat(),
+                presentation.toTagsJson());
+    }
+
     static NormalizedCell markAnchor(NormalizedCell cell, CellRangeAddress region) {
         String range = region.formatAsString();
         return new NormalizedCell(
@@ -65,7 +97,7 @@ final class NormalizedCellFactory {
                 cell.colLabel(),
                 true, false, range, "cell",
                 cell.rowHidden(), cell.colHidden(), cell.sheetHidden(),
-                cell.isBold(), cell.hasFill(), cell.hasBorder(), cell.numberFormat());
+                cell.isBold(), cell.hasFill(), cell.hasBorder(), cell.numberFormat(), cell.tagsJson());
     }
 
     static NormalizedCell createParticipant(NormalizedCell anchor, CellRangeAddress region,
@@ -95,6 +127,11 @@ final class NormalizedCellFactory {
                 null,
                 null,
                 false, true, range, "merged_anchor",
-                rowHidden, colHidden, sheetHidden);
+                rowHidden, colHidden, sheetHidden,
+                anchor == null ? null : anchor.isBold(),
+                anchor == null ? null : anchor.hasFill(),
+                anchor == null ? null : anchor.hasBorder(),
+                anchor == null ? null : anchor.numberFormat(),
+                anchor == null ? null : anchor.tagsJson());
     }
 }

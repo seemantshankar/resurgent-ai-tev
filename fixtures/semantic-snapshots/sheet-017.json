@@ -5,7 +5,7 @@
   "regions" : [ {
     "bbox" : {
       "end_col" : 9,
-      "end_row" : 5,
+      "end_row" : 12,
       "start_col" : 1,
       "start_row" : 4
     },
@@ -20,49 +20,49 @@
       "conf" : 0.95,
       "reasons" : [ "HEADER_PERIOD" ],
       "role" : "period",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 3,
       "conf" : 0.95,
       "reasons" : [ "HEADER_PERIOD" ],
       "role" : "period",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 4,
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 5,
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 6,
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 7,
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 8,
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
-      "type" : "text"
+      "type" : "number"
     }, {
       "col" : 9,
       "conf" : 0.3,
       "reasons" : [ "UNRECOGNIZED_HEADER" ],
       "role" : "other",
-      "type" : "text"
+      "type" : "number"
     } ],
     "cost_head_code" : null,
     "inferred_currency" : "unknown",
@@ -76,7 +76,7 @@
       "end_col" : 9,
       "end_row" : 22,
       "start_col" : 1,
-      "start_row" : 6
+      "start_row" : 13
     },
     "columns" : [ {
       "col" : 1,
@@ -146,9 +146,9 @@
   "role_reasons" : [ {
     "code" : "STATEMENT_CONTENT",
     "params" : {
-      "cell_count" : 145
+      "cell_count" : 90
     },
-    "weight" : 580
+    "weight" : 360
   } ],
   "scratch_cells" : [ ],
   "sheet_id" : "sheet-017"

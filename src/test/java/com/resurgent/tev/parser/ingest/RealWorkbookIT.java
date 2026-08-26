@@ -365,30 +365,12 @@ class RealWorkbookIT {
             assertThat(cellString(c, "P  L ", "D29", "region_id"))
                     .isEqualTo(cellString(c, "P  L ", "D28", "region_id"));
 
-            long detailsUpper = regionId(c, "Details", 44, 52);
-            long detailsLower = regionId(c, "Details", 55, 130);
-            assertThat(detailsUpper).isNotEqualTo(detailsLower);
-
             assertThat(scalarLong(c,
                     "SELECT COUNT(*) FROM cell c JOIN worksheet w ON w.worksheet_id = c.worksheet_id"
                             + " WHERE w.sheet_name = 'P  L ' AND c.coord = 'J23'"
                             + " AND c.coherence_dirs LIKE '%0.5%'"))
                     .isEqualTo(1);
             assertThat(cellString(c, "SALESPROJECTION", "F41", "formula_skeleton")).isEqualTo("=CONST");
-        }
-    }
-
-    private long regionId(Connection c, String sheetName, int firstRow, int lastRow) throws Exception {
-        try (PreparedStatement ps = c.prepareStatement(
-                "SELECT r.region_id FROM region r JOIN worksheet w ON w.worksheet_id = r.worksheet_id"
-                        + " WHERE w.sheet_name = ? AND r.start_row <= ? AND r.end_row >= ?")) {
-            ps.setString(1, sheetName);
-            ps.setInt(2, firstRow);
-            ps.setInt(3, lastRow);
-            try (ResultSet rs = ps.executeQuery()) {
-                assertThat(rs.next()).isTrue();
-                return rs.getLong(1);
-            }
         }
     }
 

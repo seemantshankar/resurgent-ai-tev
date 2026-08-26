@@ -469,4 +469,72 @@ class XlsAdapterTest {
         }
     }
 
+    @Test
+    void whitespaceOnlyStringWithPresentationIsStoredAsStyledBlank() throws Exception {
+        try (HSSFWorkbook workbook = new HSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("StyledBlank");
+            CellStyle style = workbook.createCellStyle();
+            style.setFillForegroundColor(org.apache.poi.ss.usermodel.IndexedColors.GREY_25_PERCENT.getIndex());
+            style.setFillPattern(org.apache.poi.ss.usermodel.FillPatternType.SOLID_FOREGROUND);
+            org.apache.poi.ss.usermodel.Font font = workbook.createFont();
+            font.setBold(true);
+            style.setFont(font);
+
+            Cell padded = sheet.createRow(0).createCell(0);
+            padded.setCellValue("           ");
+            padded.setCellStyle(style);
+
+            sheet.createRow(1).createCell(0).setCellValue(" ");
+
+            Path xls = writeWorkbook(workbook, "styled-blank.xls");
+            Map<String, NormalizedCell> cells = cellsByCoord(new XlsAdapter().parse(xls));
+
+            assertThat(cells).containsOnlyKeys("A1");
+            NormalizedCell a1 = cells.get("A1");
+            assertThat(a1.rawValue()).isNull();
+            assertThat(a1.rawType()).isEqualTo("empty");
+            assertThat(a1.valueType()).isEqualTo("empty");
+            assertThat(a1.isBold()).isTrue();
+            assertThat(a1.hasFill()).isTrue();
+            assertThat(a1.tagsJson()).contains("fillForegroundColorIndex");
+        }
+    }
+
+    @Test
+    void whitespaceOnlyStringWithNumberFormatOnlyIsNotStored() throws Exception {
+        try (HSSFWorkbook workbook = new HSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("NumberFormatOnly");
+            DataFormat dataFormat = workbook.createDataFormat();
+            CellStyle style = workbook.createCellStyle();
+            style.setDataFormat(dataFormat.getFormat("0.00_)"));
+
+            Cell padded = sheet.createRow(0).createCell(0);
+            padded.setCellValue(" ");
+            padded.setCellStyle(style);
+
+            Path xls = writeWorkbook(workbook, "number-format-blank.xls");
+            Map<String, NormalizedCell> cells = cellsByCoord(new XlsAdapter().parse(xls));
+
+            assertThat(cells).isEmpty();
+        }
+    }
+
+    @Test
+    void blankCellWithPresentationIsNotStoredWithoutStringPadding() throws Exception {
+        try (HSSFWorkbook workbook = new HSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("BlankStyled");
+            CellStyle style = workbook.createCellStyle();
+            style.setFillForegroundColor(org.apache.poi.ss.usermodel.IndexedColors.LIGHT_BLUE.getIndex());
+            style.setFillPattern(org.apache.poi.ss.usermodel.FillPatternType.SOLID_FOREGROUND);
+
+            Cell blank = sheet.createRow(0).createCell(0);
+            blank.setCellStyle(style);
+
+            Path xls = writeWorkbook(workbook, "blank-styled.xls");
+            Map<String, NormalizedCell> cells = cellsByCoord(new XlsAdapter().parse(xls));
+
+            assertThat(cells).isEmpty();
+        }
+    }
+
 }
