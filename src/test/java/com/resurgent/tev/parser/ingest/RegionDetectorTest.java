@@ -388,6 +388,111 @@ class RegionDetectorTest {
         assertThat(regions.getFirst().endRow()).isEqualTo(6);
     }
 
+    @Test
+    void numberedStubValueAmountFormWithBlankBand_isOneRegion() {
+        Map<Long, RegionDetector.RegionCell> cells = cells(
+                text("D3", 3, 4, "PROJECT SNAPSHOT"),
+                text("B5", 5, 2, "1)"),
+                text("C5", 5, 3, "Name of unit"),
+                text("F5", 5, 6, ":"),
+                text("G5", 5, 7, "Acme Hotels"),
+                number("J5", 5, 10, "0"),
+                text("B6", 6, 2, "2)"),
+                text("C6", 6, 3, "Location"),
+                text("F6", 6, 6, ":"),
+                text("G6", 6, 7, "City"),
+                text("B7", 7, 2, "3)"),
+                text("C7", 7, 3, "Constitution"),
+                text("F7", 7, 6, ":"),
+                text("G7", 7, 7, "Partnership"),
+                text("B8", 8, 2, "4)"),
+                text("C8", 8, 3, "Promoters"),
+                text("F8", 8, 6, ":"),
+                text("G8", 8, 7, "A and B"),
+                text("B9", 9, 2, "5)"),
+                text("C9", 9, 3, "Project cost"),
+                text("F9", 9, 6, ":"),
+                text("G9", 9, 7, "Total"),
+                number("J9", 9, 10, "100"),
+                text("B10", 10, 2, "6)"),
+                text("C10", 10, 3, "Means of finance"),
+                text("F10", 10, 6, ":"),
+                text("G10", 10, 7, "Bank"),
+                number("J10", 10, 10, "80"),
+                text("B15", 15, 2, "11)"),
+                text("C15", 15, 3, "Capacity"),
+                text("F15", 15, 6, ":"),
+                text("G15", 15, 7, "50 rooms"),
+                number("J15", 15, 10, "50"));
+
+        List<RegionDetector.DetectedRegion> regions = detector.detect("Summary", cells);
+
+        assertThat(regions).hasSize(1);
+        assertThat(regions.getFirst().key()).isEqualTo("Summary!D3");
+        assertThat(regions.getFirst().startRow()).isEqualTo(3);
+        assertThat(regions.getFirst().endRow()).isEqualTo(15);
+        assertThat(regions.getFirst().startCol()).isEqualTo(2);
+        assertThat(regions.getFirst().endCol()).isEqualTo(10);
+
+        RegionDetector.DetectedRegion region = regions.getFirst();
+        List<RegionClassifier.RegionCell> classified = cells.values().stream()
+                .map(RegionDetector.RegionCell::cell)
+                .map(cell -> new RegionClassifier.RegionCell(
+                        cell.rowNum(), cell.colNum(), cell.textValue(),
+                        cell.formulaText() != null && !cell.formulaText().isBlank(),
+                        cell.numericValue() != null))
+                .toList();
+        RegionClassification classification = new RegionClassifier().classify(
+                new RegionClassifier.RegionBounds(region.startRow(), region.endRow(),
+                        region.startCol(), region.endCol()),
+                classified,
+                new RegionClassifier.HeaderContext(List.of(), List.of()));
+        assertThat(classification.type()).isEqualTo(RegionType.VERTICAL_FORM);
+    }
+
+    @Test
+    void sideBySideVendorGridsSeparatedByEmptyColumn_stayTwoRegions() {
+        Map<Long, RegionDetector.RegionCell> cells = cells(
+                text("A1", 1, 1, "S.No"),
+                text("B1", 1, 2, "Description"),
+                quantityText("C1", 1, 3, "Qty"),
+                text("D1", 1, 4, "Rate"),
+                text("E1", 1, 5, "Amount"),
+                number("A2", 2, 1, "1"),
+                text("B2", 2, 2, "Item A"),
+                number("C2", 2, 3, "2"),
+                number("D2", 2, 4, "10"),
+                number("E2", 2, 5, "20"),
+                number("A3", 3, 1, "2"),
+                text("B3", 3, 2, "Item B"),
+                number("C3", 3, 3, "1"),
+                number("D3", 3, 4, "5"),
+                number("E3", 3, 5, "5"),
+                text("G8", 8, 7, "S.No"),
+                text("H8", 8, 8, "Description"),
+                quantityText("I8", 8, 9, "Qty"),
+                text("J8", 8, 10, "Rate"),
+                text("K8", 8, 11, "Amount"),
+                number("G9", 9, 7, "1"),
+                text("H9", 9, 8, "Item C"),
+                number("I9", 9, 9, "3"),
+                number("J9", 9, 10, "8"),
+                number("K9", 9, 11, "24"),
+                number("G10", 10, 7, "2"),
+                text("H10", 10, 8, "Item D"),
+                number("I10", 10, 9, "1"),
+                number("J10", 10, 10, "4"),
+                number("K10", 10, 11, "4"));
+
+        List<RegionDetector.DetectedRegion> regions = detector.detect("Details", cells);
+
+        assertThat(regions).hasSize(2);
+        assertThat(regions.get(0).startCol()).isEqualTo(1);
+        assertThat(regions.get(0).endCol()).isEqualTo(5);
+        assertThat(regions.get(1).startCol()).isEqualTo(7);
+        assertThat(regions.get(1).endCol()).isEqualTo(11);
+    }
+
     private static Map<Long, RegionDetector.RegionCell> cells(NormalizedCell... values) {
         Map<Long, RegionDetector.RegionCell> result = new LinkedHashMap<>();
         long id = 1;

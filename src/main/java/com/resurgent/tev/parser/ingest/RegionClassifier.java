@@ -48,12 +48,18 @@ public final class RegionClassifier {
         }
 
         List<String> labels = labels(cells, headers);
-        scoreCostHead(cells, headers, scores, reasons);
-        scoreHeaderTokens(headers, scores, reasons);
-        scoreStatementShape(labels, bounds, scores, reasons);
-        scoreVerticalForm(bounds, cells, scores, reasons);
-        scoreScratch(headers, cells, scores, reasons);
-        scoreSerialPattern(bounds, cells, scores, reasons);
+        List<VerticalFormLayout.Cell> layout = layoutCells(cells);
+        boolean numberedForm = VerticalFormLayout.isNumberedKeyValueForm(layout);
+        if (numberedForm) {
+            scoreVerticalForm(bounds, cells, scores, reasons, true);
+        } else {
+            scoreCostHead(cells, headers, scores, reasons);
+            scoreHeaderTokens(headers, scores, reasons);
+            scoreStatementShape(labels, bounds, scores, reasons);
+            scoreVerticalForm(bounds, cells, scores, reasons, false);
+            scoreScratch(headers, cells, scores, reasons);
+            scoreSerialPattern(bounds, cells, scores, reasons);
+        }
 
         List<RegionType> ranked = scores.entrySet().stream()
                 .filter(e -> e.getKey() != RegionType.UNKNOWN)
@@ -144,13 +150,24 @@ public final class RegionClassifier {
     }
 
     private void scoreVerticalForm(RegionBounds bounds, List<RegionCell> cells,
-            Map<RegionType, Integer> scores, Map<RegionType, List<DetectionReason>> reasons) {
+            Map<RegionType, Integer> scores, Map<RegionType, List<DetectionReason>> reasons,
+            boolean numberedForm) {
         long text = cells.stream().filter(c -> c.text() != null && !c.text().isBlank()).count();
         long numeric = cells.stream().filter(RegionCell::numeric).count();
-        if (bounds.colSpan() <= 2 && text >= 2 && numeric >= 1) {
+        boolean thin = bounds.colSpan() <= 2 && text >= 2 && numeric >= 1;
+        if (thin || numberedForm) {
             add(scores, reasons, RegionType.VERTICAL_FORM, weights.classification("verticalForm"),
                     DetectionReason.Code.VERTICAL_FORM, Map.of("column_span", (long) bounds.colSpan()));
         }
+    }
+
+    private static List<VerticalFormLayout.Cell> layoutCells(List<RegionCell> cells) {
+        List<VerticalFormLayout.Cell> result = new ArrayList<>(cells.size());
+        for (RegionCell cell : cells) {
+            result.add(new VerticalFormLayout.Cell(
+                    cell.row(), cell.col(), cell.text(), cell.numeric(), cell.formula()));
+        }
+        return result;
     }
 
     private void scoreScratch(HeaderContext headers, List<RegionCell> cells,

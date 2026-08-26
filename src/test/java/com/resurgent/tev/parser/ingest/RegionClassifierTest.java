@@ -129,6 +129,51 @@ class RegionClassifierTest {
                 java.util.Comparator.comparing(reason -> reason.code().name()));
     }
 
+    @Test
+    void wideStubValueAmountFormIsVerticalFormEvenWhenLabelsMentionCapacity() {
+        RegionClassification result = classifier.classify(
+                new RegionClassifier.RegionBounds(3, 15, 2, 10),
+                List.of(
+                        new RegionClassifier.RegionCell(3, 4, "PROJECT SNAPSHOT", false, false),
+                        new RegionClassifier.RegionCell(5, 2, "1)", false, false),
+                        new RegionClassifier.RegionCell(5, 3, "Name of unit", false, false),
+                        new RegionClassifier.RegionCell(5, 6, ":", false, false),
+                        new RegionClassifier.RegionCell(5, 7, "Acme Hotels", false, false),
+                        new RegionClassifier.RegionCell(6, 2, "2)", false, false),
+                        new RegionClassifier.RegionCell(6, 3, "Location", false, false),
+                        new RegionClassifier.RegionCell(6, 7, "City", false, false),
+                        new RegionClassifier.RegionCell(7, 2, "3)", false, false),
+                        new RegionClassifier.RegionCell(7, 3, "Constitution", false, false),
+                        new RegionClassifier.RegionCell(7, 7, "Partnership", false, false),
+                        new RegionClassifier.RegionCell(9, 2, "5)", false, false),
+                        new RegionClassifier.RegionCell(9, 3, "Project cost", false, false),
+                        new RegionClassifier.RegionCell(9, 7, "Total", false, false),
+                        new RegionClassifier.RegionCell(9, 10, "100", false, true),
+                        new RegionClassifier.RegionCell(15, 2, "11)", false, false),
+                        new RegionClassifier.RegionCell(15, 3, "Capacity", false, false),
+                        new RegionClassifier.RegionCell(15, 7, "50 rooms", false, false),
+                        new RegionClassifier.RegionCell(15, 10, "50", true, true)),
+                new RegionClassifier.HeaderContext(List.of(), List.of()));
+
+        assertThat(result.type()).isEqualTo(RegionType.VERTICAL_FORM);
+        assertThat(result.reasons()).extracting(DetectionReason::code)
+                .contains(DetectionReason.Code.VERTICAL_FORM);
+    }
+
+    @Test
+    void thinTwoColumnStubStillScoresVerticalForm() {
+        RegionClassification result = classifier.classify(
+                new RegionClassifier.RegionBounds(1, 4, 2, 3),
+                List.of(
+                        new RegionClassifier.RegionCell(1, 2, "Name", false, false),
+                        new RegionClassifier.RegionCell(1, 3, "Acme", false, false),
+                        new RegionClassifier.RegionCell(2, 2, "Cost", false, false),
+                        new RegionClassifier.RegionCell(2, 3, "100", false, true)),
+                new RegionClassifier.HeaderContext(List.of(), List.of()));
+
+        assertThat(result.type()).isEqualTo(RegionType.VERTICAL_FORM);
+    }
+
     private static RegionClassifier.RegionBounds bounds() {
         return new RegionClassifier.RegionBounds(1, 5, 1, 3);
     }

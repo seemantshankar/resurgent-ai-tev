@@ -47,6 +47,7 @@ final class RegionDetector {
             }
         }
         split = mergeUnderColumnHeaders(split);
+        split = unionVerticalForms(split);
         split.sort(Comparator.comparingInt((List<OccupiedCell> c) -> minRow(c))
                 .thenComparingInt(RegionDetector::minCol));
 
@@ -61,6 +62,109 @@ final class RegionDetector {
                     component.stream().map(OccupiedCell::id).toList()));
         }
         return regions;
+    }
+
+    /**
+     * After geometry, merge leftover fragments that form one numbered key-value layout.
+     * Connectivity is unchanged; grids with a column-header row are left alone.
+     */
+    private static List<List<OccupiedCell>> unionVerticalForms(List<List<OccupiedCell>> regions) {
+        if (regions.size() < 2) {
+            return regions;
+        }
+        List<List<OccupiedCell>> grids = new ArrayList<>();
+        List<List<OccupiedCell>> leftovers = new ArrayList<>();
+        for (List<OccupiedCell> region : regions) {
+            if (looksLikeGrid(region)) {
+                grids.add(region);
+            } else {
+                leftovers.add(region);
+            }
+        }
+        if (leftovers.size() < 2) {
+            return regions;
+        }
+        leftovers.sort(Comparator.comparingInt(RegionDetector::minRow)
+                .thenComparingInt(RegionDetector::minCol));
+        List<List<OccupiedCell>> result = new ArrayList<>();
+        boolean[] gridUsed = new boolean[grids.size()];
+        for (List<List<OccupiedCell>> cluster : clusterLeftovers(leftovers, grids)) {
+            List<OccupiedCell> flat = new ArrayList<>();
+            for (List<OccupiedCell> region : cluster) {
+                flat.addAll(region);
+            }
+            if (cluster.size() >= 2 && VerticalFormLayout.isNumberedKeyValueForm(layoutCells(flat))) {
+                int minR = minRow(flat);
+                int maxR = maxRow(flat);
+                int minC = minCol(flat);
+                int maxC = maxCol(flat);
+                List<OccupiedCell> merged = new ArrayList<>(flat);
+                for (int i = 0; i < grids.size(); i++) {
+                    if (!gridUsed[i] && sitsIn(grids.get(i), minR, maxR, minC, maxC)) {
+                        merged.addAll(grids.get(i));
+                        gridUsed[i] = true;
+                    }
+                }
+                result.add(merged);
+            } else {
+                result.addAll(cluster);
+            }
+        }
+        for (int i = 0; i < grids.size(); i++) {
+            if (!gridUsed[i]) {
+                result.add(grids.get(i));
+            }
+        }
+        return result;
+    }
+
+    private static List<List<List<OccupiedCell>>> clusterLeftovers(
+            List<List<OccupiedCell>> leftovers, List<List<OccupiedCell>> grids) {
+        List<List<List<OccupiedCell>>> clusters = new ArrayList<>();
+        List<List<OccupiedCell>> current = new ArrayList<>();
+        int currentMaxRow = -1;
+        for (List<OccupiedCell> leftover : leftovers) {
+            if (!current.isEmpty() && gridSeparates(grids, currentMaxRow, minRow(leftover))) {
+                clusters.add(current);
+                current = new ArrayList<>();
+            }
+            current.add(leftover);
+            currentMaxRow = Math.max(currentMaxRow, maxRow(leftover));
+        }
+        if (!current.isEmpty()) {
+            clusters.add(current);
+        }
+        return clusters;
+    }
+
+    private static boolean gridSeparates(List<List<OccupiedCell>> grids, int afterRow, int beforeRow) {
+        for (List<OccupiedCell> grid : grids) {
+            if (minRow(grid) > afterRow && maxRow(grid) < beforeRow) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean looksLikeGrid(List<OccupiedCell> region) {
+        return VerticalFormLayout.hasColumnHeaderRow(layoutCells(region));
+    }
+
+    private static boolean sitsIn(List<OccupiedCell> region, int minR, int maxR, int minC, int maxC) {
+        return minRow(region) >= minR && maxRow(region) <= maxR
+                && minCol(region) >= minC && maxCol(region) <= maxC;
+    }
+
+    private static List<VerticalFormLayout.Cell> layoutCells(List<OccupiedCell> cells) {
+        List<VerticalFormLayout.Cell> result = new ArrayList<>(cells.size());
+        for (OccupiedCell cell : cells) {
+            NormalizedCell n = cell.cell();
+            result.add(new VerticalFormLayout.Cell(
+                    n.rowNum(), n.colNum(), n.textValue(),
+                    isNumericCell(cell),
+                    n.formulaText() != null && !n.formulaText().isBlank()));
+        }
+        return result;
     }
 
     /**
