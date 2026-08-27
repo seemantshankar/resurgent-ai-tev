@@ -107,7 +107,7 @@ final class RegionDetector {
                 }
                 result.add(merged);
             } else {
-                result.addAll(cluster);
+                result.addAll(assembleUnlabeledForms(cluster, grids));
             }
         }
         for (int i = 0; i < grids.size(); i++) {
@@ -148,6 +148,213 @@ final class RegionDetector {
 
     private static boolean looksLikeGrid(List<OccupiedCell> region) {
         return VerticalFormLayout.hasColumnHeaderRow(layoutCells(region));
+    }
+
+    /**
+     * Unlabeled stub/value blocks (CAPITAL COST means-of-finance, KPI columns) are
+     * grouped by overlapping columns. A spanning title is attached only when exactly
+     * one body sits under it, so a banner over two blocks stays its own region.
+     */
+    private static List<List<OccupiedCell>> assembleUnlabeledForms(
+            List<List<OccupiedCell>> fragments, List<List<OccupiedCell>> grids) {
+        if (fragments.size() < 2) {
+            return fragments;
+        }
+        List<List<OccupiedCell>> titles = new ArrayList<>();
+        List<List<OccupiedCell>> bodies = new ArrayList<>();
+        for (List<OccupiedCell> fragment : fragments) {
+            if (VerticalFormLayout.isTitleFragment(layoutCells(fragment))) {
+                titles.add(fragment);
+            } else {
+                bodies.add(fragment);
+            }
+        }
+        if (bodies.isEmpty()) {
+            return fragments;
+        }
+        List<List<List<OccupiedCell>>> groups = columnGroups(bodies);
+        List<List<OccupiedCell>> forms = new ArrayList<>();
+        for (List<List<OccupiedCell>> group : groups) {
+            forms.addAll(splitBodiesByGap(group));
+        }
+        List<List<OccupiedCell>> numericForms = new ArrayList<>();
+        for (List<OccupiedCell> form : forms) {
+            int gridBelow = numberlessFormGridBelow(form, grids);
+            if (gridBelow >= 0) {
+                grids.get(gridBelow).addAll(form);
+            } else {
+                numericForms.add(form);
+            }
+        }
+        forms = numericForms;
+        boolean[] titleUsed = new boolean[titles.size()];
+        for (int t = 0; t < titles.size(); t++) {
+            List<OccupiedCell> title = titles.get(t);
+            int nearest = -1;
+            int nearestRow = Integer.MAX_VALUE;
+            int ties = 0;
+            for (int i = 0; i < forms.size(); i++) {
+                List<OccupiedCell> form = forms.get(i);
+                if (maxRow(title) >= minRow(form) || !columnsOverlap(title, form)
+                        || gridSeparates(grids, maxRow(title), minRow(form))) {
+                    continue;
+                }
+                int start = minRow(form);
+                if (start < nearestRow) {
+                    nearest = i;
+                    nearestRow = start;
+                    ties = 1;
+                } else if (start == nearestRow) {
+                    ties++;
+                }
+            }
+            if (nearest >= 0 && ties == 1) {
+                List<OccupiedCell> merged = new ArrayList<>(title);
+                merged.addAll(forms.get(nearest));
+                forms.set(nearest, merged);
+                titleUsed[t] = true;
+            }
+        }
+        List<List<OccupiedCell>> result = new ArrayList<>(forms);
+        for (int t = 0; t < titles.size(); t++) {
+            if (titleUsed[t]) {
+                continue;
+            }
+            List<OccupiedCell> title = titles.get(t);
+            int host = -1;
+            int hosts = 0;
+            for (int i = 0; i < result.size(); i++) {
+                if (sitsIn(title, minRow(result.get(i)), maxRow(result.get(i)),
+                        minCol(result.get(i)), maxCol(result.get(i)))) {
+                    host = i;
+                    hosts++;
+                }
+            }
+            if (hosts == 1) {
+                result.get(host).addAll(title);
+                continue;
+            }
+            int nearestGrid = -1;
+            int nearestRow = Integer.MAX_VALUE;
+            int gridTies = 0;
+            for (int g = 0; g < grids.size(); g++) {
+                List<OccupiedCell> grid = grids.get(g);
+                if (maxRow(title) >= minRow(grid) || !columnsOverlap(title, grid)) {
+                    continue;
+                }
+                int gap = minRow(grid) - maxRow(title) - 1;
+                if (gap > 3) {
+                    continue;
+                }
+                int start = minRow(grid);
+                if (start < nearestRow) {
+                    nearestGrid = g;
+                    nearestRow = start;
+                    gridTies = 1;
+                } else if (start == nearestRow) {
+                    gridTies++;
+                }
+            }
+            if (nearestGrid >= 0 && gridTies == 1) {
+                grids.get(nearestGrid).addAll(title);
+            } else {
+                result.add(title);
+            }
+        }
+        return result;
+    }
+
+    private static List<List<List<OccupiedCell>>> columnGroups(List<List<OccupiedCell>> fragments) {
+        int n = fragments.size();
+        int[] parent = new int[n];
+        for (int i = 0; i < n; i++) {
+            parent[i] = i;
+        }
+        for (int i = 0; i < n; i++) {
+            for (int j = i + 1; j < n; j++) {
+                if (columnsOverlap(fragments.get(i), fragments.get(j))) {
+                    int a = findRoot(parent, i);
+                    int b = findRoot(parent, j);
+                    if (a != b) {
+                        parent[a] = b;
+                    }
+                }
+            }
+        }
+        Map<Integer, List<List<OccupiedCell>>> groups = new HashMap<>();
+        for (int i = 0; i < n; i++) {
+            groups.computeIfAbsent(findRoot(parent, i), ignored -> new ArrayList<>())
+                    .add(fragments.get(i));
+        }
+        return new ArrayList<>(groups.values());
+    }
+
+    private static List<List<OccupiedCell>> splitBodiesByGap(List<List<OccupiedCell>> group) {
+        group.sort(Comparator.comparingInt(RegionDetector::minRow)
+                .thenComparingInt(RegionDetector::minCol));
+        List<List<OccupiedCell>> result = new ArrayList<>();
+        List<OccupiedCell> current = new ArrayList<>();
+        boolean hasBody = false;
+        List<OccupiedCell> previous = null;
+        for (List<OccupiedCell> fragment : group) {
+            int gap = previous == null ? 0 : minRow(fragment) - maxRow(previous) - 1;
+            List<OccupiedCell> firstRow = byRow(fragment).values().iterator().next();
+            boolean titleStart = VerticalFormLayout.isTitleFragment(layoutCells(firstRow));
+            if (!current.isEmpty() && ((titleStart && hasBody) || gap >= 4)) {
+                result.add(current);
+                current = new ArrayList<>();
+                hasBody = false;
+            }
+            current.addAll(fragment);
+            hasBody = hasBody || VerticalFormLayout.isBodyFragment(layoutCells(fragment));
+            previous = fragment;
+        }
+        if (!current.isEmpty()) {
+            result.add(current);
+        }
+        return result;
+    }
+
+    private static int findRoot(int[] parent, int index) {
+        int current = index;
+        while (parent[current] != current) {
+            parent[current] = parent[parent[current]];
+            current = parent[current];
+        }
+        return current;
+    }
+
+    private static boolean columnsOverlap(List<OccupiedCell> left, List<OccupiedCell> right) {
+        return Math.max(minCol(left), minCol(right)) <= Math.min(maxCol(left), maxCol(right));
+    }
+
+    private static int numberlessFormGridBelow(
+            List<OccupiedCell> form, List<List<OccupiedCell>> grids) {
+        if (form.stream().anyMatch(RegionDetector::isNumericCell)) {
+            return -1;
+        }
+        int nearest = -1;
+        int nearestRow = Integer.MAX_VALUE;
+        int ties = 0;
+        for (int g = 0; g < grids.size(); g++) {
+            List<OccupiedCell> grid = grids.get(g);
+            if (maxRow(form) >= minRow(grid) || !columnsOverlap(form, grid)) {
+                continue;
+            }
+            int gap = minRow(grid) - maxRow(form) - 1;
+            if (gap > 3) {
+                continue;
+            }
+            int start = minRow(grid);
+            if (start < nearestRow) {
+                nearest = g;
+                nearestRow = start;
+                ties = 1;
+            } else if (start == nearestRow) {
+                ties++;
+            }
+        }
+        return ties == 1 ? nearest : -1;
     }
 
     private static boolean sitsIn(List<OccupiedCell> region, int minR, int maxR, int minC, int maxC) {
@@ -549,6 +756,10 @@ final class RegionDetector {
             }
         }
         boolean hasPeriod = labels.stream().anyMatch(RegionHeaderAnalyzer::isColumnHeaderPeriodLabel);
+        // A merged title repeats one label across columns; a schema has distinct headers.
+        if (Set.copyOf(labels).size() < 2 && !hasPeriod) {
+            return false;
+        }
         // Two text cells alone is a section title (`D | AIR CONDITIONING`), not a schema.
         // A stacked period axis (`Particulars | Year 1`) still qualifies; a BOQ schema has 3+.
         return labels.size() >= 3 || hasPeriod;
@@ -720,7 +931,11 @@ final class RegionDetector {
         if (!(skipOnRow || skipOnCol)) {
             return false;
         }
-        return (isTextStub(left) && isValueCell(right)) || (isTextStub(right) && isValueCell(left));
+        NormalizedCell stub = skipOnRow
+                ? (left.colNum() < right.colNum() ? left : right)
+                : (left.rowNum() < right.rowNum() ? left : right);
+        NormalizedCell value = stub == left ? right : left;
+        return isTextStub(stub) && isValueCell(value);
     }
 
     private static boolean isTextStub(NormalizedCell cell) {

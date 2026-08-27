@@ -42,6 +42,51 @@ final class VerticalFormLayout {
         }
         Map<Integer, Integer> numberedStubCols = new HashMap<>();
         int stubValueRows = 0;
+        for (RowStats stats : rowStats(cells)) {
+            if (stats.numberedStub) {
+                numberedStubCols.merge(stats.stubCol, 1, Integer::sum);
+            }
+            if (stats.stubValue) {
+                stubValueRows++;
+            }
+        }
+        int numbered = numberedStubCols.values().stream().mapToInt(Integer::intValue).max().orElse(0);
+        return numbered >= MIN_NUMBERED_STUBS && stubValueRows >= MIN_STUB_VALUE_ROWS;
+    }
+
+    static boolean isStubValueForm(List<Cell> cells) {
+        if (cells.isEmpty() || hasColumnHeaderRow(cells)) {
+            return false;
+        }
+        return stubValueRowCount(cells) >= MIN_STUB_VALUE_ROWS;
+    }
+
+    static boolean isTitleFragment(List<Cell> cells) {
+        if (cells.isEmpty() || cells.stream().anyMatch(cell -> cell.numeric() || cell.formula())) {
+            return false;
+        }
+        return stubValueRowCount(cells) == 0;
+    }
+
+    static boolean isBodyFragment(List<Cell> cells) {
+        return stubValueRowCount(cells) >= 1
+                || cells.stream().anyMatch(cell -> cell.numeric() || cell.formula());
+    }
+
+    private static int stubValueRowCount(List<Cell> cells) {
+        int count = 0;
+        for (RowStats stats : rowStats(cells)) {
+            if (stats.stubValue) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private record RowStats(int stubCol, boolean numberedStub, boolean stubValue) {}
+
+    private static List<RowStats> rowStats(List<Cell> cells) {
+        List<RowStats> result = new ArrayList<>();
         for (List<Cell> row : byRow(cells).values()) {
             List<Cell> occupied = new ArrayList<>(row);
             occupied.sort(Comparator.comparingInt(Cell::col));
@@ -49,15 +94,12 @@ final class VerticalFormLayout {
             if (stub == null || !stub.stubText()) {
                 continue;
             }
-            if (stub.numberedStub()) {
-                numberedStubCols.merge(stub.col(), 1, Integer::sum);
-            }
-            if (firstValueRightOf(occupied, stub.col() + 2) != null) {
-                stubValueRows++;
-            }
+            result.add(new RowStats(
+                    stub.col(),
+                    stub.numberedStub(),
+                    firstValueRightOf(occupied, stub.col() + 2) != null));
         }
-        int numbered = numberedStubCols.values().stream().mapToInt(Integer::intValue).max().orElse(0);
-        return numbered >= MIN_NUMBERED_STUBS && stubValueRows >= MIN_STUB_VALUE_ROWS;
+        return result;
     }
 
     static boolean hasColumnHeaderRow(List<Cell> cells) {

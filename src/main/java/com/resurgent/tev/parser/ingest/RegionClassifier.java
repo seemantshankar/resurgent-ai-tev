@@ -50,7 +50,8 @@ public final class RegionClassifier {
         List<String> labels = labels(cells, headers);
         List<VerticalFormLayout.Cell> layout = layoutCells(cells);
         boolean numberedForm = VerticalFormLayout.isNumberedKeyValueForm(layout);
-        if (numberedForm) {
+        boolean stubValueForm = VerticalFormLayout.isStubValueForm(layout);
+        if (numberedForm || stubValueForm) {
             scoreVerticalForm(bounds, cells, scores, reasons, true);
         } else {
             scoreCostHead(cells, headers, scores, reasons);

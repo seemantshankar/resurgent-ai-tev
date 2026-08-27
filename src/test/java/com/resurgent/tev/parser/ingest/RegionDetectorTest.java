@@ -50,6 +50,17 @@ class RegionDetectorTest {
     }
 
     @Test
+    void skipOneSameRow_doesNotJoinNumberToFollowingLabel() {
+        Map<Long, RegionDetector.RegionCell> cells = cells(
+                number("E1", 1, 5, "2878.94"),
+                text("G1", 1, 7, "Land Area"));
+
+        List<RegionDetector.DetectedRegion> regions = detector.detect("CAPITAL COST", cells);
+
+        assertThat(regions).hasSize(2);
+    }
+
+    @Test
     void skipOneSameColumn_joinsTextStubToNumber() {
         Map<Long, RegionDetector.RegionCell> cells = cells(
                 text("B1", 1, 2, "Increase in Term Loan"),
@@ -491,6 +502,79 @@ class RegionDetectorTest {
         assertThat(regions.get(0).endCol()).isEqualTo(5);
         assertThat(regions.get(1).startCol()).isEqualTo(7);
         assertThat(regions.get(1).endCol()).isEqualTo(11);
+    }
+
+    @Test
+    void unlabeledStackedFormsAndSideKpis_keepScreenshotBlocks() {
+        Map<Long, RegionDetector.RegionCell> cells = cells(
+                text("B1", 1, 2, "Particulars"),
+                text("C1", 1, 3, "Capital Cost"),
+                text("D1", 1, 4, "% Composition"),
+                text("B2", 2, 2, "Land"),
+                number("C2", 2, 3, "0"),
+                number("D2", 2, 4, "0"),
+                text("B3", 3, 2, "Civil"),
+                number("C3", 3, 3, "100"),
+                number("D3", 3, 4, "67"),
+                text("B5", 5, 2, "Total"),
+                number("C5", 5, 3, "100"),
+                number("D5", 5, 4, "100"),
+                text("F1", 1, 6, "No.of rooms"),
+                text("G1", 1, 7, "No."),
+                number("H1", 1, 8, "108"),
+                text("F4", 4, 6, "Land Area"),
+                text("G4", 4, 7, "sq.ft"),
+                number("H4", 4, 8, "29741"),
+                text("J4", 4, 10, "Civil Cost/BUA"),
+                text("K4", 4, 11, "Rs.sq.ft"),
+                number("L4", 4, 12, "190769"),
+                text("B8", 8, 2, "COST OF CAPITAL"),
+                text("B10", 10, 2, "CAPITAL EXPENDITURE"),
+                number("D10", 10, 4, "80"),
+                text("B12", 12, 2, "PREOPERATIVE"),
+                number("D12", 12, 4, "20"),
+                number("D14", 14, 4, "100"),
+                text("B17", 17, 2, "PROPOSED MEANS OF FINANCE"),
+                text("B19", 19, 2, "PARTNERS CAPITAL"),
+                number("D19", 19, 4, "40"),
+                text("B21", 21, 2, "TERM LOAN"),
+                number("D21", 21, 4, "60"),
+                text("B23", 23, 2, "TOTAL"),
+                number("D23", 23, 4, "100"),
+                text("B28", 28, 2, "DIFF."),
+                number("D28", 28, 4, "0"));
+
+        List<RegionDetector.DetectedRegion> regions = detector.detect("CAPITAL COST", cells);
+
+        assertThat(regions).anySatisfy(region -> {
+            assertThat(region.startCol()).isEqualTo(2);
+            assertThat(region.endCol()).isEqualTo(4);
+            assertThat(region.startRow()).isEqualTo(1);
+            assertThat(region.endRow()).isEqualTo(5);
+        });
+        assertThat(regions).anySatisfy(region -> {
+            assertThat(region.startCol()).isEqualTo(6);
+            assertThat(region.endCol()).isEqualTo(8);
+        });
+        assertThat(regions).anySatisfy(region -> {
+            assertThat(region.startCol()).isEqualTo(10);
+            assertThat(region.endCol()).isEqualTo(12);
+        });
+        assertThat(regions).anySatisfy(region -> {
+            assertThat(region.startRow()).isEqualTo(8);
+            assertThat(region.endRow()).isEqualTo(14);
+            assertThat(region.startCol()).isEqualTo(2);
+        });
+        assertThat(regions).anySatisfy(region -> {
+            assertThat(region.startRow()).isEqualTo(17);
+            assertThat(region.endRow()).isEqualTo(23);
+            assertThat(region.startCol()).isEqualTo(2);
+        });
+        assertThat(regions).anySatisfy(region -> {
+            assertThat(region.startRow()).isEqualTo(28);
+            assertThat(region.endRow()).isEqualTo(28);
+        });
+        assertThat(regions).hasSize(6);
     }
 
     private static Map<Long, RegionDetector.RegionCell> cells(NormalizedCell... values) {
