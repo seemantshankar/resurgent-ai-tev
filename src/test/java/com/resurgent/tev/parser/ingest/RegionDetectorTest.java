@@ -55,7 +55,7 @@ class RegionDetectorTest {
                 number("E1", 1, 5, "2878.94"),
                 text("G1", 1, 7, "Land Area"));
 
-        List<RegionDetector.DetectedRegion> regions = detector.detect("CAPITAL COST", cells);
+        List<RegionDetector.DetectedRegion> regions = detector.detect("Sheet", cells);
 
         assertThat(regions).hasSize(2);
     }
@@ -505,7 +505,7 @@ class RegionDetectorTest {
     }
 
     @Test
-    void unlabeledStackedFormsAndSideKpis_keepScreenshotBlocks() {
+    void unlabeledHeaderGridWithSideKpisAndStackedForms_assemblesByLayout() {
         Map<Long, RegionDetector.RegionCell> cells = cells(
                 text("B1", 1, 2, "Particulars"),
                 text("C1", 1, 3, "Capital Cost"),
@@ -544,7 +544,7 @@ class RegionDetectorTest {
                 text("B28", 28, 2, "DIFF."),
                 number("D28", 28, 4, "0"));
 
-        List<RegionDetector.DetectedRegion> regions = detector.detect("CAPITAL COST", cells);
+        List<RegionDetector.DetectedRegion> regions = detector.detect("Project Cost", cells);
 
         assertThat(regions).anySatisfy(region -> {
             assertThat(region.startCol()).isEqualTo(2);
@@ -575,6 +575,7 @@ class RegionDetectorTest {
             assertThat(region.endRow()).isEqualTo(28);
         });
         assertThat(regions).hasSize(6);
+        assertThat(detector.detect("Means Summary", cells)).hasSize(6);
     }
 
     private static Map<Long, RegionDetector.RegionCell> cells(NormalizedCell... values) {

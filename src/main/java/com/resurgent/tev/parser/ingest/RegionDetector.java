@@ -65,8 +65,8 @@ final class RegionDetector {
     }
 
     /**
-     * After geometry, merge leftover fragments that form one numbered key-value layout.
-     * Connectivity is unchanged; grids with a column-header row are left alone.
+     * After geometry, assemble leftover fragments that share a vertical-form layout.
+     * Grids with a column-header row stay as schema membership already cut them.
      */
     private static List<List<OccupiedCell>> unionVerticalForms(List<List<OccupiedCell>> regions) {
         if (regions.size() < 2) {
@@ -151,9 +151,9 @@ final class RegionDetector {
     }
 
     /**
-     * Unlabeled stub/value blocks (CAPITAL COST means-of-finance, KPI columns) are
-     * grouped by overlapping columns. A spanning title is attached only when exactly
-     * one body sits under it, so a banner over two blocks stays its own region.
+     * Unlabeled stub/value leftovers are grouped by overlapping columns. A title
+     * attaches only when exactly one body sits under it (a banner over two blocks
+     * stays split) and never across a grid.
      */
     private static List<List<OccupiedCell>> assembleUnlabeledForms(
             List<List<OccupiedCell>> fragments, List<List<OccupiedCell>> grids) {
@@ -177,16 +177,6 @@ final class RegionDetector {
         for (List<List<OccupiedCell>> group : groups) {
             forms.addAll(splitBodiesByGap(group));
         }
-        List<List<OccupiedCell>> numericForms = new ArrayList<>();
-        for (List<OccupiedCell> form : forms) {
-            int gridBelow = numberlessFormGridBelow(form, grids);
-            if (gridBelow >= 0) {
-                grids.get(gridBelow).addAll(form);
-            } else {
-                numericForms.add(form);
-            }
-        }
-        forms = numericForms;
         boolean[] titleUsed = new boolean[titles.size()];
         for (int t = 0; t < titles.size(); t++) {
             List<OccupiedCell> title = titles.get(t);
@@ -243,7 +233,7 @@ final class RegionDetector {
                     continue;
                 }
                 int gap = minRow(grid) - maxRow(title) - 1;
-                if (gap > 3) {
+                if (!VerticalFormLayout.withinFormInternalGap(gap)) {
                     continue;
                 }
                 int start = minRow(grid);
@@ -300,7 +290,8 @@ final class RegionDetector {
             int gap = previous == null ? 0 : minRow(fragment) - maxRow(previous) - 1;
             List<OccupiedCell> firstRow = byRow(fragment).values().iterator().next();
             boolean titleStart = VerticalFormLayout.isTitleFragment(layoutCells(firstRow));
-            if (!current.isEmpty() && ((titleStart && hasBody) || gap >= 4)) {
+            if (!current.isEmpty()
+                    && VerticalFormLayout.startsNewUnlabeledForm(titleStart && hasBody, gap)) {
                 result.add(current);
                 current = new ArrayList<>();
                 hasBody = false;
@@ -326,35 +317,6 @@ final class RegionDetector {
 
     private static boolean columnsOverlap(List<OccupiedCell> left, List<OccupiedCell> right) {
         return Math.max(minCol(left), minCol(right)) <= Math.min(maxCol(left), maxCol(right));
-    }
-
-    private static int numberlessFormGridBelow(
-            List<OccupiedCell> form, List<List<OccupiedCell>> grids) {
-        if (form.stream().anyMatch(RegionDetector::isNumericCell)) {
-            return -1;
-        }
-        int nearest = -1;
-        int nearestRow = Integer.MAX_VALUE;
-        int ties = 0;
-        for (int g = 0; g < grids.size(); g++) {
-            List<OccupiedCell> grid = grids.get(g);
-            if (maxRow(form) >= minRow(grid) || !columnsOverlap(form, grid)) {
-                continue;
-            }
-            int gap = minRow(grid) - maxRow(form) - 1;
-            if (gap > 3) {
-                continue;
-            }
-            int start = minRow(grid);
-            if (start < nearestRow) {
-                nearest = g;
-                nearestRow = start;
-                ties = 1;
-            } else if (start == nearestRow) {
-                ties++;
-            }
-        }
-        return ties == 1 ? nearest : -1;
     }
 
     private static boolean sitsIn(List<OccupiedCell> region, int minR, int maxR, int minC, int maxC) {
@@ -745,24 +707,10 @@ final class RegionDetector {
     }
 
     private static boolean isColumnHeaderRow(List<OccupiedCell> row) {
-        if (row.isEmpty() || isTotalOrSubtotalRow(row) || hasNumberOrFormula(row)) {
+        if (row.isEmpty() || isTotalOrSubtotalRow(row)) {
             return false;
         }
-        List<String> labels = new ArrayList<>();
-        for (OccupiedCell cell : row) {
-            NormalizedCell n = cell.cell();
-            if ("text".equals(n.valueType()) && n.textValue() != null && !n.textValue().isBlank()) {
-                labels.add(n.textValue().trim());
-            }
-        }
-        boolean hasPeriod = labels.stream().anyMatch(RegionHeaderAnalyzer::isColumnHeaderPeriodLabel);
-        // A merged title repeats one label across columns; a schema has distinct headers.
-        if (Set.copyOf(labels).size() < 2 && !hasPeriod) {
-            return false;
-        }
-        // Two text cells alone is a section title (`D | AIR CONDITIONING`), not a schema.
-        // A stacked period axis (`Particulars | Year 1`) still qualifies; a BOQ schema has 3+.
-        return labels.size() >= 3 || hasPeriod;
+        return VerticalFormLayout.isColumnHeaderRow(layoutCells(row));
     }
 
     private static boolean hasColumnHeaderRowAtOrAbove(List<OccupiedCell> component, int cut) {
@@ -907,8 +855,10 @@ final class RegionDetector {
     }
 
     /**
-     * 8-connectivity, plus a one-cell skip: similar formulas, same-column labels, or an
-     * axis-aligned stub-to-value spacer ({@code name | blank | number}).
+     * 8-connectivity, plus a one-cell skip: similar formulas, same-column labels, or a
+     * directional stub-to-value spacer ({@code name | blank | number}). The stub must
+     * sit left of (or above) the value. The reverse skip is what glued a grid's amount
+     * column to a neighbour stub across one empty column.
      */
     private static boolean connected(OccupiedCell left, OccupiedCell right) {
         int rowGap = Math.abs(left.cell().rowNum() - right.cell().rowNum());

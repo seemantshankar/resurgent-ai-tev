@@ -10,13 +10,43 @@ import java.util.TreeMap;
 import java.util.regex.Pattern;
 
 /**
- * Layout signature of a vertical key-value form: numbered stubs, a spacer column,
- * values, optional amounts, and no column-header row. Sheet names are not consulted.
+ * Layout features of vertical key-value blocks. Sheet names are never consulted.
+ *
+ * <p>Swallowing of a neighbour block is not a header-membership bug. Occupied-cell
+ * skip-1 used to treat {@code number | blank | label} as stub-to-value. That glued a
+ * schema grid's amount column to a KPI stub one spacer to its right. Stub-to-value is
+ * therefore directional: on a row the stub is left of the value; on a column, above it.
+ *
+ * <p>Features any later sheet can share with CAPITAL COST:
+ * <ul>
+ *   <li>a schema grid with a distinct column-header row (membership is column-bounded)
+ *   <li>unlabeled stub/value columns with no header and no {@code 1)} serials
+ *   <li>stacked unlabeled forms, each introduced by a title after a valued body
+ *   <li>a title or preamble immediately above its body or grid, never across a grid
+ * </ul>
+ *
+ * <p>Skip-1 already joins across one empty cell, so fragments that survive geometry are
+ * at least two empty rows apart. Item spacers inside one unlabeled form are two or three
+ * empty rows. A larger empty band, or a title after a body, starts a new form.
  */
 final class VerticalFormLayout {
     private static final Pattern NUMBERED_STUB = Pattern.compile("^\\d+[).]");
     private static final int MIN_NUMBERED_STUBS = 3;
     private static final int MIN_STUB_VALUE_ROWS = 3;
+
+    /**
+     * Empty rows that still belong to one unlabeled form. Larger than skip-1 (one empty
+     * cell) and smaller than the band that separates stacked forms.
+     */
+    static final int FORM_INTERNAL_MAX_EMPTY_ROWS = 3;
+
+    static boolean startsNewUnlabeledForm(boolean titleAfterBody, int emptyRowsBetween) {
+        return titleAfterBody || emptyRowsBetween > FORM_INTERNAL_MAX_EMPTY_ROWS;
+    }
+
+    static boolean withinFormInternalGap(int emptyRowsBetween) {
+        return emptyRowsBetween <= FORM_INTERNAL_MAX_EMPTY_ROWS;
+    }
 
     record Cell(int row, int col, String text, boolean numeric, boolean formula) {
         boolean colon() {
@@ -61,16 +91,13 @@ final class VerticalFormLayout {
         return stubValueRowCount(cells) >= MIN_STUB_VALUE_ROWS;
     }
 
+    /** Section heading: text only. Multi-column merged titles still qualify. */
     static boolean isTitleFragment(List<Cell> cells) {
-        if (cells.isEmpty() || cells.stream().anyMatch(cell -> cell.numeric() || cell.formula())) {
-            return false;
-        }
-        return stubValueRowCount(cells) == 0;
+        return !cells.isEmpty() && cells.stream().noneMatch(cell -> cell.numeric() || cell.formula());
     }
 
     static boolean isBodyFragment(List<Cell> cells) {
-        return stubValueRowCount(cells) >= 1
-                || cells.stream().anyMatch(cell -> cell.numeric() || cell.formula());
+        return cells.stream().anyMatch(cell -> cell.numeric() || cell.formula());
     }
 
     private static int stubValueRowCount(List<Cell> cells) {
@@ -111,7 +138,7 @@ final class VerticalFormLayout {
         return false;
     }
 
-    private static boolean isColumnHeaderRow(List<Cell> row) {
+    static boolean isColumnHeaderRow(List<Cell> row) {
         if (row.isEmpty() || row.stream().anyMatch(cell -> cell.numeric() || cell.formula())) {
             return false;
         }
