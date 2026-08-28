@@ -77,7 +77,8 @@ public final class CellNormalizer {
         return null;
     }
 
-    static BigDecimal coerceNumericText(String trimmed) {
+    /** Package-visible for redact; also used by ingest normalization. */
+    public static BigDecimal coerceNumericText(String trimmed) {
         String work = trimmed;
 
         boolean negative = false;
