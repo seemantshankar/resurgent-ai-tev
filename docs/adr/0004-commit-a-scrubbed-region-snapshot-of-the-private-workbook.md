@@ -1,5 +1,7 @@
 # Commit a scrubbed region snapshot derived from the private reference workbook
 
+**Superseded by ADR 0009.** Golden region snapshots tied to heuristic region detection, which is removed.
+
 Sprint 3 is the first sprint whose output is not a pure function of the file. Sprints 1 and 2
 produced artifacts reproducible from the bytes alone, and their tests could assert exact values
 (`raw_token = '[15]Manpower!F35'`). Region detection produces judgements — whether `depreciation`

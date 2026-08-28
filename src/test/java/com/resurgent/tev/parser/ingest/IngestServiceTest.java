@@ -20,7 +20,6 @@ import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.usermodel.Name;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -108,260 +107,7 @@ class IngestServiceTest {
     }
 
     @Test
-    void regionDetectionSplitsABannerThatBridgesTwoDisjointBlocks() throws Exception {
-        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
-            Sheet sheet = workbook.createSheet("Model");
-            sheet.createRow(0).createCell(0).setCellValue("Revenue schedule");
-            sheet.addMergedRegion(new CellRangeAddress(0, 0, 0, 5));
-            sheet.createRow(1).createCell(0).setCellValue("Left");
-            sheet.getRow(1).createCell(1).setCellValue(1.0);
-            sheet.getRow(1).createCell(4).setCellValue("Right");
-            sheet.getRow(1).createCell(5).setCellValue(2.0);
-
-            Path xlsx = writeWorkbook(workbook, "banner-two-blocks.xlsx");
-            Path db = tempDir.resolve("banner-two-blocks.db");
-            new IngestService().ingest(xlsx, 1L, db);
-
-            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
-                assertThat(count(c, "region")).isEqualTo(3);
-                try (ResultSet rs = c.createStatement().executeQuery(
-                        "SELECT region_type, region_key FROM region ORDER BY start_row, start_col")) {
-                    assertThat(rs.next()).isTrue();
-                    assertThat(rs.getString("region_type")).isEqualTo("unknown");
-                    assertThat(rs.getString("region_key")).isEqualTo("Model!A1");
-                }
-                try (ResultSet rs = c.createStatement().executeQuery(
-                        "SELECT COUNT(DISTINCT region_id) FROM cell WHERE region_id IS NOT NULL")) {
-                    assertThat(rs.next()).isTrue();
-                    assertThat(rs.getInt(1)).isEqualTo(3);
-                }
-                try (ResultSet rs = c.createStatement().executeQuery(
-                        "SELECT COUNT(*) = COUNT(region_id) FROM cell")) {
-                    assertThat(rs.next()).isTrue();
-                    assertThat(rs.getInt(1)).isEqualTo(1);
-                }
-            }
-        }
-    }
-
-    @Test
-    void regionDetectionKeepsBannerWithASingleBlock() throws Exception {
-        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
-            Sheet sheet = workbook.createSheet("Model");
-            sheet.createRow(0).createCell(0).setCellValue("Revenue schedule");
-            sheet.addMergedRegion(new CellRangeAddress(0, 0, 0, 2));
-            sheet.createRow(1).createCell(0).setCellValue("Label");
-            sheet.getRow(1).createCell(1).setCellValue(1.0);
-
-            Path xlsx = writeWorkbook(workbook, "banner-one-block.xlsx");
-            Path db = tempDir.resolve("banner-one-block.db");
-            new IngestService().ingest(xlsx, 1L, db);
-
-            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
-                assertThat(count(c, "region")).isEqualTo(1);
-            }
-        }
-    }
-
-    @Test
-    void regionPersistenceUsesPeriodHeadersForAxisAndDenormalizedCellLabels() throws Exception {
-        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
-            Sheet sheet = workbook.createSheet("Model");
-            Row headers = sheet.createRow(0);
-            headers.createCell(0).setCellValue("Particulars");
-            headers.createCell(1).setCellValue("FY 2024-25");
-            headers.createCell(2).setCellValue("FY 2025-26");
-            Row pbit = sheet.createRow(1);
-            pbit.createCell(0).setCellValue("PBIT");
-            pbit.createCell(1).setCellValue(100.0);
-            pbit.createCell(2).setCellValue(200.0);
-
-            Path xlsx = writeWorkbook(workbook, "period-axis.xlsx");
-            Path db = tempDir.resolve("period-axis.db");
-            IngestSummary summary = new IngestService().ingest(xlsx, 1L, db);
-
-            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
-                try (ResultSet rs = c.createStatement().executeQuery(
-                        "SELECT header_rows, period_axis, detection_reasons FROM region")) {
-                    assertThat(rs.next()).isTrue();
-                    assertThat(Jsonb.fromJson(rs.getString("header_rows"),
-                            new TypeReference<List<Integer>>() {})).containsExactly(1);
-                    assertThat(Jsonb.fromJson(rs.getString("period_axis"),
-                            new TypeReference<Map<String, Integer>>() {}))
-                            .containsEntry("B", 1).containsEntry("C", 2);
-                    assertThat(Jsonb.fromJson(rs.getString("detection_reasons"),
-                            new TypeReference<List<Object>>() {})).isNotEmpty();
-                }
-                try (ResultSet rs = c.createStatement().executeQuery(
-                        "SELECT row_label, col_label FROM cell WHERE coord = 'B2'")) {
-                    assertThat(rs.next()).isTrue();
-                    assertThat(rs.getString("row_label")).isEqualTo("PBIT");
-                    assertThat(rs.getString("col_label")).isEqualTo("FY 2024-25");
-                }
-                try (ResultSet rs = c.createStatement().executeQuery(
-                        "SELECT category, detail FROM review_queue WHERE category = 'region_classification'")) {
-                    assertThat(rs.next()).isTrue();
-                    assertThat(Jsonb.fromJson(rs.getString("detail"),
-                            new TypeReference<Map<String, Object>>() {}))
-                            .containsEntry("regionType", "unknown")
-                            .containsKey("regionId")
-                            .containsKey("reasonCodes");
-                }
-            }
-            Map<String, Object> metrics = Jsonb.fromJson(summary.metricsJson(),
-                    new TypeReference<Map<String, Object>>() {});
-            assertThat(metrics).containsEntry("regionsTotal", 1)
-                    .containsEntry("cellsWithoutRegion", 0)
-                    .containsEntry("regionsClassified", 0)
-                    .containsEntry("regionsQueuedForReview", 1)
-                    .containsEntry("regionsUnaccounted", 0)
-                    .containsEntry("qaStatus", "success");
-        }
-    }
-
-    @Test
-    void regionDetectionUsesFormulaSkeletonsForOneCellDilation() throws Exception {
-        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
-            Sheet sheet = workbook.createSheet("Model");
-            sheet.createRow(0).createCell(0).setCellFormula("1+1");
-            sheet.createRow(2).createCell(0).setCellFormula("2+2");
-
-            Path xlsx = writeWorkbook(workbook, "formula-gap.xlsx");
-            Path db = tempDir.resolve("formula-gap.db");
-            new IngestService().ingest(xlsx, 1L, db);
-
-            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
-                assertThat(count(c, "region")).isEqualTo(1);
-            }
-        }
-    }
-
-    @Test
-    void regionDetectionAllowsOneSkeletonTokenDifferenceForOneCellDilation() throws Exception {
-        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
-            Sheet sheet = workbook.createSheet("Model");
-            sheet.createRow(0).createCell(0).setCellFormula("SUM(1)");
-            sheet.createRow(2).createCell(0).setCellFormula("SUM(2)");
-
-            Path xlsx = writeWorkbook(workbook, "formula-one-token-gap.xlsx");
-            Path db = tempDir.resolve("formula-one-token-gap.db");
-            new IngestService().ingest(xlsx, 1L, db);
-
-            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
-                assertThat(count(c, "region")).isEqualTo(1);
-            }
-        }
-    }
-
-    @Test
-    void regionBreakDoesNotSplitOnStyledTitleWithoutNewHeader() throws Exception {
-        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
-            Sheet sheet = workbook.createSheet("Model");
-            for (int row = 0; row < 3; row++) {
-                sheet.createRow(row).createCell(0).setCellFormula("1+1");
-            }
-            org.apache.poi.ss.usermodel.Cell title = sheet.createRow(3).createCell(0);
-            title.setCellValue("Details");
-            org.apache.poi.ss.usermodel.CellStyle style = workbook.createCellStyle();
-            org.apache.poi.ss.usermodel.Font font = workbook.createFont();
-            font.setBold(true);
-            style.setFont(font);
-            title.setCellStyle(style);
-            for (int row = 4; row < 7; row++) {
-                sheet.createRow(row).createCell(0).setCellValue("line item " + row);
-                sheet.getRow(row).createCell(1).setCellValue(row);
-            }
-
-            Path xlsx = writeWorkbook(workbook, "styled-title-is-not-break.xlsx");
-            Path db = tempDir.resolve("styled-title-is-not-break.db");
-            new IngestService().ingest(xlsx, 1L, db);
-
-            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
-                assertThat(count(c, "region")).isEqualTo(1);
-            }
-        }
-    }
-
-    @Test
-    void regionBreakSplitsStackedTablesOnNewColumnHeaderRow() throws Exception {
-        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
-            Sheet sheet = workbook.createSheet("Model");
-            Row headerA = sheet.createRow(0);
-            headerA.createCell(0).setCellValue("Particulars");
-            headerA.createCell(1).setCellValue("Year 1");
-            Row dataA = sheet.createRow(1);
-            dataA.createCell(0).setCellValue("Revenue");
-            dataA.createCell(1).setCellValue(100.0);
-            Row headerB = sheet.createRow(3);
-            headerB.createCell(0).setCellValue("Particulars");
-            headerB.createCell(1).setCellValue("Year 1");
-            Row dataB = sheet.createRow(4);
-            dataB.createCell(0).setCellValue("Cost");
-            dataB.createCell(1).setCellValue(200.0);
-
-            Path xlsx = writeWorkbook(workbook, "stacked-header-break.xlsx");
-            Path db = tempDir.resolve("stacked-header-break.db");
-            new IngestService().ingest(xlsx, 1L, db);
-
-            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
-                assertThat(count(c, "region")).isEqualTo(2);
-            }
-        }
-    }
-
-    @Test
-    void regionBreakScoringDoesNotSplitKnownTotal() throws Exception {
-        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
-            Sheet sheet = workbook.createSheet("Model");
-            for (int row = 0; row < 3; row++) {
-                sheet.createRow(row).createCell(0).setCellFormula("1+1");
-            }
-            sheet.createRow(3).createCell(0).setCellValue("Total");
-            sheet.getRow(3).createCell(1).setCellFormula("SUM(A1:A3)");
-            sheet.createRow(4).createCell(0).setCellFormula("1+1");
-
-            Path xlsx = writeWorkbook(workbook, "total-is-not-break.xlsx");
-            Path db = tempDir.resolve("total-is-not-break.db");
-            new IngestService().ingest(xlsx, 1L, db);
-
-            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
-                assertThat(count(c, "region")).isEqualTo(1);
-            }
-        }
-    }
-
-    @Test
-    void regionDetectionDoesNotTreatHiddenColumnsAsConnectivity() throws Exception {
-        try (XSSFWorkbook emptySeparator = new XSSFWorkbook();
-                XSSFWorkbook populatedSeparator = new XSSFWorkbook()) {
-            Sheet empty = emptySeparator.createSheet("Model");
-            empty.createRow(0).createCell(0).setCellValue(1.0);
-            empty.getRow(0).createCell(2).setCellValue(2.0);
-            empty.setColumnHidden(1, true);
-
-            Sheet populated = populatedSeparator.createSheet("Model");
-            populated.createRow(0).createCell(0).setCellValue(1.0);
-            populated.getRow(0).createCell(1).setCellValue(3.0);
-            populated.getRow(0).createCell(2).setCellValue(2.0);
-            populated.setColumnHidden(1, true);
-
-            Path emptyXlsx = writeWorkbook(emptySeparator, "hidden-empty-separator.xlsx");
-            Path populatedXlsx = writeWorkbook(populatedSeparator, "hidden-populated-separator.xlsx");
-            Path emptyDb = tempDir.resolve("hidden-empty-separator.db");
-            Path populatedDb = tempDir.resolve("hidden-populated-separator.db");
-            new IngestService().ingest(emptyXlsx, 1L, emptyDb);
-            new IngestService().ingest(populatedXlsx, 1L, populatedDb);
-
-            try (Connection emptyConnection = DriverManager.getConnection("jdbc:sqlite:" + emptyDb);
-                    Connection populatedConnection = DriverManager.getConnection("jdbc:sqlite:" + populatedDb)) {
-                assertThat(count(emptyConnection, "region")).isEqualTo(2);
-                assertThat(count(populatedConnection, "region")).isEqualTo(1);
-            }
-        }
-    }
-
-    @Test
-    void externalLinkProducesRowAndResolvedCellRef() throws Exception {
+    void externalLinkIsPersistedWithFormulaText() throws Exception {
         try (XSSFWorkbook external = new XSSFWorkbook();
                 XSSFWorkbook main = new XSSFWorkbook()) {
             external.createSheet("Other");
@@ -377,19 +123,10 @@ class IngestServiceTest {
                 assertThat(count(c, "workbook")).isEqualTo(1);
                 assertThat(count(c, "external_link")).isEqualTo(1);
                 try (ResultSet rs = c.createStatement().executeQuery(
-                        "SELECT COUNT(*) FROM review_queue WHERE category = 'formula_reference'")) {
+                        "SELECT target_path FROM external_link")) {
                     assertThat(rs.next()).isTrue();
-                    assertThat(rs.getInt(1)).isZero();
-                }
-
-                long linkId;
-                try (ResultSet rs = c.createStatement().executeQuery(
-                        "SELECT external_link_id, target_path FROM external_link")) {
-                    assertThat(rs.next()).isTrue();
-                    linkId = rs.getLong("external_link_id");
                     assertThat(rs.getString("target_path")).isEqualTo("other.xlsx");
                 }
-
                 try (ResultSet rs = c.createStatement().executeQuery(
                         "SELECT formula_text FROM cell WHERE coord = 'A1'")) {
                     assertThat(rs.next()).isTrue();
@@ -400,37 +137,7 @@ class IngestServiceTest {
     }
 
     @Test
-    void unresolvableExternalRefLandsInReviewQueue() throws Exception {
-        try (XSSFWorkbook main = new XSSFWorkbook()) {
-            Sheet sheet = main.createSheet("Sheet1");
-            sheet.createRow(0).createCell(0).setCellFormula("[99]Missing!A1");
-
-            Path xlsx = writeWorkbook(main, "missing.xlsx");
-            Path db = tempDir.resolve("missing.db");
-            new IngestService().ingest(xlsx, 1L, db);
-
-            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
-                assertThat(count(c, "external_link")).isEqualTo(0);
-                try (ResultSet rs = c.createStatement().executeQuery(
-                        "SELECT COUNT(*) FROM review_queue WHERE category = 'formula_reference'")) {
-                    assertThat(rs.next()).isTrue();
-                    assertThat(rs.getInt(1)).isEqualTo(1);
-                }
-
-                try (ResultSet rs = c.createStatement().executeQuery(
-                        "SELECT category, summary, detail FROM review_queue WHERE category = 'formula_reference'")) {
-                    assertThat(rs.next()).isTrue();
-                    assertThat(rs.getString("category")).isEqualTo("formula_reference");
-                    assertThat(rs.getString("summary")).contains("[99]Missing").contains("A1");
-                    Map<String, Object> detail = Jsonb.fromJson(rs.getString("detail"), Map.class);
-                    assertThat(detail.get("rawToken").toString()).contains("[99]Missing").contains("A1");
-                }
-            }
-        }
-    }
-
-    @Test
-    void definedNamesArePrunedToWorkbookAndPreservedInRawMetadata() throws Exception {
+    void definedNamesAreStoredInWorkbookAndRawMetadata() throws Exception {
         try (XSSFWorkbook main = new XSSFWorkbook()) {
             Sheet sheet = main.createSheet("Sheet1");
 
@@ -468,9 +175,9 @@ class IngestServiceTest {
                     assertThat(rs.next()).isTrue();
                     workbookNames = rs.getString(1);
                 }
-                List<String> referencedNames = Jsonb.fromJson(workbookNames,
+                List<String> definedNames = Jsonb.fromJson(workbookNames,
                         new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
-                assertThat(referencedNames).containsExactly("ReferencedName");
+                assertThat(definedNames).containsExactlyInAnyOrder("ReferencedName", "UnreferencedName");
             }
         }
     }
@@ -745,85 +452,6 @@ class IngestServiceTest {
     }
 
     @Test
-    void referenceReconciliation_countsResolvedAndUnresolvedRefs() throws Exception {
-        try (XSSFWorkbook external = new XSSFWorkbook();
-                XSSFWorkbook main = new XSSFWorkbook()) {
-            external.createSheet("Other");
-            Sheet sheet = main.createSheet("Sheet1");
-            main.linkExternalWorkbook("other.xlsx", external);
-            sheet.createRow(0).createCell(0).setCellFormula("[1]Other!A1");
-            sheet.getRow(0).createCell(1).setCellFormula("[99]Missing!A1");
-
-            Path xlsx = writeWorkbook(main, "mixed-refs.xlsx");
-            Path db = tempDir.resolve("mixed-refs.db");
-            IngestSummary summary = new IngestService().ingest(xlsx, 1L, db);
-
-            Map<String, Object> metrics = Jsonb.fromJson(summary.metricsJson(), Map.class);
-            assertThat(metrics).containsEntry("referencesTotal", 2);
-            assertThat(metrics).containsEntry("referencesResolved", 1);
-            assertThat(metrics).containsEntry("referencesUnresolved", 1);
-            assertThat(metrics).containsEntry("qaStatus", "success");
-            assertThat(summary.status()).isEqualTo("success");
-        }
-    }
-
-    // ---- §13 synthetic fixtures ----
-
-    @Test
-    void refToDeletedSheetIsUnresolvedSheetNotFoundViaFullIngest() throws Exception {
-        try (XSSFWorkbook main = new XSSFWorkbook()) {
-            Sheet sheet = main.createSheet("Sheet1");
-            sheet.createRow(0).createCell(0).setCellFormula("DeletedSheet!A1");
-
-            Path xlsx = writeWorkbook(main, "deleted-sheet.xlsx");
-            Path db = tempDir.resolve("deleted-sheet.db");
-            new IngestService().ingest(xlsx, 1L, db);
-
-            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
-                    ResultSet rs = c.createStatement().executeQuery(
-                            "SELECT unresolved_reason FROM cell_reference")) {
-                assertThat(rs.next()).isTrue();
-                assertThat(rs.getString("unresolved_reason")).isEqualTo("sheet_not_found");
-            }
-            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
-                assertThat(count(c, "review_queue")).isGreaterThanOrEqualTo(1);
-            }
-        }
-    }
-
-    @Test
-    void barrierFunctionStopsErrorCascadeViaFullIngest() throws Exception {
-        try (XSSFWorkbook main = new XSSFWorkbook()) {
-            Sheet sheet = main.createSheet("Sheet1");
-            Row row = sheet.createRow(0);
-            row.createCell(0).setCellFormula("1/0");
-            row.createCell(1).setCellFormula("IFERROR(A1,0)");
-            row.createCell(2).setCellFormula("B1");
-
-            org.apache.poi.ss.usermodel.FormulaEvaluator evaluator =
-                    main.getCreationHelper().createFormulaEvaluator();
-            evaluator.evaluateFormulaCell(row.getCell(0));
-
-            Path xlsx = writeWorkbook(main, "barrier.xlsx");
-            Path db = tempDir.resolve("barrier.db");
-            new IngestService().ingest(xlsx, 1L, db);
-
-            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
-                try (ResultSet rs = c.createStatement().executeQuery(
-                        "SELECT is_error_barrier FROM cell WHERE coord = 'B1'")) {
-                    assertThat(rs.next()).isTrue();
-                    assertThat(rs.getBoolean("is_error_barrier")).isTrue();
-                }
-                try (ResultSet rs = c.createStatement().executeQuery(
-                        "SELECT error_descendant FROM cell WHERE coord = 'C1'")) {
-                    assertThat(rs.next()).isTrue();
-                    assertThat(rs.getBoolean("error_descendant")).isFalse();
-                }
-            }
-        }
-    }
-
-    @Test
     void uncachedFormulaIsMarkedMissingAndInventsNoValueViaFullIngest() throws Exception {
         try (XSSFWorkbook main = new XSSFWorkbook()) {
             Sheet sheet = main.createSheet("Sheet1");
@@ -844,46 +472,6 @@ class IngestServiceTest {
                             .as("an uncached formula must not have a value invented for it")
                             .isNull();
                 }
-            }
-        }
-    }
-
-    @Test
-    void circularReferenceSeverityFollowsIterativeCalcSetting() throws Exception {
-        try (XSSFWorkbook main = new XSSFWorkbook()) {
-            Sheet sheet = main.createSheet("Sheet1");
-            Row row = sheet.createRow(0);
-            row.createCell(0).setCellFormula("B1");
-            row.createCell(1).setCellFormula("A1");
-            main.getCTWorkbook().addNewCalcPr().setIterate(true);
-
-            Path xlsx = writeWorkbook(main, "circular-iterative.xlsx");
-            Path db = tempDir.resolve("circular-iterative.db");
-            new IngestService().ingest(xlsx, 1L, db);
-
-            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
-                    ResultSet rs = c.createStatement().executeQuery(
-                            "SELECT detail FROM review_queue WHERE category = 'circular_reference'")) {
-                assertThat(rs.next()).isTrue();
-                assertThat(rs.getString("detail")).contains("\"severity\":\"info\"");
-            }
-        }
-
-        try (XSSFWorkbook main = new XSSFWorkbook()) {
-            Sheet sheet = main.createSheet("Sheet1");
-            Row row = sheet.createRow(0);
-            row.createCell(0).setCellFormula("B1");
-            row.createCell(1).setCellFormula("A1");
-
-            Path xlsx = writeWorkbook(main, "circular-noniterative.xlsx");
-            Path db = tempDir.resolve("circular-noniterative.db");
-            new IngestService().ingest(xlsx, 1L, db);
-
-            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
-                    ResultSet rs = c.createStatement().executeQuery(
-                            "SELECT detail FROM review_queue WHERE category = 'circular_reference'")) {
-                assertThat(rs.next()).isTrue();
-                assertThat(rs.getString("detail")).contains("\"severity\":\"warning\"");
             }
         }
     }

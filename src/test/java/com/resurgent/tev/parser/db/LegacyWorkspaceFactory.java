@@ -75,6 +75,8 @@ public final class LegacyWorkspaceFactory {
             case 8 -> "sprint2_schema";
             case 9 -> "error_barriers";
             case 10 -> "sprint3a_region_schema";
+            case 11 -> "sprint3b_schema";
+            case 12 -> "worksheet_role_reasons";
             default -> throw new IllegalArgumentException("unsupported version " + version);
         };
     }
