@@ -17,17 +17,21 @@ public record RedactSummary(
         Path outputPath,
         int cellsRedacted,
         int sheetsProcessed,
-        List<RedactedCell> redactions) {
-
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+        List<RedactedCell> redactions,
+        boolean autoIngested) {
 
     public RedactSummary(String fileName, String sheetName, Path outputPath, int cellsRedacted) {
-        this(fileName, sheetName, outputPath, cellsRedacted, 1, List.of());
+        this(fileName, sheetName, outputPath, cellsRedacted, 1, List.of(), false);
     }
 
     public RedactSummary(String fileName, String sheetName, Path outputPath, int cellsRedacted,
             int sheetsProcessed) {
-        this(fileName, sheetName, outputPath, cellsRedacted, sheetsProcessed, List.of());
+        this(fileName, sheetName, outputPath, cellsRedacted, sheetsProcessed, List.of(), false);
+    }
+
+    public RedactSummary(String fileName, String sheetName, Path outputPath, int cellsRedacted,
+            int sheetsProcessed, List<RedactedCell> redactions) {
+        this(fileName, sheetName, outputPath, cellsRedacted, sheetsProcessed, redactions, false);
     }
 
     public boolean allSheets() {
@@ -47,6 +51,7 @@ public record RedactSummary(
             root.put("outputPath", outputPath.toString());
             root.put("cellsRedacted", cellsRedacted);
             root.put("sheetsProcessed", sheetsProcessed);
+            root.put("autoIngested", autoIngested);
             if (sheetName != null) {
                 root.put("sheetName", sheetName);
             }
@@ -72,4 +77,6 @@ public record RedactSummary(
             throw new UncheckedIOException("failed writing redact report to " + report, e);
         }
     }
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 }

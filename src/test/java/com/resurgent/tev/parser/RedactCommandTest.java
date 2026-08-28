@@ -121,7 +121,7 @@ class RedactCommandTest {
     }
 
     @Test
-    void redactWithoutPriorIngest_exits3() throws Exception {
+    void redactWithoutPriorIngest_autoIngestsThenRedacts() throws Exception {
         Path input = writeRedactFixture();
         Path db = tempDir.resolve("empty.db");
         Path outputDir = tempDir.resolve("redacted");
@@ -133,9 +133,42 @@ class RedactCommandTest {
                 "--sheet", "Assumptions",
                 "--output-dir", outputDir.toString());
 
-        assertThat(redact.exitCode()).isEqualTo(3);
-        assertThat(redact.stderr()).contains("not been ingested");
-        assertThat(Files.exists(outputDir)).isFalse();
+        assertThat(redact.exitCode()).isZero();
+        assertThat(redact.stdout()).contains("Auto-ingested");
+        assertThat(redact.stdout()).contains("Redacted sheet 'Assumptions'");
+        assertThat(outputDir.resolve("Project-FM-redacted.xlsx")).exists();
+        try (java.sql.Connection c = java.sql.DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            try (java.sql.ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT COUNT(*) FROM parse_run")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getLong(1)).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
+    void redactWhenAlreadyIngested_skipsAutoIngest() throws Exception {
+        Path input = writeRedactFixture();
+        Path db = tempDir.resolve("workspace.db");
+        Path outputDir = tempDir.resolve("redacted");
+
+        run("ingest", "--input", input.toString(), "--mandate-id", "1", "--db", db.toString());
+        RunResult redact = run("redact",
+                "--input", input.toString(),
+                "--db", db.toString(),
+                "--mandate-id", "1",
+                "--sheet", "Assumptions",
+                "--output-dir", outputDir.toString());
+
+        assertThat(redact.exitCode()).isZero();
+        assertThat(redact.stdout()).doesNotContain("Auto-ingested");
+        try (java.sql.Connection c = java.sql.DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            try (java.sql.ResultSet rs = c.createStatement().executeQuery(
+                    "SELECT COUNT(*) FROM parse_run")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getLong(1)).isEqualTo(1);
+            }
+        }
     }
 
     @Test

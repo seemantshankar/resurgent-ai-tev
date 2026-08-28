@@ -1,7 +1,7 @@
 package com.resurgent.tev.parser.redact;
 
+import com.resurgent.tev.parser.config.ParserConfig;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
-import com.resurgent.tev.parser.db.WorkspaceRepository;
 import com.resurgent.tev.parser.ingest.CellNormalizer;
 import java.io.IOException;
 import java.io.InputStream;
@@ -39,6 +39,19 @@ public final class RedactService {
 
     public RedactSummary redact(Path input, long mandateId, Path dbPath, String sheetName,
             Path outputDir) throws IOException, SQLException, RedactException {
+        return redact(input, mandateId, dbPath, sheetName, outputDir,
+                ParserConfig.embeddedDefaults(), WorkspaceDatabase.OpenOptions.defaults());
+    }
+
+    public RedactSummary redactAllSheets(Path input, long mandateId, Path dbPath, Path outputDir)
+            throws IOException, SQLException, RedactException {
+        return redactAllSheets(input, mandateId, dbPath, outputDir,
+                ParserConfig.embeddedDefaults(), WorkspaceDatabase.OpenOptions.defaults());
+    }
+
+    public RedactSummary redact(Path input, long mandateId, Path dbPath, String sheetName,
+            Path outputDir, ParserConfig config, WorkspaceDatabase.OpenOptions openOptions)
+            throws IOException, SQLException, RedactException {
         SheetSelection selection = workbook -> {
             Sheet sheet = workbook.getSheet(sheetName);
             if (sheet == null) {
@@ -46,10 +59,12 @@ public final class RedactService {
             }
             return List.of(sheet);
         };
-        return redactSelectedSheets(input, mandateId, dbPath, outputDir, selection, sheetName);
+        return redactSelectedSheets(input, mandateId, dbPath, outputDir, selection, sheetName,
+                config, openOptions);
     }
 
-    public RedactSummary redactAllSheets(Path input, long mandateId, Path dbPath, Path outputDir)
+    public RedactSummary redactAllSheets(Path input, long mandateId, Path dbPath, Path outputDir,
+            ParserConfig config, WorkspaceDatabase.OpenOptions openOptions)
             throws IOException, SQLException, RedactException {
         SheetSelection selection = workbook -> {
             List<Sheet> sheets = new ArrayList<>(workbook.getNumberOfSheets());
@@ -58,7 +73,8 @@ public final class RedactService {
             }
             return sheets;
         };
-        return redactSelectedSheets(input, mandateId, dbPath, outputDir, selection, null);
+        return redactSelectedSheets(input, mandateId, dbPath, outputDir, selection, null,
+                config, openOptions);
     }
 
     @FunctionalInterface
@@ -67,7 +83,8 @@ public final class RedactService {
     }
 
     private RedactSummary redactSelectedSheets(Path input, long mandateId, Path dbPath,
-            Path outputDir, SheetSelection selection, String sheetLabel)
+            Path outputDir, SheetSelection selection, String sheetLabel, ParserConfig config,
+            WorkspaceDatabase.OpenOptions openOptions)
             throws IOException, SQLException, RedactException {
         if (!Files.isRegularFile(input)) {
             throw new IOException("input file not found: " + input);
@@ -79,14 +96,8 @@ public final class RedactService {
         }
 
         String fileHash = sha256(input);
-        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
-            if (repo.findSourceFileId(mandateId, fileHash) == null) {
-                throw new RedactException(
-                        "file has not been ingested for mandate " + mandateId
-                                + "; run tev-parse ingest first");
-            }
-        }
+        boolean autoIngested = RedactIngestGate.ensureIngested(
+                input, mandateId, dbPath, fileHash, config, openOptions);
 
         Files.createDirectories(outputDir);
         Path outputPath = outputDir.resolve(redactedFileName(fileName));
@@ -110,7 +121,7 @@ public final class RedactService {
         }
 
         return new RedactSummary(fileName, sheetLabel, outputPath, redactions.size(),
-                sheetsProcessed, redactions);
+                sheetsProcessed, redactions, autoIngested);
     }
 
     private static List<RedactedCell> redactSheet(Sheet sheet) {

@@ -39,6 +39,12 @@ public record ParserConfig(
                 true);                 // reject ActiveX/OLE/DDE payloads
     }
 
+    public ParserConfig withXlsEnabled(boolean xlsEnabled) {
+        return new ParserConfig(maxFileSizeBytes, maxSheetCount, maxRowCount, maxColumnCount,
+                maxCellCount, maxZipExpansionRatio, xlsEnabled, rejectPasswordProtected,
+                rejectActiveXOleDde);
+    }
+
     /** Hard ceilings that user values may not exceed. */
     public static final long MAX_FILE_SIZE_BYTES_CEILING = 1024L * 1024 * 1024; // 1 GiB
     public static final int MAX_SHEET_COUNT_CEILING = 200;
