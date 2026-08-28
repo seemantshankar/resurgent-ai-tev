@@ -103,10 +103,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(12);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(13);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(12);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(13);
         }
     }
 
@@ -317,13 +317,13 @@ class PersistenceSeamTest {
     }
 
     @Test
-    void v8MigrationAppliesCleanlyAndRebuildsCellTable() throws Exception {
+    void v8MigrationAppliesCleanlyAndWorkbookCalcMetadataPersists() throws Exception {
         try (WorkspaceDatabase db = openDb("v8.db")) {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(12);
-            assertThat(tableNames(c)).contains("cell_reference", "cell_error_root");
+            assertThat(count(c, "schema_migration")).isEqualTo(13);
+            assertThat(tableNames(c)).doesNotContain("cell_reference", "cell_error_root");
 
             long sourceFileId = repo.insertSourceFile(1L, "v8.xlsx", "hash8", "fm_xlsx",
                     Timestamps.now(), "0.1.0", null);
@@ -339,15 +339,7 @@ class PersistenceSeamTest {
                     null, null, null, null, null,
                     false, null, false, null, null, null,
                     false, false, null, "cell", false, false, false);
-            long cellId = repo.insertCell(worksheetId, cell);
-            assertThat(cellId).isGreaterThan(0L);
-
-            long refId = repo.insertCellReference(new CellReferenceRow(cellId, 0, "Sheet1!A1", "local_cell",
-                    "Sheet1", worksheetId, "A1", cellId, null, false, false, 0, 0,
-                    false, false, null));
-            assertThat(refId).isGreaterThan(0L);
-
-            repo.insertCellErrorRoot(cellId, cellId);
+            assertThat(repo.insertCell(worksheetId, cell)).isGreaterThan(0L);
 
             repo.updateWorkbookCalcMetadata(workbookId, "auto", true, true, false, 0, 0);
 
@@ -361,26 +353,45 @@ class PersistenceSeamTest {
     }
 
     @Test
-    void v10MigrationAddsRegionMembershipColumns() throws Exception {
-        try (WorkspaceDatabase db = openDb("v10.db")) {
-            java.sql.Connection c = db.connection();
+    void v10SchemaAddsRegionColumnsWhenStoppedAtVersion10() throws Exception {
+        Path dbPath = tempDir.resolve("v10-only.db");
+        LegacyWorkspaceFactory.applyThroughVersion(dbPath, 10);
+        try (java.sql.Connection c = java.sql.DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
             assertThat(tableNames(c)).contains("region");
-            assertThat(count(c, "schema_migration")).isEqualTo(12);
+            assertThat(count(c, "schema_migration")).isEqualTo(10);
+            assertThat(columnNames(c, "cell")).contains("region_id", "formula_skeleton_regional",
+                    "is_bold", "has_fill", "has_border", "number_format");
+            assertThat(columnNames(c, "worksheet")).contains("role", "role_conf");
+        }
+    }
 
-            try (ResultSet rs = c.createStatement().executeQuery("PRAGMA table_info(cell)")) {
-                java.util.Set<String> columns = new java.util.HashSet<>();
-                while (rs.next()) {
-                    columns.add(rs.getString("name"));
-                }
-                assertThat(columns).contains("region_id", "formula_skeleton_regional",
-                        "is_bold", "has_fill", "has_border", "number_format");
-            }
-            try (ResultSet rs = c.createStatement().executeQuery("PRAGMA table_info(worksheet)")) {
-                java.util.Set<String> columns = new java.util.HashSet<>();
-                while (rs.next()) {
-                    columns.add(rs.getString("name"));
-                }
-                assertThat(columns).contains("role", "role_conf", "role_reasons");
+    @Test
+    void v13MigrationDropsSemanticTablesAndColumns() throws Exception {
+        try (WorkspaceDatabase db = openDb("v13.db")) {
+            java.sql.Connection c = db.connection();
+            assertThat(count(c, "schema_migration")).isEqualTo(13);
+            assertThat(tableNames(c)).doesNotContain(
+                    "region",
+                    "cost_head",
+                    "cost_head_mapping",
+                    "cost_head_candidate",
+                    "cost_head_contribution",
+                    "cost_head_contribution_cell",
+                    "duplicate_proposal",
+                    "duplicate_decision",
+                    "manual_contribution",
+                    "cost_head_mapping_decision",
+                    "cost_head_total_decision",
+                    "cell_reference",
+                    "cell_error_root");
+            assertThat(columnNames(c, "cell")).contains(
+                    "is_bold", "has_fill", "has_border", "number_format", "tags");
+            assertThat(columnNames(c, "cell")).doesNotContain(
+                    "region_id", "formula_skeleton", "formula_skeleton_regional",
+                    "is_error_barrier", "is_support", "error_descendant");
+            assertThat(columnNames(c, "worksheet")).doesNotContain("role", "role_conf", "role_reasons");
+            try (ResultSet rs = c.createStatement().executeQuery("PRAGMA foreign_key_check")) {
+                assertThat(rs.next()).isFalse();
             }
         }
     }
@@ -414,9 +425,10 @@ class PersistenceSeamTest {
 
     @Test
     void v11MigrationAppliesAutomaticallyOnEmptyWorkspace() throws Exception {
-        try (WorkspaceDatabase db = openDb("v11-empty.db")) {
-            java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(12);
+        Path dbPath = tempDir.resolve("v11-only.db");
+        LegacyWorkspaceFactory.applyThroughVersion(dbPath, 11);
+        try (java.sql.Connection c = java.sql.DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
+            assertThat(count(c, "schema_migration")).isEqualTo(11);
             assertThat(tableNames(c)).contains(
                     "cost_head",
                     "cost_head_mapping",
@@ -465,10 +477,10 @@ class PersistenceSeamTest {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(
                 dbPath, WorkspaceDatabase.OpenOptions.allowDestructiveReset())) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(12);
+            assertThat(count(c, "schema_migration")).isEqualTo(13);
             assertThat(count(c, "cell")).isZero();
             assertThat(count(c, "source_file")).isZero();
-            assertThat(tableNames(c)).contains("cost_head", "cost_head_candidate");
+            assertThat(tableNames(c)).doesNotContain("cost_head", "region");
             try (ResultSet rs = c.createStatement().executeQuery("PRAGMA foreign_key_check")) {
                 assertThat(rs.next()).isFalse();
             }

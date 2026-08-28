@@ -11,8 +11,6 @@ import java.util.function.Function;
 
 /**
  * Loads and validates an optional user config file over embedded defaults.
- * Unknown keys are rejected, hard ceilings are enforced, and security protections
- * cannot be disabled.
  */
 public final class ConfigLoader {
 
@@ -27,8 +25,7 @@ public final class ConfigLoader {
             "maxZipExpansionRatio",
             "xlsEnabled",
             "rejectPasswordProtected",
-            "rejectActiveXOleDde",
-            "classificationEvidenceFloor");
+            "rejectActiveXOleDde");
 
     private ConfigLoader() {}
 
@@ -77,13 +74,10 @@ public final class ConfigLoader {
                 defaults.rejectPasswordProtected(), v -> (Boolean) v);
         boolean rejectActiveXOleDde = value(user, "rejectActiveXOleDde",
                 defaults.rejectActiveXOleDde(), v -> (Boolean) v);
-        int classificationEvidenceFloor = value(user, "classificationEvidenceFloor",
-                defaults.classificationEvidenceFloor(), v -> ((Number) v).intValue());
 
         ParserConfig effective = new ParserConfig(
                 maxFileSizeBytes, maxSheetCount, maxRowCount, maxColumnCount, maxCellCount,
-                maxZipExpansionRatio, xlsEnabled, rejectPasswordProtected, rejectActiveXOleDde,
-                classificationEvidenceFloor);
+                maxZipExpansionRatio, xlsEnabled, rejectPasswordProtected, rejectActiveXOleDde);
 
         validate(effective);
         return effective;
@@ -107,9 +101,6 @@ public final class ConfigLoader {
                 config.rejectPasswordProtected());
         assertSecurityProtectionEnabled(ParserConfig.PROTECTION_ACTIVE_X_OLE_DDE,
                 config.rejectActiveXOleDde());
-        if (config.classificationEvidenceFloor() < 1) {
-            throw new ConfigValidationException("classificationEvidenceFloor must be positive");
-        }
     }
 
     private static void assertNotAboveCeiling(String name, long value, long ceiling) {

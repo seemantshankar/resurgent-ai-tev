@@ -7,7 +7,6 @@ import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import com.resurgent.tev.parser.ingest.safety.SafetyEnforcer;
 import java.io.IOException;
-import java.math.BigDecimal;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -17,45 +16,26 @@ import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
- * Application service behind {@code tev-parse ingest}: parses the input file and
- * lands the graph in the workspace DB in a single transaction — failure leaves
- * no partial graph behind.
+ * Application service behind {@code tev-parse ingest}: reads workbook bytes and
+ * lands cells in the workspace DB in a single transaction.
  */
 public final class IngestService {
 
     private static final String PARSER_VERSION = "0.1.0-SNAPSHOT";
 
-    /**
-     * Error-consuming functions (§10.8): a cell whose formula's function set intersects
-     * this set is an error barrier — its dependents do not inherit error_descendant/
-     * cell_error_root through it, unless the barrier cell is itself still is_error.
-     */
-    private static final Set<String> BARRIER_FUNCTIONS = Set.of(
-            "IFERROR", "IFNA", "ISERROR", "ISNA", "ISERR", "COUNT", "COUNTA", "AGGREGATE", "SUBTOTAL");
-
     private final CsvSniffer sniffer = new CsvSniffer();
     private final CsvAdapter csvAdapter = new CsvAdapter();
     private final XlsxAdapter xlsxAdapter = new XlsxAdapter();
     private final XlsAdapter xlsAdapter = new XlsAdapter();
-    private final CellContextEnricher enricher = new CellContextEnricher();
     private final SafetyEnforcer safetyEnforcer = new SafetyEnforcer();
-    private final RegionDetector regionDetector = new RegionDetector();
-    private final RegionHeaderAnalyzer regionHeaderAnalyzer = new RegionHeaderAnalyzer();
-    private final RegionSchemaInferencer regionSchemaInferencer = new RegionSchemaInferencer();
-    private final ExplicitAnchorDetector explicitAnchorDetector = new ExplicitAnchorDetector();
-    private static final double CLASSIFICATION_REVIEW_CONFIDENCE = 0.5;
 
-    /** Convenience overload that uses embedded defaults. */
     public IngestSummary ingest(Path input, long mandateId, Path dbPath)
             throws IOException, SQLException {
         return ingest(input, mandateId, dbPath, ParserConfig.embeddedDefaults());
@@ -198,9 +178,6 @@ public final class IngestService {
         int rowCount = sheet.rows().size();
         int cellCount = sheet.rows().stream().mapToInt(List::size).sum();
 
-        // Placeholder row: worksheet/cell inserts below need a parse_run_id to hang off.
-        // The real status and metrics, once known, overwrite this via updateParseRunResult
-        // before commit, so nothing but this transaction ever observes the placeholder.
         long parseRunId = repo.insertParseRun(sourceFileId, mandateId, PARSER_VERSION,
                 config.configHash(), now, null, "success", "{}");
         repo.insertAuditLog(parseRunId, "parse_run_started", now,
@@ -217,32 +194,16 @@ public final class IngestService {
             }
             rowNum++;
         }
-        List<NormalizedCell> enriched = enricher.enrich(cells);
         int cellsWritten = 0;
-        Map<Long, RegionDetector.RegionCell> cellsById = new LinkedHashMap<>();
-        for (NormalizedCell cell : enriched) {
+        for (NormalizedCell cell : cells) {
             long cellId = repo.insertCell(worksheetId, cell);
             recordCellProvenance(repo, cellId, sourceFileId, parseRunId, sheet.sheetName(), cell);
-            cellsById.put(cellId, new RegionDetector.RegionCell(cell, null));
             cellsWritten++;
         }
-        persistRegions(repo, worksheetId, parseRunId, sheet.sheetName(), fileName, cellsById, config);
-        persistCellSemantics(repo, parseRunId);
-        persistCostHeadMappings(repo, parseRunId, sourceFileId, mandateId);
-        List<CostHeadTrust> costHeads = persistExplicitAnchors(repo, parseRunId, sourceFileId, fileHash);
-        List<WorksheetRoleScorer.Score> worksheetRoles = persistWorksheetRoles(repo, parseRunId);
 
-        // CSV has no formulas or structural references, so those reconciliation buckets
-        // are trivially 0/0/0 and never force a partial/failed status on their own.
-        RegionQaStats regionQa = repo.selectRegionQaStats(parseRunId, CLASSIFICATION_REVIEW_CONFIDENCE);
-        SemanticFacts semanticFacts = repo.selectSemanticFacts(parseRunId);
-        SemanticReport semantic = SemanticReporter.build(semanticFacts, costHeads);
-        QaGateResult qa = withSemanticQa(QaGate.evaluate(cellCount, cellsWritten, 0, 0, 0, 0, 0, 0, 0,
-                regionQa.cellsWithoutRegion(), regionQa.regionsUnaccounted()), costHeads,
-                semanticFacts.qa(), repo.findAcceptedTotalFingerprints(sourceFileId));
+        QaGateResult qa = QaGate.evaluate(cellCount, cellsWritten);
         String metricsJson = IngestMetrics.toJson(fileName, fileHash, sheet.sheetName(), rowCount,
-                cellCount, cellsWritten, coercedCount(enriched), errorCount(enriched),
-                0, 0, 0, 0, 0, 0, 0, regionQa, qa, worksheetRoles, costHeads, semantic);
+                cellCount, cellsWritten, coercedCount(cells), errorCount(cells), qa);
         repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
         repo.insertAuditLog(parseRunId, "parse_run_completed", Timestamps.now(),
                 Jsonb.toJson(Map.of("status", qa.status(), "cellsWritten", cellsWritten)),
@@ -257,47 +218,31 @@ public final class IngestService {
             WorkspaceRepository repo, String now, ParserConfig config) throws IOException, SQLException {
         List<XlsxSheet> sheets = workbook.sheets();
         WorkbookMetadata metadata = workbook.metadata();
-        int rowCount = sheets.stream().mapToInt(s -> maxPopulatedRowNum(s)).sum();
+        int rowCount = sheets.stream().mapToInt(IngestService::maxPopulatedRowNum).sum();
         int cellCount = sheets.stream().mapToInt(s -> s.cells().size()).sum();
 
-        // Placeholder row, overwritten with the real status/metrics via
-        // updateParseRunResult once the sheet loop below finishes (see ingestCsv).
         long parseRunId = repo.insertParseRun(sourceFileId, mandateId, PARSER_VERSION,
                 config.configHash(), now, null, "success", "{}");
         repo.insertAuditLog(parseRunId, "parse_run_started", now,
                 Jsonb.toJson(Map.of("fileName", fileName, "fileHash", fileHash)), "info");
 
-        Set<String> referencedNames = collectReferencedDefinedNames(sheets, metadata.definedNames().keySet());
         long workbookId = repo.insertWorkbook(sourceFileId,
                 metadata.applicationName(), metadata.applicationVersion(),
                 metadata.sheetCount(), Jsonb.toJson(metadata.sheetNames()),
-                Jsonb.toJson(new ArrayList<>(referencedNames)),
+                Jsonb.toJson(new ArrayList<>(metadata.definedNames().keySet())),
                 Jsonb.toJson(metadata.properties()), metadata.isProtected(),
                 metadata.createdAt(), metadata.modifiedAt());
 
-        Map<Integer, Long> linkIndexToId = new HashMap<>();
         for (ExternalLinkIn link : metadata.externalLinks()) {
-            long linkId = repo.insertExternalLink(workbookId, "external",
+            repo.insertExternalLink(workbookId, "external",
                     link.linkIndex(), link.targetUri(),
                     link.refreshError() ? "broken" : "unchecked", now);
-            linkIndexToId.put(link.linkIndex(), linkId);
         }
 
         int sheetIndex = 0;
         int cellsWritten = 0;
         int cellsCoerced = 0;
         int cellsError = 0;
-        int formulaCellsTotal = 0;
-        int formulaCellsTokenized = 0;
-        int formulaCellsParseError = 0;
-        int formulaCellsUnavailable = 0;
-
-        // B3: built once alongside sheetNameToId so ReferenceResolver never needs to
-        // linear-scan for a worksheet's sheet name.
-        Map<String, Long> sheetNameToId = new HashMap<>();
-        Map<Long, String> worksheetIdToSheetName = new HashMap<>();
-        Map<String, Map<String, Long>> cellCoordMap = new HashMap<>();
-        List<PendingCellTokens> pendingTokensList = new ArrayList<>();
 
         for (XlsxSheet sheet : sheets) {
             long worksheetId = repo.insertWorksheet(parseRunId, sheet.sheetName(),
@@ -306,147 +251,28 @@ public final class IngestService {
                     sheet.bboxMaxRow(), sheet.bboxMaxCol(),
                     sheet.dimensionsDeclared(), sheet.realContentRows(),
                     sheet.declaredMerged());
-            sheetNameToId.put(sheet.sheetName(), worksheetId);
-            worksheetIdToSheetName.put(worksheetId, sheet.sheetName());
-            Map<String, Long> coordMap = new HashMap<>();
-            cellCoordMap.put(sheet.sheetName(), coordMap);
-            Map<Long, RegionDetector.RegionCell> cellsById = new LinkedHashMap<>();
 
-            List<NormalizedCell> enriched = enricher.enrich(sheet.cells());
-            for (NormalizedCell cell : enriched) {
-                NormalizedCell cellToInsert = cell;
-                FormulaTokenizerResult tokRes = null;
-                String skeleton = null;
-                boolean isBarrierForCurrentCell = false;
-                if (cell.formulaText() != null && !cell.formulaText().isBlank()) {
-                    tokRes = FormulaTokenizer.tokenize(cell.formulaText(), cell.rowNum(), cell.colNum(), metadata.definedNames());
-                    isBarrierForCurrentCell = isBarrierFormula(tokRes);
-                    // POI misclassifies a handful of functions (observed for IFERROR/IFNA) as a
-                    // "NameX" external-name reference instead of an AbstractFunctionPtg, which
-                    // would otherwise pollute both the skeleton and the persisted reference graph
-                    // with a bogus "external reference" to the bare function name. Strip those
-                    // pseudo-tokens out before they're used for anything downstream.
-                    tokRes = new FormulaTokenizerResult(tokRes.formulaState(),
-                            stripFunctionNamePseudoTokens(tokRes.tokens()), tokRes.functionTokens());
-                    skeleton = FormulaSkeletonGenerator.generate(cell.formulaText(), tokRes.tokens());
-
-                    BigDecimal evaluatedNumeric = cell.numericValue();
-                    boolean isErr = cell.isError();
-                    String errType = cell.errorType();
-
-                    if (tokRes.tokens().isEmpty()) {
-                        ConstantFormulaEvaluator.EvalResult evalRes = ConstantFormulaEvaluator.evaluate(cell.formulaText(), tokRes.tokens());
-                        if (evalRes != null) {
-                            if (evalRes.numericValue() != null) {
-                                evaluatedNumeric = evalRes.numericValue();
-                            }
-                            if (evalRes.isError()) {
-                                isErr = true;
-                                errType = evalRes.errorType();
-                            }
-                        }
-                    }
-
-                    cellToInsert = new NormalizedCell(
-                            cell.coord(), cell.rowNum(), cell.colNum(),
-                            cell.rawValue(), cell.rawType(), cell.valueType(),
-                            cell.textValue(), cell.displayValue(), evaluatedNumeric,
-                            cell.boolValue(), cell.dateValue(), cell.formulaText(),
-                            cell.formulaNormalized(), tokRes.formulaState(),
-                            cell.cachedValue(), cell.cacheState(), cell.coercedFromText(),
-                            cell.parsedQuantity(), isErr, errType,
-                            cell.rowLabel(), cell.colLabel(), cell.isMergedAnchor(),
-                            cell.isMergedParticipant(), cell.mergedRange(), cell.valueSource(),
-                            cell.rowHidden(), cell.colHidden(), cell.sheetHidden(),
-                            cell.isBold(), cell.hasFill(), cell.hasBorder(), cell.numberFormat(),
-                            cell.tagsJson());
-                }
-
-                long cellId = repo.insertCell(worksheetId, cellToInsert);
-                coordMap.put(cellToInsert.coord(), cellId);
-                cellsById.put(cellId, new RegionDetector.RegionCell(cellToInsert, skeleton));
-                recordCellProvenance(repo, cellId, sourceFileId, parseRunId, sheet.sheetName(), cellToInsert);
-
-                if (skeleton != null) {
-                    repo.updateCellSkeleton(cellId, skeleton);
-                }
-                if (tokRes != null && !tokRes.tokens().isEmpty()) {
-                    pendingTokensList.add(new PendingCellTokens(cellId, worksheetId, tokRes.tokens()));
-                }
-                if (isBarrierForCurrentCell) {
-                    repo.updateCellErrorBarrier(cellId, true);
-                }
-
-                // Formula reconciliation (§12/C6): every formula cell's tokenization state
-                // is accounted for as exactly one of tokenized/parse_error/unavailable.
-                if ("formula".equals(cellToInsert.rawType())) {
-                    formulaCellsTotal++;
-                    String state = cellToInsert.formulaState();
-                    if ("ok".equals(state)) {
-                        formulaCellsTokenized++;
-                    } else if ("parse_error".equals(state)) {
-                        formulaCellsParseError++;
-                    } else if ("unavailable".equals(state)) {
-                        formulaCellsUnavailable++;
-                    }
-                }
-
+            for (NormalizedCell cell : sheet.cells()) {
+                long cellId = repo.insertCell(worksheetId, cell);
+                recordCellProvenance(repo, cellId, sourceFileId, parseRunId, sheet.sheetName(), cell);
                 cellsWritten++;
-                if (cellToInsert.coercedFromText()) {
+                if (cell.coercedFromText()) {
                     cellsCoerced++;
                 }
-                if (cellToInsert.isError()) {
+                if (cell.isError()) {
                     cellsError++;
                 }
             }
-            persistRegions(repo, worksheetId, parseRunId, sheet.sheetName(), fileName, cellsById, config);
             sheetIndex++;
         }
 
-        // Pass 2: Resolve reference tokens and persist cell_reference rows.
-        ReferenceResolver resolver = new ReferenceResolver(repo);
-        ReferenceStats refStats = new ReferenceStats();
-        ReferenceResolutionContext refCtx = new ReferenceResolutionContext(sheetNameToId,
-                worksheetIdToSheetName, linkIndexToId, cellCoordMap,
-                metadata.definedNames().keySet(), parseRunId, now);
-        for (PendingCellTokens pct : pendingTokensList) {
-            resolver.resolveAndPersist(pct.cellId, pct.worksheetId, pct.tokens, refCtx, refStats);
-        }
-
-        // Pass 3: Graph construction and Tarjan SCC cycle detection. Both this pass and
-        // pass 4 share one adjacency map (ranges expanded in memory, clamped to each
-        // worksheet's real bbox) built once here rather than each running its own query.
-        Map<Long, List<Long>> adjacency = ReferenceGraphLoader.loadAdjacency(repo, parseRunId);
-        DependencyGraphEngine graphEngine = new DependencyGraphEngine(repo);
-        graphEngine.processWorkbookGraph(workbookId, parseRunId, adjacency, metadata.iterativeCalc());
-
-        // Pass 4: Error cascade tracing — root error cells and their non-error descendants.
-        ErrorCascadeEngine errorEngine = new ErrorCascadeEngine(repo);
-        errorEngine.processErrorCascades(parseRunId, adjacency);
-        persistCellSemantics(repo, parseRunId);
-        persistCostHeadMappings(repo, parseRunId, sourceFileId, mandateId);
-        List<CostHeadTrust> costHeads = persistExplicitAnchors(repo, parseRunId, sourceFileId, fileHash);
-        List<WorksheetRoleScorer.Score> worksheetRoles = persistWorksheetRoles(repo, parseRunId);
-
-        // Calc metadata persistence (#19 / C5): cellsError is only known now that the
-        // sheet loop above has finished, so this can't happen right after insertWorkbook.
         repo.updateWorkbookCalcMetadata(workbookId, metadata.calculationMode(),
                 metadata.fullCalcOnLoad(), metadata.calcChainPresent(), metadata.iterativeCalc(),
                 metadata.iterativeCount(), cellsError);
 
-        RegionQaStats regionQa = repo.selectRegionQaStats(parseRunId, CLASSIFICATION_REVIEW_CONFIDENCE);
-        SemanticFacts semanticFacts = repo.selectSemanticFacts(parseRunId);
-        SemanticReport semantic = SemanticReporter.build(semanticFacts, costHeads);
-        QaGateResult qa = withSemanticQa(QaGate.evaluate(cellCount, cellsWritten,
-                refStats.total(), refStats.resolved(), refStats.unresolved(),
-                formulaCellsTotal, formulaCellsTokenized, formulaCellsParseError, formulaCellsUnavailable,
-                regionQa.cellsWithoutRegion(), regionQa.regionsUnaccounted()), costHeads,
-                semanticFacts.qa(), repo.findAcceptedTotalFingerprints(sourceFileId));
+        QaGateResult qa = QaGate.evaluate(cellCount, cellsWritten);
         String metricsJson = IngestMetrics.toJson(fileName, fileHash, primarySheetName(sheets),
-                rowCount, cellCount, cellsWritten, cellsCoerced, cellsError,
-                refStats.total(), refStats.resolved(), refStats.unresolved(),
-                formulaCellsTotal, formulaCellsTokenized, formulaCellsParseError, formulaCellsUnavailable,
-                regionQa, qa, worksheetRoles, costHeads, semantic);
+                rowCount, cellCount, cellsWritten, cellsCoerced, cellsError, qa);
         repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
         repo.insertAuditLog(parseRunId, "parse_run_completed", Timestamps.now(),
                 Jsonb.toJson(Map.of("status", qa.status(), "cellsWritten", cellsWritten)),
@@ -454,442 +280,6 @@ public final class IngestService {
         repo.commit();
         return new IngestSummary(fileName, fileHash, primarySheetName(sheets), rowCount,
                 cellCount, sourceFileId, parseRunId, dbPath, qa.status(), metricsJson);
-    }
-
-    /**
-     * A cell is an error barrier when its formula's function set intersects
-     * {@link #BARRIER_FUNCTIONS}. POI's {@link FormulaTokenizer} normally surfaces a
-     * function name via {@code functionTokens} (an {@code AbstractFunctionPtg}), but for
-     * a handful of functions POI's parser doesn't have builtin metadata for in this parse
-     * context (observed for IFERROR/IFNA) it instead emits a name-lookup reference token
-     * with {@code refKind="external"} whose raw text is the bare function name — so both
-     * sources are checked here, not just functionTokens.
-     */
-    private static boolean isBarrierFormula(FormulaTokenizerResult tokRes) {
-        if (tokRes.functionTokens() != null && tokRes.functionTokens().stream()
-                .map(String::toUpperCase).anyMatch(BARRIER_FUNCTIONS::contains)) {
-            return true;
-        }
-        return tokRes.tokens() != null && tokRes.tokens().stream()
-                .anyMatch(IngestService::isFunctionNamePseudoToken);
-    }
-
-    /** True for a token that is actually a barrier function's bare name, not a real reference. */
-    private static boolean isFunctionNamePseudoToken(FormulaToken t) {
-        return "external".equals(t.refKind()) && t.targetSheetName() == null
-                && t.rawToken() != null && BARRIER_FUNCTIONS.contains(t.rawToken().toUpperCase());
-    }
-
-    private static List<FormulaToken> stripFunctionNamePseudoTokens(List<FormulaToken> tokens) {
-        if (tokens == null || tokens.isEmpty()) {
-            return tokens;
-        }
-        List<FormulaToken> cleaned = new ArrayList<>(tokens.size());
-        for (FormulaToken t : tokens) {
-            if (!isFunctionNamePseudoToken(t)) {
-                cleaned.add(t);
-            }
-        }
-        return cleaned;
-    }
-
-    private void persistRegions(WorkspaceRepository repo, long worksheetId, long parseRunId,
-            String sheetName, String fileName, Map<Long, RegionDetector.RegionCell> cellsById,
-            ParserConfig config) throws SQLException, IOException {
-        for (RegionDetector.DetectedRegion region : regionDetector.detect(sheetName, cellsById)) {
-            List<Map.Entry<Long, RegionDetector.RegionCell>> regionEntries = region.cellIds().stream()
-                    .map(id -> Map.entry(id, cellsById.get(id)))
-                    .toList();
-            List<NormalizedCell> regionCells = regionEntries.stream()
-                    .map(entry -> entry.getValue().cell())
-                    .toList();
-            RegionHeaderContext headerContext = regionHeaderAnalyzer.analyze(regionCells,
-                    new RegionHeaderAnalyzer.Bounds(region.startRow(), region.endRow(),
-                            region.startCol(), region.endCol()));
-            RegionClassification classification = new RegionClassifier(
-                    com.resurgent.tev.parser.config.RegionWeights.defaults(),
-                    config.classificationEvidenceFloor()).classify(
-                    new RegionClassifier.RegionBounds(region.startRow(), region.endRow(),
-                            region.startCol(), region.endCol()),
-                    regionEntries.stream().map(entry -> classifierCell(entry.getValue().cell())).toList(),
-                    new RegionClassifier.HeaderContext(headerContext.headerRows(),
-                            new ArrayList<>(headerContext.columnLabelsByColumn().values())));
-            long regionId = repo.insertRegion(worksheetId, parseRunId, region.key(),
-                    region.startRow(), region.endRow(), region.startCol(), region.endCol(),
-                    Jsonb.toJson(headerContext.headerRows()), classification.type().databaseValue(),
-                    classification.confidence(), classification.costHeadCode(),
-                    Jsonb.toJson(headerContext.periodAxisByColumn()), Jsonb.toJson(classification.reasons()));
-            for (long cellId : region.cellIds()) {
-                repo.updateCellRegion(cellId, regionId);
-            }
-            persistRegionLabels(repo, regionEntries, headerContext);
-            persistRegionSchema(repo, parseRunId, regionId, region, regionCells, headerContext,
-                    sheetCells(cellsById), fileName, sheetName);
-            queueClassificationReview(repo, parseRunId, regionId, region, classification);
-            persistCoherence(repo, region, cellsById);
-        }
-    }
-
-    private static RegionClassifier.RegionCell classifierCell(NormalizedCell cell) {
-        return new RegionClassifier.RegionCell(cell.rowNum(), cell.colNum(), cell.displayValue(),
-                cell.formulaText() != null && !cell.formulaText().isBlank(), cell.numericValue() != null);
-    }
-
-    private void persistRegionSchema(
-            WorkspaceRepository repo,
-            long parseRunId,
-            long regionId,
-            RegionDetector.DetectedRegion region,
-            List<NormalizedCell> regionCells,
-            RegionHeaderContext headerContext,
-            List<NormalizedCell> sheetCells,
-            String fileName,
-            String sheetName) throws SQLException, IOException {
-        RegionSchemaInferencer.Result schema = regionSchemaInferencer.infer(
-                regionCells, headerContext, sheetCells, fileName, sheetName);
-        repo.updateRegionSchema(regionId, Jsonb.toJson(schema.columns()),
-                schema.unit(), schema.unitConf(), schema.currency(), schema.currencyConf());
-        if (schema.needsReview()) {
-            Map<String, Object> detail = new LinkedHashMap<>();
-            detail.put("regionId", regionId);
-            detail.put("regionKey", region.key());
-            detail.put("unit", schema.unit());
-            detail.put("currency", schema.currency());
-            detail.put("reasons", schema.reviewReasons());
-            repo.insertReviewQueue(parseRunId, "unit_currency",
-                    "Unit/currency requires review: " + region.key(), Jsonb.toJson(detail),
-                    "Pending", false, Timestamps.now(), null,
-                    "region", region.key(), schema.unitConf());
-        }
-    }
-
-    private static List<NormalizedCell> sheetCells(Map<Long, RegionDetector.RegionCell> cellsById) {
-        List<NormalizedCell> cells = new ArrayList<>(cellsById.size());
-        for (RegionDetector.RegionCell regionCell : cellsById.values()) {
-            cells.add(regionCell.cell());
-        }
-        return cells;
-    }
-
-    private static void persistRegionLabels(WorkspaceRepository repo,
-            List<Map.Entry<Long, RegionDetector.RegionCell>> regionEntries,
-            RegionHeaderContext headerContext) throws SQLException {
-        for (Map.Entry<Long, RegionDetector.RegionCell> entry : regionEntries) {
-            NormalizedCell cell = entry.getValue().cell();
-            String rowLabel = headerContext.rowLabelsByRow().getOrDefault(cell.rowNum(), cell.rowLabel());
-            String colLabel = headerContext.columnLabelsByColumn().getOrDefault(cell.colNum(), cell.colLabel());
-            repo.updateCellLabels(entry.getKey(), rowLabel, colLabel);
-        }
-    }
-
-    private static void queueClassificationReview(WorkspaceRepository repo, long parseRunId, long regionId,
-            RegionDetector.DetectedRegion region, RegionClassification classification)
-            throws SQLException, IOException {
-        if (classification.type() != RegionType.UNKNOWN
-                && classification.confidence() >= CLASSIFICATION_REVIEW_CONFIDENCE) {
-            return;
-        }
-        Map<String, Object> detail = new LinkedHashMap<>();
-        detail.put("regionId", regionId);
-        detail.put("regionKey", region.key());
-        detail.put("regionType", classification.type().databaseValue());
-        detail.put("regionConfidence", classification.confidence());
-        detail.put("reasonCodes", classification.reasons().stream()
-                .map(reason -> reason.code().name()).toList());
-        repo.insertReviewQueue(parseRunId, "region_classification",
-                "Region classification requires review: " + region.key(), Jsonb.toJson(detail),
-                "Pending", false, Timestamps.now(), null);
-    }
-
-    private static void persistCoherence(WorkspaceRepository repo, RegionDetector.DetectedRegion region,
-            Map<Long, RegionDetector.RegionCell> cellsById) throws SQLException, IOException {
-        Map<Long, RegionDetector.RegionCell> regionCells = new LinkedHashMap<>();
-        for (long id : region.cellIds()) {
-            regionCells.put(id, cellsById.get(id));
-        }
-        for (Map.Entry<Long, RegionDetector.RegionCell> entry : regionCells.entrySet()) {
-            if (entry.getValue().formulaSkeleton() == null) {
-                continue;
-            }
-            Map<String, Double> dirs = RegionDetector.coherenceDirections(entry.getKey(), regionCells);
-            java.util.OptionalDouble average = dirs.values().stream().filter(value -> value > 0)
-                    .mapToDouble(Double::doubleValue).average();
-            Double score = average.isPresent() ? average.getAsDouble() : null;
-            repo.updateCellCoherence(entry.getKey(), score, Jsonb.toJson(dirs));
-        }
-    }
-
-    private void persistCellSemantics(WorkspaceRepository repo, long parseRunId)
-            throws SQLException, IOException {
-        List<WorkspaceRepository.CellSemanticRow> rows = repo.findSemanticCells(parseRunId);
-        List<CellSemanticClassifier.Snapshot> cells = new ArrayList<>(rows.size());
-        for (WorkspaceRepository.CellSemanticRow row : rows) {
-            cells.add(new CellSemanticClassifier.Snapshot(
-                    row.cellId(), row.regionId(), row.formula(), row.rowLabel(),
-                    row.colLabel(), row.text(), row.numeric()));
-        }
-        Map<Long, List<Long>> precedents = ReferenceGraphLoader.loadAdjacency(repo, parseRunId);
-        Map<Long, List<Long>> dependents = CellSemanticClassifier.reverse(precedents);
-        CellSemanticClassifier.Result result = new CellSemanticClassifier().classify(
-                cells, dependents, precedents);
-        for (Map.Entry<Long, CellSemanticClassifier.CellFlags> entry : result.cells().entrySet()) {
-            CellSemanticClassifier.CellFlags flags = entry.getValue();
-            repo.updateCellSemantics(entry.getKey(), new WorkspaceRepository.CellSemanticUpdate(
-                    flags.scratch(), flags.scratchReason(), flags.support(),
-                    flags.supportReason(), flags.orphan()));
-        }
-        for (long regionId : result.scratchRegions()) {
-            repo.updateSemanticRegionType(regionId, "scratch");
-        }
-        repo.insertReviewQueue(parseRunId, "semantic_accounting",
-                "Scratch/support/orphan accounting",
-                Jsonb.toJson(Map.of(
-                        "scratch", result.scratchCount(),
-                        "support", result.supportCount(),
-                        "orphan", result.orphanCount(),
-                        "promotions", result.promotions())),
-                "Pending", false, Timestamps.now(), null);
-    }
-
-    private void persistCostHeadMappings(WorkspaceRepository repo, long parseRunId,
-            long sourceFileId, long mandateId) throws SQLException, IOException {
-        CostHeadMapper mapper = new CostHeadMapper();
-        Set<String> observed = new HashSet<>();
-        for (WorkspaceRepository.RegionMappingInput region : repo.findRegionMappingInputs(parseRunId)) {
-            String carried = repo.findLatestAcceptedMappingCode(sourceFileId, region.regionKey());
-            // Keep matching against a pre-classified code when present; persist the
-            // workbook label so review shows FM wording rather than the vocabulary code.
-            String matchLabel = region.existingCode() != null && !region.existingCode().isBlank()
-                    ? region.existingCode() : region.label();
-            for (CostHeadMapper.Proposal proposal : mapper.map(
-                    matchLabel, region.regionId(), region.regionKey(), carried)) {
-                observed.add(proposal.code());
-                long costHeadId = repo.ensureCostHead(mandateId, proposal.code());
-                long mappingId = repo.insertCostHeadMapping(parseRunId, sourceFileId, costHeadId,
-                        region.regionId(), proposal.regionKey(), proposal.method(), proposal.score(),
-                        proposal.runnerUpMargin(), proposal.confidence(), proposal.reasonsJson(),
-                        region.label());
-                if (proposal.pending()) {
-                    repo.insertReviewQueue(parseRunId, "cost_head_mapping",
-                            "Cost-head mapping requires review: " + proposal.regionKey(),
-                            Jsonb.toJson(Map.of(
-                                    "mappingId", mappingId,
-                                    "regionKey", proposal.regionKey(),
-                                    "code", proposal.code(),
-                                    "method", proposal.method(),
-                                    "sourceLabel", region.label(),
-                                    "runnerUpMargin", proposal.runnerUpMargin())),
-                            "Pending", false, Timestamps.now(), null,
-                            "mapping", proposal.regionKey(), proposal.confidence());
-                }
-            }
-        }
-        List<String> unobserved = new ArrayList<>();
-        for (String code : CostHeadVocabulary.codes()) {
-            if (!observed.contains(code)) {
-                unobserved.add(code);
-            }
-        }
-        repo.insertReviewQueue(parseRunId, "unobserved_cost_heads",
-                "Locked vocabulary codes not observed in this parse",
-                Jsonb.toJson(Map.of("codes", unobserved)),
-                "Pending", false, Timestamps.now(), null);
-    }
-
-    private static QaGateResult withSemanticQa(QaGateResult qa, List<CostHeadTrust> costHeads,
-            SemanticQaStats semanticStats, Set<String> acceptedFingerprints) {
-        List<String> extra = new ArrayList<>();
-        extra.addAll(TrustQa.reportReasons(costHeads));
-        extra.addAll(SemanticQa.reasons(semanticStats, costHeads, acceptedFingerprints));
-        if (extra.isEmpty()) {
-            return qa;
-        }
-        List<String> reasons = new ArrayList<>(qa.reasons());
-        reasons.addAll(extra);
-        String status = "success".equals(qa.status()) ? "partial" : qa.status();
-        return new QaGateResult(status, qa.cellsRejected(), List.copyOf(reasons));
-    }
-
-    private List<CostHeadTrust> persistExplicitAnchors(WorkspaceRepository repo, long parseRunId,
-            long sourceFileId, String fileHash) throws SQLException, IOException {
-        List<WorkspaceRepository.RegionAnchorRow> regions = repo.findRegionAnchorRows(parseRunId);
-        if (regions.isEmpty()) {
-            return List.of();
-        }
-        Map<Long, List<ExplicitAnchorDetector.CellSnapshot>> cellsByRegion = new HashMap<>();
-        for (WorkspaceRepository.CellAnchorRow cell : repo.findRegionAnchorCells(parseRunId)) {
-            cellsByRegion.computeIfAbsent(cell.regionId(), key -> new ArrayList<>()).add(
-                    new ExplicitAnchorDetector.CellSnapshot(
-                            cell.cellId(), cell.coord(), cell.row(), cell.col(), cell.text(),
-                            cell.numeric(), cell.formula(), cell.error(), cell.errorDescendant(),
-                            cell.scratch(), cell.mergedParticipant(), cell.cacheState(),
-                            cell.numberFormat(), cell.sheetName()));
-        }
-        List<ExplicitAnchorDetector.RegionSnapshot> snapshots = new ArrayList<>();
-        Map<Long, TrustEvaluator.MappingFact> mappings = new LinkedHashMap<>();
-        for (WorkspaceRepository.RegionAnchorRow region : regions) {
-            snapshots.add(new ExplicitAnchorDetector.RegionSnapshot(
-                    region.regionId(), region.regionKey(), region.mappingId(), region.costHeadId(),
-                    region.costHeadCode(), region.schemaJson(), region.headerRowsJson(),
-                    region.unit(), region.currency(),
-                    cellsByRegion.getOrDefault(region.regionId(), List.of())));
-            mappings.put(region.regionId(), new TrustEvaluator.MappingFact(
-                    region.matchMethod(), region.mappingReasons()));
-        }
-        Map<Long, List<Long>> precedents = ReferenceGraphLoader.loadAdjacency(repo, parseRunId);
-        List<DuplicateDetector.Proposal> proposals = DuplicateDetector.detect(snapshots);
-        List<DuplicateDetector.Decision> decisions = new ArrayList<>();
-        for (WorkspaceRepository.DuplicateDecisionRow row : repo.findLatestDuplicateDecisions(sourceFileId)) {
-            decisions.add(new DuplicateDetector.Decision(
-                    row.leftRegionKey(), row.rightRegionKey(), row.decision(), row.supersededRegionKey()));
-        }
-        persistDuplicateProposals(repo, parseRunId, proposals, decisions);
-        List<ExplicitAnchorDetector.AcceptedManual> manuals = loadAcceptedManuals(repo, sourceFileId);
-        Set<String> pendingManuals = repo.findPendingManualCostHeads(sourceFileId);
-        List<ExplicitAnchorDetector.Candidate> detected = CandidateComposer.compose(
-                fileHash, explicitAnchorDetector.detect(snapshots, precedents, fileHash),
-                proposals, decisions, precedents);
-        List<CostHeadTrust> reports = new ArrayList<>();
-        Set<Long> coveredHeads = new HashSet<>();
-        for (ExplicitAnchorDetector.Candidate raw : detected) {
-            ExplicitAnchorDetector.Candidate candidate = raw.withAcceptedManuals(fileHash, manuals);
-            String acceptedFingerprint = repo.findLatestAcceptedTotalFingerprint(
-                    sourceFileId, candidate.costHeadCode());
-            TrustEvaluator.Verdict verdict = TrustEvaluator.evaluate(
-                    candidate, mappings, pendingManuals.contains(candidate.costHeadCode()),
-                    acceptedFingerprint);
-            List<String> reasons = new ArrayList<>(candidate.reasons());
-            reasons.addAll(verdict.evidence());
-            int automatic = verdict.automatic() ? 1 : 0;
-            long candidateId = repo.insertCostHeadCandidate(
-                    parseRunId, sourceFileId, candidate.costHeadId(), candidate.fingerprint(),
-                    candidate.amount(), candidate.currency(), candidate.unit(), automatic,
-                    candidate.confidence(), Jsonb.toJson(reasons));
-            for (ExplicitAnchorDetector.Contribution contribution : candidate.contributions()) {
-                boolean manual = "manual".equals(contribution.basis());
-                long contributionId = repo.insertCostHeadContribution(
-                        candidateId,
-                        manual ? null : contribution.mappingId(),
-                        manual ? 0L : contribution.regionId(),
-                        manual ? null : contribution.anchorCellId(),
-                        contribution.basis(), contribution.sourceAmount(),
-                        contribution.sourceCurrency(), contribution.sourceUnit(),
-                        contribution.normalizedAmount(), contribution.normalizedCurrency(),
-                        contribution.normalizedUnit(), contribution.confidence(),
-                        Jsonb.toJson(contribution.reasons()),
-                        manual);
-                for (ExplicitAnchorDetector.CellParticipation cell : contribution.cells()) {
-                    repo.insertCostHeadContributionCell(
-                            contributionId, cell.cellId(), cell.participation(), cell.reason());
-                }
-            }
-            String reviewStatus = "none";
-            if (candidate.review() && !verdict.automatic()) {
-                Map<String, Object> detail = new LinkedHashMap<>();
-                detail.put("candidateId", candidateId);
-                detail.put("costHeadCode", candidate.costHeadCode());
-                detail.put("fingerprint", candidate.fingerprint());
-                detail.put("amount", candidate.amount() == null ? "" : candidate.amount().toPlainString());
-                detail.put("unit", candidate.unit() == null ? "" : candidate.unit());
-                detail.put("currency", candidate.currency() == null ? "" : candidate.currency());
-                detail.put("bases", candidate.contributions().stream()
-                        .map(ExplicitAnchorDetector.Contribution::basis).toList());
-                detail.put("trustState", verdict.state());
-                detail.put("trustSource", verdict.source() == null ? "" : verdict.source());
-                long reviewQueueId = repo.insertReviewQueue(parseRunId, "cost_head_candidate",
-                        "Cost-head candidate requires review: " + candidate.costHeadCode(),
-                        Jsonb.toJson(detail),
-                        "Pending", false, Timestamps.now(), null,
-                        "candidate", candidate.costHeadCode(), candidate.confidence());
-                carryTotalDecision(repo, reviewQueueId, sourceFileId, candidate);
-                reviewStatus = acceptedFingerprint != null
-                        && acceptedFingerprint.equals(candidate.fingerprint()) ? "Accepted" : "Pending";
-            }
-            reports.add(new CostHeadTrust(
-                    candidate.costHeadCode(), verdict.state(), verdict.source(),
-                    candidate.amount(), candidate.unit(), candidate.currency(),
-                    candidate.confidence(), reasons, reviewStatus, candidate.fingerprint(),
-                    verdict.gates()));
-            coveredHeads.add(candidate.costHeadId());
-        }
-        Set<Long> queued = new HashSet<>();
-        for (WorkspaceRepository.RegionAnchorRow region : regions) {
-            if (coveredHeads.contains(region.costHeadId()) || !queued.add(region.costHeadId())) {
-                continue;
-            }
-            repo.insertReviewQueue(parseRunId, "cost_head_candidate",
-                    "Mapped cost head has no candidate: " + region.costHeadCode(),
-                    Jsonb.toJson(Map.of(
-                            "costHeadCode", region.costHeadCode(),
-                            "blocker", "NO_CANDIDATE",
-                            "regionKey", region.regionKey())),
-                    "Pending", false, Timestamps.now(), null,
-                    "candidate", region.costHeadCode(), 0.0);
-        }
-        return reports;
-    }
-
-    private static void persistDuplicateProposals(
-            WorkspaceRepository repo,
-            long parseRunId,
-            List<DuplicateDetector.Proposal> proposals,
-            List<DuplicateDetector.Decision> decisions) throws SQLException, IOException {
-        for (DuplicateDetector.Proposal proposal : proposals) {
-            long proposalId = repo.insertDuplicateProposal(
-                    parseRunId, proposal.leftRegionId(), proposal.rightRegionId(),
-                    proposal.method(), proposal.score(), Jsonb.toJson(proposal.reasons()));
-            DuplicateDetector.Decision decision = DuplicateDetector.Decision.latest(
-                    decisions, proposal.leftRegionKey(), proposal.rightRegionKey());
-            if (decision != null && ("Distinct".equals(decision.decision())
-                    || "Duplicate".equals(decision.decision()))) {
-                continue;
-            }
-            Map<String, Object> detail = new LinkedHashMap<>();
-            detail.put("proposalId", proposalId);
-            detail.put("leftRegionId", proposal.leftRegionId());
-            detail.put("rightRegionId", proposal.rightRegionId());
-            detail.put("leftRegionKey", proposal.leftRegionKey());
-            detail.put("rightRegionKey", proposal.rightRegionKey());
-            detail.put("method", proposal.method());
-            detail.put("score", proposal.score());
-            repo.insertReviewQueue(parseRunId, "duplicate",
-                    "Possible duplicate regions: " + proposal.leftRegionKey()
-                            + " / " + proposal.rightRegionKey(),
-                    Jsonb.toJson(detail),
-                    "Pending", false, Timestamps.now(), null,
-                    "duplicate", proposal.leftRegionKey() + "|" + proposal.rightRegionKey(),
-                    proposal.score());
-        }
-    }
-
-    private List<WorksheetRoleScorer.Score> persistWorksheetRoles(WorkspaceRepository repo, long parseRunId)
-            throws SQLException, IOException {
-        List<WorksheetRoleScorer.Score> scores = new WorksheetRoleScorer().score(repo, parseRunId);
-        for (WorksheetRoleScorer.Score score : scores) {
-            repo.updateWorksheetRole(score.worksheetId(), score.role(), score.confidence(),
-                    Jsonb.toJson(score.reasons()));
-        }
-        return scores;
-    }
-
-    private static List<ExplicitAnchorDetector.AcceptedManual> loadAcceptedManuals(
-            WorkspaceRepository repo, long sourceFileId) throws SQLException {
-        List<ExplicitAnchorDetector.AcceptedManual> manuals = new ArrayList<>();
-        for (WorkspaceRepository.AcceptedManualRow row : repo.findAcceptedManuals(sourceFileId)) {
-            manuals.add(new ExplicitAnchorDetector.AcceptedManual(
-                    row.id(), row.costHeadCode(), row.amount(), row.unit(), row.currency(),
-                    row.adjustsKey()));
-        }
-        return manuals;
-    }
-
-    private static void carryTotalDecision(WorkspaceRepository repo, long reviewQueueId,
-            long sourceFileId, ExplicitAnchorDetector.Candidate candidate) throws SQLException {
-        Long decisionId = repo.findLatestAcceptedTotalDecisionId(
-                sourceFileId, candidate.costHeadCode(), candidate.fingerprint());
-        if (decisionId != null) {
-            repo.carryReviewQueue(reviewQueueId, decisionId, "Accepted");
-        }
     }
 
     private static void recordCellProvenance(WorkspaceRepository repo, long cellId,
@@ -907,29 +297,12 @@ public final class IngestService {
         };
     }
 
-    private record PendingCellTokens(long cellId, long worksheetId, List<FormulaToken> tokens) {}
-
     private static int coercedCount(List<NormalizedCell> cells) {
         return (int) cells.stream().filter(NormalizedCell::coercedFromText).count();
     }
 
     private static int errorCount(List<NormalizedCell> cells) {
         return (int) cells.stream().filter(NormalizedCell::isError).count();
-    }
-
-    private Set<String> collectReferencedDefinedNames(List<XlsxSheet> sheets, Collection<String> definedNames) {
-        Set<String> referenced = new HashSet<>();
-        for (XlsxSheet sheet : sheets) {
-            for (NormalizedCell cell : sheet.cells()) {
-                if (cell.formulaText() != null && !cell.formulaText().isBlank()) {
-                    FormulaReferences refs = FormulaReferenceExtractor.extract(cell.formulaText(), definedNames);
-                    if (refs.definedNameRefs() != null) {
-                        referenced.addAll(refs.definedNameRefs());
-                    }
-                }
-            }
-        }
-        return referenced;
     }
 
     private static NormalizedCell csvCell(int rowNum, int colNum, String field) {
@@ -995,7 +368,6 @@ public final class IngestService {
         return sheet.cells().stream().mapToInt(NormalizedCell::rowNum).max().orElse(0);
     }
 
-    /** A1-style coordinate: 1-based row and column. */
     private static String coord(int rowNum, int colNum) {
         StringBuilder col = new StringBuilder();
         int c = colNum;

@@ -19,7 +19,6 @@ class ParserConfigTest {
         assertThat(config.xlsEnabled()).isFalse();
         assertThat(config.rejectPasswordProtected()).isTrue();
         assertThat(config.rejectActiveXOleDde()).isTrue();
-        assertThat(config.classificationEvidenceFloor()).isEqualTo(3);
     }
 
     @Test
@@ -42,27 +41,13 @@ class ParserConfigTest {
                 defaults.maxZipExpansionRatio(),
                 defaults.xlsEnabled(),
                 defaults.rejectPasswordProtected(),
-                defaults.rejectActiveXOleDde(),
-                defaults.classificationEvidenceFloor());
+                defaults.rejectActiveXOleDde());
 
         assertThat(larger.configHash()).isNotEqualTo(defaults.configHash());
     }
 
     @Test
-    void configHashIncludesVersionedRegionWeights() {
-        assertThat(RegionWeights.defaults().contentHash()).hasSize(64);
+    void configHashIsSha256Hex() {
         assertThat(ParserConfig.embeddedDefaults().configHash()).hasSize(64);
-    }
-
-    @Test
-    void configHashChangesWhenClassificationFloorChanges() {
-        ParserConfig defaults = ParserConfig.embeddedDefaults();
-        ParserConfig stricter = new ParserConfig(defaults.maxFileSizeBytes(), defaults.maxSheetCount(),
-                defaults.maxRowCount(), defaults.maxColumnCount(), defaults.maxCellCount(),
-                defaults.maxZipExpansionRatio(), defaults.xlsEnabled(), defaults.rejectPasswordProtected(),
-                defaults.rejectActiveXOleDde(),
-                defaults.classificationEvidenceFloor() + 1);
-
-        assertThat(stricter.configHash()).isNotEqualTo(defaults.configHash());
     }
 }

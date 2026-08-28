@@ -24,11 +24,10 @@ class ConfigLoaderTest {
 
     @Test
     void validOverride_applies() throws IOException {
-        ParserConfig config = ConfigLoader.load("{\"maxFileSizeBytes\": 52428800, \"classificationEvidenceFloor\": 5}");
+        ParserConfig config = ConfigLoader.load("{\"maxFileSizeBytes\": 52428800}");
 
         assertThat(config.maxFileSizeBytes()).isEqualTo(52_428_800L);
         assertThat(config.maxSheetCount()).isEqualTo(ParserConfig.embeddedDefaults().maxSheetCount());
-        assertThat(config.classificationEvidenceFloor()).isEqualTo(5);
     }
 
     @Test
@@ -61,9 +60,9 @@ class ConfigLoaderTest {
     }
 
     @Test
-    void nonPositiveClassificationEvidenceFloor_rejected() {
-        assertThatThrownBy(() -> ConfigLoader.load("{\"classificationEvidenceFloor\": 0}"))
+    void removedSemanticConfigKey_rejected() {
+        assertThatThrownBy(() -> ConfigLoader.load("{\"classificationEvidenceFloor\": 3}"))
                 .isInstanceOf(ConfigValidationException.class)
-                .hasMessageContaining("classificationEvidenceFloor must be positive");
+                .hasMessageContaining("unknown config key: classificationEvidenceFloor");
     }
 }

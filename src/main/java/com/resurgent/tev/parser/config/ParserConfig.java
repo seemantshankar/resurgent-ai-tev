@@ -9,10 +9,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
-import java.util.Map;
 
 /**
- * Effective parser configuration. Instances are immutable and carry a deterministic
+ * Effective FM Loader configuration. Instances are immutable and carry a deterministic
  * hash that changes when any effective value changes.
  */
 public record ParserConfig(
@@ -24,8 +23,7 @@ public record ParserConfig(
         int maxZipExpansionRatio,
         boolean xlsEnabled,
         boolean rejectPasswordProtected,
-        boolean rejectActiveXOleDde,
-        int classificationEvidenceFloor) {
+        boolean rejectActiveXOleDde) {
 
     /** Embedded defaults used when no --config file is supplied. */
     public static ParserConfig embeddedDefaults() {
@@ -38,8 +36,7 @@ public record ParserConfig(
                 100,                   // expansion ratio (compressed bytes -> unpacked bytes)
                 false,                 // xls adapter disabled by default
                 true,                  // reject password-protected files
-                true,                  // reject ActiveX/OLE/DDE payloads
-                3);                    // minimum classification evidence
+                true);                 // reject ActiveX/OLE/DDE payloads
     }
 
     /** Hard ceilings that user values may not exceed. */
@@ -56,15 +53,10 @@ public record ParserConfig(
 
     /**
      * Deterministic SHA-256 hash of the canonical JSON representation of this config.
-     * The JSON is produced with alphabetically sorted keys and no pretty-printing so
-     * identical effective configs yield identical hashes.
      */
     public String configHash() {
         try {
-            // The weights are intentionally outside this positional record, but still part of
-            // the run identity: changing the resource must not reuse an old parse run.
-            String canonical = CANONICAL_MAPPER.writeValueAsString(Map.of(
-                    "config", this, "regionWeightsHash", RegionWeights.defaults().contentHash()));
+            String canonical = CANONICAL_MAPPER.writeValueAsString(this);
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             return HexFormat.of().formatHex(digest.digest(canonical.getBytes(StandardCharsets.UTF_8)));
         } catch (JsonProcessingException e) {
