@@ -39,9 +39,8 @@ import org.apache.poi.ss.util.CellRangeAddress;
  * <p><strong>Formula contract.</strong> HSSF exposes most formula text through
  * {@link Cell#getCellFormula()}, but some records cannot be decoded back to a
  * formula string. When the formula text is unavailable, the cell is still typed
- * as {@code raw_type='formula'} but {@code formula_text} is {@code null},
- * {@code formula_normalized} is {@code null}, and {@code formula_state} is
- * {@code 'unavailable'}. The cached value, when present, is preserved; the
+ * as {@code raw_type='formula'} but {@code formula_text} is {@code null} and
+ * {@code formula_state} is {@code 'unavailable'}. The cached value, when present, is preserved; the
  * adapter never invents or guesses formula text.
  */
 public final class XlsAdapter {
@@ -184,7 +183,7 @@ public final class XlsAdapter {
                     }
                     boolean colHidden = sheet.isColumnHidden(cell.getColumnIndex());
                     NormalizedCell normalized = normalizeCell(cell, rowHidden, colHidden,
-                            sheetHidden, cacheFresh, definedNames);
+                            sheetHidden, cacheFresh);
                     if (normalized != null) {
                         baseCells.add(normalized);
                         baseByCoord.put(normalized.coord(), normalized);
@@ -240,32 +239,25 @@ public final class XlsAdapter {
     }
 
     private static NormalizedCell normalizeCell(Cell cell, boolean rowHidden, boolean colHidden,
-            boolean sheetHidden, boolean cacheFresh, Map<String, String> definedNames) {
+            boolean sheetHidden, boolean cacheFresh) {
         int rowNum = cell.getRowIndex() + 1;
         int colNum = cell.getColumnIndex() + 1;
         String coord = CellGeometry.coord(cell.getRowIndex(), cell.getColumnIndex());
-        CellPresentation presentation = CellPresentationExtractor.extract(cell);
 
-        if (CellPresentationExtractor.shouldPersistStyledBlank(cell)) {
-            return NormalizedCellFactory.buildStyledBlankCell(coord, rowNum, colNum, rowHidden,
-                    colHidden, sheetHidden, presentation);
-        }
-        if (CellPresentationExtractor.isBlankContent(cell)) {
+        if (cell.getCellType() != CellType.FORMULA && CellGeometry.isBlankContent(cell)) {
             return null;
         }
 
         CellType type = cell.getCellType();
         if (type == CellType.FORMULA) {
             String formulaText = readFormulaText(cell);
-            NormalizedCell normalized = FormulaCellNormalizer.normalizeFormulaCell(formulaText, cell,
+            return FormulaCellNormalizer.normalizeFormulaCell(formulaText, cell,
                     coord, rowNum, colNum, rowHidden, colHidden, sheetHidden,
-                    cacheFresh, definedNames, true);
-            return normalized == null ? null : presentation.apply(normalized);
+                    cacheFresh, true);
         }
 
-        NormalizedCell normalized = LiteralCellNormalizer.normalizeLiteralCell(cell, coord, rowNum, colNum,
+        return LiteralCellNormalizer.normalizeLiteralCell(cell, coord, rowNum, colNum,
                 rowHidden, colHidden, sheetHidden);
-        return normalized == null ? null : presentation.apply(normalized);
     }
 
     /**

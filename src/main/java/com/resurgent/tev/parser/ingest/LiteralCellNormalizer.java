@@ -16,13 +16,10 @@ final class LiteralCellNormalizer {
 
     static NormalizedCell normalizeLiteralCell(Cell cell, String coord,
             int rowNum, int colNum, boolean rowHidden, boolean colHidden, boolean sheetHidden) {
-        if (cell == null) {
+        if (cell == null || CellGeometry.isBlankContent(cell)) {
             return null;
         }
         CellType type = cell.getCellType();
-        if (type == CellType.BLANK) {
-            return null;
-        }
 
         String rawValue;
         CellValue value;
@@ -54,7 +51,7 @@ final class LiteralCellNormalizer {
         }
 
         return NormalizedCellFactory.buildCell(coord, rowNum, colNum, rawValue, value,
-                null, null, null, null, null,
+                null, null, null, null,
                 rowHidden, colHidden, sheetHidden);
     }
 
@@ -66,6 +63,6 @@ final class LiteralCellNormalizer {
         return new CellValue(
                 "number", "number", rawValue, rawValue,
                 new java.math.BigDecimal(rawValue), null, null,
-                false, null, false, null);
+                false, false, null);
     }
 }

@@ -11,7 +11,7 @@
 
 ## Phase 1 (current scope)
 
-- **FM Loader only**: file adapters (xlsx / xls / csv), safety limits, SQLite persistence, ingest QA (cell count reconciliation).
+- **FM Loader only**: file adapters (xlsx / xls / csv), safety limits, SQLite persistence, ingest QA (cell count reconciliation). Cell contract: coord, typed values, formula text + cached value, merges, hidden flags — no styles, quantity parsing, or formula normalization.
 
 ## Planned (not in repo yet)
 

@@ -1,18 +1,15 @@
 package com.resurgent.tev.parser.ingest;
 
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.util.CellAddress;
 import org.apache.poi.ss.util.CellRangeAddress;
-import org.apache.poi.ss.util.CellReference;
 
 /**
  * Computes the real worksheet bounding box from occupied cells, merged regions,
- * comment addresses, and same-sheet formula precedents. Shared by the XLSX and
- * XLS adapters.
+ * and comment addresses. Shared by the XLSX and XLS adapters.
  */
 final class SheetBbox {
 
@@ -26,9 +23,6 @@ final class SheetBbox {
         Integer maxRow = null;
         Integer maxCol = null;
         for (NormalizedCell cell : baseCells) {
-            if (cell.isPresentationOnlyEmpty()) {
-                continue;
-            }
             minRow = min(minRow, cell.rowNum());
             minCol = min(minCol, cell.colNum());
             maxRow = max(maxRow, cell.rowNum());
@@ -46,36 +40,17 @@ final class SheetBbox {
             maxRow = max(maxRow, address.getRow() + 1);
             maxCol = max(maxCol, address.getColumn() + 1);
         }
-        for (CellReference ref : sameSheetPrecedents(sheet.getSheetName(), baseCells)) {
-            minRow = min(minRow, ref.getRow() + 1);
-            minCol = min(minCol, ref.getCol() + 1);
-            maxRow = max(maxRow, ref.getRow() + 1);
-            maxCol = max(maxCol, ref.getCol() + 1);
-        }
         return new Bbox(minRow, minCol, maxRow, maxCol);
     }
 
     static int countContentRows(List<NormalizedCell> cells) {
         Set<Integer> rows = new HashSet<>();
         for (NormalizedCell cell : cells) {
-            if ("cell".equals(cell.valueSource()) && !cell.isPresentationOnlyEmpty()) {
+            if ("cell".equals(cell.valueSource())) {
                 rows.add(cell.rowNum());
             }
         }
         return rows.size();
-    }
-
-    private static List<CellReference> sameSheetPrecedents(String sheetName,
-            List<NormalizedCell> baseCells) {
-        List<CellReference> refs = new ArrayList<>();
-        for (NormalizedCell cell : baseCells) {
-            if (cell.formulaText() == null || cell.formulaText().isBlank()) {
-                continue;
-            }
-            refs.addAll(FormulaReferenceExtractor.extractLocalRefs(
-                    cell.formulaText(), sheetName));
-        }
-        return refs;
     }
 
     private static Integer min(Integer current, int candidate) {
