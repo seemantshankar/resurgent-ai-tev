@@ -322,12 +322,9 @@ public final class IngestService {
                 null,
                 null,
                 null,
-                null,
                 value.coercedFromText(),
-                value.parsedQuantity(),
                 value.isError(),
                 value.errorType(),
-                null, null,
                 false, false, null, "cell", false, false, false);
     }
 

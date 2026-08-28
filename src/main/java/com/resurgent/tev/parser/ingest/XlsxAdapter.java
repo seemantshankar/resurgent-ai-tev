@@ -237,7 +237,7 @@ public final class XlsxAdapter {
                             : valueRow.getCell(formulaCell.getColumnIndex());
                     boolean colHidden = formulaSheet.isColumnHidden(formulaCell.getColumnIndex());
                     NormalizedCell normalized = normalizeCell(formulaCell, valueCell,
-                            rowHidden, colHidden, sheetHidden, cacheFresh, definedNames);
+                            rowHidden, colHidden, sheetHidden, cacheFresh);
                     if (normalized != null) {
                         baseCells.add(normalized);
                         baseByCoord.put(normalized.coord(), normalized);
@@ -300,34 +300,25 @@ public final class XlsxAdapter {
 
     private static NormalizedCell normalizeCell(Cell formulaCell, Cell valueCell,
             boolean rowHidden, boolean colHidden, boolean sheetHidden,
-            boolean cacheFresh, Map<String, String> definedNames) {
+            boolean cacheFresh) {
         int rowNum = formulaCell.getRowIndex() + 1;
         int colNum = formulaCell.getColumnIndex() + 1;
         String coord = CellGeometry.coord(formulaCell.getRowIndex(), formulaCell.getColumnIndex());
 
         CellType formulaType = formulaCell.getCellType();
-        CellPresentation presentation = CellPresentationExtractor.extract(formulaCell);
-        if (CellPresentationExtractor.shouldPersistStyledBlank(formulaCell)) {
-            return NormalizedCellFactory.buildStyledBlankCell(coord, rowNum, colNum, rowHidden,
-                    colHidden, sheetHidden, presentation);
-        }
-        if (CellPresentationExtractor.isBlankContent(formulaCell)) {
+        if (formulaType != CellType.FORMULA && CellGeometry.isBlankContent(formulaCell)) {
             return null;
         }
-
-        NormalizedCell normalized;
 
         if (formulaType == CellType.FORMULA) {
             boolean hasCachedValue = valueCell instanceof XSSFCell xssfCell
                     && xssfCell.getCTCell().isSetV();
-            normalized = FormulaCellNormalizer.normalizeFormulaCell(formulaCell.getCellFormula(), valueCell,
+            return FormulaCellNormalizer.normalizeFormulaCell(formulaCell.getCellFormula(), valueCell,
                     coord, rowNum, colNum, rowHidden, colHidden, sheetHidden,
-                    cacheFresh, definedNames, hasCachedValue);
-        } else {
-            normalized = LiteralCellNormalizer.normalizeLiteralCell(valueCell, coord, rowNum, colNum,
-                    rowHidden, colHidden, sheetHidden);
+                    cacheFresh, hasCachedValue);
         }
-        return normalized == null ? null : presentation.apply(normalized);
+        return LiteralCellNormalizer.normalizeLiteralCell(valueCell, coord, rowNum, colNum,
+                rowHidden, colHidden, sheetHidden);
     }
 
     private static String dimensionsDeclared(Sheet formulaSheet) {

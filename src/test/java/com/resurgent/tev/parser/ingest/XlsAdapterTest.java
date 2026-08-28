@@ -301,7 +301,6 @@ class XlsAdapterTest {
             NormalizedCell b1Out = cells.get("B1");
             assertThat(b1Out.rawType()).isEqualTo("formula");
             assertThat(b1Out.formulaText()).isEqualTo("A1*2");
-            assertThat(b1Out.formulaNormalized()).isEqualTo("A1*2");
             assertThat(b1Out.formulaState()).isEqualTo("ok");
             assertThat(b1Out.cachedValue()).isEqualTo("10.0");
             assertThat(b1Out.cacheState()).isEqualTo("fresh");
@@ -319,7 +318,6 @@ class XlsAdapterTest {
         NormalizedCell a1 = cells.get("A1");
         assertThat(a1.rawType()).isEqualTo("formula");
         assertThat(a1.formulaText()).isNull();
-        assertThat(a1.formulaNormalized()).isNull();
         assertThat(a1.formulaState()).isEqualTo("unavailable");
         assertThat(a1.cachedValue()).isEqualTo("2.0");
         assertThat(a1.cacheState()).isEqualTo("fresh");
@@ -356,7 +354,7 @@ class XlsAdapterTest {
     }
 
     @Test
-    void quantityTextProducesParsedJson() throws Exception {
+    void quantityLikeTextIsStoredAsPlainText() throws Exception {
         try (HSSFWorkbook workbook = new HSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Qty");
             Row row = sheet.createRow(0);
@@ -365,23 +363,12 @@ class XlsAdapterTest {
             row.createCell(2).setCellValue("L S");
 
             Path xls = writeWorkbook(workbook, "qty.xls");
-            List<XlsxSheet> sheets = new XlsAdapter().parse(xls);
-            Map<String, NormalizedCell> cells = cellsByCoord(sheets);
+            Map<String, NormalizedCell> cells = cellsByCoord(new XlsAdapter().parse(xls));
 
-            NormalizedCell a1 = cells.get("A1");
-            assertThat(a1.valueType()).isEqualTo("quantity_text");
-            assertThat(a1.parsedQuantity().count()).isEqualByComparingTo("1");
-            assertThat(a1.parsedQuantity().unit()).isEqualTo("Set");
-
-            NormalizedCell b1 = cells.get("B1");
-            assertThat(b1.valueType()).isEqualTo("quantity_text");
-            assertThat(b1.parsedQuantity().count()).isEqualByComparingTo("200");
-            assertThat(b1.parsedQuantity().unit()).isEqualTo("PC");
-
-            NormalizedCell c1 = cells.get("C1");
-            assertThat(c1.valueType()).isEqualTo("quantity_text");
-            assertThat(c1.parsedQuantity().count()).isNull();
-            assertThat(c1.parsedQuantity().unit()).isEqualTo("L S");
+            assertThat(cells.get("A1").valueType()).isEqualTo("text");
+            assertThat(cells.get("A1").textValue()).isEqualTo("1Set");
+            assertThat(cells.get("B1").textValue()).isEqualTo("200 PC");
+            assertThat(cells.get("C1").textValue()).isEqualTo("L S");
         }
     }
 
@@ -470,7 +457,7 @@ class XlsAdapterTest {
     }
 
     @Test
-    void whitespaceOnlyStringWithPresentationIsStoredAsStyledBlank() throws Exception {
+    void whitespaceOnlyStringWithPresentationIsNotStored() throws Exception {
         try (HSSFWorkbook workbook = new HSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("StyledBlank");
             CellStyle style = workbook.createCellStyle();
@@ -489,14 +476,7 @@ class XlsAdapterTest {
             Path xls = writeWorkbook(workbook, "styled-blank.xls");
             Map<String, NormalizedCell> cells = cellsByCoord(new XlsAdapter().parse(xls));
 
-            assertThat(cells).containsOnlyKeys("A1");
-            NormalizedCell a1 = cells.get("A1");
-            assertThat(a1.rawValue()).isNull();
-            assertThat(a1.rawType()).isEqualTo("empty");
-            assertThat(a1.valueType()).isEqualTo("empty");
-            assertThat(a1.isBold()).isTrue();
-            assertThat(a1.hasFill()).isTrue();
-            assertThat(a1.tagsJson()).contains("fillForegroundColorIndex");
+            assertThat(cells).isEmpty();
         }
     }
 

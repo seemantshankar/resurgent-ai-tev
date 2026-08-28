@@ -196,7 +196,7 @@ class XlsxAdapterTest {
     }
 
     @Test
-    void formulaNormalizationPreservesStringLiteralSpacing() throws Exception {
+    void formulaTextIsPreservedVerbatim() throws Exception {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Formulas");
             Row row = sheet.createRow(0);
@@ -208,15 +208,9 @@ class XlsxAdapterTest {
             List<XlsxSheet> sheets = new XlsxAdapter().parse(xlsx);
             Map<String, NormalizedCell> cells = cellsByCoord(sheets);
 
-            NormalizedCell a1 = cells.get("A1");
-            assertThat(a1.formulaText()).isEqualTo("\"A  B\"  &  C1");
-            assertThat(a1.formulaNormalized()).isEqualTo("\"A  B\" & C1");
-
-            NormalizedCell b1 = cells.get("B1");
-            assertThat(b1.formulaNormalized()).isEqualTo("SUM( A1, B1 )");
-
-            NormalizedCell c1 = cells.get("C1");
-            assertThat(c1.formulaNormalized()).isEqualTo("'My  Sheet'!A1 + B1");
+            assertThat(cells.get("A1").formulaText()).isEqualTo("\"A  B\"  &  C1");
+            assertThat(cells.get("B1").formulaText()).isEqualTo("SUM(  A1,  B1 )");
+            assertThat(cells.get("C1").formulaText()).isEqualTo("'My  Sheet'!A1 + B1");
         }
     }
 
@@ -249,7 +243,7 @@ class XlsxAdapterTest {
     }
 
     @Test
-    void quantityTextProducesParsedJson() throws Exception {
+    void quantityLikeTextIsStoredAsPlainText() throws Exception {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Qty");
             Row row = sheet.createRow(0);
@@ -261,20 +255,10 @@ class XlsxAdapterTest {
             List<XlsxSheet> sheets = new XlsxAdapter().parse(xlsx);
             Map<String, NormalizedCell> cells = cellsByCoord(sheets);
 
-            NormalizedCell a1 = cells.get("A1");
-            assertThat(a1.valueType()).isEqualTo("quantity_text");
-            assertThat(a1.parsedQuantity().count()).isEqualByComparingTo("1");
-            assertThat(a1.parsedQuantity().unit()).isEqualTo("Set");
-
-            NormalizedCell b1 = cells.get("B1");
-            assertThat(b1.valueType()).isEqualTo("quantity_text");
-            assertThat(b1.parsedQuantity().count()).isEqualByComparingTo("200");
-            assertThat(b1.parsedQuantity().unit()).isEqualTo("PC");
-
-            NormalizedCell c1 = cells.get("C1");
-            assertThat(c1.valueType()).isEqualTo("quantity_text");
-            assertThat(c1.parsedQuantity().count()).isNull();
-            assertThat(c1.parsedQuantity().unit()).isEqualTo("L S");
+            assertThat(cells.get("A1").valueType()).isEqualTo("text");
+            assertThat(cells.get("A1").textValue()).isEqualTo("1Set");
+            assertThat(cells.get("B1").textValue()).isEqualTo("200 PC");
+            assertThat(cells.get("C1").textValue()).isEqualTo("L S");
         }
     }
 
@@ -344,7 +328,7 @@ class XlsxAdapterTest {
     }
 
     @Test
-    void styledTitleCapturesCellStyleAtTheAdapterOutput() throws Exception {
+    void styledTitleStoresCellValueWithoutStyleMetadata() throws Exception {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Model");
             Cell title = sheet.createRow(0).createCell(0);
@@ -359,14 +343,10 @@ class XlsxAdapterTest {
             style.setFont(font);
             title.setCellStyle(style);
 
-            Map<String, NormalizedCell> cells = cellsByCoord(
-                    new XlsxAdapter().parse(writeWorkbook(workbook, "styled-title.xlsx")));
-
-            NormalizedCell a1 = cells.get("A1");
-            assertThat(a1.isBold()).isTrue();
-            assertThat(a1.hasFill()).isTrue();
-            assertThat(a1.hasBorder()).isTrue();
-            assertThat(a1.numberFormat()).isEqualTo("$#,##0.00");
+            NormalizedCell a1 = cellsByCoord(
+                    new XlsxAdapter().parse(writeWorkbook(workbook, "styled-title.xlsx"))).get("A1");
+            assertThat(a1.textValue()).isEqualTo("Project cost summary");
+            assertThat(a1.valueType()).isEqualTo("text");
         }
     }
 

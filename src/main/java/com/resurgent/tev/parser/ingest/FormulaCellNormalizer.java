@@ -18,14 +18,11 @@ final class FormulaCellNormalizer {
     static NormalizedCell normalizeFormulaCell(String formulaText, Cell valueCell,
             String coord, int rowNum, int colNum,
             boolean rowHidden, boolean colHidden, boolean sheetHidden,
-            boolean cacheFresh, java.util.Map<String, String> definedNames,
-            boolean hasCachedValue) {
+            boolean cacheFresh, boolean hasCachedValue) {
         if (formulaText == null) {
             return normalizeUnavailableFormula(valueCell, coord, rowNum, colNum,
                     rowHidden, colHidden, sheetHidden, cacheFresh, hasCachedValue);
         }
-
-        String formulaNormalized = FormulaNormalizer.normalize(formulaText);
 
         CachedResult cachedResult = readCachedValue(valueCell, cacheFresh, hasCachedValue);
         CellValue cached = cachedResult.value();
@@ -37,11 +34,10 @@ final class FormulaCellNormalizer {
                 "formula", valueType,
                 cached.textValue(), cached.displayValue(),
                 cached.numericValue(), cached.boolValue(), cached.dateValue(),
-                cached.coercedFromText(), cached.parsedQuantity(),
-                cached.isError(), cached.errorType());
+                cached.coercedFromText(), cached.isError(), cached.errorType());
 
         return NormalizedCellFactory.buildCell(coord, rowNum, colNum, "=" + formulaText, value,
-                formulaText, formulaNormalized, "ok", cachedValue, cacheState,
+                formulaText, "ok", cachedValue, cacheState,
                 rowHidden, colHidden, sheetHidden);
     }
 
@@ -59,11 +55,10 @@ final class FormulaCellNormalizer {
                 "formula", valueType,
                 cached.textValue(), cached.displayValue(),
                 cached.numericValue(), cached.boolValue(), cached.dateValue(),
-                cached.coercedFromText(), cached.parsedQuantity(),
-                cached.isError(), cached.errorType());
+                cached.coercedFromText(), cached.isError(), cached.errorType());
 
         return NormalizedCellFactory.buildCell(coord, rowNum, colNum, null, value,
-                null, null, "unavailable", cachedValue, cacheState,
+                null, "unavailable", cachedValue, cacheState,
                 rowHidden, colHidden, sheetHidden);
     }
 

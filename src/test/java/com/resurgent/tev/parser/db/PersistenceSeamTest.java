@@ -103,10 +103,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(13);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(14);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(13);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(14);
         }
     }
 
@@ -207,10 +207,10 @@ class PersistenceSeamTest {
     }
 
     @Test
-    void cellHeaderLabelsRoundTrip() throws Exception {
-        try (WorkspaceDatabase db = openDb("labels.db")) {
+    void cellValuesRoundTrip() throws Exception {
+        try (WorkspaceDatabase db = openDb("values.db")) {
             WorkspaceRepository repo = new WorkspaceRepository(db.connection());
-            long sourceFileId = repo.insertSourceFile(1L, "labels.xlsx", "hash", "fm_xlsx",
+            long sourceFileId = repo.insertSourceFile(1L, "values.xlsx", "hash", "fm_xlsx",
                     Timestamps.now(), "0.1.0", null);
             long parseRunId = repo.insertParseRun(sourceFileId, 1L, "0.1.0", "cfg",
                     Timestamps.now(), Timestamps.now(), "success", null);
@@ -218,21 +218,18 @@ class PersistenceSeamTest {
 
             NormalizedCell cell = new NormalizedCell(
                     "B2", 2, 2,
-                    "100",
-                    "number", "number",
-                    "100", "100",
+                    "100", "number", "number", "100", "100",
                     java.math.BigDecimal.valueOf(100), null, null,
-                    null, null, null, null, null,
-                    false, null, false, null,
-                    "Revenue", "Year1",
+                    null, null, null, null, false,
+                    false, null,
                     false, false, null, "cell", false, false, false);
             repo.insertCell(worksheetId, cell);
 
             try (ResultSet rs = db.connection().createStatement().executeQuery(
-                    "SELECT row_label, col_label FROM cell WHERE coord = 'B2'")) {
+                    "SELECT numeric_value, formula_text FROM cell WHERE coord = 'B2'")) {
                 assertThat(rs.next()).isTrue();
-                assertThat(rs.getString("row_label")).isEqualTo("Revenue");
-                assertThat(rs.getString("col_label")).isEqualTo("Year1");
+                assertThat(rs.getBigDecimal("numeric_value")).isEqualByComparingTo("100");
+                assertThat(rs.getString("formula_text")).isNull();
             }
         }
     }
@@ -289,8 +286,8 @@ class PersistenceSeamTest {
                 NormalizedCell goodCell = new NormalizedCell(
                         "A1", 1, 1, "1", "number", "number", "1", "1",
                         java.math.BigDecimal.ONE, null, null,
-                        null, null, null, null, null,
-                        false, null, false, null, null, null,
+                        null, null, null, null, false,
+                        false, null,
                         false, false, null, "cell", false, false, false);
                 repo.insertCell(worksheetId, goodCell);
 
@@ -322,7 +319,7 @@ class PersistenceSeamTest {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(13);
+            assertThat(count(c, "schema_migration")).isEqualTo(14);
             assertThat(tableNames(c)).doesNotContain("cell_reference", "cell_error_root");
 
             long sourceFileId = repo.insertSourceFile(1L, "v8.xlsx", "hash8", "fm_xlsx",
@@ -336,8 +333,8 @@ class PersistenceSeamTest {
             NormalizedCell cell = new NormalizedCell(
                     "A1", 1, 1, "100", "number", "number", "100", "100",
                     new java.math.BigDecimal("100"), null, null,
-                    null, null, null, null, null,
-                    false, null, false, null, null, null,
+                    null, null, null, null, false,
+                    false, null,
                     false, false, null, "cell", false, false, false);
             assertThat(repo.insertCell(worksheetId, cell)).isGreaterThan(0L);
 
@@ -366,29 +363,21 @@ class PersistenceSeamTest {
     }
 
     @Test
-    void v13MigrationDropsSemanticTablesAndColumns() throws Exception {
-        try (WorkspaceDatabase db = openDb("v13.db")) {
+    void v14MigrationUsesLeanCellContract() throws Exception {
+        try (WorkspaceDatabase db = openDb("v14.db")) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(13);
+            assertThat(count(c, "schema_migration")).isEqualTo(14);
             assertThat(tableNames(c)).doesNotContain(
                     "region",
                     "cost_head",
-                    "cost_head_mapping",
-                    "cost_head_candidate",
-                    "cost_head_contribution",
-                    "cost_head_contribution_cell",
-                    "duplicate_proposal",
-                    "duplicate_decision",
-                    "manual_contribution",
-                    "cost_head_mapping_decision",
-                    "cost_head_total_decision",
                     "cell_reference",
                     "cell_error_root");
             assertThat(columnNames(c, "cell")).contains(
-                    "is_bold", "has_fill", "has_border", "number_format", "tags");
+                    "formula_text", "formula_state", "cached_value", "is_merged_anchor");
             assertThat(columnNames(c, "cell")).doesNotContain(
-                    "region_id", "formula_skeleton", "formula_skeleton_regional",
-                    "is_error_barrier", "is_support", "error_descendant");
+                    "formula_normalized", "parsed_quantity", "row_label", "col_label",
+                    "is_bold", "has_fill", "has_border", "number_format", "tags",
+                    "region_id", "formula_skeleton");
             assertThat(columnNames(c, "worksheet")).doesNotContain("role", "role_conf", "role_reasons");
             try (ResultSet rs = c.createStatement().executeQuery("PRAGMA foreign_key_check")) {
                 assertThat(rs.next()).isFalse();
@@ -477,7 +466,7 @@ class PersistenceSeamTest {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(
                 dbPath, WorkspaceDatabase.OpenOptions.allowDestructiveReset())) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(13);
+            assertThat(count(c, "schema_migration")).isEqualTo(14);
             assertThat(count(c, "cell")).isZero();
             assertThat(count(c, "source_file")).isZero();
             assertThat(tableNames(c)).doesNotContain("cost_head", "region");

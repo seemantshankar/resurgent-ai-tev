@@ -1,7 +1,6 @@
 package com.resurgent.tev.parser.db;
 
 import com.resurgent.tev.parser.ingest.NormalizedCell;
-import com.resurgent.tev.parser.ingest.ParsedQuantity;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -150,14 +149,10 @@ public final class WorkspaceRepository {
                 "INSERT INTO cell (worksheet_id, coord, row_num, col_num,"
                         + " raw_value, raw_type, value_type, text_value, display_value,"
                         + " numeric_value, bool_value, date_value,"
-                        + " formula_text, formula_normalized, formula_state,"
-                        + " cached_value, cache_state, coerced_from_text, parsed_quantity,"
-                        + " is_error, error_type, row_label, col_label,"
-                        + " is_merged_anchor, is_merged_participant, merged_range, value_source,"
-                        + " row_hidden, col_hidden, sheet_hidden,"
-                        + " is_bold, has_fill, has_border, number_format, tags)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-                        + " ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        + " formula_text, formula_state, cached_value, cache_state, coerced_from_text,"
+                        + " is_error, error_type, is_merged_anchor, is_merged_participant, merged_range,"
+                        + " value_source, row_hidden, col_hidden, sheet_hidden)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, worksheetId);
             ps.setString(2, cell.coord());
@@ -176,28 +171,19 @@ public final class WorkspaceRepository {
             }
             ps.setString(12, cell.dateValue() == null ? null : cell.dateValue().toString());
             ps.setString(13, cell.formulaText());
-            ps.setString(14, cell.formulaNormalized());
-            ps.setString(15, cell.formulaState());
-            ps.setString(16, cell.cachedValue());
-            ps.setString(17, cell.cacheState());
-            ps.setInt(18, cell.coercedFromText() ? 1 : 0);
-            ps.setString(19, quantityJson(cell.parsedQuantity()));
-            ps.setInt(20, cell.isError() ? 1 : 0);
-            ps.setString(21, cell.errorType());
-            ps.setString(22, cell.rowLabel());
-            ps.setString(23, cell.colLabel());
-            ps.setInt(24, cell.isMergedAnchor() ? 1 : 0);
-            ps.setInt(25, cell.isMergedParticipant() ? 1 : 0);
-            ps.setString(26, cell.mergedRange());
-            ps.setString(27, cell.valueSource());
-            ps.setInt(28, cell.rowHidden() ? 1 : 0);
-            ps.setInt(29, cell.colHidden() ? 1 : 0);
-            ps.setInt(30, cell.sheetHidden() ? 1 : 0);
-            setBoolean(ps, 31, cell.isBold());
-            setBoolean(ps, 32, cell.hasFill());
-            setBoolean(ps, 33, cell.hasBorder());
-            ps.setString(34, cell.numberFormat());
-            ps.setString(35, cell.tagsJson() == null ? "{}" : cell.tagsJson());
+            ps.setString(14, cell.formulaState());
+            ps.setString(15, cell.cachedValue());
+            ps.setString(16, cell.cacheState());
+            ps.setInt(17, cell.coercedFromText() ? 1 : 0);
+            ps.setInt(18, cell.isError() ? 1 : 0);
+            ps.setString(19, cell.errorType());
+            ps.setInt(20, cell.isMergedAnchor() ? 1 : 0);
+            ps.setInt(21, cell.isMergedParticipant() ? 1 : 0);
+            ps.setString(22, cell.mergedRange());
+            ps.setString(23, cell.valueSource());
+            ps.setInt(24, cell.rowHidden() ? 1 : 0);
+            ps.setInt(25, cell.colHidden() ? 1 : 0);
+            ps.setInt(26, cell.sheetHidden() ? 1 : 0);
             ps.executeUpdate();
             return generatedId(ps);
         }
@@ -486,10 +472,6 @@ public final class WorkspaceRepository {
         } else {
             ps.setInt(index, value ? 1 : 0);
         }
-    }
-
-    private static String quantityJson(ParsedQuantity quantity) {
-        return quantity == null ? null : quantity.toJson();
     }
 
     private long count(String sql) throws SQLException {

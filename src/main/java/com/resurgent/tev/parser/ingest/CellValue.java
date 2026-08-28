@@ -16,12 +16,11 @@ public record CellValue(
         Boolean boolValue,
         LocalDateTime dateValue,
         boolean coercedFromText,
-        ParsedQuantity parsedQuantity,
         boolean isError,
         String errorType) {
 
     public static CellValue empty() {
         return new CellValue("empty", "empty", null, null,
-                null, null, null, false, null, false, null);
+                null, null, null, false, false, null);
     }
 }

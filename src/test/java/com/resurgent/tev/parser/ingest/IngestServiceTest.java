@@ -50,7 +50,7 @@ class IngestServiceTest {
     }
 
     @Test
-    void csvIngestLeavesStyleColumnsNullAndRecordsWhyStyleWasUnavailable() throws Exception {
+    void csvIngestStoresTextValuesAndRecordsNoStylesInMetadata() throws Exception {
         Path csv = tempDir.resolve("model.csv");
         Files.writeString(csv, "Title,Amount\nProject cost summary,1200\n");
         Path db = tempDir.resolve("model.csv.db");
@@ -59,12 +59,10 @@ class IngestServiceTest {
 
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
             try (ResultSet rs = c.createStatement().executeQuery(
-                    "SELECT is_bold, has_fill, has_border, number_format FROM cell WHERE coord = 'A1'")) {
+                    "SELECT text_value, value_type FROM cell WHERE coord = 'A1'")) {
                 assertThat(rs.next()).isTrue();
-                assertThat(rs.getObject("is_bold")).isNull();
-                assertThat(rs.getObject("has_fill")).isNull();
-                assertThat(rs.getObject("has_border")).isNull();
-                assertThat(rs.getString("number_format")).isNull();
+                assertThat(rs.getString("text_value")).isEqualTo("Title");
+                assertThat(rs.getString("value_type")).isEqualTo("text");
             }
             try (ResultSet rs = c.createStatement().executeQuery(
                     "SELECT raw_metadata FROM source_file")) {
@@ -76,7 +74,7 @@ class IngestServiceTest {
     }
 
     @Test
-    void xlsxIngestPersistsStyledTitleFields() throws Exception {
+    void xlsxIngestPersistsCellTextWithoutStyleColumns() throws Exception {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Model");
             org.apache.poi.ss.usermodel.Cell title = sheet.createRow(0).createCell(0);
@@ -93,15 +91,13 @@ class IngestServiceTest {
 
             Path xlsx = writeWorkbook(workbook, "styled-title.xlsx");
             Path db = tempDir.resolve("styled-title.db");
-            IngestSummary summary = new IngestService().ingest(xlsx, 1L, db);
+            new IngestService().ingest(xlsx, 1L, db);
             try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
                     ResultSet rs = c.createStatement().executeQuery(
-                            "SELECT is_bold, has_fill, has_border, number_format FROM cell WHERE coord = 'A1'")) {
+                            "SELECT text_value, value_type FROM cell WHERE coord = 'A1'")) {
                 assertThat(rs.next()).isTrue();
-                assertThat(rs.getInt("is_bold")).isEqualTo(1);
-                assertThat(rs.getInt("has_fill")).isEqualTo(1);
-                assertThat(rs.getInt("has_border")).isEqualTo(1);
-                assertThat(rs.getString("number_format")).isEqualTo("$#,##0.00");
+                assertThat(rs.getString("text_value")).isEqualTo("Project cost summary");
+                assertThat(rs.getString("value_type")).isEqualTo("text");
             }
         }
     }
