@@ -48,7 +48,7 @@ public final class LlmEnrichmentAdapter {
         }
     }
 
-    private static String buildPrompt(EnrichmentInput input) throws Exception {
+    private String buildPrompt(EnrichmentInput input) throws Exception {
         StringBuilder prompt = new StringBuilder("""
                 Produce JSON matching enrichment-report-v1 for the worksheet below.
                 Use one region per distinct table and assign every filled cell exactly once.
@@ -59,7 +59,15 @@ public final class LlmEnrichmentAdapter {
                 receive row and column labels.
                 """);
         prompt.append("Prompt version: ").append(PROMPT_VERSION).append('\n');
+        prompt.append("Report version: ").append(EnrichmentReport.VERSION).append('\n');
+        prompt.append("File name: ")
+                .append(input.redactedWorkbook().getFileName()).append('\n');
         prompt.append("Sheet: ").append(input.sheetName()).append('\n');
+        prompt.append("Redacted input path: ")
+                .append(input.redactedWorkbook()).append('\n');
+        prompt.append("Unhidden temporary path: ")
+                .append(input.unhiddenWorkbook()).append('\n');
+        prompt.append("Model id: ").append(config.modelId()).append('\n');
         prompt.append("Type menu: ").append(String.join(", ", input.typeMenu())).append('\n');
         prompt.append("Cells (address<TAB>value or formula):\n");
 
