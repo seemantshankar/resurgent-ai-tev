@@ -3,6 +3,9 @@ package com.resurgent.tev.parser.enrichment;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.resurgent.tev.parser.enrichment.EnrichmentReport.Cell;
 import com.resurgent.tev.parser.enrichment.EnrichmentReport.CellRole;
 import com.resurgent.tev.parser.enrichment.EnrichmentReport.Problem;
@@ -16,6 +19,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class EnrichmentReportJsonTest {
+
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     @TempDir
     Path tempDir;
@@ -82,19 +87,13 @@ class EnrichmentReportJsonTest {
 
     @Test
     void rejectsAmountCellOutsideRequiredRegionAtParseTime() throws Exception {
-        EnrichmentReport original = civilCostReport();
-        Region orphanWithAmount = new Region(
-                "r2",
-                "A8:A8",
-                "Notes: GST extra",
-                "Orphan",
-                RegionPurpose.ORPHAN,
-                List.of(new Cell("A8", CellRole.AMOUNT, "Note", null, "Value", null)),
-                List.of());
-        EnrichmentReport invalid = withRegions(
-                original, List.of(original.regions().getFirst(), orphanWithAmount));
+        ObjectNode report = reportJsonTree();
+        ObjectNode orphanCell = (ObjectNode) report.at("/regions/1/cells/0");
+        orphanCell.put("role", "amount");
+        orphanCell.put("rowLabel", "Note");
+        orphanCell.put("columnLabel", "Value");
 
-        assertThatThrownBy(() -> EnrichmentReportJson.fromJson(EnrichmentReportJson.toJson(invalid)))
+        assertThatThrownBy(() -> EnrichmentReportJson.fromJson(JSON.writeValueAsString(report)))
                 .isInstanceOf(EnrichmentReportFormatException.class)
                 .hasMessageContaining("amount cell A8")
                 .hasMessageContaining("Required");
@@ -115,62 +114,75 @@ class EnrichmentReportJsonTest {
 
     @Test
     void rejectsProblemWithoutRequiredEntryShapeAtParseTime() throws Exception {
-        EnrichmentReport original = civilCostReport();
-        Problem malformed = new Problem(
-                ProblemCode.OVERLAP,
-                "Cells B5 assigned to both r1 and r3",
-                List.of("B5"),
-                null);
-        EnrichmentReport invalid = withProblems(original, List.of(malformed));
+        ObjectNode report = reportJsonTree();
+        ((ObjectNode) report.at("/problems/0")).remove("regionIds");
 
-        assertThatThrownBy(() -> EnrichmentReportJson.fromJson(EnrichmentReportJson.toJson(invalid)))
+        assertThatThrownBy(() -> EnrichmentReportJson.fromJson(JSON.writeValueAsString(report)))
                 .isInstanceOf(EnrichmentReportFormatException.class)
                 .hasMessageContaining("problems[0].regionIds");
     }
 
     @Test
     void rejectsMissingRequiredReportCollectionsAtParseTime() throws Exception {
-        EnrichmentReport invalid = withProblems(civilCostReport(), null);
+        ObjectNode report = reportJsonTree();
+        report.remove("problems");
 
-        assertThatThrownBy(() -> EnrichmentReportJson.fromJson(EnrichmentReportJson.toJson(invalid)))
+        assertThatThrownBy(() -> EnrichmentReportJson.fromJson(JSON.writeValueAsString(report)))
                 .isInstanceOf(EnrichmentReportFormatException.class)
                 .hasMessageContaining("problems");
     }
 
     @Test
     void rejectsMalformedRegionAndCellEntriesAtParseTime() throws Exception {
-        EnrichmentReport original = civilCostReport();
-        Region malformedRegion = new Region(
-                "r1",
-                "A1:D6",
-                null,
-                "Civil Cost",
-                RegionPurpose.REQUIRED,
-                List.of(new Cell("A1", null, null, null, null, null)),
-                List.of());
-        EnrichmentReport invalid = withRegions(original, List.of(malformedRegion));
+        ObjectNode report = reportJsonTree();
+        ((ObjectNode) report.at("/regions/0")).remove("displayName");
 
-        assertThatThrownBy(() -> EnrichmentReportJson.fromJson(EnrichmentReportJson.toJson(invalid)))
+        assertThatThrownBy(() -> EnrichmentReportJson.fromJson(JSON.writeValueAsString(report)))
                 .isInstanceOf(EnrichmentReportFormatException.class)
                 .hasMessageContaining("regions[0].displayName");
     }
 
     @Test
     void rejectsProblemWithoutCodeMessageOrCellsAtParseTime() throws Exception {
-        EnrichmentReport original = civilCostReport();
+        assertInvalidProblemField("code");
+        assertInvalidProblemField("message");
+        assertInvalidProblemField("cells");
+    }
 
-        assertInvalidProblem(
-                original,
-                new Problem(null, "message", List.of("B5"), List.of("r1")),
-                "problems[0].code");
-        assertInvalidProblem(
-                original,
-                new Problem(ProblemCode.OVERLAP, null, List.of("B5"), List.of("r1")),
-                "problems[0].message");
-        assertInvalidProblem(
-                original,
-                new Problem(ProblemCode.OVERLAP, "message", null, List.of("r1")),
-                "problems[0].cells");
+    @Test
+    void rejectsMalformedBoundsAndCellAddressesAtParseTime() throws Exception {
+        ObjectNode malformedBounds = reportJsonTree();
+        ((ObjectNode) malformedBounds.at("/regions/0")).put("bounds", "A1-D6");
+        assertThatThrownBy(() ->
+                        EnrichmentReportJson.fromJson(JSON.writeValueAsString(malformedBounds)))
+                .isInstanceOf(EnrichmentReportFormatException.class)
+                .hasMessageContaining("regions[0].bounds");
+
+        ObjectNode malformedAddress = reportJsonTree();
+        ((ObjectNode) malformedAddress.at("/regions/0/cells/0")).put("address", "not-a-cell");
+        assertThatThrownBy(() ->
+                        EnrichmentReportJson.fromJson(JSON.writeValueAsString(malformedAddress)))
+                .isInstanceOf(EnrichmentReportFormatException.class)
+                .hasMessageContaining("regions[0].cells[0].address");
+    }
+
+    @Test
+    void rejectsTypesOutsideTheMenuAndInconsistentNewTypesAtParseTime() throws Exception {
+        ObjectNode unknownRegionType = reportJsonTree();
+        ((ObjectNode) unknownRegionType.at("/regions/0")).put("type", "Unknown Type");
+        assertThatThrownBy(() ->
+                        EnrichmentReportJson.fromJson(JSON.writeValueAsString(unknownRegionType)))
+                .isInstanceOf(EnrichmentReportFormatException.class)
+                .hasMessageContaining("regions[0].type")
+                .hasMessageContaining("typeMenu.types");
+
+        ObjectNode unknownNewType = reportJsonTree();
+        ((ArrayNode) unknownNewType.at("/typeMenu/newTypesAdded")).add("Unknown Type");
+        assertThatThrownBy(() ->
+                        EnrichmentReportJson.fromJson(JSON.writeValueAsString(unknownNewType)))
+                .isInstanceOf(EnrichmentReportFormatException.class)
+                .hasMessageContaining("typeMenu.newTypesAdded[0]")
+                .hasMessageContaining("typeMenu.types");
     }
 
     @Test
@@ -195,42 +207,16 @@ class EnrichmentReportJsonTest {
         assertThat(output).doesNotExist();
     }
 
-    private static void assertInvalidProblem(
-            EnrichmentReport original, Problem problem, String expectedField) throws Exception {
-        EnrichmentReport invalid = withProblems(original, List.of(problem));
-        assertThatThrownBy(() -> EnrichmentReportJson.fromJson(EnrichmentReportJson.toJson(invalid)))
+    private static void assertInvalidProblemField(String field) throws Exception {
+        ObjectNode report = reportJsonTree();
+        ((ObjectNode) report.at("/problems/0")).remove(field);
+        assertThatThrownBy(() -> EnrichmentReportJson.fromJson(JSON.writeValueAsString(report)))
                 .isInstanceOf(EnrichmentReportFormatException.class)
-                .hasMessageContaining(expectedField);
+                .hasMessageContaining("problems[0]." + field);
     }
 
-    private static EnrichmentReport withRegions(
-            EnrichmentReport report, List<Region> regions) {
-        return new EnrichmentReport(
-                report.version(),
-                report.fileName(),
-                report.sheetName(),
-                report.redactedInputPath(),
-                report.unhiddenTempPath(),
-                report.modelId(),
-                report.promptVersion(),
-                report.typeMenu(),
-                regions,
-                report.problems());
-    }
-
-    private static EnrichmentReport withProblems(
-            EnrichmentReport report, List<Problem> problems) {
-        return new EnrichmentReport(
-                report.version(),
-                report.fileName(),
-                report.sheetName(),
-                report.redactedInputPath(),
-                report.unhiddenTempPath(),
-                report.modelId(),
-                report.promptVersion(),
-                report.typeMenu(),
-                report.regions(),
-                problems);
+    private static ObjectNode reportJsonTree() throws Exception {
+        return (ObjectNode) JSON.readTree(EnrichmentReportJson.toJson(civilCostReport()));
     }
 
     private static EnrichmentReport civilCostReport() {
@@ -256,6 +242,7 @@ class EnrichmentReportJsonTest {
                                         new Cell("A1", CellRole.TITLE, null, null, null, null),
                                         new Cell("A2", CellRole.ANNOTATION, null, null, null, null),
                                         new Cell("A3", CellRole.COLUMN_HEADER, null, null, null, null),
+                                        new Cell("B3", CellRole.COLUMN_HEADER, null, null, null, null),
                                         new Cell("A4", CellRole.ROW_HEADER, null, null, null, null),
                                         new Cell(
                                                 "B4",
