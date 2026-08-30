@@ -103,10 +103,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(14);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(15);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(14);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(15);
         }
     }
 
@@ -319,7 +319,7 @@ class PersistenceSeamTest {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(14);
+            assertThat(count(c, "schema_migration")).isEqualTo(15);
             assertThat(tableNames(c)).doesNotContain("cell_reference", "cell_error_root");
 
             long sourceFileId = repo.insertSourceFile(1L, "v8.xlsx", "hash8", "fm_xlsx",
@@ -366,7 +366,7 @@ class PersistenceSeamTest {
     void v14MigrationUsesLeanCellContract() throws Exception {
         try (WorkspaceDatabase db = openDb("v14.db")) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(14);
+            assertThat(count(c, "schema_migration")).isEqualTo(15);
             assertThat(tableNames(c)).doesNotContain(
                     "region",
                     "cost_head",
@@ -466,7 +466,7 @@ class PersistenceSeamTest {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(
                 dbPath, WorkspaceDatabase.OpenOptions.allowDestructiveReset())) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(14);
+            assertThat(count(c, "schema_migration")).isEqualTo(15);
             assertThat(count(c, "cell")).isZero();
             assertThat(count(c, "source_file")).isZero();
             assertThat(tableNames(c)).doesNotContain("cost_head", "region");
