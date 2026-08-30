@@ -7,9 +7,12 @@ import com.resurgent.tev.parser.enrichment.EnrichmentReport.CellRole;
 import com.resurgent.tev.parser.enrichment.EnrichmentReport.Region;
 import com.resurgent.tev.parser.enrichment.EnrichmentReport.RegionPurpose;
 import com.resurgent.tev.parser.enrichment.EnrichmentReport.TypeMenu;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.apache.poi.ss.util.CellRangeAddress;
+import org.apache.poi.ss.util.CellReference;
 import org.junit.jupiter.api.Test;
 
 class RegionQaValidatorTest {
@@ -59,6 +62,29 @@ class RegionQaValidatorTest {
     }
 
     @Test
+    void filledCellInsideBoundsStillNeedsAPerCellRole() {
+        EnrichmentReport report = report(List.of(
+                new Region(
+                        "table",
+                        "A1:B2",
+                        "table",
+                        "Civil Cost",
+                        RegionPurpose.REQUIRED,
+                        List.of(new Cell(
+                                "A1", CellRole.TITLE, null, null, null, null)),
+                        List.of())));
+        WorksheetSnapshot sheet = new WorksheetSnapshot(Set.of("A1", "B2"), Map.of());
+
+        EnrichmentReport validated = new RegionQaValidator().validate(sheet, report);
+
+        assertThat(validated.problems()).containsExactly(new EnrichmentReport.Problem(
+                EnrichmentReport.ProblemCode.UNASSIGNED_CELL,
+                "Filled cell B2 has no cell role in region table",
+                List.of("B2"),
+                List.of("table")));
+    }
+
+    @Test
     void requiredFormulaCannotReferenceScratchRegion() {
         EnrichmentReport report = report(List.of(
                 region("live-table", "A1:B2", RegionPurpose.REQUIRED),
@@ -98,7 +124,24 @@ class RegionQaValidatorTest {
                 id,
                 "Civil Cost",
                 purpose,
-                List.of(new Cell("A1", CellRole.TITLE, null, null, null, null)),
+                cells(bounds),
                 List.of());
+    }
+
+    private static List<Cell> cells(String bounds) {
+        CellRangeAddress range = CellRangeAddress.valueOf(bounds);
+        List<Cell> cells = new ArrayList<>();
+        for (int row = range.getFirstRow(); row <= range.getLastRow(); row++) {
+            for (int column = range.getFirstColumn(); column <= range.getLastColumn(); column++) {
+                cells.add(new Cell(
+                        CellReference.convertNumToColString(column) + (row + 1),
+                        CellRole.ANNOTATION,
+                        null,
+                        null,
+                        null,
+                        null));
+            }
+        }
+        return List.copyOf(cells);
     }
 }

@@ -86,7 +86,21 @@ class EnrichmentReportJsonTest {
     }
 
     @Test
-    void rejectsAmountCellOutsideRequiredRegionAtParseTime() throws Exception {
+    void allowsUnlabelledAmountCellOutsideRequiredRegion() throws Exception {
+        ObjectNode report = reportJsonTree();
+        ObjectNode orphanCell = (ObjectNode) report.at("/regions/1/cells/0");
+        orphanCell.put("role", "amount");
+
+        EnrichmentReport parsed =
+                EnrichmentReportJson.fromJson(JSON.writeValueAsString(report));
+
+        assertThat(parsed.regions().get(1).cells().getFirst().role())
+                .isEqualTo(CellRole.AMOUNT);
+        assertThat(parsed.regions().get(1).cells().getFirst().rowLabel()).isNull();
+    }
+
+    @Test
+    void rejectsLabelsOnAmountCellOutsideRequiredRegion() throws Exception {
         ObjectNode report = reportJsonTree();
         ObjectNode orphanCell = (ObjectNode) report.at("/regions/1/cells/0");
         orphanCell.put("role", "amount");
@@ -96,7 +110,7 @@ class EnrichmentReportJsonTest {
         assertThatThrownBy(() -> EnrichmentReportJson.fromJson(JSON.writeValueAsString(report)))
                 .isInstanceOf(EnrichmentReportFormatException.class)
                 .hasMessageContaining("amount cell A8")
-                .hasMessageContaining("Required");
+                .hasMessageContaining("must not carry labels");
     }
 
     @Test

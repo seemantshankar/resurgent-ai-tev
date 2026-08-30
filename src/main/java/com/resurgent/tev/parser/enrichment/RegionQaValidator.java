@@ -28,6 +28,14 @@ public final class RegionQaValidator {
                         "Filled cell " + cell + " is assigned to multiple regions",
                         List.of(cell),
                         assignments.stream().map(Region::id).toList()));
+            } else if (assignments.getFirst().cells().stream()
+                    .noneMatch(regionCell -> regionCell.address().equals(cell))) {
+                Region assignment = assignments.getFirst();
+                problems.add(new Problem(
+                        EnrichmentReport.ProblemCode.UNASSIGNED_CELL,
+                        "Filled cell " + cell + " has no cell role in region " + assignment.id(),
+                        List.of(cell),
+                        List.of(assignment.id())));
             }
         });
         sheet.formulaReferences().entrySet().stream()

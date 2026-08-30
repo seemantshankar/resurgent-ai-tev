@@ -17,9 +17,33 @@ import java.util.Objects;
 /** Loads and updates the region type menu shared by enrichment runs. */
 public final class RegionTypeMenuService {
 
-    private static final Map<String, String> SYNONYMS = Map.of(
-            "civil", "civil cost",
-            "civil works", "civil cost");
+    private static final Map<String, String> SYNONYMS = Map.ofEntries(
+            Map.entry("project costs", "project cost"),
+            Map.entry("capital expenditure", "capital cost"),
+            Map.entry("capex", "capital cost"),
+            Map.entry("civil", "civil cost"),
+            Map.entry("civil works", "civil cost"),
+            Map.entry("land cost", "land"),
+            Map.entry("plant & machinery", "plant and machinery"),
+            Map.entry("plant machinery", "plant and machinery"),
+            Map.entry("profit and loss", "p&l"),
+            Map.entry("profit & loss", "p&l"),
+            Map.entry("income statement", "p&l"),
+            Map.entry("cashflow", "cash flow"),
+            Map.entry("cash flow statement", "cash flow"),
+            Map.entry("working capital assessment", "working capital"),
+            Map.entry("depreciation schedule", "depreciation"),
+            Map.entry("interest expense", "interest"),
+            Map.entry("revenue", "sales"),
+            Map.entry("key assumptions", "assumptions"),
+            Map.entry("internal rate of return", "irr"),
+            Map.entry("break even", "break-even"),
+            Map.entry("breakeven", "break-even"),
+            Map.entry("credit monitoring arrangement", "cma"),
+            Map.entry("taxation", "tax"),
+            Map.entry("workforce", "manpower"),
+            Map.entry("human resources", "manpower"),
+            Map.entry("electricity", "power"));
 
     private final Path dbPath;
 

@@ -79,12 +79,14 @@ final class EnrichmentReportValidator {
                     throw required(cellField + ".role");
                 }
                 if (cell.role() == CellRole.AMOUNT) {
-                    if (region.purpose() != RegionPurpose.REQUIRED) {
+                    if (region.purpose() == RegionPurpose.REQUIRED) {
+                        requireText(cell.rowLabel(), "amount cell " + cell.address() + " rowLabel");
+                        requireText(cell.columnLabel(), "amount cell " + cell.address() + " columnLabel");
+                    } else if (hasLabels(cell)) {
                         throw new EnrichmentReportFormatException(
-                                "amount cell " + cell.address() + " must belong to a Required region");
+                                "amount cell " + cell.address()
+                                        + " outside a Required region must not carry labels");
                     }
-                    requireText(cell.rowLabel(), "amount cell " + cell.address() + " rowLabel");
-                    requireText(cell.columnLabel(), "amount cell " + cell.address() + " columnLabel");
                 } else if (cell != null && hasLabels(cell)) {
                     throw new EnrichmentReportFormatException(
                             "structural cell " + cell.address() + " must not carry labels");

@@ -114,7 +114,7 @@ public final class EnrichCommand implements Callable<Integer> {
             return summary.report().problems().isEmpty() ? 0 : 3;
         } catch (DestructiveResetRequiredException e) {
             err.println(e.getMessage());
-            return 1;
+            return 3;
         } catch (RedactException e) {
             err.println("enrich rejected: " + e.getMessage());
             return 3;

@@ -36,32 +36,55 @@ public final class EnrichService {
             WorkspaceDatabase.OpenOptions openOptions)
             throws IOException, SQLException, RedactException, EnrichmentInfrastructureException {
         requireXlsx(input);
-        RedactSummary redaction = new RedactService().redact(
-                input, mandateId, db, sheetName, outputDirectory, parserConfig, openOptions);
-
-        Path unhidden = new TemporaryUnhiddenCopyBuilder().build(
-                redaction.outputPath(), sheetName);
+        Path standardRedacted = standardRedactedPath(input, outputDirectory);
+        boolean preserveExistingRedacted = Files.isRegularFile(standardRedacted);
+        Path redactionDirectory = preserveExistingRedacted
+                ? Files.createTempDirectory("tev-enrichment-redacted-")
+                : outputDirectory;
         try {
-            RegionTypeMenuService menuService = new RegionTypeMenuService(db);
-            List<String> currentMenu = menuService.load();
-            EnrichmentReport proposed = new LlmEnrichmentAdapter(llmConfig, modelClient).enrich(
-                    new EnrichmentInput(
-                            redaction.outputPath(), unhidden, sheetName, currentMenu));
-            RegionTypeNormalizationResult normalized = menuService.normalizeProposals(
-                    proposed.regions().stream().map(Region::type).toList());
-            EnrichmentReport normalizedReport = authoritativeReport(
+            RedactSummary redaction = new RedactService().redact(
                     input,
-                    redaction.outputPath(),
-                    unhidden,
+                    mandateId,
+                    db,
                     sheetName,
-                    proposed,
-                    normalized);
-            WorksheetSnapshot snapshot = new WorksheetSnapshotReader().read(unhidden, sheetName);
-            EnrichmentReport validated =
-                    new RegionQaValidator().validate(snapshot, normalizedReport);
-            return new EnrichSummary(validated, redaction.outputPath(), redaction.autoIngested());
+                    redactionDirectory,
+                    parserConfig,
+                    openOptions);
+            Path unhidden = new TemporaryUnhiddenCopyBuilder().build(
+                    redaction.outputPath(), sheetName);
+            try {
+                RegionTypeMenuService menuService = new RegionTypeMenuService(db);
+                List<String> currentMenu = menuService.load();
+                EnrichmentReport proposed = new LlmEnrichmentAdapter(llmConfig, modelClient).enrich(
+                        new EnrichmentInput(
+                                redaction.outputPath(), unhidden, sheetName, currentMenu));
+                RegionTypeNormalizationResult normalized = menuService.normalizeProposals(
+                        proposed.regions().stream().map(Region::type).toList());
+                EnrichmentReport normalizedReport = authoritativeReport(
+                        input,
+                        redaction.outputPath(),
+                        unhidden,
+                        sheetName,
+                        proposed,
+                        normalized);
+                WorksheetSnapshot snapshot =
+                        new WorksheetSnapshotReader().read(unhidden, sheetName);
+                EnrichmentReport validated =
+                        new RegionQaValidator().validate(snapshot, normalizedReport);
+                Path redactedArtifact = preserveExistingRedacted
+                        ? standardRedacted
+                        : redaction.outputPath();
+                return new EnrichSummary(
+                        validated, redactedArtifact, redaction.autoIngested());
+            } finally {
+                Files.deleteIfExists(unhidden);
+            }
         } finally {
-            Files.deleteIfExists(unhidden);
+            if (preserveExistingRedacted) {
+                Files.deleteIfExists(redactionDirectory.resolve(
+                        standardRedacted.getFileName()));
+                Files.deleteIfExists(redactionDirectory);
+            }
         }
     }
 
@@ -102,5 +125,10 @@ public final class EnrichService {
         if (!fileName.endsWith(".xlsx")) {
             throw new RedactException("enrich v1 supports .xlsx only: " + input.getFileName());
         }
+    }
+
+    private static Path standardRedactedPath(Path input, Path outputDirectory) {
+        String stem = input.getFileName().toString().replaceFirst("(?i)\\.xlsx$", "");
+        return outputDirectory.resolve(stem + "-redacted.xlsx");
     }
 }

@@ -49,15 +49,26 @@ class RegionTypeMenuServiceTest {
         RegionTypeMenuService service = new RegionTypeMenuService(dbPath);
 
         RegionTypeNormalizationResult result =
-                service.normalizeProposals(List.of("Civil", "Civil Works", "Contingency"));
+                service.normalizeProposals(List.of(
+                        "Civil",
+                        "Civil Works",
+                        "Plant & Machinery",
+                        "Profit and Loss",
+                        "Contingency"));
 
         assertThat(result.canonicalTypes())
-                .containsExactly("Civil Cost", "Civil Cost", "Contingency");
+                .containsExactly(
+                        "Civil Cost",
+                        "Civil Cost",
+                        "Plant and Machinery",
+                        "P&L",
+                        "Contingency");
         assertThat(result.newTypesAdded()).containsExactly("Contingency");
         assertThat(result.types()).contains("Civil Cost", "Contingency");
         assertThat(new RegionTypeMenuService(dbPath).load())
                 .contains("Contingency")
-                .doesNotContain("Civil", "Civil Works");
+                .doesNotContain(
+                        "Civil", "Civil Works", "Plant & Machinery", "Profit and Loss");
     }
 
     @Test

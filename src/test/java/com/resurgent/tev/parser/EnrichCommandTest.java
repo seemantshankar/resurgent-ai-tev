@@ -3,6 +3,7 @@ package com.resurgent.tev.parser;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.resurgent.tev.parser.enrichment.EnrichmentModelClient;
+import com.resurgent.tev.parser.db.LegacyWorkspaceFactory;
 import com.resurgent.tev.parser.enrichment.EnrichmentReport;
 import com.resurgent.tev.parser.enrichment.EnrichmentReport.Cell;
 import com.resurgent.tev.parser.enrichment.EnrichmentReport.CellRole;
@@ -93,6 +94,59 @@ class EnrichCommandTest {
                 .containsExactly(EnrichmentReport.ProblemCode.OVERLAP);
         assertThat(result.stdout()).contains("1 problems");
         assertThat(result.stderr()).contains(reportPath.toString());
+    }
+
+    @Test
+    void preservesAnExistingStandardRedactedExport() throws Exception {
+        Path input = writeWorkbook();
+        Path outputDir = tempDir.resolve("existing-output");
+        Files.createDirectories(outputDir);
+        Path existingRedacted = outputDir.resolve("fixture-redacted.xlsx");
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            workbook.createSheet("Do not replace").createRow(0).createCell(0)
+                    .setCellValue("existing artifact");
+            try (OutputStream output = Files.newOutputStream(existingRedacted)) {
+                workbook.write(output);
+            }
+        }
+        byte[] existingBytes = Files.readAllBytes(existingRedacted);
+
+        RunResult result = run(
+                request -> EnrichmentReportJson.toJson(cleanResponse()),
+                "enrich",
+                "--input", input.toString(),
+                "--db", tempDir.resolve("preserve.db").toString(),
+                "--mandate-id", "1",
+                "--sheet", "Project Cost",
+                "--output-dir", outputDir.toString(),
+                "--config", writeConfig().toString());
+
+        assertThat(result.exitCode()).isZero();
+        assertThat(Files.readAllBytes(existingRedacted)).isEqualTo(existingBytes);
+    }
+
+    @Test
+    void ingestGateRejectionExitsThree() throws Exception {
+        Path input = writeWorkbook();
+        Path db = tempDir.resolve("legacy.db");
+        LegacyWorkspaceFactory.writePopulatedV10(db);
+
+        RunResult result = run(
+                request -> {
+                    throw new AssertionError("model must not run after a gate rejection");
+                },
+                "enrich",
+                "--input", input.toString(),
+                "--db", db.toString(),
+                "--mandate-id", "1",
+                "--sheet", "Project Cost",
+                "--output-dir", tempDir.resolve("gate-output").toString(),
+                "--config", writeConfig().toString());
+
+        assertThat(result.exitCode()).isEqualTo(3);
+        assertThat(result.stderr())
+                .contains("Refusing to apply the Sprint 3b schema reset")
+                .contains(db.toAbsolutePath().normalize().toString());
     }
 
     private RunResult run(EnrichmentModelClient client, String... args) {
