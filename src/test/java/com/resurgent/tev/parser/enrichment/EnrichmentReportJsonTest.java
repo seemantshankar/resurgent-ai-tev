@@ -167,6 +167,17 @@ class EnrichmentReportJsonTest {
     }
 
     @Test
+    void rejectsCellOutsideItsRegionBoundsAtParseTime() throws Exception {
+        ObjectNode report = reportJsonTree();
+        ((ObjectNode) report.at("/regions/0/cells/0")).put("address", "Z99");
+
+        assertThatThrownBy(() -> EnrichmentReportJson.fromJson(JSON.writeValueAsString(report)))
+                .isInstanceOf(EnrichmentReportFormatException.class)
+                .hasMessageContaining("regions[0].cells[0].address")
+                .hasMessageContaining("bounds");
+    }
+
+    @Test
     void rejectsTypesOutsideTheMenuAndInconsistentNewTypesAtParseTime() throws Exception {
         ObjectNode unknownRegionType = reportJsonTree();
         ((ObjectNode) unknownRegionType.at("/regions/0")).put("type", "Unknown Type");

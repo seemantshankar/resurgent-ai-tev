@@ -52,7 +52,7 @@ final class EnrichmentReportValidator {
                 throw required(field);
             }
             requireText(region.id(), field + ".id");
-            requireBounds(region.bounds(), field + ".bounds");
+            int[] bounds = requireBounds(region.bounds(), field + ".bounds");
             requireText(region.displayName(), field + ".displayName");
             requireText(region.type(), field + ".type");
             if (!types.contains(region.type())) {
@@ -70,7 +70,11 @@ final class EnrichmentReportValidator {
                 if (cell == null) {
                     throw required(cellField);
                 }
-                requireAddress(cell.address(), cellField + ".address");
+                int[] address = requireAddress(cell.address(), cellField + ".address");
+                if (!contains(bounds, address)) {
+                    throw new EnrichmentReportFormatException(
+                            cellField + ".address must be inside " + field + ".bounds");
+                }
                 if (cell.role() == null) {
                     throw required(cellField + ".role");
                 }
@@ -134,15 +138,17 @@ final class EnrichmentReportValidator {
         return requiredValues;
     }
 
-    private static void requireAddress(String address, String field)
+    private static int[] requireAddress(String address, String field)
             throws EnrichmentReportFormatException {
         requireText(address, field);
-        if (parseAddress(address) == null) {
+        int[] parsed = parseAddress(address);
+        if (parsed == null) {
             throw new EnrichmentReportFormatException(field + " must be a valid cell address");
         }
+        return parsed;
     }
 
-    private static void requireBounds(String bounds, String field)
+    private static int[] requireBounds(String bounds, String field)
             throws EnrichmentReportFormatException {
         requireText(bounds, field);
         String[] endpoints = bounds.split(":", -1);
@@ -154,6 +160,14 @@ final class EnrichmentReportValidator {
         if (first == null || last == null || first[0] > last[0] || first[1] > last[1]) {
             throw new EnrichmentReportFormatException(field + " must be a valid rectangular range");
         }
+        return new int[] {first[0], first[1], last[0], last[1]};
+    }
+
+    private static boolean contains(int[] bounds, int[] address) {
+        return address[0] >= bounds[0]
+                && address[0] <= bounds[2]
+                && address[1] >= bounds[1]
+                && address[1] <= bounds[3];
     }
 
     private static int[] parseAddress(String address) {
