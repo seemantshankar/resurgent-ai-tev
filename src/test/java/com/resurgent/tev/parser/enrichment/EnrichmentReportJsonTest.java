@@ -43,6 +43,50 @@ class EnrichmentReportJsonTest {
     }
 
     @Test
+    void parsesMarkdownWrappedModelJson() throws Exception {
+        EnrichmentReport report = civilCostReport();
+        String wrapped = """
+                ```json
+                %s
+                ```
+                """.formatted(EnrichmentReportJson.toJson(report));
+
+        assertThat(EnrichmentReportJson.fromModelContent(wrapped)).isEqualTo(report);
+    }
+
+    @Test
+    void normalizesSingleCellBoundsToRectangularRange() throws Exception {
+        String json = """
+                {
+                  "version": "enrichment-report-v1",
+                  "fileName": "fixture.xlsx",
+                  "sheetName": "depreciation",
+                  "redactedInputPath": "/tmp/redacted.xlsx",
+                  "unhiddenTempPath": "/tmp/unhidden.xlsx",
+                  "modelId": "fixture-enrichment-model",
+                  "promptVersion": "enrichment-v2-regions-only",
+                  "typeMenu": { "types": ["Depreciation"], "newTypesAdded": [] },
+                  "regions": [
+                    {
+                      "id": "orphan-f2",
+                      "bounds": "F2",
+                      "displayName": "Stray",
+                      "type": "Depreciation",
+                      "purpose": "Orphan",
+                      "cells": [],
+                      "notes": []
+                    }
+                  ],
+                  "problems": []
+                }
+                """;
+
+        EnrichmentReport parsed = EnrichmentReportJson.fromJson(json);
+
+        assertThat(parsed.regions().getFirst().bounds()).isEqualTo("F2:F2");
+    }
+
+    @Test
     void rejectsMissingRequiredMetadataAtParseTime() {
         String json = """
                 {
@@ -50,7 +94,7 @@ class EnrichmentReportJsonTest {
                   "sheetName": "Project Cost",
                   "redactedInputPath": "/data/Project-FM-redacted.xlsx",
                   "unhiddenTempPath": "/tmp/Project-FM-unhidden.xlsx",
-                  "modelId": "gpt-4.1",
+                  "modelId": "fixture-enrichment-model",
                   "promptVersion": "enrich-v1",
                   "typeMenu": { "types": [], "newTypesAdded": [] },
                   "regions": [],
@@ -251,7 +295,7 @@ class EnrichmentReportJsonTest {
                 "Project Cost",
                 "/data/client/redacted/Project-FM-redacted.xlsx",
                 "/tmp/Project-FM-unhidden-abc123.xlsx",
-                "gpt-4.1",
+                "fixture-enrichment-model",
                 "enrich-v1",
                 new TypeMenu(
                         List.of("Project Cost", "Civil Cost", "Orphan"),

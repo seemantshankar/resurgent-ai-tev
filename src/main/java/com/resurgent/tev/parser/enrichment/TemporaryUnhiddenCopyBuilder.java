@@ -9,7 +9,8 @@ import java.util.Locale;
 import org.apache.poi.ss.SpreadsheetVersion;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
 
 /**
  * Builds throwaway LLM input from a redacted workbook without changing the
@@ -18,17 +19,21 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 public final class TemporaryUnhiddenCopyBuilder {
 
     /**
-     * Copies an {@code .xlsx} workbook to a temporary file and makes every row
-     * and column on the named sheet visible. The caller owns the returned file
-     * and is responsible for deleting it.
+     * Copies a redacted workbook to a temporary file and makes every row and
+     * column on the named sheet visible. The caller owns the returned file and
+     * is responsible for deleting it.
      */
     public Path build(Path redactedWorkbook, String sheetName) throws IOException {
-        requireXlsx(redactedWorkbook);
+        requireSpreadsheet(redactedWorkbook);
 
-        Path copy = Files.createTempFile("tev-enrichment-unhidden-", ".xlsx");
+        String extension = redactedWorkbook.getFileName().toString().toLowerCase(Locale.ROOT)
+                .endsWith(".xls")
+                ? ".xls"
+                : ".xlsx";
+        Path copy = Files.createTempFile("tev-enrichment-unhidden-", extension);
         boolean complete = false;
         try (InputStream input = Files.newInputStream(redactedWorkbook);
-                XSSFWorkbook workbook = new XSSFWorkbook(input)) {
+                Workbook workbook = WorkbookFactory.create(input)) {
             Sheet sheet = workbook.getSheet(sheetName);
             if (sheet == null) {
                 throw new IllegalArgumentException("sheet not found: " + sheetName);
@@ -48,14 +53,14 @@ public final class TemporaryUnhiddenCopyBuilder {
         }
     }
 
-    private static void requireXlsx(Path redactedWorkbook) throws IOException {
+    private static void requireSpreadsheet(Path redactedWorkbook) throws IOException {
         if (!Files.isRegularFile(redactedWorkbook)) {
             throw new IOException("input file not found: " + redactedWorkbook);
         }
         String fileName = redactedWorkbook.getFileName().toString().toLowerCase(Locale.ROOT);
-        if (!fileName.endsWith(".xlsx")) {
+        if (!fileName.endsWith(".xlsx") && !fileName.endsWith(".xls")) {
             throw new IllegalArgumentException(
-                    "temporary unhidden copy supports .xlsx only: " + redactedWorkbook);
+                    "temporary unhidden copy supports .xlsx and .xls only: " + redactedWorkbook);
         }
     }
 

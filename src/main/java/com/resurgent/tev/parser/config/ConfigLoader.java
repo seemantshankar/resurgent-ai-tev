@@ -27,8 +27,10 @@ public final class ConfigLoader {
             "rejectPasswordProtected",
             "rejectActiveXOleDde",
             "llmApiKey",
-            "llmModelId",
-            "llmEndpoint");
+            "llmEndpoint",
+            "llmHttpReferer",
+            "llmAppTitle",
+            "llmMaxOutputTokens");
 
     private ConfigLoader() {}
 

@@ -24,6 +24,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 class EnrichCommandTest {
 
+    private static final String FIXTURE_MODEL_ID = "fixture-enrichment-model";
+
     @TempDir
     Path tempDir;
 
@@ -33,6 +35,7 @@ class EnrichCommandTest {
         Path db = tempDir.resolve("workspace.db");
         Path outputDir = tempDir.resolve("enriched");
         Path config = writeConfig();
+        Path env = writeEnv();
         EnrichmentModelClient stub = request -> EnrichmentReportJson.toJson(cleanResponse());
         byte[] originalBytes = Files.readAllBytes(input);
 
@@ -43,7 +46,8 @@ class EnrichCommandTest {
                 "--mandate-id", "1",
                 "--sheet", "Project Cost",
                 "--output-dir", outputDir.toString(),
-                "--config", config.toString());
+                "--config", config.toString(),
+                "--env", env.toString());
 
         assertThat(result.exitCode()).isZero();
         assertThat(result.stdout())
@@ -65,7 +69,7 @@ class EnrichCommandTest {
         EnrichmentReport report = EnrichmentReportJson.read(reportPath);
         assertThat(report.problems()).isEmpty();
         assertThat(report.regions()).hasSize(1);
-        assertThat(report.modelId()).isEqualTo("stub-model");
+        assertThat(report.modelId()).isEqualTo(FIXTURE_MODEL_ID);
         assertThat(Files.exists(Path.of(report.unhiddenTempPath()))).isFalse();
     }
 
@@ -73,6 +77,7 @@ class EnrichCommandTest {
     void writesOverrideReportAndExitsThreeWhenQaFindsProblems() throws Exception {
         Path input = writeWorkbook();
         Path reportPath = tempDir.resolve("reports/dirty.json");
+        Path env = writeEnv();
         EnrichmentModelClient stub =
                 request -> EnrichmentReportJson.toJson(overlappingResponse());
 
@@ -84,7 +89,8 @@ class EnrichCommandTest {
                 "--sheet", "Project Cost",
                 "--output-dir", tempDir.resolve("dirty-output").toString(),
                 "--report", reportPath.toString(),
-                "--config", writeConfig().toString());
+                "--config", writeConfig().toString(),
+                "--env", env.toString());
 
         assertThat(result.exitCode()).isEqualTo(3);
         assertThat(reportPath).exists();
@@ -119,7 +125,8 @@ class EnrichCommandTest {
                 "--mandate-id", "1",
                 "--sheet", "Project Cost",
                 "--output-dir", outputDir.toString(),
-                "--config", writeConfig().toString());
+                "--config", writeConfig().toString(),
+                "--env", writeEnv().toString());
 
         assertThat(result.exitCode()).isZero();
         assertThat(Files.readAllBytes(existingRedacted)).isEqualTo(existingBytes);
@@ -141,7 +148,8 @@ class EnrichCommandTest {
                 "--mandate-id", "1",
                 "--sheet", "Project Cost",
                 "--output-dir", tempDir.resolve("gate-output").toString(),
-                "--config", writeConfig().toString());
+                "--config", writeConfig().toString(),
+                "--env", writeEnv().toString());
 
         assertThat(result.exitCode()).isEqualTo(3);
         assertThat(result.stderr())
@@ -181,11 +189,19 @@ class EnrichCommandTest {
         Files.writeString(config, """
                 {
                   "llmApiKey": "test-key",
-                  "llmModelId": "stub-model",
                   "llmEndpoint": "https://example.invalid/chat"
                 }
                 """);
         return config;
+    }
+
+    private Path writeEnv() throws Exception {
+        Path env = tempDir.resolve("enrichment.env");
+        Files.writeString(env, """
+                OPENROUTER_API_KEY=test-key
+                Excel_Enrichment_Model_id=%s
+                """.formatted(FIXTURE_MODEL_ID));
+        return env;
     }
 
     private static EnrichmentReport cleanResponse() {
@@ -195,7 +211,7 @@ class EnrichCommandTest {
                 "Project Cost",
                 "/stub/redacted.xlsx",
                 "/stub/unhidden.xlsx",
-                "stub-model",
+                FIXTURE_MODEL_ID,
                 LlmEnrichmentAdapter.PROMPT_VERSION,
                 new TypeMenu(List.of("Sales"), List.of()),
                 List.of(new Region(
@@ -220,7 +236,7 @@ class EnrichCommandTest {
                 "Overlapping Sales",
                 "Sales",
                 RegionPurpose.REQUIRED,
-                List.of(new Cell("B1", CellRole.COLUMN_HEADER, null, null, null, null)),
+                List.of(new Cell("B2", CellRole.AMOUNT, "Sales", null, "Year 1", null)),
                 List.of());
         return new EnrichmentReport(
                 clean.version(),

@@ -9,6 +9,7 @@ import com.resurgent.tev.parser.enrichment.EnrichService;
 import com.resurgent.tev.parser.enrichment.EnrichSummary;
 import com.resurgent.tev.parser.enrichment.EnrichmentInfrastructureException;
 import com.resurgent.tev.parser.enrichment.EnrichmentModelClient;
+import com.resurgent.tev.parser.enrichment.EnrichmentPromptMode;
 import com.resurgent.tev.parser.enrichment.EnrichmentReportJson;
 import com.resurgent.tev.parser.enrichment.LlmEnrichmentConfig;
 import com.resurgent.tev.parser.enrichment.LlmEnrichmentConfigLoader;
@@ -46,12 +47,22 @@ public final class EnrichCommand implements Callable<Integer> {
     @Option(names = "--report", description = "Override the enrichment JSON report path")
     Path reportPath;
 
-    @Option(names = "--config", description = "Config JSON containing parser and LLM settings")
+    @Option(names = "--config",
+            description = "Optional config JSON; LLM API key can also come from --env")
     Path configPath;
+
+    @Option(names = "--env",
+            description = "Path to .env file with OPENROUTER_API_KEY and Excel_Enrichment_Model_id",
+            defaultValue = ".env")
+    Path envPath;
 
     @Option(names = "--allow-destructive-reset",
             description = "Allow auto-ingest to erase parser-owned operational data in a populated pre-live workspace")
     boolean allowDestructiveReset;
+
+    @Option(names = "--regions-only",
+            description = "Ask the model for region boxes only (empty cells arrays); faster sanity check")
+    boolean regionsOnly;
 
     @Spec
     CommandSpec spec;
@@ -68,7 +79,7 @@ public final class EnrichCommand implements Callable<Integer> {
         final LlmEnrichmentConfig llmConfig;
         try {
             parserConfig = ConfigLoader.load(configPath);
-            llmConfig = LlmEnrichmentConfigLoader.load(configPath);
+            llmConfig = LlmEnrichmentConfigLoader.load(configPath, envPath);
         } catch (ConfigValidationException e) {
             err.println("invalid config: " + e.getMessage());
             return 2;
@@ -89,7 +100,8 @@ public final class EnrichCommand implements Callable<Integer> {
                     outputDirectory,
                     parserConfig,
                     llmConfig,
-                    openOptions);
+                    openOptions,
+                    regionsOnly ? EnrichmentPromptMode.REGIONS_ONLY : EnrichmentPromptMode.FULL);
             Path destination = reportPath != null
                     ? reportPath
                     : summary.defaultReportPath(outputDirectory);
@@ -120,10 +132,20 @@ public final class EnrichCommand implements Callable<Integer> {
             return 3;
         } catch (EnrichmentInfrastructureException e) {
             err.println("enrich failed: " + e.getMessage());
+            printCauses(err, e);
             return 1;
         } catch (Exception e) {
             err.println("enrich failed: " + message(e));
+            printCauses(err, e);
             return 1;
+        }
+    }
+
+    private static void printCauses(PrintWriter err, Throwable error) {
+        for (Throwable cause = error.getCause(); cause != null; cause = cause.getCause()) {
+            if (cause.getMessage() != null && !cause.getMessage().isBlank()) {
+                err.println("cause: " + cause.getMessage());
+            }
         }
     }
 

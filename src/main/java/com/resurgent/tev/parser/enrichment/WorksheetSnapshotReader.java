@@ -16,9 +16,10 @@ import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.util.CellReference;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
 
-/** Reads filled cells and same-sheet formula dependencies from an .xlsx tab. */
+/** Reads filled cells and same-sheet formula dependencies from a workbook tab. */
 public final class WorksheetSnapshotReader {
 
     private static final Pattern CELL_OR_RANGE = Pattern.compile(
@@ -32,7 +33,7 @@ public final class WorksheetSnapshotReader {
         DataFormatter formatter = new DataFormatter();
 
         try (InputStream input = Files.newInputStream(workbookPath);
-                XSSFWorkbook workbook = new XSSFWorkbook(input)) {
+                Workbook workbook = WorkbookFactory.create(input)) {
             Sheet sheet = workbook.getSheet(sheetName);
             if (sheet == null) {
                 throw new IllegalArgumentException("sheet not found: " + sheetName);

@@ -4,7 +4,7 @@ import com.resurgent.tev.parser.cli.EnrichCommand;
 import com.resurgent.tev.parser.cli.IngestCommand;
 import com.resurgent.tev.parser.cli.RedactCommand;
 import com.resurgent.tev.parser.enrichment.EnrichmentModelClient;
-import com.resurgent.tev.parser.enrichment.OpenAiChatCompletionsClient;
+import com.resurgent.tev.parser.enrichment.OpenRouterEnrichmentClient;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 
@@ -15,7 +15,7 @@ public final class Main {
     private Main() {}
 
     public static CommandLine commandLine() {
-        return commandLine(new OpenAiChatCompletionsClient());
+        return commandLine(new OpenRouterEnrichmentClient());
     }
 
     public static CommandLine commandLine(EnrichmentModelClient modelClient) {

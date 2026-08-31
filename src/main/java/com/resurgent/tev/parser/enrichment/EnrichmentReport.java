@@ -115,7 +115,8 @@ public record EnrichmentReport(
     public enum ProblemCode {
         OVERLAP("overlap"),
         UNASSIGNED_CELL("unassigned_cell"),
-        SCRATCH_REFERENCED_BY_REQUIRED("scratch_referenced_by_required");
+        SCRATCH_REFERENCED_BY_REQUIRED("scratch_referenced_by_required"),
+        BLANK_CELL_IN_REPORT("blank_cell_in_report");
 
         private final String jsonValue;
 

@@ -23,14 +23,59 @@ public final class EnrichmentReportJson {
     }
 
     public static EnrichmentReport fromJson(String json) throws IOException {
+        return fromModelContent(json);
+    }
+
+    static EnrichmentReport fromModelContent(String content) throws IOException {
         final EnrichmentReport report;
+        String json = EnrichmentModelContentNormalizer.normalize(content);
         try {
-            report = MAPPER.readValue(json, EnrichmentReport.class);
+            report = normalizeBounds(MAPPER.readValue(json, EnrichmentReport.class));
         } catch (JsonProcessingException | IllegalArgumentException e) {
-            throw new EnrichmentReportFormatException("invalid enrichment report JSON", e);
+            throw new EnrichmentReportFormatException(
+                    "invalid enrichment report JSON: " + rootMessage(e), e);
         }
         validate(report);
         return report;
+    }
+
+    private static String rootMessage(Throwable error) {
+        Throwable current = error;
+        String message = error.getMessage();
+        while (current.getCause() != null) {
+            current = current.getCause();
+            if (current.getMessage() != null && !current.getMessage().isBlank()) {
+                message = current.getMessage();
+            }
+        }
+        return message == null ? error.toString() : message;
+    }
+
+    private static EnrichmentReport normalizeBounds(EnrichmentReport report) {
+        if (report == null || report.regions() == null) {
+            return report;
+        }
+        java.util.List<EnrichmentReport.Region> regions = report.regions().stream()
+                .map(region -> new EnrichmentReport.Region(
+                        region.id(),
+                        RegionBounds.normalize(region.bounds()),
+                        region.displayName(),
+                        region.type(),
+                        region.purpose(),
+                        region.cells(),
+                        region.notes()))
+                .toList();
+        return new EnrichmentReport(
+                report.version(),
+                report.fileName(),
+                report.sheetName(),
+                report.redactedInputPath(),
+                report.unhiddenTempPath(),
+                report.modelId(),
+                report.promptVersion(),
+                report.typeMenu(),
+                regions,
+                report.problems());
     }
 
     private static void validate(EnrichmentReport report)

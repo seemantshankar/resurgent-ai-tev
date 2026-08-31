@@ -153,7 +153,7 @@ final class EnrichmentReportValidator {
     private static int[] requireBounds(String bounds, String field)
             throws EnrichmentReportFormatException {
         requireText(bounds, field);
-        String[] endpoints = bounds.split(":", -1);
+        String[] endpoints = RegionBounds.normalize(bounds).split(":", -1);
         if (endpoints.length != 2) {
             throw new EnrichmentReportFormatException(field + " must be a rectangular range");
         }

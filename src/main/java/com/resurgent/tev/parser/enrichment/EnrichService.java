@@ -33,9 +33,10 @@ public final class EnrichService {
             Path outputDirectory,
             ParserConfig parserConfig,
             LlmEnrichmentConfig llmConfig,
-            WorkspaceDatabase.OpenOptions openOptions)
+            WorkspaceDatabase.OpenOptions openOptions,
+            EnrichmentPromptMode promptMode)
             throws IOException, SQLException, RedactException, EnrichmentInfrastructureException {
-        requireXlsx(input);
+        requireSpreadsheet(input);
         Path standardRedacted = standardRedactedPath(input, outputDirectory);
         boolean preserveExistingRedacted = Files.isRegularFile(standardRedacted);
         Path redactionDirectory = preserveExistingRedacted
@@ -57,7 +58,11 @@ public final class EnrichService {
                 List<String> currentMenu = menuService.load();
                 EnrichmentReport proposed = new LlmEnrichmentAdapter(llmConfig, modelClient).enrich(
                         new EnrichmentInput(
-                                redaction.outputPath(), unhidden, sheetName, currentMenu));
+                                redaction.outputPath(),
+                                unhidden,
+                                sheetName,
+                                currentMenu,
+                                promptMode));
                 RegionTypeNormalizationResult normalized = menuService.normalizeProposals(
                         proposed.regions().stream().map(Region::type).toList());
                 EnrichmentReport normalizedReport = authoritativeReport(
@@ -120,15 +125,21 @@ public final class EnrichService {
                 proposed.problems());
     }
 
-    private static void requireXlsx(Path input) throws RedactException {
+    private static void requireSpreadsheet(Path input) throws RedactException {
         String fileName = input.getFileName().toString().toLowerCase(Locale.ROOT);
-        if (!fileName.endsWith(".xlsx")) {
-            throw new RedactException("enrich v1 supports .xlsx only: " + input.getFileName());
+        if (!fileName.endsWith(".xlsx") && !fileName.endsWith(".xls")) {
+            throw new RedactException("enrich v1 supports .xlsx and .xls only: " + input.getFileName());
         }
     }
 
     private static Path standardRedactedPath(Path input, Path outputDirectory) {
-        String stem = input.getFileName().toString().replaceFirst("(?i)\\.xlsx$", "");
+        String fileName = input.getFileName().toString();
+        if (fileName.toLowerCase(Locale.ROOT).endsWith(".xls")
+                && !fileName.toLowerCase(Locale.ROOT).endsWith(".xlsx")) {
+            String stem = fileName.replaceFirst("(?i)\\.xls$", "");
+            return outputDirectory.resolve(stem + "-redacted.xls");
+        }
+        String stem = fileName.replaceFirst("(?i)\\.xlsx$", "");
         return outputDirectory.resolve(stem + "-redacted.xlsx");
     }
 }

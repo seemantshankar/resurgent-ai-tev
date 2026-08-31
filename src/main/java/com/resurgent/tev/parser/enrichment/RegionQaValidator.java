@@ -14,6 +14,17 @@ public final class RegionQaValidator {
 
     public EnrichmentReport validate(WorksheetSnapshot sheet, EnrichmentReport report) {
         List<Problem> problems = new ArrayList<>();
+        boolean regionsOnly = LlmEnrichmentAdapter.isRegionsOnly(report.promptVersion());
+        report.regions().forEach(region -> region.cells().forEach(cell -> {
+            if (!sheet.filledCells().contains(cell.address())) {
+                problems.add(new Problem(
+                        EnrichmentReport.ProblemCode.BLANK_CELL_IN_REPORT,
+                        "Cell " + cell.address() + " is blank and must not appear in region "
+                                + region.id(),
+                        List.of(cell.address()),
+                        List.of(region.id())));
+            }
+        }));
         sheet.filledCells().stream().sorted(Comparator.naturalOrder()).forEach(cell -> {
             List<Region> assignments = containingRegions(cell, report.regions());
             if (assignments.isEmpty()) {
@@ -28,7 +39,7 @@ public final class RegionQaValidator {
                         "Filled cell " + cell + " is assigned to multiple regions",
                         List.of(cell),
                         assignments.stream().map(Region::id).toList()));
-            } else if (assignments.getFirst().cells().stream()
+            } else if (!regionsOnly && assignments.getFirst().cells().stream()
                     .noneMatch(regionCell -> regionCell.address().equals(cell))) {
                 Region assignment = assignments.getFirst();
                 problems.add(new Problem(

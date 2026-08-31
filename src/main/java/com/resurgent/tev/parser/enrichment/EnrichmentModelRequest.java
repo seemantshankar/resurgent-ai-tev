@@ -7,4 +7,7 @@ public record EnrichmentModelRequest(
         String apiKey,
         String modelId,
         URI endpoint,
-        String prompt) {}
+        String httpReferer,
+        String appTitle,
+        String prompt,
+        int maxOutputTokens) {}

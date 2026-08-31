@@ -9,7 +9,16 @@ public record EnrichmentInput(
         Path redactedWorkbook,
         Path unhiddenWorkbook,
         String sheetName,
-        List<String> typeMenu) {
+        List<String> typeMenu,
+        EnrichmentPromptMode mode) {
+
+    public EnrichmentInput(
+            Path redactedWorkbook,
+            Path unhiddenWorkbook,
+            String sheetName,
+            List<String> typeMenu) {
+        this(redactedWorkbook, unhiddenWorkbook, sheetName, typeMenu, EnrichmentPromptMode.FULL);
+    }
 
     public EnrichmentInput {
         Objects.requireNonNull(redactedWorkbook, "redactedWorkbook");
@@ -18,5 +27,6 @@ public record EnrichmentInput(
             throw new IllegalArgumentException("sheetName must not be blank");
         }
         typeMenu = List.copyOf(Objects.requireNonNull(typeMenu, "typeMenu"));
+        mode = Objects.requireNonNull(mode, "mode");
     }
 }
