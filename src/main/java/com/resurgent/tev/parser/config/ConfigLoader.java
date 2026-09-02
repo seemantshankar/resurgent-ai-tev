@@ -25,7 +25,12 @@ public final class ConfigLoader {
             "maxZipExpansionRatio",
             "xlsEnabled",
             "rejectPasswordProtected",
-            "rejectActiveXOleDde");
+            "rejectActiveXOleDde",
+            "llmApiKey",
+            "llmEndpoint",
+            "llmHttpReferer",
+            "llmAppTitle",
+            "llmMaxOutputTokens");
 
     private ConfigLoader() {}
 
