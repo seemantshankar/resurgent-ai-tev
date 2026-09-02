@@ -58,6 +58,20 @@ class FilledCellIslandDetectorTest {
     }
 
     @Test
+    void doesNotGlueIslandsAcrossFourBlankRows() {
+        Set<String> filled = new LinkedHashSet<>();
+        filled.addAll(Set.of("A1", "D1", "E1", "F1"));
+        filled.addAll(Set.of("A3", "D3", "E3", "F3"));
+        filled.addAll(Set.of("A5", "D5", "E5", "F5"));
+        filled.addAll(Set.of("A10", "D10", "E10", "F10"));
+
+        var islands = new FilledCellIslandDetector().detect(filled);
+
+        assertThat(islands.stream().map(IslandHint::bounds).toList())
+                .containsExactlyInAnyOrder("A1:F5", "A10:F10");
+    }
+
+    @Test
     void doesNotMergeSideScratchSeparatedByBlankColumn() {
         // Wide main block A1:M2 and narrow side check O1:P2 (blank N) stay separate
         Set<String> filled = new LinkedHashSet<>();

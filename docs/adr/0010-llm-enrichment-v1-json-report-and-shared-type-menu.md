@@ -69,7 +69,7 @@ Project Cost, Capital Cost, Civil Cost, Land, Plant and Machinery, P&L, Balance 
 
 ## Violations and QA
 
-When the model breaks partition or reclassify rules, still write the JSON with a **problems list** (overlap, unassigned cell, Scratch still used by Required). The command **fails** if any problems exist. We do **not** silently move boxes to "fix" the model.
+When the model breaks partition or reclassify rules, still write the JSON with a **problems list** (overlap, unassigned cell, Scratch still used by Required). The command **fails** if any problems exist. We do **not** silently move boxes to "fix" the model. If QA finds `unassigned_cell`, we run **one cropped repair pass**: leftover filled cells plus nearby existing regions (proximity crops the prompt; it does not decide membership). Frozen regions are not sent. The model may expand nearby boxes or add new ones. Java merges that patch over the first report and keeps the result only when QA is clean. A dirty repair does not replace the first. Overlap-only failures do not trigger repair. We do not resample the full sheet.
 
 **How we will say it worked.** One real tab you care about (e.g. Project Cost or P&L). Pass if: each real table is one box including title and headers; scratch/leftovers look right; a dozen amount cells have the right row/column names. Not a 16,000-cell perfect score.
 

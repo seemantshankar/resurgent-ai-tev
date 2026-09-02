@@ -17,6 +17,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
@@ -100,6 +101,89 @@ class EnrichCommandTest {
                 .containsExactly(EnrichmentReport.ProblemCode.OVERLAP);
         assertThat(result.stdout()).contains("1 problems");
         assertThat(result.stderr()).contains(reportPath.toString());
+    }
+
+    @Test
+    void repairsUnassignedWithCroppedSecondCallThenKeepsCleanPartition() throws Exception {
+        Path input = writeWorkbook();
+        Path reportPath = tempDir.resolve("retry-clean.json");
+        SequencingClient stub = new SequencingClient(
+                EnrichmentReportJson.toJson(titleOnlyResponse()),
+                EnrichmentReportJson.toJson(cleanRepairResponse()));
+
+        RunResult result = run(stub,
+                "enrich",
+                "--input", input.toString(),
+                "--db", tempDir.resolve("retry-clean.db").toString(),
+                "--mandate-id", "1",
+                "--sheet", "Project Cost",
+                "--output-dir", tempDir.resolve("retry-clean-output").toString(),
+                "--report", reportPath.toString(),
+                "--config", writeConfig().toString(),
+                "--env", writeEnv().toString());
+
+        assertThat(stub.calls).isEqualTo(2);
+        assertThat(stub.prompts.get(0)).doesNotContain("This is a repair pass");
+        assertThat(stub.prompts.get(1))
+                .contains("This is a repair pass")
+                .contains("Leftover filled cells")
+                .contains("A2")
+                .contains("B2")
+                .contains("Nearby regions to replace or expand");
+        assertThat(result.exitCode()).isZero();
+        EnrichmentReport report = EnrichmentReportJson.read(reportPath);
+        assertThat(report.problems()).isEmpty();
+        assertThat(report.promptVersion()).isEqualTo(LlmEnrichmentAdapter.PROMPT_VERSION);
+        assertThat(report.regions().getFirst().bounds()).isEqualTo("A1:B2");
+    }
+
+    @Test
+    void doesNotRetryWhenQaFindsOnlyOverlap() throws Exception {
+        Path input = writeWorkbook();
+        SequencingClient stub = new SequencingClient(
+                EnrichmentReportJson.toJson(overlappingResponse()));
+
+        RunResult result = run(stub,
+                "enrich",
+                "--input", input.toString(),
+                "--db", tempDir.resolve("overlap-once.db").toString(),
+                "--mandate-id", "1",
+                "--sheet", "Project Cost",
+                "--output-dir", tempDir.resolve("overlap-once-output").toString(),
+                "--report", tempDir.resolve("overlap-once.json").toString(),
+                "--config", writeConfig().toString(),
+                "--env", writeEnv().toString());
+
+        assertThat(stub.calls).isEqualTo(1);
+        assertThat(result.exitCode()).isEqualTo(3);
+    }
+
+    @Test
+    void keepsFirstReportWhenRepairAlsoHasUnassigned() throws Exception {
+        Path input = writeWorkbook();
+        Path reportPath = tempDir.resolve("retry-still-dirty.json");
+        SequencingClient stub = new SequencingClient(
+                EnrichmentReportJson.toJson(titleOnlyResponse()),
+                EnrichmentReportJson.toJson(titleOnlyRepairResponse("retry-miss")));
+
+        RunResult result = run(stub,
+                "enrich",
+                "--input", input.toString(),
+                "--db", tempDir.resolve("retry-dirty.db").toString(),
+                "--mandate-id", "1",
+                "--sheet", "Project Cost",
+                "--output-dir", tempDir.resolve("retry-dirty-output").toString(),
+                "--report", reportPath.toString(),
+                "--config", writeConfig().toString(),
+                "--env", writeEnv().toString());
+
+        assertThat(stub.calls).isEqualTo(2);
+        assertThat(result.exitCode()).isEqualTo(3);
+        EnrichmentReport report = EnrichmentReportJson.read(reportPath);
+        assertThat(report.regions().getFirst().id()).isEqualTo("sales");
+        assertThat(report.problems())
+                .extracting(EnrichmentReport.Problem::code)
+                .contains(EnrichmentReport.ProblemCode.UNASSIGNED_CELL);
     }
 
     @Test
@@ -249,6 +333,73 @@ class EnrichCommandTest {
                 clean.typeMenu(),
                 List.of(clean.regions().getFirst(), overlapping),
                 List.of());
+    }
+
+    private static EnrichmentReport cleanRepairResponse() {
+        EnrichmentReport clean = cleanResponse();
+        return new EnrichmentReport(
+                clean.version(),
+                clean.fileName(),
+                clean.sheetName(),
+                clean.redactedInputPath(),
+                clean.unhiddenTempPath(),
+                clean.modelId(),
+                LlmEnrichmentAdapter.PROMPT_VERSION_REPAIR,
+                clean.typeMenu(),
+                clean.regions(),
+                List.of());
+    }
+
+    private static EnrichmentReport titleOnlyResponse() {
+        return titleOnlyResponse("sales");
+    }
+
+    private static EnrichmentReport titleOnlyResponse(String regionId) {
+        return titleOnly(regionId, LlmEnrichmentAdapter.PROMPT_VERSION);
+    }
+
+    private static EnrichmentReport titleOnlyRepairResponse(String regionId) {
+        return titleOnly(regionId, LlmEnrichmentAdapter.PROMPT_VERSION_REPAIR);
+    }
+
+    private static EnrichmentReport titleOnly(String regionId, String promptVersion) {
+        EnrichmentReport clean = cleanResponse();
+        return new EnrichmentReport(
+                clean.version(),
+                clean.fileName(),
+                clean.sheetName(),
+                clean.redactedInputPath(),
+                clean.unhiddenTempPath(),
+                clean.modelId(),
+                promptVersion,
+                clean.typeMenu(),
+                List.of(new Region(
+                        regionId,
+                        "A1:A1",
+                        "Sales",
+                        "Sales",
+                        RegionPurpose.REQUIRED,
+                        List.of(new Cell("A1", CellRole.TITLE, null, null, null, null)),
+                        List.of())),
+                List.of());
+    }
+
+    private static final class SequencingClient implements EnrichmentModelClient {
+        private final List<String> payloads;
+        private final List<String> prompts = new ArrayList<>();
+        private int calls;
+
+        private SequencingClient(String... payloads) {
+            this.payloads = List.of(payloads);
+        }
+
+        @Override
+        public String generate(com.resurgent.tev.parser.enrichment.EnrichmentModelRequest request) {
+            prompts.add(request.prompt());
+            int index = Math.min(calls, payloads.size() - 1);
+            calls++;
+            return payloads.get(index);
+        }
     }
 
     private record RunResult(int exitCode, String stdout, String stderr) {}

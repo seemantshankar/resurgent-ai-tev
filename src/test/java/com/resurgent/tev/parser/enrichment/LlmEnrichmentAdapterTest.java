@@ -13,6 +13,7 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -54,7 +55,7 @@ class LlmEnrichmentAdapterTest {
                 .contains("Sparse grid")
                 .contains("A1:Revenue")
                 .contains("Cell index (NDJSON")
-                .contains("Island hints");
+                .doesNotContain("Island hints");
     }
 
     @Test
@@ -115,10 +116,43 @@ class LlmEnrichmentAdapterTest {
 
         assertThat(fakeClient.request.prompt())
                 .contains("Return only valid JSON matching enrichment-report-v1")
-                .contains("\"promptVersion\": \"enrichment-v2.1-regions-only\"")
+                .contains("\"promptVersion\": \"enrichment-v2.4-regions-only\"")
                 .contains("\"cells\": []")
                 .contains("regions-only pass")
                 .doesNotContain("list every filled cell exactly once in region.cells");
+    }
+
+    @Test
+    void promptUsesLabelsAndFormulasNotIslandHints() throws Exception {
+        Path unhidden = tempDir.resolve("mixed.xlsx");
+        writeWorkbook(unhidden);
+        CapturingClient fakeClient = new CapturingClient(
+                EnrichmentReportJson.toJson(regionsOnlyFixture(tempDir.resolve("r.xlsx"), unhidden)));
+        LlmEnrichmentAdapter adapter = new LlmEnrichmentAdapter(
+                new LlmEnrichmentConfig(
+                        "test-api-key",
+                        FIXTURE_MODEL_ID,
+                        URI.create("https://example.invalid/v1/chat/completions"),
+                        null,
+                        "tev-parse",
+                        LlmEnrichmentConfigLoader.DEFAULT_MAX_OUTPUT_TOKENS),
+                fakeClient);
+
+        adapter.enrich(new EnrichmentInput(
+                tempDir.resolve("r.xlsx"),
+                unhidden,
+                "Project Cost",
+                List.of("Civil Cost"),
+                EnrichmentPromptMode.REGIONS_ONLY));
+
+        assertThat(fakeClient.request.prompt())
+                .contains("Prompt version: enrichment-v2.4-regions-only")
+                .contains("Decide regions from labels and formulas")
+                .contains("unless a formula in a main")
+                .contains("O47:V48")
+                .doesNotContain("computed from a Required table")
+                .doesNotContain("Island hints")
+                .doesNotContain("island-");
     }
 
     @Test
@@ -141,6 +175,87 @@ class LlmEnrichmentAdapterTest {
                 redacted, unhidden, "Project Cost", List.of("Civil Cost"), EnrichmentPromptMode.REGIONS_ONLY));
 
         assertThat(actual.promptVersion()).isEqualTo(LlmEnrichmentAdapter.PROMPT_VERSION_REGIONS_ONLY);
+    }
+
+    @Test
+    void repairPromptCropsToLeftoversAndNearbyRegions() throws Exception {
+        Path unhidden = tempDir.resolve("repair.xlsx");
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            var sheet = workbook.createSheet("Project Cost");
+            sheet.createRow(0).createCell(0).setCellValue("Revenue");
+            var row = sheet.createRow(1);
+            row.createCell(0).setCellValue("Sales");
+            row.createCell(1).setCellValue(100.0);
+            sheet.createRow(19).createCell(5).setCellValue("Far");
+            try (OutputStream output = Files.newOutputStream(unhidden)) {
+                workbook.write(output);
+            }
+        }
+        Path redacted = tempDir.resolve("r.xlsx");
+        EnrichmentReport response = new EnrichmentReport(
+                EnrichmentReport.VERSION,
+                "fixture.xlsx",
+                "Project Cost",
+                redacted.toString(),
+                unhidden.toString(),
+                FIXTURE_MODEL_ID,
+                LlmEnrichmentAdapter.PROMPT_VERSION_REPAIR,
+                new TypeMenu(List.of("Civil Cost"), List.of()),
+                List.of(new Region(
+                        "sales",
+                        "A1:B2",
+                        "Sales",
+                        "Civil Cost",
+                        RegionPurpose.REQUIRED,
+                        List.of(
+                                new Cell("A1", CellRole.TITLE, null, null, null, null),
+                                new Cell("A2", CellRole.ROW_HEADER, null, null, null, null),
+                                new Cell("B2", CellRole.AMOUNT, "Sales", null, "Year 1", null)),
+                        List.of())),
+                List.of());
+        CapturingClient fakeClient = new CapturingClient(EnrichmentReportJson.toJson(response));
+        LlmEnrichmentAdapter adapter = new LlmEnrichmentAdapter(
+                new LlmEnrichmentConfig(
+                        "test-api-key",
+                        FIXTURE_MODEL_ID,
+                        URI.create("https://example.invalid/v1/chat/completions"),
+                        null,
+                        "tev-parse",
+                        LlmEnrichmentConfigLoader.DEFAULT_MAX_OUTPUT_TOKENS),
+                fakeClient);
+        RepairWindow window = new RepairWindow(
+                List.of("A2", "B2"),
+                List.of(new Region(
+                        "sales",
+                        "A1:A1",
+                        "Sales",
+                        "Sales",
+                        RegionPurpose.REQUIRED,
+                        List.of(),
+                        List.of())),
+                Set.of("A1", "A2", "B2"));
+
+        EnrichmentReport actual = adapter.repair(new EnrichmentRepairInput(
+                redacted,
+                unhidden,
+                "Project Cost",
+                List.of("Civil Cost"),
+                EnrichmentPromptMode.FULL,
+                window));
+
+        assertThat(actual.promptVersion()).isEqualTo(LlmEnrichmentAdapter.PROMPT_VERSION_REPAIR);
+        assertThat(fakeClient.request.prompt())
+                .contains("This is a repair pass")
+                .contains("Leftover filled cells")
+                .contains("A2, B2")
+                .contains("Nearby regions to replace or expand")
+                .contains("\"id\":\"sales\"")
+                .contains("Prompt version: enrichment-v2.4-repair")
+                .contains("A1:Revenue")
+                .contains("A2:Sales")
+                .doesNotContain("F20")
+                .doesNotContain("Island hints")
+                .doesNotContain("island-");
     }
 
     @Test

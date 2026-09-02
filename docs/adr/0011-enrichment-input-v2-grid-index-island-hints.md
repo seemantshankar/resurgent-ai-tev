@@ -8,13 +8,13 @@ We already send every filled cell as `address<TAB>value` from POI (real coordina
 
 1. **Sparse grid view** — rows that contain at least one filled cell, rendered with column letters and pipe separators so adjacency matches the Excel UI. Each value is prefixed with its coordinate (`B13:516.15`).
 2. **Cell index (NDJSON)** — one JSON object per filled cell: `coord`, `row`, `col`, `kind` (`amount` | `formula` | `text`), `display`, optional `formula`, optional `mergedRange`. The model must cite only addresses present in this index.
-3. **Island hints** — 8-connected components over filled cells, then merged for L-shaped tables (column-header strip above a body with an empty corner, left row labels beside amounts, one blank row of vertical spacing). Each hint has exact `bounds` and `cellCount`. The model classifies and may merge/split further; it must not invent coordinates outside the index. Prompt v2.1 requires header/title rows inside the table box (no standalone year-header regions).
+3. **Island hints (not sent to the model as of v2.3)** — Java can still detect 8-connected filled-cell clusters for tests. Prompt v2.1–v2.2 included those bounds in the LLM input; the model copied them as regions instead of reading formulas. v2.3 drops island JSON from the prompt. v2.4: a separated block is Scratch unless a **main/Required table formula references those cells**. An island that only *reads* the main table stays Scratch. Scratch is forbidden when a Required formula references the region.
 
-**Ownership split (unchanged from ADR 0009):** Java owns geometry; the external model owns meaning (purpose, type, display name, labels). Island hints are disposable input hints, not ingest-time region detection and not official workbook truth.
+**Ownership split (unchanged from ADR 0009):** Java owns coordinates and the redacted grid. The external model owns meaning (which cells are one table, purpose, type, display name, labels). Filled-cell clusters are not region proposals and must not be shown to the model as if they were.
 
 Flat TSV (`enrichment-v1`) remains in code for tests but is no longer the default prompt version.
 
-**Validation:** existing partition QA (overlap, unassigned, scratch referenced by required) stays. v2 adds no new problem codes in this slice; chunking for tabs whose sparse grid exceeds a row cap is deferred.
+**Validation:** existing partition QA (overlap, unassigned, scratch referenced by required) stays. v2 adds no new problem codes in this slice; chunking for tabs whose sparse grid exceeds a row cap is deferred. After `unassigned_cell`, a repair call (ADR 0010) sends only leftovers and nearby boxes on a cropped grid/index; island hints stay omitted.
 
 **Deferred:** multimodal screenshots, automatic row-window chunking, DB write-back.
 

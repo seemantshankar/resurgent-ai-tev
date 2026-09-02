@@ -2,6 +2,8 @@ package com.resurgent.tev.parser.enrichment;
 
 import com.resurgent.tev.parser.config.ParserConfig;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
+import com.resurgent.tev.parser.enrichment.EnrichmentReport.Problem;
+import com.resurgent.tev.parser.enrichment.EnrichmentReport.ProblemCode;
 import com.resurgent.tev.parser.enrichment.EnrichmentReport.Region;
 import com.resurgent.tev.parser.enrichment.EnrichmentReport.TypeMenu;
 import com.resurgent.tev.parser.redact.RedactException;
@@ -12,9 +14,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 
 /** Coordinates redaction, temporary input, model enrichment, normalization, and QA. */
 public final class EnrichService {
@@ -55,27 +59,17 @@ public final class EnrichService {
                     redaction.outputPath(), sheetName);
             try {
                 RegionTypeMenuService menuService = new RegionTypeMenuService(db);
-                List<String> currentMenu = menuService.load();
-                EnrichmentReport proposed = new LlmEnrichmentAdapter(llmConfig, modelClient).enrich(
-                        new EnrichmentInput(
-                                redaction.outputPath(),
-                                unhidden,
-                                sheetName,
-                                currentMenu,
-                                promptMode));
-                RegionTypeNormalizationResult normalized = menuService.normalizeProposals(
-                        proposed.regions().stream().map(Region::type).toList());
-                EnrichmentReport normalizedReport = authoritativeReport(
+                WorksheetSnapshot snapshot =
+                        new WorksheetSnapshotReader().read(unhidden, sheetName);
+                EnrichmentReport validated = proposeUntilCovered(
                         input,
                         redaction.outputPath(),
                         unhidden,
                         sheetName,
-                        proposed,
-                        normalized);
-                WorksheetSnapshot snapshot =
-                        new WorksheetSnapshotReader().read(unhidden, sheetName);
-                EnrichmentReport validated =
-                        new RegionQaValidator().validate(snapshot, normalizedReport);
+                        promptMode,
+                        llmConfig,
+                        menuService,
+                        snapshot);
                 Path redactedArtifact = preserveExistingRedacted
                         ? standardRedacted
                         : redaction.outputPath();
@@ -91,6 +85,118 @@ public final class EnrichService {
                 Files.deleteIfExists(redactionDirectory);
             }
         }
+    }
+
+    private EnrichmentReport proposeUntilCovered(
+            Path input,
+            Path redacted,
+            Path unhidden,
+            String sheetName,
+            EnrichmentPromptMode promptMode,
+            LlmEnrichmentConfig llmConfig,
+            RegionTypeMenuService menuService,
+            WorksheetSnapshot snapshot)
+            throws SQLException, EnrichmentInfrastructureException {
+        EnrichmentReport first = proposeAndValidate(
+                input, redacted, unhidden, sheetName, promptMode, llmConfig, menuService, snapshot);
+        if (!hasUnassigned(first)) {
+            return first;
+        }
+        RepairWindow window = RepairWindow.from(first, snapshot.filledCells());
+        if (window.leftovers().isEmpty()) {
+            return first;
+        }
+        EnrichmentReport patched = repairAndValidate(
+                input, redacted, unhidden, sheetName, promptMode, llmConfig, menuService,
+                snapshot, first, window);
+        return patched.problems().isEmpty() ? patched : first;
+    }
+
+    private EnrichmentReport repairAndValidate(
+            Path input,
+            Path redacted,
+            Path unhidden,
+            String sheetName,
+            EnrichmentPromptMode promptMode,
+            LlmEnrichmentConfig llmConfig,
+            RegionTypeMenuService menuService,
+            WorksheetSnapshot snapshot,
+            EnrichmentReport first,
+            RepairWindow window)
+            throws SQLException, EnrichmentInfrastructureException {
+        List<String> currentMenu = menuService.load();
+        EnrichmentReport proposed = new LlmEnrichmentAdapter(llmConfig, modelClient).repair(
+                new EnrichmentRepairInput(
+                        redacted, unhidden, sheetName, currentMenu, promptMode, window));
+        List<Region> merged = mergeRepair(first.regions(), proposed.regions(), window.nearbyIds());
+        RegionTypeNormalizationResult normalized = menuService.normalizeProposals(
+                merged.stream().map(Region::type).toList());
+        EnrichmentReport normalizedReport = authoritativeReport(
+                input,
+                redacted,
+                unhidden,
+                sheetName,
+                new EnrichmentReport(
+                        first.version(),
+                        first.fileName(),
+                        first.sheetName(),
+                        first.redactedInputPath(),
+                        first.unhiddenTempPath(),
+                        proposed.modelId(),
+                        first.promptVersion(),
+                        first.typeMenu(),
+                        merged,
+                        List.of()),
+                normalized);
+        return new RegionQaValidator().validate(snapshot, normalizedReport);
+    }
+
+    static List<Region> mergeRepair(
+            List<Region> first,
+            List<Region> patch,
+            Set<String> replaceIds) {
+        List<Region> merged = new ArrayList<>();
+        for (Region region : first) {
+            if (!replaceIds.contains(region.id())) {
+                merged.add(region);
+            }
+        }
+        Set<String> firstIds = new LinkedHashSet<>();
+        for (Region region : first) {
+            firstIds.add(region.id());
+        }
+        for (Region region : patch) {
+            if (replaceIds.contains(region.id()) || !firstIds.contains(region.id())) {
+                merged.add(region);
+            }
+        }
+        return merged;
+    }
+
+    private EnrichmentReport proposeAndValidate(
+            Path input,
+            Path redacted,
+            Path unhidden,
+            String sheetName,
+            EnrichmentPromptMode promptMode,
+            LlmEnrichmentConfig llmConfig,
+            RegionTypeMenuService menuService,
+            WorksheetSnapshot snapshot)
+            throws SQLException, EnrichmentInfrastructureException {
+        List<String> currentMenu = menuService.load();
+        EnrichmentReport proposed = new LlmEnrichmentAdapter(llmConfig, modelClient).enrich(
+                new EnrichmentInput(redacted, unhidden, sheetName, currentMenu, promptMode));
+        RegionTypeNormalizationResult normalized = menuService.normalizeProposals(
+                proposed.regions().stream().map(Region::type).toList());
+        EnrichmentReport normalizedReport = authoritativeReport(
+                input, redacted, unhidden, sheetName, proposed, normalized);
+        return new RegionQaValidator().validate(snapshot, normalizedReport);
+    }
+
+    private static boolean hasUnassigned(EnrichmentReport report) {
+        return report.problems().stream()
+                .map(Problem::code)
+                .anyMatch(code -> code == ProblemCode.UNASSIGNED_CELL);
     }
 
     private static EnrichmentReport authoritativeReport(
