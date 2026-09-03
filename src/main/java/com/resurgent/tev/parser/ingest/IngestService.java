@@ -21,7 +21,9 @@ import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Application service behind {@code tev-parse ingest}: reads workbook bytes and
@@ -30,6 +32,14 @@ import java.util.Map;
 public final class IngestService {
 
     private static final String PARSER_VERSION = "0.1.0-SNAPSHOT";
+
+    /**
+     * POI sometimes emits barrier function names as NameX "external" tokens instead of
+     * AbstractFunctionPtg. Strip those before persisting reference edges.
+     */
+    private static final Set<String> BARRIER_FUNCTIONS = Set.of(
+            "IFERROR", "IFNA", "ISERROR", "ISNA", "ISERR", "COUNT", "COUNTA", "AGGREGATE",
+            "SUBTOTAL");
 
     private final CsvSniffer sniffer = new CsvSniffer();
     private final CsvAdapter csvAdapter = new CsvAdapter();
@@ -234,17 +244,27 @@ public final class IngestService {
                 Jsonb.toJson(metadata.properties()), metadata.isProtected(),
                 metadata.createdAt(), metadata.modifiedAt());
 
+        Map<Integer, Long> linkIndexToId = new HashMap<>();
         for (ExternalLinkIn link : metadata.externalLinks()) {
-            repo.insertExternalLink(workbookId, "external",
+            long linkId = repo.insertExternalLink(workbookId, "external",
                     link.linkIndex(), link.targetUri(),
                     link.refreshError() ? "broken" : "unchecked", now);
+            linkIndexToId.put(link.linkIndex(), linkId);
         }
 
         int sheetIndex = 0;
         int cellsWritten = 0;
         int cellsCoerced = 0;
         int cellsError = 0;
+        int formulaCellsTotal = 0;
+        int formulaCellsTokenized = 0;
+        int formulaCellsParseError = 0;
+        int formulaCellsUnavailable = 0;
         Map<CellStyle, Long> styleIds = new HashMap<>();
+        Map<String, Long> sheetNameToId = new HashMap<>();
+        Map<Long, String> worksheetIdToSheetName = new HashMap<>();
+        Map<String, Map<String, Long>> cellCoordMap = new HashMap<>();
+        List<PendingCellTokens> pendingTokensList = new ArrayList<>();
 
         for (XlsxSheet sheet : sheets) {
             long worksheetId = repo.insertWorksheet(parseRunId, sheet.sheetName(),
@@ -253,29 +273,81 @@ public final class IngestService {
                     sheet.bboxMaxRow(), sheet.bboxMaxCol(),
                     sheet.dimensionsDeclared(), sheet.realContentRows(),
                     sheet.declaredMerged());
+            sheetNameToId.put(sheet.sheetName(), worksheetId);
+            worksheetIdToSheetName.put(worksheetId, sheet.sheetName());
+            Map<String, Long> coordMap = new HashMap<>();
+            cellCoordMap.put(sheet.sheetName(), coordMap);
 
             for (NormalizedCell cell : sheet.cells()) {
-                Long styleId = resolveStyleId(repo, styleIds, cell.cellStyle());
-                long cellId = repo.insertCell(worksheetId, cell, styleId, cell.formulaNormalized());
-                recordCellProvenance(repo, cellId, sourceFileId, parseRunId, sheet.sheetName(), cell);
+                NormalizedCell cellToInsert = cell;
+                FormulaTokenizerResult tokRes = null;
+                if (cell.formulaText() != null && !cell.formulaText().isBlank()) {
+                    tokRes = FormulaTokenizer.tokenize(
+                            cell.formulaText(), cell.rowNum(), cell.colNum(),
+                            metadata.definedNames());
+                    tokRes = new FormulaTokenizerResult(tokRes.formulaState(),
+                            stripFunctionNamePseudoTokens(tokRes.tokens()),
+                            tokRes.functionTokens());
+                    cellToInsert = cell.withFormulaState(tokRes.formulaState());
+                }
+
+                Long styleId = resolveStyleId(repo, styleIds, cellToInsert.cellStyle());
+                long cellId = repo.insertCell(worksheetId, cellToInsert, styleId,
+                        cellToInsert.formulaNormalized());
+                coordMap.put(cellToInsert.coord(), cellId);
+                recordCellProvenance(repo, cellId, sourceFileId, parseRunId, sheet.sheetName(),
+                        cellToInsert);
+
+                if (tokRes != null && !tokRes.tokens().isEmpty()) {
+                    pendingTokensList.add(new PendingCellTokens(cellId, worksheetId, tokRes.tokens()));
+                }
+
+                if ("formula".equals(cellToInsert.rawType())) {
+                    formulaCellsTotal++;
+                    String state = cellToInsert.formulaState();
+                    if ("ok".equals(state)) {
+                        formulaCellsTokenized++;
+                    } else if ("parse_error".equals(state)) {
+                        formulaCellsParseError++;
+                    } else if ("unavailable".equals(state)) {
+                        formulaCellsUnavailable++;
+                    }
+                }
+
                 cellsWritten++;
-                if (cell.coercedFromText()) {
+                if (cellToInsert.coercedFromText()) {
                     cellsCoerced++;
                 }
-                if (cell.isError()) {
+                if (cellToInsert.isError()) {
                     cellsError++;
                 }
             }
             sheetIndex++;
         }
 
+        ReferenceResolver resolver = new ReferenceResolver(repo);
+        ReferenceStats refStats = new ReferenceStats();
+        ReferenceResolutionContext refCtx = new ReferenceResolutionContext(sheetNameToId,
+                worksheetIdToSheetName, linkIndexToId, cellCoordMap,
+                metadata.definedNames().keySet(), parseRunId, now);
+        for (PendingCellTokens pct : pendingTokensList) {
+            resolver.resolveAndPersist(pct.cellId(), pct.worksheetId(), pct.tokens(), refCtx,
+                    refStats);
+        }
+
         repo.updateWorkbookCalcMetadata(workbookId, metadata.calculationMode(),
                 metadata.fullCalcOnLoad(), metadata.calcChainPresent(), metadata.iterativeCalc(),
                 metadata.iterativeCount(), cellsError);
 
-        QaGateResult qa = QaGate.evaluate(cellCount, cellsWritten);
+        QaGateResult qa = QaGate.evaluate(cellCount, cellsWritten,
+                refStats.total(), refStats.resolved(), refStats.unresolved(),
+                formulaCellsTotal, formulaCellsTokenized, formulaCellsParseError,
+                formulaCellsUnavailable);
         String metricsJson = IngestMetrics.toJson(fileName, fileHash, primarySheetName(sheets),
-                rowCount, cellCount, cellsWritten, cellsCoerced, cellsError, qa);
+                rowCount, cellCount, cellsWritten, cellsCoerced, cellsError,
+                refStats.total(), refStats.resolved(), refStats.unresolved(),
+                formulaCellsTotal, formulaCellsTokenized, formulaCellsParseError,
+                formulaCellsUnavailable, qa);
         repo.updateParseRunResult(parseRunId, Timestamps.now(), qa.status(), metricsJson);
         repo.insertAuditLog(parseRunId, "parse_run_completed", Timestamps.now(),
                 Jsonb.toJson(Map.of("status", qa.status(), "cellsWritten", cellsWritten)),
@@ -283,6 +355,28 @@ public final class IngestService {
         repo.commit();
         return new IngestSummary(fileName, fileHash, primarySheetName(sheets), rowCount,
                 cellCount, sourceFileId, parseRunId, dbPath, qa.status(), metricsJson);
+    }
+
+    private static boolean isFunctionNamePseudoToken(FormulaToken token) {
+        return "external".equals(token.refKind()) && token.targetSheetName() == null
+                && token.rawToken() != null
+                && BARRIER_FUNCTIONS.contains(token.rawToken().toUpperCase(Locale.ROOT));
+    }
+
+    private static List<FormulaToken> stripFunctionNamePseudoTokens(List<FormulaToken> tokens) {
+        if (tokens == null || tokens.isEmpty()) {
+            return tokens;
+        }
+        List<FormulaToken> cleaned = new ArrayList<>(tokens.size());
+        for (FormulaToken token : tokens) {
+            if (!isFunctionNamePseudoToken(token)) {
+                cleaned.add(token);
+            }
+        }
+        return cleaned;
+    }
+
+    private record PendingCellTokens(long cellId, long worksheetId, List<FormulaToken> tokens) {
     }
 
     private static void recordCellProvenance(WorkspaceRepository repo, long cellId,
