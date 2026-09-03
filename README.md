@@ -1,5 +1,5 @@
 # Resurgent AI — TEV Automation
 
-Phase 1: spreadsheet parser and downstream automation for TEV financial models.
+Phase 1: `tev-parse ingest` (FM Loader) and `tev-parse redact` (number-redacted tab export).
 
-See `Project Docs/` for strategy, findings, and requirements.
+See `Project Docs/` for strategy, findings, and requirements. `CONTEXT.md` is the glossary.

@@ -301,6 +301,7 @@ class XlsAdapterTest {
             NormalizedCell b1Out = cells.get("B1");
             assertThat(b1Out.rawType()).isEqualTo("formula");
             assertThat(b1Out.formulaText()).isEqualTo("A1*2");
+            assertThat(b1Out.formulaNormalized()).isEqualTo("A1*2");
             assertThat(b1Out.formulaState()).isEqualTo("ok");
             assertThat(b1Out.cachedValue()).isEqualTo("10.0");
             assertThat(b1Out.cacheState()).isEqualTo("fresh");
@@ -318,11 +319,45 @@ class XlsAdapterTest {
         NormalizedCell a1 = cells.get("A1");
         assertThat(a1.rawType()).isEqualTo("formula");
         assertThat(a1.formulaText()).isNull();
+        assertThat(a1.formulaNormalized()).isNull();
         assertThat(a1.formulaState()).isEqualTo("unavailable");
         assertThat(a1.cachedValue()).isEqualTo("2.0");
         assertThat(a1.cacheState()).isEqualTo("fresh");
         assertThat(a1.numericValue()).isEqualByComparingTo("2");
         assertThat(a1.valueType()).isEqualTo("number");
+    }
+
+    @Test
+    void styledTitleCapturesSharedCellStyleAtTheAdapterOutput() throws Exception {
+        try (HSSFWorkbook workbook = new HSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Model");
+            Cell title = sheet.createRow(0).createCell(0);
+            title.setCellValue("Project cost summary");
+            CellStyle style = workbook.createCellStyle();
+            style.setDataFormat(workbook.createDataFormat().getFormat("$#,##0.00"));
+            style.setFillForegroundColor(org.apache.poi.ss.usermodel.IndexedColors.YELLOW.getIndex());
+            style.setFillPattern(org.apache.poi.ss.usermodel.FillPatternType.SOLID_FOREGROUND);
+            style.setBorderBottom(org.apache.poi.ss.usermodel.BorderStyle.THIN);
+            org.apache.poi.ss.usermodel.Font font = workbook.createFont();
+            font.setBold(true);
+            style.setFont(font);
+            title.setCellStyle(style);
+
+            Cell twin = sheet.createRow(1).createCell(0);
+            twin.setCellValue("same paint");
+            twin.setCellStyle(style);
+
+            Map<String, NormalizedCell> cells = cellsByCoord(
+                    new XlsAdapter().parse(writeWorkbook(workbook, "styled-title.xls")));
+
+            NormalizedCell a1 = cells.get("A1");
+            assertThat(a1.cellStyle()).isNotNull();
+            assertThat(a1.cellStyle().isBold()).isTrue();
+            assertThat(a1.cellStyle().numberFormat()).isEqualTo("$#,##0.00");
+            assertThat(a1.cellStyle().fillPattern()).isEqualTo("SOLID_FOREGROUND");
+            assertThat(a1.cellStyle().borderBottomStyle()).isEqualTo("THIN");
+            assertThat(cells.get("A2").cellStyle()).isEqualTo(a1.cellStyle());
+        }
     }
 
     @Test
@@ -457,7 +492,7 @@ class XlsAdapterTest {
     }
 
     @Test
-    void whitespaceOnlyStringWithPresentationIsNotStored() throws Exception {
+    void whitespaceOnlyStringWithPresentationIsStoredAsStyledBlank() throws Exception {
         try (HSSFWorkbook workbook = new HSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("StyledBlank");
             CellStyle style = workbook.createCellStyle();
@@ -476,7 +511,14 @@ class XlsAdapterTest {
             Path xls = writeWorkbook(workbook, "styled-blank.xls");
             Map<String, NormalizedCell> cells = cellsByCoord(new XlsAdapter().parse(xls));
 
-            assertThat(cells).isEmpty();
+            assertThat(cells).containsOnlyKeys("A1");
+            NormalizedCell a1 = cells.get("A1");
+            assertThat(a1.rawValue()).isNull();
+            assertThat(a1.valueType()).isEqualTo("empty");
+            assertThat(a1.cellStyle()).isNotNull();
+            assertThat(a1.cellStyle().isBold()).isTrue();
+            assertThat(a1.cellStyle().fillPattern()).isEqualTo("SOLID_FOREGROUND");
+            assertThat(a1.cellStyle().fillFgColor()).isEqualTo("22");
         }
     }
 
@@ -500,12 +542,12 @@ class XlsAdapterTest {
     }
 
     @Test
-    void blankCellWithPresentationIsNotStoredWithoutStringPadding() throws Exception {
+    void blankCellWithBorderIsStoredForTableEdgePaint() throws Exception {
         try (HSSFWorkbook workbook = new HSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("BlankStyled");
             CellStyle style = workbook.createCellStyle();
-            style.setFillForegroundColor(org.apache.poi.ss.usermodel.IndexedColors.LIGHT_BLUE.getIndex());
-            style.setFillPattern(org.apache.poi.ss.usermodel.FillPatternType.SOLID_FOREGROUND);
+            style.setBorderBottom(org.apache.poi.ss.usermodel.BorderStyle.THIN);
+            style.setBottomBorderColor(org.apache.poi.ss.usermodel.IndexedColors.BLACK.getIndex());
 
             Cell blank = sheet.createRow(0).createCell(0);
             blank.setCellStyle(style);
@@ -513,7 +555,11 @@ class XlsAdapterTest {
             Path xls = writeWorkbook(workbook, "blank-styled.xls");
             Map<String, NormalizedCell> cells = cellsByCoord(new XlsAdapter().parse(xls));
 
-            assertThat(cells).isEmpty();
+            assertThat(cells).containsOnlyKeys("A1");
+            NormalizedCell a1 = cells.get("A1");
+            assertThat(a1.valueType()).isEqualTo("empty");
+            assertThat(a1.cellStyle().borderBottomStyle()).isEqualTo("THIN");
+            assertThat(a1.cellStyle().borderBottomColor()).isEqualTo("8");
         }
     }
 

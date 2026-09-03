@@ -196,7 +196,7 @@ class XlsxAdapterTest {
     }
 
     @Test
-    void formulaTextIsPreservedVerbatim() throws Exception {
+    void formulaTextIsPreservedVerbatimAndNormalizedCleansWhitespace() throws Exception {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Formulas");
             Row row = sheet.createRow(0);
@@ -209,8 +209,13 @@ class XlsxAdapterTest {
             Map<String, NormalizedCell> cells = cellsByCoord(sheets);
 
             assertThat(cells.get("A1").formulaText()).isEqualTo("\"A  B\"  &  C1");
+            assertThat(cells.get("A1").formulaNormalized()).isEqualTo("\"A  B\" & C1");
+
             assertThat(cells.get("B1").formulaText()).isEqualTo("SUM(  A1,  B1 )");
+            assertThat(cells.get("B1").formulaNormalized()).isEqualTo("SUM( A1, B1 )");
+
             assertThat(cells.get("C1").formulaText()).isEqualTo("'My  Sheet'!A1 + B1");
+            assertThat(cells.get("C1").formulaNormalized()).isEqualTo("'My  Sheet'!A1 + B1");
         }
     }
 
@@ -328,7 +333,7 @@ class XlsxAdapterTest {
     }
 
     @Test
-    void styledTitleStoresCellValueWithoutStyleMetadata() throws Exception {
+    void styledTitleCapturesSharedCellStyleAtTheAdapterOutput() throws Exception {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Model");
             Cell title = sheet.createRow(0).createCell(0);
@@ -338,15 +343,70 @@ class XlsxAdapterTest {
             style.setFillForegroundColor(org.apache.poi.ss.usermodel.IndexedColors.YELLOW.getIndex());
             style.setFillPattern(FillPatternType.SOLID_FOREGROUND);
             style.setBorderBottom(BorderStyle.THIN);
+            style.setBottomBorderColor(org.apache.poi.ss.usermodel.IndexedColors.BLACK.getIndex());
             org.apache.poi.ss.usermodel.Font font = workbook.createFont();
             font.setBold(true);
             style.setFont(font);
             title.setCellStyle(style);
 
-            NormalizedCell a1 = cellsByCoord(
-                    new XlsxAdapter().parse(writeWorkbook(workbook, "styled-title.xlsx"))).get("A1");
+            Cell twin = sheet.createRow(1).createCell(0);
+            twin.setCellValue("same paint");
+            twin.setCellStyle(style);
+
+            Cell other = sheet.createRow(2).createCell(0);
+            other.setCellValue("missing bottom border");
+            org.apache.poi.ss.usermodel.CellStyle otherStyle = workbook.createCellStyle();
+            otherStyle.setDataFormat(workbook.createDataFormat().getFormat("$#,##0.00"));
+            otherStyle.setFillForegroundColor(org.apache.poi.ss.usermodel.IndexedColors.YELLOW.getIndex());
+            otherStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+            otherStyle.setFont(font);
+            other.setCellStyle(otherStyle);
+
+            Map<String, NormalizedCell> cells = cellsByCoord(
+                    new XlsxAdapter().parse(writeWorkbook(workbook, "styled-title.xlsx")));
+
+            NormalizedCell a1 = cells.get("A1");
             assertThat(a1.textValue()).isEqualTo("Project cost summary");
-            assertThat(a1.valueType()).isEqualTo("text");
+            assertThat(a1.cellStyle()).isNotNull();
+            assertThat(a1.cellStyle().isBold()).isTrue();
+            assertThat(a1.cellStyle().numberFormat()).isEqualTo("$#,##0.00");
+            assertThat(a1.cellStyle().fillPattern()).isEqualTo("SOLID_FOREGROUND");
+            assertThat(a1.cellStyle().fillFgColor()).isEqualTo("#ffff00");
+            assertThat(a1.cellStyle().borderBottomStyle()).isEqualTo("THIN");
+            assertThat(a1.cellStyle().borderBottomColor()).isNotBlank();
+            assertThat(a1.cellStyle().borderTopStyle()).isNull();
+
+            assertThat(cells.get("A2").cellStyle()).isEqualTo(a1.cellStyle());
+            assertThat(cells.get("A3").cellStyle()).isNotEqualTo(a1.cellStyle());
+            assertThat(cells.get("A3").cellStyle().borderBottomStyle()).isNull();
+        }
+    }
+
+    @Test
+    void blankCellWithBorderIsStoredForTableEdgePaint() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("BlankBorder");
+            org.apache.poi.ss.usermodel.CellStyle style = workbook.createCellStyle();
+            style.setBorderBottom(BorderStyle.THIN);
+            style.setBottomBorderColor(org.apache.poi.ss.usermodel.IndexedColors.BLACK.getIndex());
+            Cell blank = sheet.createRow(0).createCell(0);
+            blank.setCellStyle(style);
+
+            Cell spacer = sheet.createRow(1).createCell(0);
+            spacer.setCellValue(" ");
+            org.apache.poi.ss.usermodel.CellStyle formatOnly = workbook.createCellStyle();
+            formatOnly.setDataFormat(workbook.createDataFormat().getFormat("0.00"));
+            spacer.setCellStyle(formatOnly);
+
+            Map<String, NormalizedCell> cells = cellsByCoord(
+                    new XlsxAdapter().parse(writeWorkbook(workbook, "blank-border.xlsx")));
+
+            assertThat(cells).containsOnlyKeys("A1");
+            NormalizedCell a1 = cells.get("A1");
+            assertThat(a1.valueType()).isEqualTo("empty");
+            assertThat(a1.rawValue()).isNull();
+            assertThat(a1.cellStyle().borderBottomStyle()).isEqualTo("THIN");
+            assertThat(a1.cellStyle().borderBottomColor()).matches("#[0-9a-f]{6}|\\d+");
         }
     }
 

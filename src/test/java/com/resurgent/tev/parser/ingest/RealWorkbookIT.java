@@ -202,15 +202,47 @@ class RealWorkbookIT {
 
     @Test
     void phantomDeclaredDimensionsAreOverriddenByComputedBbox() throws Exception {
-        // AT GLANCE declares B3:J44 but real content ends at row 43; SALESPROJECTION
-        // declares A2:R83 but the real bounding box never reaches column R; Details
-        // declares A1:J235 but real content ends at row 234 -- ws.dimensions()
-        // overstates every one of them per the complexity findings.
+        // Declared dimensions can overstate the sheet, but painted blank cells are
+        // real extent for table-edge detection. Computed bbox must stay within the
+        // declared range and must include those painted blanks once ingested.
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
-            assertBboxNarrowerThanDeclared(c, "AT GLANCE");
-            assertBboxNarrowerThanDeclared(c, "SALESPROJECTION");
+            for (String sheetName : List.of("AT GLANCE", "SALESPROJECTION", "Details")) {
+                assertBboxWithinDeclared(c, sheetName);
+            }
+            assertThat(scalarLong(c,
+                    "SELECT COUNT(*) FROM cell c JOIN worksheet w ON w.worksheet_id = c.worksheet_id"
+                            + " WHERE w.sheet_name IN ('AT GLANCE', 'SALESPROJECTION', 'Details')"
+                            + " AND c.value_type = 'empty' AND c.style_id IS NOT NULL"))
+                    .as("painted blank cells on phantom-prone sheets are kept")
+                    .isGreaterThan(0);
+            // Details still has declared padding past the last painted/content row.
             assertBboxNarrowerThanDeclared(c, "Details");
         }
+    }
+
+    private void assertBboxWithinDeclared(Connection c, String sheetName) throws Exception {
+        int bboxMaxRow;
+        int bboxMaxCol;
+        String declared;
+        try (PreparedStatement ps = c.prepareStatement(
+                "SELECT bbox_max_row, bbox_max_col, dimensions_declared FROM worksheet"
+                        + " WHERE sheet_name = ?")) {
+            ps.setString(1, sheetName);
+            try (ResultSet rs = ps.executeQuery()) {
+                assertThat(rs.next()).isTrue();
+                bboxMaxRow = rs.getInt("bbox_max_row");
+                bboxMaxCol = rs.getInt("bbox_max_col");
+                declared = rs.getString("dimensions_declared");
+            }
+        }
+        assertThat(declared).isNotNull();
+        Matcher m = A1_RANGE_END.matcher(declared);
+        assertThat(m.find()).as("dimensions_declared '%s' matches an A1 range", declared).isTrue();
+        int declaredMaxRow = Integer.parseInt(m.group(2));
+        int declaredMaxCol = columnLettersToIndex(m.group(1));
+
+        assertThat(bboxMaxRow).isLessThanOrEqualTo(declaredMaxRow);
+        assertThat(bboxMaxCol).isLessThanOrEqualTo(declaredMaxCol);
     }
 
     private void assertBboxNarrowerThanDeclared(Connection c, String sheetName) throws Exception {

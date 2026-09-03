@@ -103,10 +103,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(14);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(15);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(14);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(15);
         }
     }
 
@@ -319,8 +319,9 @@ class PersistenceSeamTest {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(14);
-            assertThat(tableNames(c)).doesNotContain("cell_reference", "cell_error_root");
+            assertThat(count(c, "schema_migration")).isEqualTo(15);
+            assertThat(tableNames(c)).contains("cell_reference");
+            assertThat(tableNames(c)).doesNotContain("cell_error_root");
 
             long sourceFileId = repo.insertSourceFile(1L, "v8.xlsx", "hash8", "fm_xlsx",
                     Timestamps.now(), "0.1.0", null);
@@ -363,25 +364,97 @@ class PersistenceSeamTest {
     }
 
     @Test
-    void v14MigrationUsesLeanCellContract() throws Exception {
-        try (WorkspaceDatabase db = openDb("v14.db")) {
+    void v15MigrationRestoresAdr0013IngestSignalsWithoutHeuristicStack() throws Exception {
+        try (WorkspaceDatabase db = openDb("v15.db")) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(14);
+            assertThat(count(c, "schema_migration")).isEqualTo(15);
+            assertThat(tableNames(c)).contains("cell_style", "cell_reference");
             assertThat(tableNames(c)).doesNotContain(
                     "region",
                     "cost_head",
-                    "cell_reference",
                     "cell_error_root");
             assertThat(columnNames(c, "cell")).contains(
-                    "formula_text", "formula_state", "cached_value", "is_merged_anchor");
+                    "formula_text", "formula_state", "cached_value", "is_merged_anchor",
+                    "formula_normalized", "style_id");
             assertThat(columnNames(c, "cell")).doesNotContain(
-                    "formula_normalized", "parsed_quantity", "row_label", "col_label",
+                    "parsed_quantity", "row_label", "col_label",
                     "is_bold", "has_fill", "has_border", "number_format", "tags",
                     "region_id", "formula_skeleton");
+            assertThat(columnNames(c, "cell_style")).contains(
+                    "style_id", "is_bold", "number_format", "fill_fg_color", "fill_pattern",
+                    "border_top_style", "border_top_color",
+                    "border_right_style", "border_right_color",
+                    "border_bottom_style", "border_bottom_color",
+                    "border_left_style", "border_left_color");
             assertThat(columnNames(c, "worksheet")).doesNotContain("role", "role_conf", "role_reasons");
             try (ResultSet rs = c.createStatement().executeQuery("PRAGMA foreign_key_check")) {
                 assertThat(rs.next()).isFalse();
             }
+        }
+    }
+
+    @Test
+    void repositoryRoundTripsCellStyleFormulaNormalizedAndReferenceEdge() throws Exception {
+        try (WorkspaceDatabase db = openDb("adr0013-roundtrip.db")) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            long sourceFileId = repo.insertSourceFile(1L, "style.xlsx", "hash", "fm_xlsx",
+                    Timestamps.now(), "0.1.0", null);
+            long parseRunId = repo.insertParseRun(sourceFileId, 1L, "0.1.0", "cfg",
+                    Timestamps.now(), Timestamps.now(), "success", null);
+            long worksheetId = repo.insertWorksheet(parseRunId, "Sheet1", 0);
+
+            CellStyle style = new CellStyle(
+                    true, "#,##0.00", "#ffff00", "SOLID_FOREGROUND",
+                    "THIN", "#000000",
+                    "THIN", "#000000",
+                    "NONE", null,
+                    "MEDIUM", "#ff0000");
+            long styleId = repo.insertCellStyle(style);
+            assertThat(repo.selectCellStyle(styleId)).isEqualTo(style);
+
+            long sameStyleId = repo.insertCellStyle(style);
+            assertThat(sameStyleId).isEqualTo(styleId);
+            assertThat(repo.countCellStyles()).isEqualTo(1);
+
+            CellStyle distinct = new CellStyle(
+                    true, "#,##0.00", "#ffff00", "SOLID_FOREGROUND",
+                    "THIN", "#000000",
+                    "NONE", null,
+                    "NONE", null,
+                    "MEDIUM", "#ff0000");
+            assertThat(repo.insertCellStyle(distinct)).isNotEqualTo(styleId);
+            assertThat(repo.countCellStyles()).isEqualTo(2);
+
+            NormalizedCell formulaCell = new NormalizedCell(
+                    "B2", 2, 2,
+                    "=A1", "formula", "number", null, "100",
+                    java.math.BigDecimal.valueOf(100), null, null,
+                    "=A1", "ok", "100", "from_cache", false,
+                    false, null,
+                    false, false, null, "cell", false, false, false);
+            long cellId = repo.insertCell(worksheetId, formulaCell, styleId, "=A1");
+            long targetId = repo.insertCell(worksheetId, new NormalizedCell(
+                    "A1", 1, 1,
+                    "10", "number", "number", "10", "10",
+                    java.math.BigDecimal.TEN, null, null,
+                    null, null, null, null, false,
+                    false, null,
+                    false, false, null, "cell", false, false, false));
+
+            assertThat(repo.selectCellStyleId(cellId)).isEqualTo(styleId);
+            assertThat(repo.selectFormulaNormalized(cellId)).isEqualTo("=A1");
+            assertThat(repo.selectCellStyleId(targetId)).isNull();
+            assertThat(repo.selectFormulaNormalized(targetId)).isNull();
+
+            CellReferenceEdge edge = new CellReferenceEdge(
+                    cellId, 0, "A1", "cell",
+                    "Sheet1", worksheetId, "A1", targetId,
+                    null, false, false, null, null,
+                    false, false, null);
+            long edgeId = repo.insertCellReference(edge);
+            assertThat(repo.selectCellReference(edgeId)).isEqualTo(edge);
+            assertThat(repo.countCellStyles()).isEqualTo(2);
+            assertThat(repo.countCellReferences()).isEqualTo(1);
         }
     }
 
@@ -466,7 +539,7 @@ class PersistenceSeamTest {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(
                 dbPath, WorkspaceDatabase.OpenOptions.allowDestructiveReset())) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(14);
+            assertThat(count(c, "schema_migration")).isEqualTo(15);
             assertThat(count(c, "cell")).isZero();
             assertThat(count(c, "source_file")).isZero();
             assertThat(tableNames(c)).doesNotContain("cost_head", "region");
