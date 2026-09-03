@@ -223,7 +223,15 @@ public final class WorkspaceRepository {
         }
     }
 
+    /**
+     * Inserts a style row, or returns the existing flyweight id when identical
+     * paint is already stored (ADR 0013 deduplication).
+     */
     public long insertCellStyle(CellStyle style) throws SQLException {
+        Long existing = findCellStyleId(style);
+        if (existing != null) {
+            return existing;
+        }
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO cell_style (is_bold, number_format, fill_fg_color, fill_pattern,"
                         + " border_top_style, border_top_color,"
@@ -232,20 +240,50 @@ public final class WorkspaceRepository {
                         + " border_left_style, border_left_color)"
                         + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
-            setBoolean(ps, 1, style.isBold());
-            ps.setString(2, style.numberFormat());
-            ps.setString(3, style.fillFgColor());
-            ps.setString(4, style.fillPattern());
-            ps.setString(5, style.borderTopStyle());
-            ps.setString(6, style.borderTopColor());
-            ps.setString(7, style.borderRightStyle());
-            ps.setString(8, style.borderRightColor());
-            ps.setString(9, style.borderBottomStyle());
-            ps.setString(10, style.borderBottomColor());
-            ps.setString(11, style.borderLeftStyle());
-            ps.setString(12, style.borderLeftColor());
+            bindCellStyle(ps, style);
             ps.executeUpdate();
             return generatedId(ps);
+        } catch (SQLException e) {
+            // Concurrent identical insert races the unique index; reuse the winner.
+            Long raced = findCellStyleId(style);
+            if (raced != null) {
+                return raced;
+            }
+            throw e;
+        }
+    }
+
+    public Long findCellStyleId(CellStyle style) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT style_id FROM cell_style WHERE"
+                        + " ((is_bold IS NULL AND ? IS NULL) OR is_bold = ?)"
+                        + " AND ((number_format IS NULL AND ? IS NULL) OR number_format = ?)"
+                        + " AND ((fill_fg_color IS NULL AND ? IS NULL) OR fill_fg_color = ?)"
+                        + " AND ((fill_pattern IS NULL AND ? IS NULL) OR fill_pattern = ?)"
+                        + " AND ((border_top_style IS NULL AND ? IS NULL) OR border_top_style = ?)"
+                        + " AND ((border_top_color IS NULL AND ? IS NULL) OR border_top_color = ?)"
+                        + " AND ((border_right_style IS NULL AND ? IS NULL) OR border_right_style = ?)"
+                        + " AND ((border_right_color IS NULL AND ? IS NULL) OR border_right_color = ?)"
+                        + " AND ((border_bottom_style IS NULL AND ? IS NULL) OR border_bottom_style = ?)"
+                        + " AND ((border_bottom_color IS NULL AND ? IS NULL) OR border_bottom_color = ?)"
+                        + " AND ((border_left_style IS NULL AND ? IS NULL) OR border_left_style = ?)"
+                        + " AND ((border_left_color IS NULL AND ? IS NULL) OR border_left_color = ?)")) {
+            int i = 1;
+            i = bindNullableBooleanPair(ps, i, style.isBold());
+            i = bindNullableStringPair(ps, i, style.numberFormat());
+            i = bindNullableStringPair(ps, i, style.fillFgColor());
+            i = bindNullableStringPair(ps, i, style.fillPattern());
+            i = bindNullableStringPair(ps, i, style.borderTopStyle());
+            i = bindNullableStringPair(ps, i, style.borderTopColor());
+            i = bindNullableStringPair(ps, i, style.borderRightStyle());
+            i = bindNullableStringPair(ps, i, style.borderRightColor());
+            i = bindNullableStringPair(ps, i, style.borderBottomStyle());
+            i = bindNullableStringPair(ps, i, style.borderBottomColor());
+            i = bindNullableStringPair(ps, i, style.borderLeftStyle());
+            bindNullableStringPair(ps, i, style.borderLeftColor());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : null;
+            }
         }
     }
 
@@ -641,6 +679,35 @@ public final class WorkspaceRepository {
         } else {
             ps.setInt(index, value ? 1 : 0);
         }
+    }
+
+    private static void bindCellStyle(PreparedStatement ps, CellStyle style) throws SQLException {
+        setBoolean(ps, 1, style.isBold());
+        ps.setString(2, style.numberFormat());
+        ps.setString(3, style.fillFgColor());
+        ps.setString(4, style.fillPattern());
+        ps.setString(5, style.borderTopStyle());
+        ps.setString(6, style.borderTopColor());
+        ps.setString(7, style.borderRightStyle());
+        ps.setString(8, style.borderRightColor());
+        ps.setString(9, style.borderBottomStyle());
+        ps.setString(10, style.borderBottomColor());
+        ps.setString(11, style.borderLeftStyle());
+        ps.setString(12, style.borderLeftColor());
+    }
+
+    private static int bindNullableBooleanPair(PreparedStatement ps, int index, Boolean value)
+            throws SQLException {
+        setBoolean(ps, index, value);
+        setBoolean(ps, index + 1, value);
+        return index + 2;
+    }
+
+    private static int bindNullableStringPair(PreparedStatement ps, int index, String value)
+            throws SQLException {
+        ps.setString(index, value);
+        ps.setString(index + 1, value);
+        return index + 2;
     }
 
     private static Boolean getNullableBoolean(ResultSet rs, String column) throws SQLException {

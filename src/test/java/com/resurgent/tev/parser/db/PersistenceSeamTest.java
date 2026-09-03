@@ -412,6 +412,19 @@ class PersistenceSeamTest {
             long styleId = repo.insertCellStyle(style);
             assertThat(repo.selectCellStyle(styleId)).isEqualTo(style);
 
+            long sameStyleId = repo.insertCellStyle(style);
+            assertThat(sameStyleId).isEqualTo(styleId);
+            assertThat(repo.countCellStyles()).isEqualTo(1);
+
+            CellStyle distinct = new CellStyle(
+                    true, "#,##0.00", "#ffff00", "SOLID_FOREGROUND",
+                    "THIN", "#000000",
+                    "NONE", null,
+                    "NONE", null,
+                    "MEDIUM", "#ff0000");
+            assertThat(repo.insertCellStyle(distinct)).isNotEqualTo(styleId);
+            assertThat(repo.countCellStyles()).isEqualTo(2);
+
             NormalizedCell formulaCell = new NormalizedCell(
                     "B2", 2, 2,
                     "=A1", "formula", "number", null, "100",
@@ -440,7 +453,7 @@ class PersistenceSeamTest {
                     false, false, null);
             long edgeId = repo.insertCellReference(edge);
             assertThat(repo.selectCellReference(edgeId)).isEqualTo(edge);
-            assertThat(repo.countCellStyles()).isEqualTo(1);
+            assertThat(repo.countCellStyles()).isEqualTo(2);
             assertThat(repo.countCellReferences()).isEqualTo(1);
         }
     }

@@ -17,6 +17,23 @@ CREATE TABLE cell_style (
     border_left_color       TEXT
 );
 
+-- SQLite UNIQUE treats NULLs as distinct; COALESCE so identical paint (including
+-- null sides) collapses to one flyweight row.
+CREATE UNIQUE INDEX idx_cell_style_identity ON cell_style (
+    COALESCE(is_bold, -1),
+    COALESCE(number_format, ''),
+    COALESCE(fill_fg_color, ''),
+    COALESCE(fill_pattern, ''),
+    COALESCE(border_top_style, ''),
+    COALESCE(border_top_color, ''),
+    COALESCE(border_right_style, ''),
+    COALESCE(border_right_color, ''),
+    COALESCE(border_bottom_style, ''),
+    COALESCE(border_bottom_color, ''),
+    COALESCE(border_left_style, ''),
+    COALESCE(border_left_color, '')
+);
+
 ALTER TABLE cell ADD COLUMN style_id INTEGER REFERENCES cell_style (style_id);
 ALTER TABLE cell ADD COLUMN formula_normalized TEXT;
 
