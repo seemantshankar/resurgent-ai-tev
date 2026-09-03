@@ -411,6 +411,30 @@ class XlsxAdapterTest {
     }
 
     @Test
+    void boldOnlyBlankIsNotStored() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("BoldOnlyBlank");
+            org.apache.poi.ss.usermodel.Font font = workbook.createFont();
+            font.setBold(true);
+            org.apache.poi.ss.usermodel.CellStyle boldOnly = workbook.createCellStyle();
+            boldOnly.setFont(font);
+
+            Cell blank = sheet.createRow(0).createCell(0);
+            blank.setCellStyle(boldOnly);
+
+            Cell valued = sheet.createRow(1).createCell(0);
+            valued.setCellValue("label");
+            valued.setCellStyle(boldOnly);
+
+            Map<String, NormalizedCell> cells = cellsByCoord(
+                    new XlsxAdapter().parse(writeWorkbook(workbook, "bold-only-blank.xlsx")));
+
+            assertThat(cells).containsOnlyKeys("A2");
+            assertThat(cells.get("A2").cellStyle().isBold()).isTrue();
+        }
+    }
+
+    @Test
     void mergedRangeProducesAnchorOnceAndParticipantsMirrorDisplayValue() throws Exception {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Merged");

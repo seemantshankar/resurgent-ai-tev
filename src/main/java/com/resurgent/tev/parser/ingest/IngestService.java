@@ -31,7 +31,7 @@ import java.util.Set;
  */
 public final class IngestService {
 
-    private static final String PARSER_VERSION = "0.1.1-SNAPSHOT";
+    private static final String PARSER_VERSION = "0.1.2-SNAPSHOT";
 
     /**
      * POI sometimes emits barrier function names as NameX "external" tokens instead of

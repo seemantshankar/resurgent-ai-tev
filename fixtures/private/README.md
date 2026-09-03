@@ -1,30 +1,22 @@
 # fixtures/private/
 
-This directory holds real client financial models used only for local/manual
-integration testing. Everything in here except this README is gitignored
-(`fixtures/private/*` with a `!README.md` exception) — nothing placed here is
-ever committed.
+**Do not use this directory for integration testing.** Real-workbook ITs and
+manual ingest verification must use the working file under `Project Docs/`
+(e.g. `Project Docs/OM Arham Ventures.xlsx`). See
+`.cursor/rules/no-fixture-integration.mdc`.
 
-## Placement
-
-Copy the reference client FM to:
-
-```
-fixtures/private/OM Arham Ventures.xlsx
-```
-
-The corresponding integration test
-(`src/test/java/com/resurgent/tev/parser/ingest/RealWorkbookIT.java`) reads
-this exact path. When the file is absent — the default for any fresh clone or
-CI job without the private fixture provisioned — the test skips cleanly via
-`assumeTrue(...)` with a clear message. It only hard-fails in a private CI job
-that has been configured to provision the file first.
+This folder remains gitignored (`fixtures/private/*` with a `!README.md`
+exception) for any ad-hoc local scratch copies. Prefer not to keep a second
+client FM here — it drifts from Project Docs and caused false bbox/row
+mismatches.
 
 ## Rules
 
+- Never point `RealWorkbookIT` (or any real-workbook IT) at paths under
+  `fixtures/`.
 - Never `git add` anything in this directory other than this README.
 - Never paste workbook contents, cell dumps, or file paths containing client
   identifiers into commit messages, PR descriptions, or committed test logs.
-- If you need a repro case from the real workbook, extract the minimal
-  structural shape into a synthetic POI-generated fixture instead (see
-  `IngestServiceTest`) rather than committing a slice of the real file.
+- For unit-test repros, build a minimal synthetic workbook with Apache POI in
+  the test (see `IngestServiceTest`) rather than copying slices of the real
+  file.
