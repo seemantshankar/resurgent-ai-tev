@@ -563,4 +563,28 @@ class XlsAdapterTest {
         }
     }
 
+    @Test
+    void boldOnlyBlankIsNotStored() throws Exception {
+        try (HSSFWorkbook workbook = new HSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("BoldOnlyBlank");
+            org.apache.poi.ss.usermodel.Font font = workbook.createFont();
+            font.setBold(true);
+            CellStyle boldOnly = workbook.createCellStyle();
+            boldOnly.setFont(font);
+
+            Cell blank = sheet.createRow(0).createCell(0);
+            blank.setCellStyle(boldOnly);
+
+            Cell valued = sheet.createRow(1).createCell(0);
+            valued.setCellValue("label");
+            valued.setCellStyle(boldOnly);
+
+            Path xls = writeWorkbook(workbook, "bold-only-blank.xls");
+            Map<String, NormalizedCell> cells = cellsByCoord(new XlsAdapter().parse(xls));
+
+            assertThat(cells).containsOnlyKeys("A2");
+            assertThat(cells.get("A2").cellStyle().isBold()).isTrue();
+        }
+    }
+
 }

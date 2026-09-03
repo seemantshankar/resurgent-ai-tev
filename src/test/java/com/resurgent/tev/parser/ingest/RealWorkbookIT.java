@@ -21,13 +21,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Ticket 12: proves Sprint 1's definition of done against the real reference
- * client FM. The workbook is never committed — {@code fixtures/private/} is
- * gitignored except its README (see {@code fixtures/private/README.md}) — so
- * this test skips with a clear message whenever the file is absent, which is
- * the default for a fresh clone or any CI job that hasn't provisioned the
- * private fixture. It only hard-fails in a private CI job configured to
- * provision the file first.
+ * Ticket 12: proves Sprint 1's definition of done against the real working
+ * client FM under {@code Project Docs/}. That file is not committed; when it
+ * is absent the test skips via {@code assumeTrue}. Do not point this IT at
+ * {@code fixtures/} — those copies drift from the workbook under review.
  *
  * <p>Assertions here stick to structural facts (sheet names, cell coordinates,
  * formula references, dimensions) and never assert on the model's actual
@@ -35,7 +32,8 @@ import org.junit.jupiter.api.io.TempDir;
  */
 class RealWorkbookIT {
 
-    private static final Path WORKBOOK = Path.of("fixtures", "private", "OM Arham Ventures.xlsx");
+    private static final Path WORKBOOK =
+            Path.of("Project Docs", "OM Arham Ventures.xlsx");
     private static final Set<String> CANONICAL_ERROR_ENUM = Set.of(
             "#REF!", "#VALUE!", "#DIV/0!", "#NAME?", "#NUM!", "#NULL!", "#N/A");
     private static final Pattern A1_RANGE_END = Pattern.compile(":([A-Z]+)(\\d+)$");
@@ -49,9 +47,9 @@ class RealWorkbookIT {
     @BeforeAll
     static void ingestRealWorkbookOnce() throws Exception {
         assumeTrue(Files.exists(WORKBOOK),
-                "Real workbook fixture not found at " + WORKBOOK.toAbsolutePath()
-                        + " -- copy the client FM there to run this integration test locally"
-                        + " (see fixtures/private/README.md); skipping.");
+                "Working workbook not found at " + WORKBOOK.toAbsolutePath()
+                        + " -- place the client FM at Project Docs/OM Arham Ventures.xlsx"
+                        + " to run this integration test; skipping.");
         db = tempDir.resolve("real-workbook.db");
         summary = new IngestService().ingest(WORKBOOK, 1L, db);
     }
@@ -215,6 +213,8 @@ class RealWorkbookIT {
                             + " AND c.value_type = 'empty' AND c.style_id IS NOT NULL"))
                     .as("painted blank cells on phantom-prone sheets are kept")
                     .isGreaterThan(0);
+            // Bold-only empties must not stretch bbox to declared R; real content ends at O.
+            assertBboxNarrowerThanDeclared(c, "SALESPROJECTION");
             // Details still has declared padding past the last painted/content row.
             assertBboxNarrowerThanDeclared(c, "Details");
         }

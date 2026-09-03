@@ -48,15 +48,13 @@ final class CellStyleExtractor {
     }
 
     /**
-     * True when paint is worth keeping on an otherwise blank cell: bold, fill, or
-     * any per-side border. Number format alone is not enough (column defaults).
+     * True when paint is worth keeping on an otherwise blank cell: fill or any
+     * per-side border. Bold alone is invisible on empties and must not stretch
+     * bbox or bloat the DB. Number format alone is not enough (column defaults).
      */
     static boolean hasMeaningfulAppearance(CellStyle style) {
         if (style == null) {
             return false;
-        }
-        if (Boolean.TRUE.equals(style.isBold())) {
-            return true;
         }
         if (style.fillPattern() != null) {
             return true;
