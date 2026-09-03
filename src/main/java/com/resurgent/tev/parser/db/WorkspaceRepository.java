@@ -9,7 +9,7 @@ import java.sql.Statement;
 
 /**
  * JDBC repository for FM Loader ingest: source files, parse runs, worksheets, cells,
- * workbook metadata, provenance, and audit trail.
+ * shared cell styles, reference edges, workbook metadata, provenance, and audit trail.
  */
 public final class WorkspaceRepository {
 
@@ -145,14 +145,20 @@ public final class WorkspaceRepository {
     }
 
     public long insertCell(long worksheetId, NormalizedCell cell) throws SQLException {
+        return insertCell(worksheetId, cell, null, null);
+    }
+
+    public long insertCell(long worksheetId, NormalizedCell cell, Long styleId,
+            String formulaNormalized) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO cell (worksheet_id, coord, row_num, col_num,"
                         + " raw_value, raw_type, value_type, text_value, display_value,"
                         + " numeric_value, bool_value, date_value,"
                         + " formula_text, formula_state, cached_value, cache_state, coerced_from_text,"
                         + " is_error, error_type, is_merged_anchor, is_merged_participant, merged_range,"
-                        + " value_source, row_hidden, col_hidden, sheet_hidden)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        + " value_source, row_hidden, col_hidden, sheet_hidden,"
+                        + " style_id, formula_normalized)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, worksheetId);
             ps.setString(2, cell.coord());
@@ -184,8 +190,192 @@ public final class WorkspaceRepository {
             ps.setInt(24, cell.rowHidden() ? 1 : 0);
             ps.setInt(25, cell.colHidden() ? 1 : 0);
             ps.setInt(26, cell.sheetHidden() ? 1 : 0);
+            setLong(ps, 27, styleId);
+            ps.setString(28, formulaNormalized);
             ps.executeUpdate();
             return generatedId(ps);
+        }
+    }
+
+    public Long selectCellStyleId(long cellId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT style_id FROM cell WHERE cell_id = ?")) {
+            ps.setLong(1, cellId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                return getNullableLong(rs, "style_id");
+            }
+        }
+    }
+
+    public String selectFormulaNormalized(long cellId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT formula_normalized FROM cell WHERE cell_id = ?")) {
+            ps.setLong(1, cellId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                return rs.getString("formula_normalized");
+            }
+        }
+    }
+
+    /**
+     * Inserts a style row, or returns the existing flyweight id when identical
+     * paint is already stored (ADR 0013 deduplication).
+     */
+    public long insertCellStyle(CellStyle style) throws SQLException {
+        Long existing = findCellStyleId(style);
+        if (existing != null) {
+            return existing;
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cell_style (is_bold, number_format, fill_fg_color, fill_pattern,"
+                        + " border_top_style, border_top_color,"
+                        + " border_right_style, border_right_color,"
+                        + " border_bottom_style, border_bottom_color,"
+                        + " border_left_style, border_left_color)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            bindCellStyle(ps, style);
+            ps.executeUpdate();
+            return generatedId(ps);
+        } catch (SQLException e) {
+            // Concurrent identical insert races the unique index; reuse the winner.
+            Long raced = findCellStyleId(style);
+            if (raced != null) {
+                return raced;
+            }
+            throw e;
+        }
+    }
+
+    public Long findCellStyleId(CellStyle style) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT style_id FROM cell_style WHERE"
+                        + " ((is_bold IS NULL AND ? IS NULL) OR is_bold = ?)"
+                        + " AND ((number_format IS NULL AND ? IS NULL) OR number_format = ?)"
+                        + " AND ((fill_fg_color IS NULL AND ? IS NULL) OR fill_fg_color = ?)"
+                        + " AND ((fill_pattern IS NULL AND ? IS NULL) OR fill_pattern = ?)"
+                        + " AND ((border_top_style IS NULL AND ? IS NULL) OR border_top_style = ?)"
+                        + " AND ((border_top_color IS NULL AND ? IS NULL) OR border_top_color = ?)"
+                        + " AND ((border_right_style IS NULL AND ? IS NULL) OR border_right_style = ?)"
+                        + " AND ((border_right_color IS NULL AND ? IS NULL) OR border_right_color = ?)"
+                        + " AND ((border_bottom_style IS NULL AND ? IS NULL) OR border_bottom_style = ?)"
+                        + " AND ((border_bottom_color IS NULL AND ? IS NULL) OR border_bottom_color = ?)"
+                        + " AND ((border_left_style IS NULL AND ? IS NULL) OR border_left_style = ?)"
+                        + " AND ((border_left_color IS NULL AND ? IS NULL) OR border_left_color = ?)")) {
+            int i = 1;
+            i = bindNullableBooleanPair(ps, i, style.isBold());
+            i = bindNullableStringPair(ps, i, style.numberFormat());
+            i = bindNullableStringPair(ps, i, style.fillFgColor());
+            i = bindNullableStringPair(ps, i, style.fillPattern());
+            i = bindNullableStringPair(ps, i, style.borderTopStyle());
+            i = bindNullableStringPair(ps, i, style.borderTopColor());
+            i = bindNullableStringPair(ps, i, style.borderRightStyle());
+            i = bindNullableStringPair(ps, i, style.borderRightColor());
+            i = bindNullableStringPair(ps, i, style.borderBottomStyle());
+            i = bindNullableStringPair(ps, i, style.borderBottomColor());
+            i = bindNullableStringPair(ps, i, style.borderLeftStyle());
+            bindNullableStringPair(ps, i, style.borderLeftColor());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : null;
+            }
+        }
+    }
+
+    public CellStyle selectCellStyle(long styleId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT is_bold, number_format, fill_fg_color, fill_pattern,"
+                        + " border_top_style, border_top_color,"
+                        + " border_right_style, border_right_color,"
+                        + " border_bottom_style, border_bottom_color,"
+                        + " border_left_style, border_left_color"
+                        + " FROM cell_style WHERE style_id = ?")) {
+            ps.setLong(1, styleId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                return new CellStyle(
+                        getNullableBoolean(rs, "is_bold"),
+                        rs.getString("number_format"),
+                        rs.getString("fill_fg_color"),
+                        rs.getString("fill_pattern"),
+                        rs.getString("border_top_style"),
+                        rs.getString("border_top_color"),
+                        rs.getString("border_right_style"),
+                        rs.getString("border_right_color"),
+                        rs.getString("border_bottom_style"),
+                        rs.getString("border_bottom_color"),
+                        rs.getString("border_left_style"),
+                        rs.getString("border_left_color"));
+            }
+        }
+    }
+
+    public long insertCellReference(CellReferenceEdge edge) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cell_reference (from_cell_id, token_index, raw_token, ref_kind,"
+                        + " target_sheet_name, target_worksheet_id, target_range, resolved_cell_id,"
+                        + " external_link_id, abs_row, abs_col, row_offset, col_offset,"
+                        + " is_whole_column, is_whole_row, unresolved_reason)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, edge.fromCellId());
+            ps.setInt(2, edge.tokenIndex());
+            ps.setString(3, edge.rawToken());
+            ps.setString(4, edge.refKind());
+            ps.setString(5, edge.targetSheetName());
+            setLong(ps, 6, edge.targetWorksheetId());
+            ps.setString(7, edge.targetRange());
+            setLong(ps, 8, edge.resolvedCellId());
+            setLong(ps, 9, edge.externalLinkId());
+            setBoolean(ps, 10, edge.absRow());
+            setBoolean(ps, 11, edge.absCol());
+            setInteger(ps, 12, edge.rowOffset());
+            setInteger(ps, 13, edge.colOffset());
+            ps.setInt(14, edge.isWholeColumn() ? 1 : 0);
+            ps.setInt(15, edge.isWholeRow() ? 1 : 0);
+            ps.setString(16, edge.unresolvedReason());
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    public CellReferenceEdge selectCellReference(long cellReferenceId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT from_cell_id, token_index, raw_token, ref_kind,"
+                        + " target_sheet_name, target_worksheet_id, target_range, resolved_cell_id,"
+                        + " external_link_id, abs_row, abs_col, row_offset, col_offset,"
+                        + " is_whole_column, is_whole_row, unresolved_reason"
+                        + " FROM cell_reference WHERE cell_reference_id = ?")) {
+            ps.setLong(1, cellReferenceId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                return new CellReferenceEdge(
+                        rs.getLong("from_cell_id"),
+                        rs.getInt("token_index"),
+                        rs.getString("raw_token"),
+                        rs.getString("ref_kind"),
+                        rs.getString("target_sheet_name"),
+                        getNullableLong(rs, "target_worksheet_id"),
+                        rs.getString("target_range"),
+                        getNullableLong(rs, "resolved_cell_id"),
+                        getNullableLong(rs, "external_link_id"),
+                        getNullableBoolean(rs, "abs_row"),
+                        getNullableBoolean(rs, "abs_col"),
+                        getNullableInteger(rs, "row_offset"),
+                        getNullableInteger(rs, "col_offset"),
+                        rs.getInt("is_whole_column") == 1,
+                        rs.getInt("is_whole_row") == 1,
+                        rs.getString("unresolved_reason"));
+            }
         }
     }
 
@@ -456,12 +646,29 @@ public final class WorkspaceRepository {
         return count("SELECT COUNT(*) FROM ingest_rejection");
     }
 
+    public long countCellStyles() throws SQLException {
+        return count("SELECT COUNT(*) FROM cell_style");
+    }
+
+    public long countCellReferences() throws SQLException {
+        return count("SELECT COUNT(*) FROM cell_reference");
+    }
+
     private static void setInteger(PreparedStatement ps, int index, Integer value)
             throws SQLException {
         if (value == null) {
             ps.setNull(index, java.sql.Types.INTEGER);
         } else {
             ps.setInt(index, value);
+        }
+    }
+
+    private static void setLong(PreparedStatement ps, int index, Long value)
+            throws SQLException {
+        if (value == null) {
+            ps.setNull(index, java.sql.Types.INTEGER);
+        } else {
+            ps.setLong(index, value);
         }
     }
 
@@ -472,6 +679,50 @@ public final class WorkspaceRepository {
         } else {
             ps.setInt(index, value ? 1 : 0);
         }
+    }
+
+    private static void bindCellStyle(PreparedStatement ps, CellStyle style) throws SQLException {
+        setBoolean(ps, 1, style.isBold());
+        ps.setString(2, style.numberFormat());
+        ps.setString(3, style.fillFgColor());
+        ps.setString(4, style.fillPattern());
+        ps.setString(5, style.borderTopStyle());
+        ps.setString(6, style.borderTopColor());
+        ps.setString(7, style.borderRightStyle());
+        ps.setString(8, style.borderRightColor());
+        ps.setString(9, style.borderBottomStyle());
+        ps.setString(10, style.borderBottomColor());
+        ps.setString(11, style.borderLeftStyle());
+        ps.setString(12, style.borderLeftColor());
+    }
+
+    private static int bindNullableBooleanPair(PreparedStatement ps, int index, Boolean value)
+            throws SQLException {
+        setBoolean(ps, index, value);
+        setBoolean(ps, index + 1, value);
+        return index + 2;
+    }
+
+    private static int bindNullableStringPair(PreparedStatement ps, int index, String value)
+            throws SQLException {
+        ps.setString(index, value);
+        ps.setString(index + 1, value);
+        return index + 2;
+    }
+
+    private static Boolean getNullableBoolean(ResultSet rs, String column) throws SQLException {
+        int value = rs.getInt(column);
+        return rs.wasNull() ? null : value == 1;
+    }
+
+    private static Long getNullableLong(ResultSet rs, String column) throws SQLException {
+        long value = rs.getLong(column);
+        return rs.wasNull() ? null : value;
+    }
+
+    private static Integer getNullableInteger(ResultSet rs, String column) throws SQLException {
+        int value = rs.getInt(column);
+        return rs.wasNull() ? null : value;
     }
 
     private long count(String sql) throws SQLException {

@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.ingest;
 
+import com.resurgent.tev.parser.db.CellStyle;
 import org.apache.poi.ss.util.CellRangeAddress;
 
 /**
@@ -12,7 +13,7 @@ final class NormalizedCellFactory {
     }
 
     static NormalizedCell buildCell(String coord, int rowNum, int colNum,
-            String rawValue, CellValue value, String formulaText,
+            String rawValue, CellValue value, String formulaText, String formulaNormalized,
             String formulaState, String cachedValue, String cacheState,
             boolean rowHidden, boolean colHidden, boolean sheetHidden) {
         return new NormalizedCell(
@@ -26,6 +27,7 @@ final class NormalizedCellFactory {
                 value.boolValue(),
                 value.dateValue(),
                 formulaText,
+                formulaNormalized,
                 formulaState,
                 cachedValue,
                 cacheState,
@@ -33,7 +35,8 @@ final class NormalizedCellFactory {
                 value.isError(),
                 value.errorType(),
                 false, false, null, "cell",
-                rowHidden, colHidden, sheetHidden);
+                rowHidden, colHidden, sheetHidden,
+                null);
     }
 
     static NormalizedCell markAnchor(NormalizedCell cell, CellRangeAddress region) {
@@ -48,6 +51,7 @@ final class NormalizedCellFactory {
                 cell.boolValue(),
                 cell.dateValue(),
                 cell.formulaText(),
+                cell.formulaNormalized(),
                 cell.formulaState(),
                 cell.cachedValue(),
                 cell.cacheState(),
@@ -55,7 +59,8 @@ final class NormalizedCellFactory {
                 cell.isError(),
                 cell.errorType(),
                 true, false, region.formatAsString(), "cell",
-                cell.rowHidden(), cell.colHidden(), cell.sheetHidden());
+                cell.rowHidden(), cell.colHidden(), cell.sheetHidden(),
+                cell.cellStyle());
     }
 
     static NormalizedCell createParticipant(NormalizedCell anchor, CellRangeAddress region,
@@ -76,10 +81,16 @@ final class NormalizedCellFactory {
                 null,
                 null,
                 null,
+                null,
                 false,
                 false,
                 null,
                 false, true, region.formatAsString(), "merged_anchor",
-                rowHidden, colHidden, sheetHidden);
+                rowHidden, colHidden, sheetHidden,
+                null);
+    }
+
+    static NormalizedCell attachStyle(NormalizedCell cell, CellStyle style) {
+        return cell == null ? null : cell.withCellStyle(style);
     }
 }

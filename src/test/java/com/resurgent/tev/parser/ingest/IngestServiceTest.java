@@ -50,7 +50,7 @@ class IngestServiceTest {
     }
 
     @Test
-    void csvIngestStoresTextValuesAndRecordsNoStylesInMetadata() throws Exception {
+    void csvIngestStoresTextValuesWithNullStyleId() throws Exception {
         Path csv = tempDir.resolve("model.csv");
         Files.writeString(csv, "Title,Amount\nProject cost summary,1200\n");
         Path db = tempDir.resolve("model.csv.db");
@@ -59,11 +59,14 @@ class IngestServiceTest {
 
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
             try (ResultSet rs = c.createStatement().executeQuery(
-                    "SELECT text_value, value_type FROM cell WHERE coord = 'A1'")) {
+                    "SELECT text_value, value_type, style_id FROM cell WHERE coord = 'A1'")) {
                 assertThat(rs.next()).isTrue();
                 assertThat(rs.getString("text_value")).isEqualTo("Title");
                 assertThat(rs.getString("value_type")).isEqualTo("text");
+                rs.getObject("style_id");
+                assertThat(rs.wasNull()).isTrue();
             }
+            assertThat(count(c, "cell_style")).isEqualTo(0);
             try (ResultSet rs = c.createStatement().executeQuery(
                     "SELECT raw_metadata FROM source_file")) {
                 assertThat(rs.next()).isTrue();
@@ -74,7 +77,7 @@ class IngestServiceTest {
     }
 
     @Test
-    void xlsxIngestPersistsCellTextWithoutStyleColumns() throws Exception {
+    void xlsxIngestPersistsSharedCellStylesAndFormulaNormalized() throws Exception {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Model");
             org.apache.poi.ss.usermodel.Cell title = sheet.createRow(0).createCell(0);
@@ -89,15 +92,68 @@ class IngestServiceTest {
             style.setFont(font);
             title.setCellStyle(style);
 
+            org.apache.poi.ss.usermodel.Cell twin = sheet.createRow(1).createCell(0);
+            twin.setCellValue("same paint");
+            twin.setCellStyle(style);
+
+            org.apache.poi.ss.usermodel.Cell other = sheet.createRow(2).createCell(0);
+            other.setCellValue("missing bottom border");
+            org.apache.poi.ss.usermodel.CellStyle otherStyle = workbook.createCellStyle();
+            otherStyle.setDataFormat(workbook.createDataFormat().getFormat("$#,##0.00"));
+            otherStyle.setFillForegroundColor(org.apache.poi.ss.usermodel.IndexedColors.YELLOW.getIndex());
+            otherStyle.setFillPattern(org.apache.poi.ss.usermodel.FillPatternType.SOLID_FOREGROUND);
+            otherStyle.setFont(font);
+            other.setCellStyle(otherStyle);
+
+            org.apache.poi.ss.usermodel.Cell formula = sheet.createRow(3).createCell(0);
+            formula.setCellFormula("\"A  B\"  &  C1");
+
             Path xlsx = writeWorkbook(workbook, "styled-title.xlsx");
             Path db = tempDir.resolve("styled-title.db");
             new IngestService().ingest(xlsx, 1L, db);
-            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
-                    ResultSet rs = c.createStatement().executeQuery(
-                            "SELECT text_value, value_type FROM cell WHERE coord = 'A1'")) {
-                assertThat(rs.next()).isTrue();
-                assertThat(rs.getString("text_value")).isEqualTo("Project cost summary");
-                assertThat(rs.getString("value_type")).isEqualTo("text");
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT c.style_id, s.is_bold, s.number_format, s.fill_pattern,"
+                                + " s.fill_fg_color, s.border_bottom_style, s.border_bottom_color"
+                                + " FROM cell c JOIN cell_style s ON s.style_id = c.style_id"
+                                + " WHERE c.coord = 'A1'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getObject("style_id")).isNotNull();
+                    assertThat(rs.getInt("is_bold")).isEqualTo(1);
+                    assertThat(rs.getString("number_format")).isEqualTo("$#,##0.00");
+                    assertThat(rs.getString("fill_pattern")).isEqualTo("SOLID_FOREGROUND");
+                    assertThat(rs.getString("fill_fg_color")).matches("#?[0-9a-fA-F]+|\\d+");
+                    assertThat(rs.getString("border_bottom_style")).isEqualTo("THIN");
+                    assertThat(rs.getString("border_bottom_color")).isNotBlank();
+                }
+                Long a1Style;
+                Long a3Style;
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT coord, style_id FROM cell WHERE coord IN ('A1', 'A2', 'A3')"
+                                + " ORDER BY coord")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("coord")).isEqualTo("A1");
+                    a1Style = rs.getLong("style_id");
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("coord")).isEqualTo("A2");
+                    assertThat(rs.getLong("style_id")).isEqualTo(a1Style);
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("coord")).isEqualTo("A3");
+                    a3Style = rs.getLong("style_id");
+                    assertThat(a3Style).isNotEqualTo(a1Style);
+                }
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT border_bottom_style FROM cell_style WHERE style_id = " + a3Style)) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("border_bottom_style")).isNull();
+                }
+                assertThat(count(c, "cell_style")).isLessThan(count(c, "cell"));
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT formula_text, formula_normalized FROM cell WHERE coord = 'A4'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("formula_text")).isEqualTo("\"A  B\"  &  C1");
+                    assertThat(rs.getString("formula_normalized")).isEqualTo("\"A  B\" & C1");
+                }
             }
         }
     }
@@ -317,8 +373,13 @@ class IngestServiceTest {
                     assertThat(rs.next()).isTrue();
                     assertThat(rs.getString(1))
                             .contains("\"format\":\"xls\"")
-                            .contains("\"sheetNames\"")
-                            .contains("\"style_capture_reason\":\"xls_style_capture_not_supported\"");
+                            .contains("\"sheetNames\"");
+                    assertThat(rs.getString(1)).doesNotContain("xls_style_capture_not_supported");
+                }
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT COUNT(*) FROM cell WHERE style_id IS NOT NULL")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getLong(1)).isEqualTo(2);
                 }
             }
         }
