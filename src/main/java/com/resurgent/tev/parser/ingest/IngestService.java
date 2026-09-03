@@ -1,6 +1,7 @@
 package com.resurgent.tev.parser.ingest;
 
 import com.resurgent.tev.parser.config.ParserConfig;
+import com.resurgent.tev.parser.db.CellStyle;
 import com.resurgent.tev.parser.db.Jsonb;
 import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
@@ -196,7 +197,7 @@ public final class IngestService {
         }
         int cellsWritten = 0;
         for (NormalizedCell cell : cells) {
-            long cellId = repo.insertCell(worksheetId, cell);
+            long cellId = repo.insertCell(worksheetId, cell, null, cell.formulaNormalized());
             recordCellProvenance(repo, cellId, sourceFileId, parseRunId, sheet.sheetName(), cell);
             cellsWritten++;
         }
@@ -243,6 +244,7 @@ public final class IngestService {
         int cellsWritten = 0;
         int cellsCoerced = 0;
         int cellsError = 0;
+        Map<CellStyle, Long> styleIds = new HashMap<>();
 
         for (XlsxSheet sheet : sheets) {
             long worksheetId = repo.insertWorksheet(parseRunId, sheet.sheetName(),
@@ -253,7 +255,8 @@ public final class IngestService {
                     sheet.declaredMerged());
 
             for (NormalizedCell cell : sheet.cells()) {
-                long cellId = repo.insertCell(worksheetId, cell);
+                Long styleId = resolveStyleId(repo, styleIds, cell.cellStyle());
+                long cellId = repo.insertCell(worksheetId, cell, styleId, cell.formulaNormalized());
                 recordCellProvenance(repo, cellId, sourceFileId, parseRunId, sheet.sheetName(), cell);
                 cellsWritten++;
                 if (cell.coercedFromText()) {
@@ -297,6 +300,20 @@ public final class IngestService {
         };
     }
 
+    private static Long resolveStyleId(WorkspaceRepository repo, Map<CellStyle, Long> styleIds,
+            CellStyle style) throws SQLException {
+        if (style == null) {
+            return null;
+        }
+        Long existing = styleIds.get(style);
+        if (existing != null) {
+            return existing;
+        }
+        long styleId = repo.insertCellStyle(style);
+        styleIds.put(style, styleId);
+        return styleId;
+    }
+
     private static int coercedCount(List<NormalizedCell> cells) {
         return (int) cells.stream().filter(NormalizedCell::coercedFromText).count();
     }
@@ -322,10 +339,11 @@ public final class IngestService {
                 null,
                 null,
                 null,
+                null,
                 value.coercedFromText(),
                 value.isError(),
                 value.errorType(),
-                false, false, null, "cell", false, false, false);
+                false, false, null, "cell", false, false, false, null);
     }
 
     private String rawMetadataJson(Path input, FileType fileType, XlsxWorkbook workbook)
@@ -333,9 +351,6 @@ public final class IngestService {
         if (fileType == FileType.FM_XLSX || fileType == FileType.FM_XLS) {
             Map<String, Object> map = new LinkedHashMap<>();
             map.put("format", fileType == FileType.FM_XLSX ? "xlsx" : "xls");
-            if (fileType == FileType.FM_XLS) {
-                map.put("style_capture_reason", "xls_style_capture_not_supported");
-            }
             if (workbook != null) {
                 WorkbookMetadata metadata = workbook.metadata();
                 map.put("sheetCount", metadata.sheetCount());

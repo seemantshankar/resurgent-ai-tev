@@ -251,13 +251,17 @@ public final class XlsAdapter {
         CellType type = cell.getCellType();
         if (type == CellType.FORMULA) {
             String formulaText = readFormulaText(cell);
-            return FormulaCellNormalizer.normalizeFormulaCell(formulaText, cell,
+            return withStyle(cell, FormulaCellNormalizer.normalizeFormulaCell(formulaText, cell,
                     coord, rowNum, colNum, rowHidden, colHidden, sheetHidden,
-                    cacheFresh, true);
+                    cacheFresh, true));
         }
 
-        return LiteralCellNormalizer.normalizeLiteralCell(cell, coord, rowNum, colNum,
-                rowHidden, colHidden, sheetHidden);
+        return withStyle(cell, LiteralCellNormalizer.normalizeLiteralCell(cell, coord, rowNum, colNum,
+                rowHidden, colHidden, sheetHidden));
+    }
+
+    private static NormalizedCell withStyle(Cell styleSource, NormalizedCell cell) {
+        return NormalizedCellFactory.attachStyle(cell, CellStyleExtractor.extract(styleSource));
     }
 
     /**

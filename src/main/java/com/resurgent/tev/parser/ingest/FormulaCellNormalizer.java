@@ -36,8 +36,9 @@ final class FormulaCellNormalizer {
                 cached.numericValue(), cached.boolValue(), cached.dateValue(),
                 cached.coercedFromText(), cached.isError(), cached.errorType());
 
+        String formulaNormalized = FormulaNormalizer.normalize(formulaText);
         return NormalizedCellFactory.buildCell(coord, rowNum, colNum, "=" + formulaText, value,
-                formulaText, "ok", cachedValue, cacheState,
+                formulaText, formulaNormalized, "ok", cachedValue, cacheState,
                 rowHidden, colHidden, sheetHidden);
     }
 
@@ -58,7 +59,7 @@ final class FormulaCellNormalizer {
                 cached.coercedFromText(), cached.isError(), cached.errorType());
 
         return NormalizedCellFactory.buildCell(coord, rowNum, colNum, null, value,
-                null, "unavailable", cachedValue, cacheState,
+                null, null, "unavailable", cachedValue, cacheState,
                 rowHidden, colHidden, sheetHidden);
     }
 

@@ -51,7 +51,7 @@ final class LiteralCellNormalizer {
         }
 
         return NormalizedCellFactory.buildCell(coord, rowNum, colNum, rawValue, value,
-                null, null, null, null,
+                null, null, null, null, null,
                 rowHidden, colHidden, sheetHidden);
     }
 

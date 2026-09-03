@@ -313,12 +313,17 @@ public final class XlsxAdapter {
         if (formulaType == CellType.FORMULA) {
             boolean hasCachedValue = valueCell instanceof XSSFCell xssfCell
                     && xssfCell.getCTCell().isSetV();
-            return FormulaCellNormalizer.normalizeFormulaCell(formulaCell.getCellFormula(), valueCell,
+            return withStyle(formulaCell, FormulaCellNormalizer.normalizeFormulaCell(
+                    formulaCell.getCellFormula(), valueCell,
                     coord, rowNum, colNum, rowHidden, colHidden, sheetHidden,
-                    cacheFresh, hasCachedValue);
+                    cacheFresh, hasCachedValue));
         }
-        return LiteralCellNormalizer.normalizeLiteralCell(valueCell, coord, rowNum, colNum,
-                rowHidden, colHidden, sheetHidden);
+        return withStyle(valueCell, LiteralCellNormalizer.normalizeLiteralCell(
+                valueCell, coord, rowNum, colNum, rowHidden, colHidden, sheetHidden));
+    }
+
+    private static NormalizedCell withStyle(Cell styleSource, NormalizedCell cell) {
+        return NormalizedCellFactory.attachStyle(cell, CellStyleExtractor.extract(styleSource));
     }
 
     private static String dimensionsDeclared(Sheet formulaSheet) {
