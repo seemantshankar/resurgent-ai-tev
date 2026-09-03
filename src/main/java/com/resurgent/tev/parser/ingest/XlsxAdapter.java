@@ -307,7 +307,8 @@ public final class XlsxAdapter {
 
         CellType formulaType = formulaCell.getCellType();
         if (formulaType != CellType.FORMULA && CellGeometry.isBlankContent(formulaCell)) {
-            return null;
+            return styledBlankOrNull(formulaCell, coord, rowNum, colNum,
+                    rowHidden, colHidden, sheetHidden);
         }
 
         if (formulaType == CellType.FORMULA) {
@@ -320,6 +321,16 @@ public final class XlsxAdapter {
         }
         return withStyle(valueCell, LiteralCellNormalizer.normalizeLiteralCell(
                 valueCell, coord, rowNum, colNum, rowHidden, colHidden, sheetHidden));
+    }
+
+    private static NormalizedCell styledBlankOrNull(Cell styleSource, String coord,
+            int rowNum, int colNum, boolean rowHidden, boolean colHidden, boolean sheetHidden) {
+        com.resurgent.tev.parser.db.CellStyle style = CellStyleExtractor.extract(styleSource);
+        if (!CellStyleExtractor.hasMeaningfulAppearance(style)) {
+            return null;
+        }
+        return NormalizedCellFactory.buildStyledBlank(coord, rowNum, colNum,
+                rowHidden, colHidden, sheetHidden, style);
     }
 
     private static NormalizedCell withStyle(Cell styleSource, NormalizedCell cell) {

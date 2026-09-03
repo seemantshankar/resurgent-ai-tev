@@ -14,6 +14,15 @@ final class IngestMetrics {
 
     static String toJson(String fileName, String fileHash, String worksheetName, int rowCount,
             int cellsIn, int cellsWritten, int cellsCoerced, int cellsError, QaGateResult qa) {
+        return toJson(fileName, fileHash, worksheetName, rowCount, cellsIn, cellsWritten,
+                cellsCoerced, cellsError, 0, 0, 0, 0, 0, 0, 0, qa);
+    }
+
+    static String toJson(String fileName, String fileHash, String worksheetName, int rowCount,
+            int cellsIn, int cellsWritten, int cellsCoerced, int cellsError,
+            int referencesTotal, int referencesResolved, int referencesUnresolved,
+            int formulaCellsTotal, int formulaCellsTokenized, int formulaCellsParseError,
+            int formulaCellsUnavailable, QaGateResult qa) {
         ObjectNode metrics = MAPPER.createObjectNode();
         metrics.put("fileName", fileName);
         metrics.put("fileHash", fileHash);
@@ -24,6 +33,13 @@ final class IngestMetrics {
         metrics.put("cellsRejected", qa.cellsRejected());
         metrics.put("cellsCoerced", cellsCoerced);
         metrics.put("cellsError", cellsError);
+        metrics.put("referencesTotal", referencesTotal);
+        metrics.put("referencesResolved", referencesResolved);
+        metrics.put("referencesUnresolved", referencesUnresolved);
+        metrics.put("formulaCellsTotal", formulaCellsTotal);
+        metrics.put("formulaCellsTokenized", formulaCellsTokenized);
+        metrics.put("formulaCellsParseError", formulaCellsParseError);
+        metrics.put("formulaCellsUnavailable", formulaCellsUnavailable);
         metrics.put("qaStatus", qa.status());
         ArrayNode reasons = metrics.putArray("qaFailureReasons");
         qa.reasons().forEach(reasons::add);

@@ -63,4 +63,13 @@ public record NormalizedCell(
                 isMergedParticipant, mergedRange, valueSource, rowHidden, colHidden, sheetHidden,
                 cellStyle);
     }
+
+    NormalizedCell withFormulaState(String formulaState) {
+        return new NormalizedCell(
+                coord, rowNum, colNum, rawValue, rawType, valueType, textValue, displayValue,
+                numericValue, boolValue, dateValue, formulaText, formulaNormalized, formulaState,
+                cachedValue, cacheState, coercedFromText, isError, errorType, isMergedAnchor,
+                isMergedParticipant, mergedRange, valueSource, rowHidden, colHidden, sheetHidden,
+                cellStyle);
+    }
 }

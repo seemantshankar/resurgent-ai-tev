@@ -371,7 +371,7 @@ class XlsxAdapterTest {
             assertThat(a1.cellStyle().isBold()).isTrue();
             assertThat(a1.cellStyle().numberFormat()).isEqualTo("$#,##0.00");
             assertThat(a1.cellStyle().fillPattern()).isEqualTo("SOLID_FOREGROUND");
-            assertThat(a1.cellStyle().fillFgColor()).matches("#[0-9a-f]{6}");
+            assertThat(a1.cellStyle().fillFgColor()).isEqualTo("#ffff00");
             assertThat(a1.cellStyle().borderBottomStyle()).isEqualTo("THIN");
             assertThat(a1.cellStyle().borderBottomColor()).isNotBlank();
             assertThat(a1.cellStyle().borderTopStyle()).isNull();
@@ -379,6 +379,34 @@ class XlsxAdapterTest {
             assertThat(cells.get("A2").cellStyle()).isEqualTo(a1.cellStyle());
             assertThat(cells.get("A3").cellStyle()).isNotEqualTo(a1.cellStyle());
             assertThat(cells.get("A3").cellStyle().borderBottomStyle()).isNull();
+        }
+    }
+
+    @Test
+    void blankCellWithBorderIsStoredForTableEdgePaint() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("BlankBorder");
+            org.apache.poi.ss.usermodel.CellStyle style = workbook.createCellStyle();
+            style.setBorderBottom(BorderStyle.THIN);
+            style.setBottomBorderColor(org.apache.poi.ss.usermodel.IndexedColors.BLACK.getIndex());
+            Cell blank = sheet.createRow(0).createCell(0);
+            blank.setCellStyle(style);
+
+            Cell spacer = sheet.createRow(1).createCell(0);
+            spacer.setCellValue(" ");
+            org.apache.poi.ss.usermodel.CellStyle formatOnly = workbook.createCellStyle();
+            formatOnly.setDataFormat(workbook.createDataFormat().getFormat("0.00"));
+            spacer.setCellStyle(formatOnly);
+
+            Map<String, NormalizedCell> cells = cellsByCoord(
+                    new XlsxAdapter().parse(writeWorkbook(workbook, "blank-border.xlsx")));
+
+            assertThat(cells).containsOnlyKeys("A1");
+            NormalizedCell a1 = cells.get("A1");
+            assertThat(a1.valueType()).isEqualTo("empty");
+            assertThat(a1.rawValue()).isNull();
+            assertThat(a1.cellStyle().borderBottomStyle()).isEqualTo("THIN");
+            assertThat(a1.cellStyle().borderBottomColor()).matches("#[0-9a-f]{6}|\\d+");
         }
     }
 

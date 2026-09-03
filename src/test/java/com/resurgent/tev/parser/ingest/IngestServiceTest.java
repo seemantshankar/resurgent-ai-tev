@@ -122,7 +122,7 @@ class IngestServiceTest {
                     assertThat(rs.getInt("is_bold")).isEqualTo(1);
                     assertThat(rs.getString("number_format")).isEqualTo("$#,##0.00");
                     assertThat(rs.getString("fill_pattern")).isEqualTo("SOLID_FOREGROUND");
-                    assertThat(rs.getString("fill_fg_color")).matches("#?[0-9a-fA-F]+|\\d+");
+                    assertThat(rs.getString("fill_fg_color")).isEqualTo("#ffff00");
                     assertThat(rs.getString("border_bottom_style")).isEqualTo("THIN");
                     assertThat(rs.getString("border_bottom_color")).isNotBlank();
                 }
@@ -154,6 +154,36 @@ class IngestServiceTest {
                     assertThat(rs.getString("formula_text")).isEqualTo("\"A  B\"  &  C1");
                     assertThat(rs.getString("formula_normalized")).isEqualTo("\"A  B\" & C1");
                 }
+            }
+        }
+    }
+
+    @Test
+    void xlsxIngestPersistsBorderOnlyBlankCells() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Edges");
+            // POI omits trailing blank cells on a row that also has values; keep the
+            // painted blank on its own row so the fixture matches Excel-authored paint.
+            org.apache.poi.ss.usermodel.Cell blank = sheet.createRow(0).createCell(0);
+            org.apache.poi.ss.usermodel.CellStyle style = workbook.createCellStyle();
+            style.setBorderRight(org.apache.poi.ss.usermodel.BorderStyle.THIN);
+            blank.setCellStyle(style);
+            sheet.createRow(1).createCell(0).setCellValue("Total Cost");
+
+            Path xlsx = writeWorkbook(workbook, "border-blank.xlsx");
+            Path db = tempDir.resolve("border-blank.db");
+            new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT c.value_type, s.border_right_style"
+                                + " FROM cell c JOIN cell_style s ON s.style_id = c.style_id"
+                                + " WHERE c.coord = 'A1'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("value_type")).isEqualTo("empty");
+                    assertThat(rs.getString("border_right_style")).isEqualTo("THIN");
+                }
+                assertThat(count(c, "cell")).isEqualTo(2);
             }
         }
     }
@@ -230,6 +260,19 @@ class IngestServiceTest {
                 List<String> definedNames = Jsonb.fromJson(workbookNames,
                         new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
                 assertThat(definedNames).containsExactlyInAnyOrder("ReferencedName", "UnreferencedName");
+
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT ref_kind, unresolved_reason FROM cell_reference")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("ref_kind")).isEqualTo("defined_name");
+                    assertThat(rs.getString("unresolved_reason")).isNull();
+                    assertThat(rs.next()).isFalse();
+                }
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT formula_state FROM cell WHERE coord = 'B1'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("formula_state")).isEqualTo("ok");
+                }
             }
         }
     }
@@ -367,6 +410,14 @@ class IngestServiceTest {
                             s -> assertThat(s).isNull(),
                             s -> assertThat(s).isEqualTo("unavailable"));
                 }
+
+                Map<String, Object> metrics = Jsonb.fromJson(summary.metricsJson(), Map.class);
+                assertThat(metrics).containsEntry("qaStatus", "success");
+                int unavailable = ((Number) metrics.get("formulaCellsUnavailable")).intValue();
+                int tokenized = ((Number) metrics.get("formulaCellsTokenized")).intValue();
+                int parseError = ((Number) metrics.get("formulaCellsParseError")).intValue();
+                int total = ((Number) metrics.get("formulaCellsTotal")).intValue();
+                assertThat(tokenized + parseError + unavailable).isEqualTo(total);
 
                 try (ResultSet rs = c.createStatement().executeQuery(
                         "SELECT raw_metadata FROM source_file")) {
@@ -528,6 +579,130 @@ class IngestServiceTest {
                     assertThat(rs.getObject("numeric_value"))
                             .as("an uncached formula must not have a value invented for it")
                             .isNull();
+                }
+            }
+        }
+    }
+
+    @Test
+    void crossSheetRefResolvesWhenFormulaSheetCaseDiffers() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet target = workbook.createSheet("Interest");
+            target.createRow(153).createCell(8).setCellValue(42.0); // I154
+            Sheet source = workbook.createSheet("Model");
+            source.createRow(0).createCell(0).setCellFormula("interest!I154");
+
+            Path xlsx = writeWorkbook(workbook, "case-sheet.xlsx");
+            Path db = tempDir.resolve("case-sheet.db");
+            IngestSummary summary = new IngestService().ingest(xlsx, 1L, db);
+
+            assertThat(summary.status()).isEqualTo("success");
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                    ResultSet rs = c.createStatement().executeQuery(
+                            "SELECT cr.target_sheet_name, cr.target_range, cr.resolved_cell_id,"
+                                    + " cr.unresolved_reason, tc.coord"
+                                    + " FROM cell_reference cr"
+                                    + " JOIN cell tc ON tc.cell_id = cr.resolved_cell_id")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("target_sheet_name")).isEqualTo("interest");
+                assertThat(rs.getString("target_range")).isEqualTo("I154");
+                assertThat(rs.getObject("resolved_cell_id")).isNotNull();
+                assertThat(rs.getString("unresolved_reason")).isNull();
+                assertThat(rs.getString("coord")).isEqualTo("I154");
+            }
+        }
+    }
+
+    @Test
+    void ingestPersistsUnexpandedReferenceEdgesAndReconcilesFormulaQa() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Sheet1");
+            Row row = sheet.createRow(0);
+            row.createCell(0).setCellValue(1.0); // A1 occupied
+            row.createCell(1).setCellValue(2.0); // B1 occupied
+            // Range stays one edge; blank B5 must not invent a cell; A1 resolves.
+            sheet.createRow(1).createCell(0).setCellFormula("SUM(B1:B10)+A1+B5");
+
+            Path xlsx = writeWorkbook(workbook, "refs.xlsx");
+            Path db = tempDir.resolve("refs.db");
+            IngestSummary summary = new IngestService().ingest(xlsx, 1L, db);
+
+            assertThat(summary.status()).isEqualTo("success");
+            Map<String, Object> metrics = Jsonb.fromJson(summary.metricsJson(), Map.class);
+            assertThat(metrics).containsEntry("qaStatus", "success");
+            assertThat(metrics).containsEntry("formulaCellsTotal", 1);
+            assertThat(metrics).containsEntry("formulaCellsTokenized", 1);
+            assertThat(metrics).containsEntry("formulaCellsParseError", 0);
+            assertThat(metrics).containsEntry("referencesTotal", 3);
+            assertThat(((Number) metrics.get("referencesResolved")).intValue()
+                    + ((Number) metrics.get("referencesUnresolved")).intValue())
+                    .isEqualTo(3);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                assertThat(count(c, "cell")).isEqualTo(3); // A1, B1, A2 — not B5
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT formula_state FROM cell WHERE coord = 'A2'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("formula_state")).isEqualTo("ok");
+                }
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT raw_token, target_range, resolved_cell_id, unresolved_reason"
+                                + " FROM cell_reference ORDER BY token_index")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("raw_token")).isEqualTo("B1:B10");
+                    assertThat(rs.getString("target_range")).isEqualTo("B1:B10");
+                    assertThat(rs.getObject("resolved_cell_id")).isNull();
+                    assertThat(rs.getString("unresolved_reason")).isNull();
+
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("raw_token")).isEqualTo("A1");
+                    assertThat(rs.getString("target_range")).isEqualTo("A1");
+                    assertThat(rs.getObject("resolved_cell_id")).isNotNull();
+
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("raw_token")).isEqualTo("B5");
+                    assertThat(rs.getString("target_range")).isEqualTo("B5");
+                    assertThat(rs.getObject("resolved_cell_id"))
+                            .as("blank target must not invent a cell")
+                            .isNull();
+                    assertThat(rs.getString("unresolved_reason")).isNull();
+                    assertThat(rs.next()).isFalse();
+                }
+            }
+        }
+    }
+
+    @Test
+    void parseFailureSalvagesUnresolvedEdgesAndMarksParseError() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Sheet1");
+            // Inject formula text POI would reject via setCellFormula, so the tokenizer
+            // salvage path (ADR 0003) is exercised through full ingest.
+            org.apache.poi.xssf.usermodel.XSSFCell cell =
+                    (org.apache.poi.xssf.usermodel.XSSFCell) sheet.createRow(0).createCell(0);
+            org.openxmlformats.schemas.spreadsheetml.x2006.main.CTCellFormula f =
+                    cell.getCTCell().addNewF();
+            f.setStringValue("INVALID_SYNTAX(,,)'Sheet1'!A1");
+
+            Path xlsx = writeWorkbook(workbook, "parse-error.xlsx");
+            Path db = tempDir.resolve("parse-error.db");
+            IngestSummary summary = new IngestService().ingest(xlsx, 1L, db);
+
+            Map<String, Object> metrics = Jsonb.fromJson(summary.metricsJson(), Map.class);
+            assertThat(metrics).containsEntry("formulaCellsParseError", 1);
+            assertThat(metrics).containsEntry("qaStatus", "success");
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT formula_state FROM cell WHERE coord = 'A1'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("formula_state")).isEqualTo("parse_error");
+                }
+                assertThat(count(c, "cell_reference")).isGreaterThan(0);
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT unresolved_reason FROM cell_reference")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("unresolved_reason")).isNotBlank();
                 }
             }
         }

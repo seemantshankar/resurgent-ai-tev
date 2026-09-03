@@ -9,10 +9,12 @@ import org.apache.poi.ss.usermodel.Font;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.xssf.usermodel.XSSFCellStyle;
 import org.apache.poi.xssf.usermodel.XSSFColor;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 /**
  * Reads Excel paint into the shared {@link CellStyle} flyweight (ADR 0013).
  * Colour prefers {@code #rrggbb} when XSSF RGB is available, else palette index.
+ * Theme colours with no resolvable RGB stay null — never invent index {@code 0}.
  */
 final class CellStyleExtractor {
 
@@ -33,16 +35,36 @@ final class CellStyleExtractor {
         return new CellStyle(
                 font.getBold(),
                 style.getDataFormatString(),
-                hasFill ? foregroundColor(style) : null,
+                hasFill ? foregroundColor(workbook, style) : null,
                 hasFill && fillPattern != null ? fillPattern.name() : null,
                 borderStyle(style.getBorderTop()),
-                borderColor(style, BorderSide.TOP),
+                borderColor(workbook, style, BorderSide.TOP),
                 borderStyle(style.getBorderRight()),
-                borderColor(style, BorderSide.RIGHT),
+                borderColor(workbook, style, BorderSide.RIGHT),
                 borderStyle(style.getBorderBottom()),
-                borderColor(style, BorderSide.BOTTOM),
+                borderColor(workbook, style, BorderSide.BOTTOM),
                 borderStyle(style.getBorderLeft()),
-                borderColor(style, BorderSide.LEFT));
+                borderColor(workbook, style, BorderSide.LEFT));
+    }
+
+    /**
+     * True when paint is worth keeping on an otherwise blank cell: bold, fill, or
+     * any per-side border. Number format alone is not enough (column defaults).
+     */
+    static boolean hasMeaningfulAppearance(CellStyle style) {
+        if (style == null) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(style.isBold())) {
+            return true;
+        }
+        if (style.fillPattern() != null) {
+            return true;
+        }
+        return style.borderTopStyle() != null
+                || style.borderRightStyle() != null
+                || style.borderBottomStyle() != null
+                || style.borderLeftStyle() != null;
     }
 
     private enum BorderSide {
@@ -56,7 +78,8 @@ final class CellStyleExtractor {
         return border.name();
     }
 
-    private static String borderColor(org.apache.poi.ss.usermodel.CellStyle style, BorderSide side) {
+    private static String borderColor(Workbook workbook, org.apache.poi.ss.usermodel.CellStyle style,
+            BorderSide side) {
         BorderStyle border = switch (side) {
             case TOP -> style.getBorderTop();
             case RIGHT -> style.getBorderRight();
@@ -73,9 +96,9 @@ final class CellStyleExtractor {
                 case BOTTOM -> xssfStyle.getBottomBorderXSSFColor();
                 case LEFT -> xssfStyle.getLeftBorderXSSFColor();
             };
-            String rgb = rgb(color);
-            if (rgb != null) {
-                return rgb;
+            String resolved = resolveXssfColor(workbook, color);
+            if (resolved != null || (color != null && color.isThemed())) {
+                return resolved;
             }
         }
         short index = switch (side) {
@@ -87,12 +110,49 @@ final class CellStyleExtractor {
         return paletteIndex(index);
     }
 
-    private static String foregroundColor(org.apache.poi.ss.usermodel.CellStyle style) {
+    private static String foregroundColor(Workbook workbook, org.apache.poi.ss.usermodel.CellStyle style) {
+        if (style instanceof XSSFCellStyle xssfStyle) {
+            XSSFColor color = xssfStyle.getFillForegroundXSSFColor();
+            String resolved = resolveXssfColor(workbook, color);
+            if (resolved != null || (color != null && color.isThemed())) {
+                return resolved;
+            }
+        }
         String rgb = colorRgb(style.getFillForegroundColorColor());
         if (rgb != null) {
             return rgb;
         }
         return paletteIndex(style.getFillForegroundColor());
+    }
+
+    private static String resolveXssfColor(Workbook workbook, XSSFColor color) {
+        if (color == null) {
+            return null;
+        }
+        String rgb = rgb(color);
+        if (rgb != null) {
+            return rgb;
+        }
+        String hex = color.getARGBHex();
+        if (hex != null && hex.length() >= 6) {
+            return "#" + hex.substring(hex.length() - 6).toLowerCase();
+        }
+        if (color.isThemed() && workbook instanceof XSSFWorkbook xssfWorkbook
+                && xssfWorkbook.getTheme() != null) {
+            try {
+                XSSFColor themeColor = xssfWorkbook.getTheme().getThemeColor(color.getTheme());
+                String themeRgb = rgb(themeColor);
+                if (themeRgb != null) {
+                    return themeRgb;
+                }
+            } catch (RuntimeException ignored) {
+                // Incomplete theme tables leave colour unavailable.
+            }
+        }
+        if (color.isThemed()) {
+            return null;
+        }
+        return null;
     }
 
     private static String colorRgb(Color color) {

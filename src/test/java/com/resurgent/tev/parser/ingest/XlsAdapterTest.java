@@ -492,7 +492,7 @@ class XlsAdapterTest {
     }
 
     @Test
-    void whitespaceOnlyStringWithPresentationIsNotStored() throws Exception {
+    void whitespaceOnlyStringWithPresentationIsStoredAsStyledBlank() throws Exception {
         try (HSSFWorkbook workbook = new HSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("StyledBlank");
             CellStyle style = workbook.createCellStyle();
@@ -511,7 +511,14 @@ class XlsAdapterTest {
             Path xls = writeWorkbook(workbook, "styled-blank.xls");
             Map<String, NormalizedCell> cells = cellsByCoord(new XlsAdapter().parse(xls));
 
-            assertThat(cells).isEmpty();
+            assertThat(cells).containsOnlyKeys("A1");
+            NormalizedCell a1 = cells.get("A1");
+            assertThat(a1.rawValue()).isNull();
+            assertThat(a1.valueType()).isEqualTo("empty");
+            assertThat(a1.cellStyle()).isNotNull();
+            assertThat(a1.cellStyle().isBold()).isTrue();
+            assertThat(a1.cellStyle().fillPattern()).isEqualTo("SOLID_FOREGROUND");
+            assertThat(a1.cellStyle().fillFgColor()).isEqualTo("22");
         }
     }
 
@@ -535,12 +542,12 @@ class XlsAdapterTest {
     }
 
     @Test
-    void blankCellWithPresentationIsNotStoredWithoutStringPadding() throws Exception {
+    void blankCellWithBorderIsStoredForTableEdgePaint() throws Exception {
         try (HSSFWorkbook workbook = new HSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("BlankStyled");
             CellStyle style = workbook.createCellStyle();
-            style.setFillForegroundColor(org.apache.poi.ss.usermodel.IndexedColors.LIGHT_BLUE.getIndex());
-            style.setFillPattern(org.apache.poi.ss.usermodel.FillPatternType.SOLID_FOREGROUND);
+            style.setBorderBottom(org.apache.poi.ss.usermodel.BorderStyle.THIN);
+            style.setBottomBorderColor(org.apache.poi.ss.usermodel.IndexedColors.BLACK.getIndex());
 
             Cell blank = sheet.createRow(0).createCell(0);
             blank.setCellStyle(style);
@@ -548,7 +555,11 @@ class XlsAdapterTest {
             Path xls = writeWorkbook(workbook, "blank-styled.xls");
             Map<String, NormalizedCell> cells = cellsByCoord(new XlsAdapter().parse(xls));
 
-            assertThat(cells).isEmpty();
+            assertThat(cells).containsOnlyKeys("A1");
+            NormalizedCell a1 = cells.get("A1");
+            assertThat(a1.valueType()).isEqualTo("empty");
+            assertThat(a1.cellStyle().borderBottomStyle()).isEqualTo("THIN");
+            assertThat(a1.cellStyle().borderBottomColor()).isEqualTo("8");
         }
     }
 

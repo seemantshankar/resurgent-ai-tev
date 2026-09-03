@@ -93,4 +93,30 @@ final class NormalizedCellFactory {
     static NormalizedCell attachStyle(NormalizedCell cell, CellStyle style) {
         return cell == null ? null : cell.withCellStyle(style);
     }
+
+    static NormalizedCell buildStyledBlank(String coord, int rowNum, int colNum,
+            boolean rowHidden, boolean colHidden, boolean sheetHidden, CellStyle style) {
+        CellValue empty = CellValue.empty();
+        return new NormalizedCell(
+                coord, rowNum, colNum,
+                null,
+                empty.rawType(),
+                empty.valueType(),
+                empty.textValue(),
+                empty.displayValue(),
+                empty.numericValue(),
+                empty.boolValue(),
+                empty.dateValue(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                false,
+                false,
+                null,
+                false, false, null, "cell",
+                rowHidden, colHidden, sheetHidden,
+                style);
+    }
 }
