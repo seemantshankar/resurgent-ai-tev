@@ -585,6 +585,35 @@ class IngestServiceTest {
     }
 
     @Test
+    void crossSheetRefResolvesWhenFormulaSheetCaseDiffers() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet target = workbook.createSheet("Interest");
+            target.createRow(153).createCell(8).setCellValue(42.0); // I154
+            Sheet source = workbook.createSheet("Model");
+            source.createRow(0).createCell(0).setCellFormula("interest!I154");
+
+            Path xlsx = writeWorkbook(workbook, "case-sheet.xlsx");
+            Path db = tempDir.resolve("case-sheet.db");
+            IngestSummary summary = new IngestService().ingest(xlsx, 1L, db);
+
+            assertThat(summary.status()).isEqualTo("success");
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+                    ResultSet rs = c.createStatement().executeQuery(
+                            "SELECT cr.target_sheet_name, cr.target_range, cr.resolved_cell_id,"
+                                    + " cr.unresolved_reason, tc.coord"
+                                    + " FROM cell_reference cr"
+                                    + " JOIN cell tc ON tc.cell_id = cr.resolved_cell_id")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("target_sheet_name")).isEqualTo("interest");
+                assertThat(rs.getString("target_range")).isEqualTo("I154");
+                assertThat(rs.getObject("resolved_cell_id")).isNotNull();
+                assertThat(rs.getString("unresolved_reason")).isNull();
+                assertThat(rs.getString("coord")).isEqualTo("I154");
+            }
+        }
+    }
+
+    @Test
     void ingestPersistsUnexpandedReferenceEdgesAndReconcilesFormulaQa() throws Exception {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Sheet1");

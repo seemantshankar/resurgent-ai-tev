@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.apache.poi.ss.SpreadsheetVersion;
 import org.apache.poi.ss.formula.FormulaParseException;
 import org.apache.poi.ss.formula.FormulaParser;
 import org.apache.poi.ss.formula.FormulaType;
@@ -31,8 +32,15 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
  */
 public final class FormulaTokenizer {
 
+    /** Quoted sheet names may contain doubled apostrophes (Excel escape for {@code '}). */
     private static final Pattern SALVAGE_REF_PATTERN = Pattern.compile(
-            "('[^']+'|[A-Za-z0-9_]+!)?(\\$?[A-Z]+\\$?\\d+(?::\\$?[A-Z]+\\$?\\d+)?|\\[\\d+\\][^\\s(),+*/-]+)");
+            "('(?:[^']|'')+'!|[A-Za-z0-9_]+!)?(\\$?[A-Z]+\\$?\\d+(?::\\$?[A-Z]+\\$?\\d+)?|\\[\\d+\\][^\\s(),+*/-]+)");
+
+    private static final Pattern SHEET_PREFIX_PATTERN = Pattern.compile(
+            "(\\[\\d+\\][^'!]+|'\\s*\\[\\d+\\](?:[^']|'')+'|'(?:[^']|'')+'|[A-Za-z0-9_]+)!");
+
+    private static final int MAX_ROWS = SpreadsheetVersion.EXCEL2007.getMaxRows();
+    private static final int MAX_COLS = SpreadsheetVersion.EXCEL2007.getMaxColumns();
 
     private FormulaTokenizer() {}
 
@@ -146,13 +154,12 @@ public final class FormulaTokenizer {
     }
 
     private static void registerSheetNames(String formulaText, XSSFWorkbook wb) {
-        Pattern pattern = Pattern.compile("(\\[\\d+\\][^'!]+|'\\s*\\[\\d+\\][^']+'|'[^']+'|[A-Za-z0-9_]+)!");
-        Matcher matcher = pattern.matcher(formulaText);
+        Matcher matcher = SHEET_PREFIX_PATTERN.matcher(formulaText);
         while (matcher.find()) {
             String sheet = matcher.group(1);
             if (sheet != null) {
                 if (sheet.startsWith("'") && sheet.endsWith("'")) {
-                    sheet = sheet.substring(1, sheet.length() - 1);
+                    sheet = unescapeSheetName(sheet.substring(1, sheet.length() - 1));
                 }
                 if (wb.getSheet(sheet) == null) {
                     try {
@@ -162,6 +169,10 @@ public final class FormulaTokenizer {
                 }
             }
         }
+    }
+
+    private static String unescapeSheetName(String quotedInterior) {
+        return quotedInterior.replace("''", "'");
     }
 
     private static FormulaToken buildLocalCellToken(int index, RefPtg ref, int formulaRow, int formulaCol) {
@@ -178,11 +189,11 @@ public final class FormulaTokenizer {
 
     /** Shared by local and 3D range builders: is this Excel's shorthand for a whole column/row? */
     private static boolean isWholeColumn(int firstRow, int lastRow) {
-        return firstRow == 1 && lastRow >= 65536;
+        return firstRow == 1 && lastRow >= MAX_ROWS;
     }
 
     private static boolean isWholeRow(int firstCol, int lastCol) {
-        return firstCol == 1 && lastCol >= 256;
+        return firstCol == 1 && lastCol >= MAX_COLS;
     }
 
     /** Shared by local and 3D range builders: "firstCell:lastCell" from 1-based row/col bounds. */
@@ -305,12 +316,13 @@ public final class FormulaTokenizer {
             String sheet = matcher.group(1);
             if (sheet != null) {
                 if (sheet.startsWith("'") && sheet.endsWith("'!")) {
-                    sheet = sheet.substring(1, sheet.length() - 2);
+                    sheet = unescapeSheetName(sheet.substring(1, sheet.length() - 2));
                 } else if (sheet.endsWith("!")) {
                     sheet = sheet.substring(0, sheet.length() - 1);
                 }
             }
-            salvaged.add(new FormulaToken(index++, rawToken, "unresolved", sheet, matcher.group(2), null, null, null, null, false, false));
+            salvaged.add(new FormulaToken(index++, rawToken, "unresolved", sheet, matcher.group(2),
+                    null, null, null, null, false, false));
         }
         return salvaged;
     }

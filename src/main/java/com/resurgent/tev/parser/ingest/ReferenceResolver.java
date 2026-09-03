@@ -61,7 +61,7 @@ public final class ReferenceResolver {
             }
 
             if (targetSheet != null && !targetSheet.isBlank() && !targetSheet.startsWith("[")) {
-                targetWorksheetId = ctx.sheetNameToId().get(targetSheet);
+                targetWorksheetId = ctx.sheetNameToId().get(IngestService.sheetLookupKey(targetSheet));
             } else if (targetSheet == null && !"defined_name".equals(token.refKind())
                     && !"unresolved".equals(token.refKind())) {
                 // Local unqualified reference: default target worksheet to the
@@ -102,8 +102,9 @@ public final class ReferenceResolver {
                         : (localSheetName != null ? localSheetName
                                 : (targetWorksheetId == null ? null
                                         : ctx.worksheetIdToSheetName().get(targetWorksheetId)));
-                if (targetSheetLookup != null && ctx.cellCoordMap().containsKey(targetSheetLookup)) {
-                    resolvedCellId = ctx.cellCoordMap().get(targetSheetLookup).get(token.targetRange());
+                String coordMapKey = IngestService.sheetLookupKey(targetSheetLookup);
+                if (coordMapKey != null && ctx.cellCoordMap().containsKey(coordMapKey)) {
+                    resolvedCellId = ctx.cellCoordMap().get(coordMapKey).get(token.targetRange());
                 }
             }
 
@@ -114,12 +115,10 @@ public final class ReferenceResolver {
                         ctx.now());
             }
 
-            if (resolvedCellId != null || externalLinkId != null) {
-                stats.resolved++;
-            } else if (unresolvedReason != null) {
+            if (unresolvedReason != null) {
                 stats.unresolved++;
             } else {
-                // Ranges and known defined names: no single resolved_cell_id, but not an error.
+                // Resolved cell, external link, ranges, and known defined names.
                 stats.resolved++;
             }
 

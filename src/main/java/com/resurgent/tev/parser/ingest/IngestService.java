@@ -31,7 +31,7 @@ import java.util.Set;
  */
 public final class IngestService {
 
-    private static final String PARSER_VERSION = "0.1.0-SNAPSHOT";
+    private static final String PARSER_VERSION = "0.1.1-SNAPSHOT";
 
     /**
      * POI sometimes emits barrier function names as NameX "external" tokens instead of
@@ -273,10 +273,10 @@ public final class IngestService {
                     sheet.bboxMaxRow(), sheet.bboxMaxCol(),
                     sheet.dimensionsDeclared(), sheet.realContentRows(),
                     sheet.declaredMerged());
-            sheetNameToId.put(sheet.sheetName(), worksheetId);
+            sheetNameToId.put(sheetLookupKey(sheet.sheetName()), worksheetId);
             worksheetIdToSheetName.put(worksheetId, sheet.sheetName());
             Map<String, Long> coordMap = new HashMap<>();
-            cellCoordMap.put(sheet.sheetName(), coordMap);
+            cellCoordMap.put(sheetLookupKey(sheet.sheetName()), coordMap);
 
             for (NormalizedCell cell : sheet.cells()) {
                 NormalizedCell cellToInsert = cell;
@@ -377,6 +377,11 @@ public final class IngestService {
     }
 
     private record PendingCellTokens(long cellId, long worksheetId, List<FormulaToken> tokens) {
+    }
+
+    /** Excel sheet names are case-insensitive; lookups use a Locale.ROOT key. */
+    static String sheetLookupKey(String sheetName) {
+        return sheetName == null ? null : sheetName.toLowerCase(Locale.ROOT);
     }
 
     private static void recordCellProvenance(WorkspaceRepository repo, long cellId,

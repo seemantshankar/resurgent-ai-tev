@@ -59,4 +59,40 @@ class FormulaTokenizerTest {
         assertThat(result.formulaState()).isEqualTo("parse_error");
         assertThat(result.tokens()).isNotEmpty();
     }
+
+    @Test
+    void salvageKeepsEscapedApostropheSheetName() {
+        FormulaTokenizerResult result = FormulaTokenizer.tokenize(
+                "INVALID_SYNTAX(,,)'O''Brien'!A1", 1, 1, Map.of());
+        assertThat(result.formulaState()).isEqualTo("parse_error");
+        assertThat(result.tokens()).isNotEmpty();
+        FormulaToken token = result.tokens().get(0);
+        assertThat(token.targetSheetName()).isEqualTo("O'Brien");
+        assertThat(token.targetRange()).isEqualTo("A1");
+        assertThat(token.rawToken()).contains("O''Brien");
+    }
+
+    @Test
+    void cellRangeToRow65536IsNotWholeColumn() {
+        FormulaTokenizerResult result = FormulaTokenizer.tokenize("A1:A65536", 1, 1, Map.of());
+        assertThat(result.formulaState()).isEqualTo("ok");
+        assertThat(result.tokens()).hasSize(1);
+        FormulaToken token = result.tokens().get(0);
+        assertThat(token.refKind()).isEqualTo("local_range");
+        assertThat(token.isWholeColumn()).isFalse();
+        assertThat(token.rawToken()).isEqualTo("A1:A65536");
+        assertThat(token.targetRange()).isEqualTo("A1:A65536");
+    }
+
+    @Test
+    void cellRangeToColIvIsNotWholeRow() {
+        FormulaTokenizerResult result = FormulaTokenizer.tokenize("A1:IV1", 1, 1, Map.of());
+        assertThat(result.formulaState()).isEqualTo("ok");
+        assertThat(result.tokens()).hasSize(1);
+        FormulaToken token = result.tokens().get(0);
+        assertThat(token.refKind()).isEqualTo("local_range");
+        assertThat(token.isWholeRow()).isFalse();
+        assertThat(token.rawToken()).isEqualTo("A1:IV1");
+        assertThat(token.targetRange()).isEqualTo("A1:IV1");
+    }
 }
