@@ -122,7 +122,7 @@ class IngestServiceTest {
                     assertThat(rs.getInt("is_bold")).isEqualTo(1);
                     assertThat(rs.getString("number_format")).isEqualTo("$#,##0.00");
                     assertThat(rs.getString("fill_pattern")).isEqualTo("SOLID_FOREGROUND");
-                    assertThat(rs.getString("fill_fg_color")).matches("#?[0-9a-fA-F]+|\\d+");
+                    assertThat(rs.getString("fill_fg_color")).isEqualTo("#ffff00");
                     assertThat(rs.getString("border_bottom_style")).isEqualTo("THIN");
                     assertThat(rs.getString("border_bottom_color")).isNotBlank();
                 }
@@ -154,6 +154,36 @@ class IngestServiceTest {
                     assertThat(rs.getString("formula_text")).isEqualTo("\"A  B\"  &  C1");
                     assertThat(rs.getString("formula_normalized")).isEqualTo("\"A  B\" & C1");
                 }
+            }
+        }
+    }
+
+    @Test
+    void xlsxIngestPersistsBorderOnlyBlankCells() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Edges");
+            // POI omits trailing blank cells on a row that also has values; keep the
+            // painted blank on its own row so the fixture matches Excel-authored paint.
+            org.apache.poi.ss.usermodel.Cell blank = sheet.createRow(0).createCell(0);
+            org.apache.poi.ss.usermodel.CellStyle style = workbook.createCellStyle();
+            style.setBorderRight(org.apache.poi.ss.usermodel.BorderStyle.THIN);
+            blank.setCellStyle(style);
+            sheet.createRow(1).createCell(0).setCellValue("Total Cost");
+
+            Path xlsx = writeWorkbook(workbook, "border-blank.xlsx");
+            Path db = tempDir.resolve("border-blank.db");
+            new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT c.value_type, s.border_right_style"
+                                + " FROM cell c JOIN cell_style s ON s.style_id = c.style_id"
+                                + " WHERE c.coord = 'A1'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("value_type")).isEqualTo("empty");
+                    assertThat(rs.getString("border_right_style")).isEqualTo("THIN");
+                }
+                assertThat(count(c, "cell")).isEqualTo(2);
             }
         }
     }

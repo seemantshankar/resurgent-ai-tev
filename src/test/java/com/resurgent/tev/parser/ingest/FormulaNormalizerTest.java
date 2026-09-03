@@ -2,6 +2,7 @@ package com.resurgent.tev.parser.ingest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.Locale;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -28,5 +29,17 @@ class FormulaNormalizerTest {
     void stripsLegacyEqualsPlusPrefix() {
         assertThat(FormulaNormalizer.normalize("=+A1+B1")).isEqualTo("A1+B1");
         assertThat(FormulaNormalizer.normalize("=A1+B1")).isEqualTo("A1+B1");
+    }
+
+    @Test
+    void uppercasingIsStableUnderTurkishDefaultLocale() {
+        Locale previous = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+            assertThat(FormulaNormalizer.normalize("if(a1>0, \"i\", b1)"))
+                    .isEqualTo("IF(A1>0, \"i\", B1)");
+        } finally {
+            Locale.setDefault(previous);
+        }
     }
 }

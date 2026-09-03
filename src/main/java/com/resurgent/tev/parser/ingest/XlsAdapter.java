@@ -245,7 +245,7 @@ public final class XlsAdapter {
         String coord = CellGeometry.coord(cell.getRowIndex(), cell.getColumnIndex());
 
         if (cell.getCellType() != CellType.FORMULA && CellGeometry.isBlankContent(cell)) {
-            return null;
+            return styledBlankOrNull(cell, coord, rowNum, colNum, rowHidden, colHidden, sheetHidden);
         }
 
         CellType type = cell.getCellType();
@@ -258,6 +258,16 @@ public final class XlsAdapter {
 
         return withStyle(cell, LiteralCellNormalizer.normalizeLiteralCell(cell, coord, rowNum, colNum,
                 rowHidden, colHidden, sheetHidden));
+    }
+
+    private static NormalizedCell styledBlankOrNull(Cell styleSource, String coord,
+            int rowNum, int colNum, boolean rowHidden, boolean colHidden, boolean sheetHidden) {
+        com.resurgent.tev.parser.db.CellStyle style = CellStyleExtractor.extract(styleSource);
+        if (!CellStyleExtractor.hasMeaningfulAppearance(style)) {
+            return null;
+        }
+        return NormalizedCellFactory.buildStyledBlank(coord, rowNum, colNum,
+                rowHidden, colHidden, sheetHidden, style);
     }
 
     private static NormalizedCell withStyle(Cell styleSource, NormalizedCell cell) {

@@ -1,11 +1,13 @@
 package com.resurgent.tev.parser.ingest;
 
+import java.util.Locale;
+
 /**
  * Safe formula normalization per ADR 0003 / 0013:
  * <ul>
  *   <li>Strip legacy {@code =+} only at the start.</li>
  *   <li>Collapse whitespace only outside string literals and quoted sheet names.</li>
- *   <li>Uppercase only outside those quoted regions.</li>
+ *   <li>Uppercase only outside those quoted regions ({@link Locale#ROOT}).</li>
  *   <li>Never alter quoted sheet names or quoted string constants, including
  *       doubled quote escapes.</li>
  * </ul>
@@ -89,7 +91,7 @@ public final class FormulaNormalizer {
                 continue;
             }
 
-            out.append(Character.toUpperCase(c));
+            out.append(String.valueOf(c).toUpperCase(Locale.ROOT));
             lastWasSpace = false;
         }
 
