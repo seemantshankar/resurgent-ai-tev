@@ -24,6 +24,9 @@ final class LocalStructureDiscoverer {
             int bboxMinCol,
             int bboxMaxRow,
             int bboxMaxCol,
+            String internalWhitespaceJson,
+            String anchorsJson,
+            String structuralSignaturesJson,
             double structuralConfidence,
             String structuralConfidenceRationale,
             String explanation) {
@@ -59,41 +62,59 @@ final class LocalStructureDiscoverer {
                         "wide grouping remains plausible alongside parallel bands",
                         "Overlapping wide grouping spanning parallel column bands"));
             } else {
-                result.add(toCandidate(
-                        "child",
-                        segmentCells,
-                        0.8,
-                        "soft-blank vertical cluster with compatible column occupancy",
-                        "Local child spanning compatible rows with soft blank separators"));
                 List<List<Integer>> hardBlocks = hardContiguousBlocks(segmentRows, byRow);
-                // Nested section children only when blank gaps coincide with a signature
-                // change — blank bands alone must not split (Rules §5.5 / #91).
-                if (hardBlocks.size() >= 2) {
-                    for (int i = 0; i < hardBlocks.size(); i++) {
-                        List<Integer> blockRows = hardBlocks.get(i);
+                // #98: stacked isomorphic schedule blocks across a blank gap stay siblings
+                // unless multi-signal continuity says they are one form-like cluster.
+                if (shouldEmitStackedScheduleSiblings(hardBlocks, byRow)) {
+                    for (List<Integer> blockRows : hardBlocks) {
                         List<CellEvidence> blockCells = cellsInRows(byRow, blockRows);
                         if (blockCells.size() < 2) {
-                            continue;
-                        }
-                        boolean distinctFromNeighbor = false;
-                        if (i > 0) {
-                            distinctFromNeighbor = !rowSignatureCompatible(
-                                    cellsInRows(byRow, hardBlocks.get(i - 1)), blockCells);
-                        }
-                        if (i + 1 < hardBlocks.size()) {
-                            distinctFromNeighbor = distinctFromNeighbor
-                                    || !rowSignatureCompatible(
-                                            blockCells, cellsInRows(byRow, hardBlocks.get(i + 1)));
-                        }
-                        if (!distinctFromNeighbor) {
                             continue;
                         }
                         result.add(toCandidate(
                                 "child",
                                 blockCells,
-                                0.7,
-                                "contiguous row block with a changed layout signature across a soft gap",
-                                "Nested section child under a wide local parent"));
+                                0.75,
+                                "stacked schedule sibling separated by a soft blank gap",
+                                "Sibling schedule child; resemblance is not physical identity"));
+                    }
+                } else {
+                    result.add(toCandidate(
+                            "child",
+                            segmentCells,
+                            0.8,
+                            "soft-blank vertical cluster with compatible column occupancy",
+                            "Local child spanning compatible rows with soft blank separators"));
+                    // Nested section children only when blank gaps coincide with a signature
+                    // change — blank bands alone must not split (Rules §5.5 / #91).
+                    if (hardBlocks.size() >= 2) {
+                        for (int i = 0; i < hardBlocks.size(); i++) {
+                            List<Integer> blockRows = hardBlocks.get(i);
+                            List<CellEvidence> blockCells = cellsInRows(byRow, blockRows);
+                            if (blockCells.size() < 2) {
+                                continue;
+                            }
+                            boolean distinctFromNeighbor = false;
+                            if (i > 0) {
+                                distinctFromNeighbor = !rowSignatureCompatible(
+                                        cellsInRows(byRow, hardBlocks.get(i - 1)), blockCells);
+                            }
+                            if (i + 1 < hardBlocks.size()) {
+                                distinctFromNeighbor = distinctFromNeighbor
+                                        || !rowSignatureCompatible(
+                                                blockCells,
+                                                cellsInRows(byRow, hardBlocks.get(i + 1)));
+                            }
+                            if (!distinctFromNeighbor) {
+                                continue;
+                            }
+                            result.add(toCandidate(
+                                    "child",
+                                    blockCells,
+                                    0.7,
+                                    "contiguous row block with a changed layout signature across a soft gap",
+                                    "Nested section child under a wide local parent"));
+                        }
                     }
                 }
             }
@@ -125,7 +146,9 @@ final class LocalStructureDiscoverer {
         for (int i = 1; i < occupiedRows.size(); i++) {
             int row = occupiedRows.get(i);
             Set<Integer> nextCols = occupiedCols(byRow.get(row));
-            if (columnBandsCompatible(currentCols, nextCols)) {
+            boolean compatible = columnBandsCompatible(currentCols, nextCols)
+                    || isBlankLabelContinuation(byRow.get(occupiedRows.get(i - 1)), byRow.get(row));
+            if (compatible) {
                 current.add(row);
                 currentCols = union(currentCols, nextCols);
             } else {
@@ -210,8 +233,77 @@ final class LocalStructureDiscoverer {
 
     private static boolean rowSignatureCompatible(
             List<CellEvidence> left, List<CellEvidence> right) {
+        // Nested split / sibling checks use occupancy + value-type shape only.
+        // Blank-label continuation is for soft vertical merge of adjacent detail rows (#100),
+        // not for suppressing a multi-row table Candidate next to a sparse helper row.
         return columnBandsCompatible(occupiedCols(left), occupiedCols(right))
                 && typePattern(left).equals(typePattern(right));
+    }
+
+    /**
+     * #98 — two+ multi-row hard blocks that are near-isomorphic across blank gaps become
+     * sibling Candidates. Single-row form fields with soft blanks stay soft-merged (#91).
+     */
+    private static boolean shouldEmitStackedScheduleSiblings(
+            List<List<Integer>> hardBlocks, Map<Integer, List<CellEvidence>> byRow) {
+        if (hardBlocks.size() < 2) {
+            return false;
+        }
+        List<List<CellEvidence>> substantial = new ArrayList<>();
+        for (List<Integer> blockRows : hardBlocks) {
+            if (blockRows.size() < 2) {
+                return false;
+            }
+            List<CellEvidence> cells = cellsInRows(byRow, blockRows);
+            if (cells.size() < 4) {
+                return false;
+            }
+            substantial.add(cells);
+        }
+        for (int i = 1; i < substantial.size(); i++) {
+            if (!rowSignatureCompatible(substantial.get(i - 1), substantial.get(i))) {
+                return false;
+            }
+            // Require an actual blank gap between blocks (not contiguous).
+            int prevLast = hardBlocks.get(i - 1).get(hardBlocks.get(i - 1).size() - 1);
+            int nextFirst = hardBlocks.get(i).get(0);
+            if (nextFirst <= prevLast + 1) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * #100 — immediately following row continues value columns while omitting the leftmost
+     * label column. Only adjacent occupied rows (no blank-row gap).
+     */
+    private static boolean isBlankLabelContinuation(
+            List<CellEvidence> prevRow, List<CellEvidence> nextRow) {
+        if (prevRow == null || nextRow == null || prevRow.isEmpty() || nextRow.isEmpty()) {
+            return false;
+        }
+        int prevNum = prevRow.get(0).rowNum();
+        int nextNum = nextRow.get(0).rowNum();
+        if (nextNum != prevNum + 1) {
+            return false;
+        }
+        TreeSet<Integer> prevCols = new TreeSet<>(occupiedCols(prevRow));
+        TreeSet<Integer> nextCols = new TreeSet<>(occupiedCols(nextRow));
+        if (prevCols.size() < 2 || nextCols.isEmpty()) {
+            return false;
+        }
+        int labelCol = prevCols.first();
+        if (nextCols.contains(labelCol)) {
+            return false;
+        }
+        TreeSet<Integer> prevValues = new TreeSet<>(prevCols);
+        prevValues.remove(labelCol);
+        if (prevValues.isEmpty()) {
+            return false;
+        }
+        // Value columns of the continuation are a non-empty subset of the opener's value cols.
+        return prevValues.containsAll(nextCols);
     }
 
     private static String typePattern(List<CellEvidence> cells) {
@@ -317,8 +409,21 @@ final class LocalStructureDiscoverer {
             maxCol = Math.max(maxCol, cell.colNum());
         }
         ids.sort(Long::compareTo);
+        Set<Long> occupied = CandidateStructuralEvidence.occupiedPackedCoords(cells);
         return new NarrowCandidate(
-                kind, ids, minRow, minCol, maxRow, maxCol, confidence, rationale, explanation);
+                kind,
+                ids,
+                minRow,
+                minCol,
+                maxRow,
+                maxCol,
+                CandidateStructuralEvidence.internalWhitespaceJson(
+                        minRow, minCol, maxRow, maxCol, occupied),
+                CandidateStructuralEvidence.anchorsJson(cells),
+                CandidateStructuralEvidence.structuralSignaturesJson(cells),
+                confidence,
+                rationale,
+                explanation);
     }
 
     private static List<NarrowCandidate> dedupeExactMembership(List<NarrowCandidate> candidates) {
