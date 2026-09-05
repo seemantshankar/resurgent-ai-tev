@@ -164,4 +164,33 @@ class RealWorkbookDiscoverIT {
             assertThat(coverageCount).isEqualTo(discover.worksheetCount());
         }
     }
+
+    @Test
+    void candidatesWithBboxLargerThanMembersPersistInternalWhitespace() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            boolean found = false;
+            for (CandidateRow candidate : repo.selectCandidatesForParseRun(ingest.parseRunId())) {
+                if (candidate.bboxMinRow() == null || candidate.bboxMaxRow() == null
+                        || candidate.bboxMinCol() == null || candidate.bboxMaxCol() == null) {
+                    continue;
+                }
+                int envelope = (candidate.bboxMaxRow() - candidate.bboxMinRow() + 1)
+                        * (candidate.bboxMaxCol() - candidate.bboxMinCol() + 1);
+                int members = repo.selectCandidateMemberCellIds(candidate.candidateId()).size();
+                if (envelope > members) {
+                    assertThat(candidate.internalWhitespaceJson()).isNotNull();
+                    found = true;
+                    break;
+                }
+            }
+            assertThat(found).isTrue();
+        }
+    }
+
+    @Test
+    void discoverSummaryReportsUnavailableIngestSignals() {
+        assertThat(discover.unavailableIngestSignals())
+                .contains("column_width", "font", "comments", "drawings");
+    }
 }

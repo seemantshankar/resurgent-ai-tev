@@ -78,6 +78,50 @@ class DiscoverServiceTest {
             assertThat(memberIds).hasSize(4);
             assertThat(parent.bboxMinRow()).isEqualTo(1);
             assertThat(parent.bboxMaxRow()).isEqualTo(3);
+            // #96: gap row inside bbox is whitespace coords, not members
+            assertThat(parent.internalWhitespaceJson()).isNotNull();
+            assertThat(parent.internalWhitespaceJson()).contains("\"r\":2");
+            assertThat(parent.internalWhitespaceJson()).doesNotContain("cell");
+        }
+    }
+
+    @Test
+    void internalWhitespaceIsCoordinatesOnlyAndMembersUnchanged() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Gaps");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Item");
+            header.createCell(1).setCellValue("Amt");
+            // Internal blank row 1 (POI) / DB row 2
+            Row body = sheet.createRow(2);
+            body.createCell(0).setCellValue("Steel");
+            body.createCell(1).setCellValue(50.0);
+            // Internal blank column gap: col 2 empty between col 1 and col 3
+            body.createCell(3).setCellValue("note");
+            xlsx = writeWorkbook(workbook, "whitespace.xlsx");
+        }
+        Path db = tempDir.resolve("whitespace.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            CandidateRow parent = repo.selectCandidatesForParseRun(ingest.parseRunId()).stream()
+                    .filter(c -> "coverage_parent".equals(c.candidateKind()))
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(repo.selectCandidateMemberCellIds(parent.candidateId())).hasSize(5);
+            assertThat(parent.internalWhitespaceJson()).isNotNull();
+            assertThat(parent.internalWhitespaceJson()).contains("\"r\":2");
+            assertThat(parent.internalWhitespaceJson()).doesNotMatch(".*\"cell_id\".*");
+            // Re-run replaces whitespace with the Candidate set
+            new DiscoverService().discover(db, ingest.parseRunId());
+            CandidateRow again = repo.selectCandidatesForParseRun(ingest.parseRunId()).stream()
+                    .filter(c -> "coverage_parent".equals(c.candidateKind()))
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(again.internalWhitespaceJson()).isEqualTo(parent.internalWhitespaceJson());
         }
     }
 
@@ -523,6 +567,193 @@ class DiscoverServiceTest {
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
             assertThat(repo.selectCandidateRelatedForParseRun(ingest.parseRunId())).isEmpty();
+            // #98: stacked same-shape schedules → sibling narrower children, not one soft merge
+            List<CandidateRow> children = repo.selectCandidatesForParseRun(ingest.parseRunId())
+                    .stream()
+                    .filter(c -> "child".equals(c.candidateKind()))
+                    .toList();
+            assertThat(children).hasSizeGreaterThanOrEqualTo(2);
+            assertThat(children.stream()
+                            .anyMatch(c -> c.bboxMaxRow() != null && c.bboxMaxRow() >= 11
+                                    && c.bboxMinRow() != null && c.bboxMinRow() <= 3))
+                    .isFalse();
+        }
+    }
+
+    @Test
+    void blankContinuationLabelRowsStayWithGroupOpener() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Cont");
+            Row opener = sheet.createRow(0);
+            opener.createCell(0).setCellValue("GroupA");
+            opener.createCell(1).setCellValue(10.0);
+            opener.createCell(2).setCellValue(20.0);
+            // Continuation rows: blank label column, value columns continue
+            for (int r = 1; r <= 3; r++) {
+                Row row = sheet.createRow(r);
+                row.createCell(1).setCellValue(10.0 + r);
+                row.createCell(2).setCellValue(20.0 + r);
+            }
+            Row distant = sheet.createRow(30);
+            distant.createCell(8).setCellValue("meta");
+            distant.createCell(9).setCellValue("x");
+            xlsx = writeWorkbook(workbook, "continuation.xlsx");
+        }
+        Path db = tempDir.resolve("continuation.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            CandidateRow coverage = repo.selectCandidatesForParseRun(ingest.parseRunId()).stream()
+                    .filter(c -> "coverage_parent".equals(c.candidateKind()))
+                    .findFirst()
+                    .orElseThrow();
+            Set<Long> groupCells = new HashSet<>();
+            for (var cell : repo.selectCellsForWorksheet(coverage.worksheetId())) {
+                if (cell.rowNum() <= 4) {
+                    groupCells.add(cell.cellId());
+                }
+            }
+            boolean together = false;
+            for (CandidateRow candidate : repo.selectCandidatesForParseRun(ingest.parseRunId())) {
+                if ("coverage_parent".equals(candidate.candidateKind())) {
+                    continue;
+                }
+                Set<Long> members = new HashSet<>(
+                        repo.selectCandidateMemberCellIds(candidate.candidateId()));
+                if (members.containsAll(groupCells)) {
+                    together = true;
+                    break;
+                }
+            }
+            assertThat(together).isTrue();
+            // Coverage still owns every cell (no Scratch/Orphan assignment)
+            assertThat(repo.selectCandidateMemberCellIds(coverage.candidateId()))
+                    .hasSize(groupCells.size() + 2);
+        }
+    }
+
+    @Test
+    void heterogeneousSectionsGetLocallyReAnchoredChildren() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Hetero");
+            Row h1 = sheet.createRow(0);
+            h1.createCell(0).setCellValue("Item");
+            h1.createCell(1).setCellValue("Qty");
+            for (int r = 1; r <= 3; r++) {
+                Row row = sheet.createRow(r);
+                row.createCell(0).setCellValue("A" + r);
+                row.createCell(1).setCellValue(r);
+            }
+            // Different column band + value types → local re-anchor (#101)
+            Row h2 = sheet.createRow(8);
+            h2.createCell(4).setCellValue("Note");
+            h2.createCell(5).setCellValue("Flag");
+            h2.createCell(6).setCellValue("Score");
+            for (int r = 9; r <= 11; r++) {
+                Row row = sheet.createRow(r);
+                row.createCell(4).setCellValue("n" + r);
+                row.createCell(5).setCellValue("y");
+                row.createCell(6).setCellValue(r * 1.5);
+            }
+            xlsx = writeWorkbook(workbook, "hetero.xlsx");
+        }
+        Path db = tempDir.resolve("hetero.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<CandidateRow> candidates = repo.selectCandidatesForParseRun(ingest.parseRunId());
+            assertThat(candidates.stream().filter(c -> "coverage_parent".equals(c.candidateKind())))
+                    .hasSize(1);
+            List<CandidateRow> children = candidates.stream()
+                    .filter(c -> "child".equals(c.candidateKind())
+                            || "parallel".equals(c.candidateKind()))
+                    .toList();
+            assertThat(children).hasSizeGreaterThanOrEqualTo(2);
+            // Additive: parallel/overlap patterns still allowed elsewhere
+            assertThat(candidates.stream().anyMatch(c -> c.structuralConfidence() != null)).isTrue();
+
+            DiscoverService service = new DiscoverService();
+            CandidateRow firstChild = children.get(0);
+            Packet packet = service.buildPacket(db, firstChild.candidateId());
+            assertThat(packet.cells().stream().anyMatch(c -> PacketCell.ROLE_CORE.equals(c.role())))
+                    .isTrue();
+            // Local re-anchor may still close via nearby header/axis context (#93 / #101)
+            assertThat(packet.contextClosureSucceeded()
+                    || packet.cells().stream().anyMatch(c -> PacketCell.ROLE_CONTEXT.equals(c.role())))
+                    .isTrue();
+        }
+    }
+
+    @Test
+    void narrowerCandidatesPersistAnchorsAndStructuralSignatures() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Sig");
+            var font = workbook.createFont();
+            font.setBold(true);
+            var bold = workbook.createCellStyle();
+            bold.setFont(font);
+            Row header = sheet.createRow(0);
+            var h0 = header.createCell(0);
+            h0.setCellValue("Title");
+            h0.setCellStyle(bold);
+            header.createCell(1).setCellValue("Y1");
+            header.createCell(2).setCellValue("Y2");
+            for (int r = 1; r <= 3; r++) {
+                Row row = sheet.createRow(r);
+                row.createCell(0).setCellValue("R" + r);
+                row.createCell(1).setCellValue(r);
+                row.createCell(2).setCellValue(r * 2.0);
+            }
+            Row distant = sheet.createRow(20);
+            distant.createCell(8).setCellValue("meta");
+            distant.createCell(9).setCellValue("x");
+            xlsx = writeWorkbook(workbook, "signatures.xlsx");
+        }
+        Path db = tempDir.resolve("signatures.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<CandidateRow> narrow = repo.selectCandidatesForParseRun(ingest.parseRunId()).stream()
+                    .filter(c -> !"coverage_parent".equals(c.candidateKind()))
+                    .toList();
+            assertThat(narrow).isNotEmpty();
+            assertThat(narrow.stream().anyMatch(c -> c.structuralSignaturesJson() != null)).isTrue();
+            assertThat(narrow.stream()
+                            .filter(c -> c.structuralSignaturesJson() != null)
+                            .allMatch(c -> c.structuralSignaturesJson().contains("occupied_cols")))
+                    .isTrue();
+            assertThat(narrow.stream().anyMatch(c -> c.anchorsJson() != null
+                    && (c.anchorsJson().contains("bold") || c.anchorsJson().contains("text_row"))))
+                    .isTrue();
+            String sigBefore = narrow.stream()
+                    .map(CandidateRow::structuralSignaturesJson)
+                    .filter(s -> s != null)
+                    .findFirst()
+                    .orElseThrow();
+            String anchorsBefore = narrow.stream()
+                    .map(CandidateRow::anchorsJson)
+                    .filter(a -> a != null)
+                    .findFirst()
+                    .orElse(null);
+            new DiscoverService().discover(db, ingest.parseRunId());
+            List<CandidateRow> again = repo.selectCandidatesForParseRun(ingest.parseRunId()).stream()
+                    .filter(c -> !"coverage_parent".equals(c.candidateKind()))
+                    .toList();
+            assertThat(again.stream().anyMatch(c -> sigBefore.equals(c.structuralSignaturesJson())))
+                    .isTrue();
+            if (anchorsBefore != null) {
+                assertThat(again.stream().anyMatch(c -> anchorsBefore.equals(c.anchorsJson())))
+                        .isTrue();
+            }
         }
     }
 

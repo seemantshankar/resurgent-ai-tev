@@ -10,6 +10,7 @@ public record CellEvidence(
         int colNum,
         String valueType,
         Long styleId,
+        Boolean isBold,
         boolean isMergedAnchor,
         boolean isMergedParticipant,
         String mergedRange) {

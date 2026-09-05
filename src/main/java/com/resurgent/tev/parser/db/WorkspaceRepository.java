@@ -1003,10 +1003,13 @@ public final class WorkspaceRepository {
     /** Bulk cell evidence for one worksheet’s discover pass (signatures / membership). */
     public List<CellEvidence> selectCellEvidenceForWorksheet(long worksheetId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT cell_id, coord, row_num, col_num, value_type, style_id,"
-                        + " is_merged_anchor, is_merged_participant, merged_range"
-                        + " FROM cell WHERE worksheet_id = ?"
-                        + " ORDER BY row_num, col_num, cell_id")) {
+                "SELECT c.cell_id, c.coord, c.row_num, c.col_num, c.value_type, c.style_id,"
+                        + " s.is_bold,"
+                        + " c.is_merged_anchor, c.is_merged_participant, c.merged_range"
+                        + " FROM cell c"
+                        + " LEFT JOIN cell_style s ON s.style_id = c.style_id"
+                        + " WHERE c.worksheet_id = ?"
+                        + " ORDER BY c.row_num, c.col_num, c.cell_id")) {
             ps.setLong(1, worksheetId);
             try (ResultSet rs = ps.executeQuery()) {
                 List<CellEvidence> rows = new ArrayList<>();
@@ -1020,6 +1023,7 @@ public final class WorkspaceRepository {
                             rs.getInt("col_num"),
                             rs.getString("value_type"),
                             style,
+                            getNullableBoolean(rs, "is_bold"),
                             rs.getInt("is_merged_anchor") == 1,
                             rs.getInt("is_merged_participant") == 1,
                             rs.getString("merged_range")));
