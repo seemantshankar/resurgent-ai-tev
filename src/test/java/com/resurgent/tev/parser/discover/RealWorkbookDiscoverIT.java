@@ -50,7 +50,6 @@ class RealWorkbookDiscoverIT {
     @Test
     void everyWorksheetHasExactlyOneCoverageParentContainingAllPersistedCells() throws Exception {
         assertThat(discover.coverageCheckPassed()).isTrue();
-        assertThat(discover.candidateCount()).isEqualTo(discover.worksheetCount());
 
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
@@ -58,11 +57,13 @@ class RealWorkbookDiscoverIT {
             assertThat(worksheets).hasSize(discover.worksheetCount());
 
             List<CandidateRow> candidates = repo.selectCandidatesForParseRun(ingest.parseRunId());
-            assertThat(candidates).hasSize(discover.worksheetCount());
-            assertThat(candidates).allMatch(c -> "coverage_parent".equals(c.candidateKind()));
+            List<CandidateRow> coverageParents = candidates.stream()
+                    .filter(c -> "coverage_parent".equals(c.candidateKind()))
+                    .toList();
+            assertThat(coverageParents).hasSize(discover.worksheetCount());
 
             for (WorksheetRef worksheet : worksheets) {
-                List<CandidateRow> parents = candidates.stream()
+                List<CandidateRow> parents = coverageParents.stream()
                         .filter(c -> c.worksheetId() == worksheet.worksheetId())
                         .toList();
                 assertThat(parents).hasSize(1);
@@ -76,6 +77,60 @@ class RealWorkbookDiscoverIT {
                 assertThat(memberIds).isEqualTo(cellIds);
             }
         }
+    }
+
+    @Test
+    void narrowerCandidatesExistWithoutReducingCoverage() throws Exception {
+        assertThat(discover.candidateCount()).isGreaterThan(discover.worksheetCount());
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<CandidateRow> candidates = repo.selectCandidatesForParseRun(ingest.parseRunId());
+            assertThat(candidates.stream()
+                            .anyMatch(c -> "child".equals(c.candidateKind())
+                                    || "parallel".equals(c.candidateKind())
+                                    || "overlap".equals(c.candidateKind())))
+                    .isTrue();
+            assertThat(candidates.stream()
+                            .filter(c -> !"coverage_parent".equals(c.candidateKind()))
+                            .allMatch(c -> c.structuralConfidence() != null))
+                    .isTrue();
+        }
+    }
+
+    @Test
+    void formulaLinkedCandidatesAreRelatedWhenEdgesExist() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            // OM Arham has formula reference edges; linked Candidates should not be
+            // discarded solely for distance. Assert relationships exist when edges do.
+            if (repo.selectCellReferencesForParseRun(ingest.parseRunId()).isEmpty()) {
+                return;
+            }
+            assertThat(repo.selectCandidateRelatedForParseRun(ingest.parseRunId()))
+                    .isNotEmpty();
+        }
+    }
+
+    @Test
+    void packetsDistinguishCoreFromContextWithoutReducingCoverage() throws Exception {
+        List<Packet> packets = new DiscoverService()
+                .selectDefaultPackets(db, ingest.parseRunId());
+        assertThat(packets).isNotEmpty();
+        assertThat(packets.stream()
+                        .flatMap(p -> p.cells().stream())
+                        .anyMatch(c -> PacketCell.ROLE_CORE.equals(c.role())))
+                .isTrue();
+        boolean hasNarrow = packets.stream()
+                .anyMatch(p -> !"coverage_parent".equals(p.candidateKind()));
+        if (hasNarrow) {
+            assertThat(packets.stream()
+                            .filter(p -> !"coverage_parent".equals(p.candidateKind()))
+                            .anyMatch(p -> p.cells().stream()
+                                    .anyMatch(c -> PacketCell.ROLE_CONTEXT.equals(c.role())
+                                            || p.contextClosureSucceeded())))
+                    .isTrue();
+        }
+        assertThat(discover.coverageCheckPassed()).isTrue();
     }
 
     @Test
@@ -100,7 +155,13 @@ class RealWorkbookDiscoverIT {
     @Test
     void reRunDoesNotStackDuplicateCoverageParents() throws Exception {
         DiscoverSummary second = new DiscoverService().discover(db, ingest.parseRunId());
-        assertThat(second.candidateCount()).isEqualTo(second.worksheetCount());
         assertThat(second.candidateCount()).isEqualTo(discover.candidateCount());
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            long coverageCount = repo.selectCandidatesForParseRun(ingest.parseRunId()).stream()
+                    .filter(c -> "coverage_parent".equals(c.candidateKind()))
+                    .count();
+            assertThat(coverageCount).isEqualTo(discover.worksheetCount());
+        }
     }
 }

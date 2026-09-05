@@ -694,13 +694,193 @@ public final class WorkspaceRepository {
         return candidateId;
     }
 
-    public void replaceCandidatesForParseRun(long parseRunId, List<CandidateWithMembers> batch)
-            throws SQLException {
+    public void deleteCandidatesForParseRun(long parseRunId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "DELETE FROM candidate WHERE parse_run_id = ?")) {
             ps.setLong(1, parseRunId);
             ps.executeUpdate();
         }
+    }
+
+    public void insertCandidateRelated(
+            long candidateId, long relatedCandidateId, String relationshipKind)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO candidate_related (candidate_id, related_candidate_id, relationship_kind)"
+                        + " VALUES (?, ?, ?)")) {
+            ps.setLong(1, candidateId);
+            ps.setLong(2, relatedCandidateId);
+            ps.setString(3, relationshipKind);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Directed related edges for Candidates belonging to the parse run. */
+    public List<long[]> selectCandidateRelatedForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT cr.candidate_id, cr.related_candidate_id"
+                        + " FROM candidate_related cr"
+                        + " JOIN candidate c ON c.candidate_id = cr.candidate_id"
+                        + " WHERE c.parse_run_id = ?"
+                        + " ORDER BY cr.candidate_id, cr.related_candidate_id")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<long[]> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new long[] {rs.getLong(1), rs.getLong(2)});
+                }
+                return rows;
+            }
+        }
+    }
+
+    public List<CellReferenceEdge> selectCellReferencesForParseRun(long parseRunId)
+            throws SQLException {
+        return selectPersistedCellReferencesForParseRun(parseRunId).stream()
+                .map(PersistedCellReference::edge)
+                .toList();
+    }
+
+    public List<PersistedCellReference> selectPersistedCellReferencesForParseRun(long parseRunId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT cr.cell_reference_id, cr.from_cell_id, cr.token_index, cr.raw_token, cr.ref_kind,"
+                        + " cr.target_sheet_name, cr.target_worksheet_id, cr.target_range,"
+                        + " cr.resolved_cell_id, cr.external_link_id, cr.abs_row, cr.abs_col,"
+                        + " cr.row_offset, cr.col_offset, cr.is_whole_column, cr.is_whole_row,"
+                        + " cr.unresolved_reason"
+                        + " FROM cell_reference cr"
+                        + " JOIN cell from_cell ON from_cell.cell_id = cr.from_cell_id"
+                        + " JOIN worksheet ws ON ws.worksheet_id = from_cell.worksheet_id"
+                        + " WHERE ws.parse_run_id = ?"
+                        + " ORDER BY cr.from_cell_id, cr.token_index")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<PersistedCellReference> rows = new ArrayList<>();
+                while (rs.next()) {
+                    CellReferenceEdge edge = new CellReferenceEdge(
+                            rs.getLong("from_cell_id"),
+                            rs.getInt("token_index"),
+                            rs.getString("raw_token"),
+                            rs.getString("ref_kind"),
+                            rs.getString("target_sheet_name"),
+                            getNullableLong(rs, "target_worksheet_id"),
+                            rs.getString("target_range"),
+                            getNullableLong(rs, "resolved_cell_id"),
+                            getNullableLong(rs, "external_link_id"),
+                            getNullableBoolean(rs, "abs_row"),
+                            getNullableBoolean(rs, "abs_col"),
+                            getNullableInteger(rs, "row_offset"),
+                            getNullableInteger(rs, "col_offset"),
+                            rs.getInt("is_whole_column") == 1,
+                            rs.getInt("is_whole_row") == 1,
+                            rs.getString("unresolved_reason"));
+                    rows.add(new PersistedCellReference(rs.getLong("cell_reference_id"), edge));
+                }
+                return rows;
+            }
+        }
+    }
+
+    public List<CellPacketView> selectCellPacketViews(List<Long> cellIds) throws SQLException {
+        if (cellIds == null || cellIds.isEmpty()) {
+            return List.of();
+        }
+        StringBuilder placeholders = new StringBuilder();
+        for (int i = 0; i < cellIds.size(); i++) {
+            if (i > 0) {
+                placeholders.append(',');
+            }
+            placeholders.append('?');
+        }
+        String sql = "SELECT cell_id, worksheet_id, coord, row_num, col_num, value_type,"
+                + " text_value, display_value, numeric_value, formula_text,"
+                + " row_hidden, col_hidden"
+                + " FROM cell WHERE cell_id IN (" + placeholders + ")"
+                + " ORDER BY row_num, col_num, cell_id";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            for (int i = 0; i < cellIds.size(); i++) {
+                ps.setLong(i + 1, cellIds.get(i));
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                List<CellPacketView> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new CellPacketView(
+                            rs.getLong("cell_id"),
+                            rs.getLong("worksheet_id"),
+                            rs.getString("coord"),
+                            rs.getInt("row_num"),
+                            rs.getInt("col_num"),
+                            rs.getString("value_type"),
+                            rs.getString("text_value"),
+                            rs.getString("display_value"),
+                            rs.getString("numeric_value"),
+                            rs.getString("formula_text"),
+                            rs.getInt("row_hidden") == 1,
+                            rs.getInt("col_hidden") == 1));
+                }
+                return rows;
+            }
+        }
+    }
+
+    /**
+     * Persisted cells on a worksheet whose coordinates fall inside an A1-style range
+     * (e.g. {@code A1}, {@code B2:D10}). Whole-column/row refs return all cells on that axis.
+     */
+    public List<CellPacketView> selectCellsInTargetRange(long worksheetId, String targetRange)
+            throws SQLException {
+        if (targetRange == null || targetRange.isBlank()) {
+            return List.of();
+        }
+        List<CellPacketView> all = selectCellPacketViewsForWorksheet(worksheetId);
+        A1Range bounds = A1Range.parse(targetRange.trim());
+        if (bounds == null) {
+            return List.of();
+        }
+        List<CellPacketView> out = new ArrayList<>();
+        for (CellPacketView cell : all) {
+            if (bounds.contains(cell.rowNum(), cell.colNum())) {
+                out.add(cell);
+            }
+        }
+        return out;
+    }
+
+    public List<CellPacketView> selectCellPacketViewsForWorksheet(long worksheetId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT cell_id, worksheet_id, coord, row_num, col_num, value_type,"
+                        + " text_value, display_value, numeric_value, formula_text,"
+                        + " row_hidden, col_hidden"
+                        + " FROM cell WHERE worksheet_id = ?"
+                        + " ORDER BY row_num, col_num, cell_id")) {
+            ps.setLong(1, worksheetId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<CellPacketView> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new CellPacketView(
+                            rs.getLong("cell_id"),
+                            rs.getLong("worksheet_id"),
+                            rs.getString("coord"),
+                            rs.getInt("row_num"),
+                            rs.getInt("col_num"),
+                            rs.getString("value_type"),
+                            rs.getString("text_value"),
+                            rs.getString("display_value"),
+                            rs.getString("numeric_value"),
+                            rs.getString("formula_text"),
+                            rs.getInt("row_hidden") == 1,
+                            rs.getInt("col_hidden") == 1));
+                }
+                return rows;
+            }
+        }
+    }
+
+    public void replaceCandidatesForParseRun(long parseRunId, List<CandidateWithMembers> batch)
+            throws SQLException {
+        deleteCandidatesForParseRun(parseRunId);
         for (CandidateWithMembers item : batch) {
             insertCandidate(item.write(), item.memberCellIds());
         }
@@ -814,6 +994,35 @@ public final class WorkspaceRepository {
                             rs.getString("coord"),
                             rs.getInt("row_num"),
                             rs.getInt("col_num")));
+                }
+                return rows;
+            }
+        }
+    }
+
+    /** Bulk cell evidence for one worksheet’s discover pass (signatures / membership). */
+    public List<CellEvidence> selectCellEvidenceForWorksheet(long worksheetId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT cell_id, coord, row_num, col_num, value_type, style_id,"
+                        + " is_merged_anchor, is_merged_participant, merged_range"
+                        + " FROM cell WHERE worksheet_id = ?"
+                        + " ORDER BY row_num, col_num, cell_id")) {
+            ps.setLong(1, worksheetId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<CellEvidence> rows = new ArrayList<>();
+                while (rs.next()) {
+                    long styleId = rs.getLong("style_id");
+                    Long style = rs.wasNull() ? null : styleId;
+                    rows.add(new CellEvidence(
+                            rs.getLong("cell_id"),
+                            rs.getString("coord"),
+                            rs.getInt("row_num"),
+                            rs.getInt("col_num"),
+                            rs.getString("value_type"),
+                            style,
+                            rs.getInt("is_merged_anchor") == 1,
+                            rs.getInt("is_merged_participant") == 1,
+                            rs.getString("merged_range")));
                 }
                 return rows;
             }

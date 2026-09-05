@@ -56,11 +56,10 @@ _Avoid_: using “region” for Candidate, Packet, or any code identifier
 
 - **FM Loader**: file adapters (xlsx / xls / csv), safety limits, SQLite persistence, ingest QA (cell / reference / formula reconciliation). Cell contract: coord, typed values, formula text + `formula_normalized` + cached value, merges, hidden flags, `style_id` → shared cell style (bold, `number_format`, fill FG + pattern, per-side borders), and reference edges at ingest — no quantity parsing, header labels, font name/size, or fill background (ADR 0013).
 - **Redacted export v1** (`tev-parse redact`): after a successful ingest, export one `.xlsx` tab from the original file with numeric literals redacted. Requires `--input`, `--db`, `--mandate-id`, `--sheet`, `--output-dir`. Output: `{output-dir}/{basename}-redacted.xlsx`. Tied to ingest so file hash and parse run stay in sync. `.xlsx` only; one named tab for testing; all tabs in production later.
-- **Region discovery — coverage parents** (`tev-parse discover --db --parse-run`): DB-only pass that writes one coverage parent Candidate per worksheet (including isolated hidden worksheets, flagged not skipped). Members are cell identities; re-run replaces that parse run’s Candidates. [#90](https://github.com/seemantshankar/resurgent-ai-tev/issues/90).
+- **Region discovery** (`tev-parse discover --db --parse-run`): DB-only pass that writes Candidates for an ingested parse run — always a coverage parent per worksheet (isolated hidden sheets flagged, not skipped), plus local child/parallel/overlap Candidates, formula-reference related links, and on-demand Packets (core vs context; amounts stay on the cell graph). Re-run replaces that parse run’s Candidates. [#90](https://github.com/seemantshankar/resurgent-ai-tev/issues/90)–[#93](https://github.com/seemantshankar/resurgent-ai-tev/issues/93).
 
 ## Planned (not in repo yet)
 
-- **Region discovery — local children, related Candidates, Packets**: child/parallel/overlap Candidates, formula-reference related links, and on-demand Packets. Same `discover` verb and Candidate tables. Spec [#89](https://github.com/seemantshankar/resurgent-ai-tev/issues/89); tickets [#91](https://github.com/seemantshankar/resurgent-ai-tev/issues/91)–[#93](https://github.com/seemantshankar/resurgent-ai-tev/issues/93). Not LLM-proposed boxes, not the pre-LLM heuristic semantic stack, and not an LLM call.
 - LLM classification of Packets, discrepancy engine, and analyst review
 
 ## Out of scope — do not reintroduce without ADR
