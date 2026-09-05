@@ -36,7 +36,8 @@ public final class WorkspaceDatabase implements AutoCloseable {
             "db/migration/V12__worksheet_role_reasons.sql",
             "db/migration/V13__fm_loader_schema_trim.sql",
             "db/migration/V14__lean_cell_contract.sql",
-            "db/migration/V15__adr0013_ingest_signals.sql"
+            "db/migration/V15__adr0013_ingest_signals.sql",
+            "db/migration/V16__candidate_schema.sql"
     };
 
     private final Connection connection;

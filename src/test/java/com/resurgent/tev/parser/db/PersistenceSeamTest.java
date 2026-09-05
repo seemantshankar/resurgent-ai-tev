@@ -103,10 +103,73 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(15);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(16);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(15);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(16);
+        }
+    }
+
+    @Test
+    void candidateTablesExistAndRoundTripMembers() throws Exception {
+        try (WorkspaceDatabase db = openDb("candidate.db")) {
+            List<String> tables = tableNames(db.connection());
+            assertThat(tables).contains("candidate", "candidate_member", "candidate_related");
+            assertThat(tables).doesNotContain("region");
+
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            long sourceFileId = repo.insertSourceFile(1L, "c.xlsx", "hash", "fm_xlsx",
+                    Timestamps.now(), "0.1.0", null);
+            long parseRunId = repo.insertParseRun(sourceFileId, 1L, "0.1.0", "cfg",
+                    Timestamps.now(), Timestamps.now(), "success", null);
+            long worksheetId = repo.insertWorksheet(parseRunId, "Sheet1", 0, "visible");
+            long cellA1 = repo.insertCell(worksheetId, new NormalizedCell(
+                    "A1", 1, 1,
+                    "x", "string", "string", "x", "x",
+                    null, null, null,
+                    null, null, null, null, false,
+                    false, null,
+                    false, false, null, "cell", false, false, false));
+            long cellB2 = repo.insertCell(worksheetId, new NormalizedCell(
+                    "B2", 2, 2,
+                    "10", "number", "number", "10", "10",
+                    java.math.BigDecimal.TEN, null, null,
+                    null, null, null, null, false,
+                    false, null,
+                    false, false, null, "cell", false, false, false));
+
+            CandidateWrite write = new CandidateWrite(
+                    parseRunId, worksheetId, "coverage_parent", null,
+                    1, 1, 2, 2,
+                    null, null, null,
+                    false, 1.0, "sole coverage parent",
+                    "Coverage parent for Sheet1");
+            long candidateId = repo.insertCandidate(write, List.of(cellA1, cellB2));
+
+            CandidateRow row = repo.selectCandidate(candidateId);
+            assertThat(row.candidateKind()).isEqualTo("coverage_parent");
+            assertThat(row.worksheetId()).isEqualTo(worksheetId);
+            assertThat(row.isolatedHiddenWorksheet()).isFalse();
+            assertThat(row.bboxMinRow()).isEqualTo(1);
+            assertThat(row.bboxMaxCol()).isEqualTo(2);
+            assertThat(repo.selectCandidateMemberCellIds(candidateId))
+                    .containsExactlyInAnyOrder(cellA1, cellB2);
+
+            CandidateWrite replacement = new CandidateWrite(
+                    parseRunId, worksheetId, "coverage_parent", null,
+                    1, 1, 1, 1,
+                    null, null, null,
+                    true, 1.0, "isolated hidden",
+                    "Replaced coverage parent");
+            repo.replaceCandidatesForParseRun(parseRunId, List.of(
+                    new CandidateWithMembers(replacement, List.of(cellA1))));
+
+            assertThat(repo.countCandidatesForParseRun(parseRunId)).isEqualTo(1);
+            List<CandidateRow> after = repo.selectCandidatesForParseRun(parseRunId);
+            assertThat(after).hasSize(1);
+            assertThat(after.get(0).isolatedHiddenWorksheet()).isTrue();
+            assertThat(repo.selectCandidateMemberCellIds(after.get(0).candidateId()))
+                    .containsExactly(cellA1);
         }
     }
 
@@ -319,7 +382,7 @@ class PersistenceSeamTest {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(15);
+            assertThat(count(c, "schema_migration")).isEqualTo(16);
             assertThat(tableNames(c)).contains("cell_reference");
             assertThat(tableNames(c)).doesNotContain("cell_error_root");
 
@@ -367,8 +430,8 @@ class PersistenceSeamTest {
     void v15MigrationRestoresAdr0013IngestSignalsWithoutHeuristicStack() throws Exception {
         try (WorkspaceDatabase db = openDb("v15.db")) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(15);
-            assertThat(tableNames(c)).contains("cell_style", "cell_reference");
+            assertThat(count(c, "schema_migration")).isEqualTo(16);
+            assertThat(tableNames(c)).contains("cell_style", "cell_reference", "candidate");
             assertThat(tableNames(c)).doesNotContain(
                     "region",
                     "cost_head",
@@ -539,7 +602,7 @@ class PersistenceSeamTest {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(
                 dbPath, WorkspaceDatabase.OpenOptions.allowDestructiveReset())) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(15);
+            assertThat(count(c, "schema_migration")).isEqualTo(16);
             assertThat(count(c, "cell")).isZero();
             assertThat(count(c, "source_file")).isZero();
             assertThat(tableNames(c)).doesNotContain("cost_head", "region");
