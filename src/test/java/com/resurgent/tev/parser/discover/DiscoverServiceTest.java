@@ -636,6 +636,50 @@ class DiscoverServiceTest {
     }
 
     @Test
+    void largeContiguousTableIsNotSuppressedBySparseNeighborRows() throws Exception {
+        // Regression: blank-label continuation must not treat a multi-row period table as
+        // "the same as" a single sparse row below (OM Arham P L A8:Z69 disappearance).
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("PL");
+            sheet.createRow(0).createCell(9).setCellValue("unit");
+            for (int r = 2; r <= 20; r++) {
+                Row row = sheet.createRow(r);
+                row.createCell(0).setCellValue("L" + r);
+                for (int c = 3; c <= 8; c++) {
+                    row.createCell(c).setCellValue(r * c * 1.0);
+                }
+            }
+            Row sparse = sheet.createRow(24);
+            for (int c = 3; c <= 8; c++) {
+                sparse.createCell(c).setCellValue(c);
+            }
+            xlsx = writeWorkbook(workbook, "main-table-regress.xlsx");
+        }
+        Path db = tempDir.resolve("main-table-regress.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            CandidateRow table = repo.selectCandidatesForParseRun(ingest.parseRunId()).stream()
+                    .filter(c -> !"coverage_parent".equals(c.candidateKind()))
+                    .filter(c -> c.bboxMinRow() != null && c.bboxMaxRow() != null
+                            && c.bboxMinRow() <= 3 && c.bboxMaxRow() >= 20)
+                    .filter(c -> {
+                        try {
+                            return repo.selectCandidateMemberCellIds(c.candidateId()).size() >= 40;
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    })
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(table.bboxMaxRow() - table.bboxMinRow()).isGreaterThanOrEqualTo(15);
+        }
+    }
+
+    @Test
     void heterogeneousSectionsGetLocallyReAnchoredChildren() throws Exception {
         Path xlsx;
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {

@@ -233,12 +233,11 @@ final class LocalStructureDiscoverer {
 
     private static boolean rowSignatureCompatible(
             List<CellEvidence> left, List<CellEvidence> right) {
-        if (columnBandsCompatible(occupiedCols(left), occupiedCols(right))
-                && typePattern(left).equals(typePattern(right))) {
-            return true;
-        }
-        // #100: blank continuation-label rows keep the prior value-column pattern.
-        return isBlankLabelContinuationGroup(left, right);
+        // Nested split / sibling checks use occupancy + value-type shape only.
+        // Blank-label continuation is for soft vertical merge of adjacent detail rows (#100),
+        // not for suppressing a multi-row table Candidate next to a sparse helper row.
+        return columnBandsCompatible(occupiedCols(left), occupiedCols(right))
+                && typePattern(left).equals(typePattern(right));
     }
 
     /**
@@ -275,10 +274,18 @@ final class LocalStructureDiscoverer {
         return true;
     }
 
-    /** #100 — next row continues value columns while omitting the leftmost label column. */
+    /**
+     * #100 — immediately following row continues value columns while omitting the leftmost
+     * label column. Only adjacent occupied rows (no blank-row gap).
+     */
     private static boolean isBlankLabelContinuation(
             List<CellEvidence> prevRow, List<CellEvidence> nextRow) {
         if (prevRow == null || nextRow == null || prevRow.isEmpty() || nextRow.isEmpty()) {
+            return false;
+        }
+        int prevNum = prevRow.get(0).rowNum();
+        int nextNum = nextRow.get(0).rowNum();
+        if (nextNum != prevNum + 1) {
             return false;
         }
         TreeSet<Integer> prevCols = new TreeSet<>(occupiedCols(prevRow));
@@ -297,21 +304,6 @@ final class LocalStructureDiscoverer {
         }
         // Value columns of the continuation are a non-empty subset of the opener's value cols.
         return prevValues.containsAll(nextCols);
-    }
-
-    private static boolean isBlankLabelContinuationGroup(
-            List<CellEvidence> left, List<CellEvidence> right) {
-        Map<Integer, List<CellEvidence>> leftByRow = groupByRow(left);
-        Map<Integer, List<CellEvidence>> rightByRow = groupByRow(right);
-        if (leftByRow.isEmpty() || rightByRow.isEmpty()) {
-            return false;
-        }
-        List<CellEvidence> leftLast = leftByRow.get(leftByRow.keySet().stream()
-                .mapToInt(Integer::intValue).max().orElseThrow());
-        List<CellEvidence> rightFirst = rightByRow.get(rightByRow.keySet().stream()
-                .mapToInt(Integer::intValue).min().orElseThrow());
-        return isBlankLabelContinuation(leftLast, rightFirst)
-                || isBlankLabelContinuation(rightFirst, leftLast);
     }
 
     private static String typePattern(List<CellEvidence> cells) {
