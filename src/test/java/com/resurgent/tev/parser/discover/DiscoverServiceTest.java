@@ -679,14 +679,20 @@ class DiscoverServiceTest {
             assertThat(candidates.stream().anyMatch(c -> c.structuralConfidence() != null)).isTrue();
 
             DiscoverService service = new DiscoverService();
-            CandidateRow firstChild = children.get(0);
-            Packet packet = service.buildPacket(db, firstChild.candidateId());
-            assertThat(packet.cells().stream().anyMatch(c -> PacketCell.ROLE_CORE.equals(c.role())))
-                    .isTrue();
-            // Local re-anchor may still close via nearby header/axis context (#93 / #101)
-            assertThat(packet.contextClosureSucceeded()
-                    || packet.cells().stream().anyMatch(c -> PacketCell.ROLE_CONTEXT.equals(c.role())))
-                    .isTrue();
+            for (CandidateRow child : children) {
+                Packet packet = service.buildPacket(db, child.candidateId());
+                assertThat(packet.cells().stream().anyMatch(c -> PacketCell.ROLE_CORE.equals(c.role())))
+                        .isTrue();
+                // #101 / #93: local header/axis is either already core (re-anchored with the
+                // section) or appended as context from rows above / label columns.
+                boolean hasLocalHeaderAsCore = packet.cells().stream()
+                        .anyMatch(c -> PacketCell.ROLE_CORE.equals(c.role())
+                                && ("text".equals(c.valueType()) || "quantity_text".equals(c.valueType())));
+                boolean hasContext = packet.contextClosureSucceeded()
+                        || packet.cells().stream()
+                                .anyMatch(c -> PacketCell.ROLE_CONTEXT.equals(c.role()));
+                assertThat(hasLocalHeaderAsCore || hasContext).isTrue();
+            }
         }
     }
 
