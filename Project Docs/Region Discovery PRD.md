@@ -32,7 +32,7 @@ The system optimizes for coverage, traceability, and recoverable uncertainty. It
 ## 4. Non-goals
 
 - Semantic classification during ingestion or deterministic region discovery.
-- Folding discovery into ingest, or a second product/jar (ADR 0014: `tev-parse discover` is a read-only verb on SQLite).
+- Folding discovery into ingest, or a second product/jar (ADR 0014: `tev-parse discover` is DB-only — read-only for the source workbook, read/write for Candidates in the workspace database).
 - Hard-coded rules for known sheet names, labels, coordinates, row counts, column counts, or spacing counts.
 - Reopening the source workbook during discovery.
 - Automatically assigning `Scratch` or `Orphan` as an irreversible cleanup decision.

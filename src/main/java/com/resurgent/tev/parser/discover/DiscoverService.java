@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.discover;
 
+import com.resurgent.tev.parser.db.CandidateRow;
 import com.resurgent.tev.parser.db.CandidateWithMembers;
 import com.resurgent.tev.parser.db.CandidateWrite;
 import com.resurgent.tev.parser.db.CellCoordRef;
@@ -13,8 +14,10 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Region discovery application service: reads one parse run from SQLite and writes
@@ -215,12 +218,14 @@ public final class DiscoverService {
     private static boolean verifyCoverage(
             WorkspaceRepository repo, long parseRunId, List<WorksheetRef> worksheets)
             throws SQLException {
+        Map<Long, List<CandidateRow>> coverageParentsByWorksheet =
+                repo.selectCandidatesForParseRun(parseRunId).stream()
+                        .filter(c -> "coverage_parent".equals(c.candidateKind()))
+                        .collect(Collectors.groupingBy(CandidateRow::worksheetId));
         for (WorksheetRef worksheet : worksheets) {
             List<CellCoordRef> cells = repo.selectCellsForWorksheet(worksheet.worksheetId());
-            var candidates = repo.selectCandidatesForParseRun(parseRunId).stream()
-                    .filter(c -> c.worksheetId() == worksheet.worksheetId()
-                            && "coverage_parent".equals(c.candidateKind()))
-                    .toList();
+            List<CandidateRow> candidates =
+                    coverageParentsByWorksheet.getOrDefault(worksheet.worksheetId(), List.of());
             if (candidates.size() != 1) {
                 return false;
             }
@@ -228,8 +233,9 @@ public final class DiscoverService {
             if (members.size() != cells.size()) {
                 return false;
             }
+            Set<Long> memberIds = new HashSet<>(members);
             for (CellCoordRef cell : cells) {
-                if (!members.contains(cell.cellId())) {
+                if (!memberIds.contains(cell.cellId())) {
                     return false;
                 }
             }
