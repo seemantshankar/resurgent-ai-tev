@@ -66,18 +66,34 @@ final class LocalStructureDiscoverer {
                         "soft-blank vertical cluster with compatible column occupancy",
                         "Local child spanning compatible rows with soft blank separators"));
                 List<List<Integer>> hardBlocks = hardContiguousBlocks(segmentRows, byRow);
+                // Nested section children only when blank gaps coincide with a signature
+                // change — blank bands alone must not split (Rules §5.5 / #91).
                 if (hardBlocks.size() >= 2) {
-                    for (List<Integer> blockRows : hardBlocks) {
+                    for (int i = 0; i < hardBlocks.size(); i++) {
+                        List<Integer> blockRows = hardBlocks.get(i);
                         List<CellEvidence> blockCells = cellsInRows(byRow, blockRows);
                         if (blockCells.size() < 2) {
+                            continue;
+                        }
+                        boolean distinctFromNeighbor = false;
+                        if (i > 0) {
+                            distinctFromNeighbor = !rowSignatureCompatible(
+                                    cellsInRows(byRow, hardBlocks.get(i - 1)), blockCells);
+                        }
+                        if (i + 1 < hardBlocks.size()) {
+                            distinctFromNeighbor = distinctFromNeighbor
+                                    || !rowSignatureCompatible(
+                                            blockCells, cellsInRows(byRow, hardBlocks.get(i + 1)));
+                        }
+                        if (!distinctFromNeighbor) {
                             continue;
                         }
                         result.add(toCandidate(
                                 "child",
                                 blockCells,
                                 0.7,
-                                "contiguous row block inside a table-wide soft parent",
-                                "Nested section child under table-wide local parent"));
+                                "contiguous row block with a changed layout signature across a soft gap",
+                                "Nested section child under a wide local parent"));
                     }
                 }
             }
@@ -187,9 +203,45 @@ final class LocalStructureDiscoverer {
         if (!last.isEmpty()) {
             bands.add(new ColBand(bandStart, max, last));
         }
-        // Require each band to look like a real table fragment (multiple cells).
+        // Require each band to look like a real side-by-side fragment (multiple cells).
         List<ColBand> substantial = bands.stream().filter(b -> b.cells().size() >= 2).toList();
         return substantial.size() >= 2 ? substantial : List.of(new ColBand(min, max, segmentCells));
+    }
+
+    private static boolean rowSignatureCompatible(
+            List<CellEvidence> left, List<CellEvidence> right) {
+        return columnBandsCompatible(occupiedCols(left), occupiedCols(right))
+                && typePattern(left).equals(typePattern(right));
+    }
+
+    private static String typePattern(List<CellEvidence> cells) {
+        // Per-column multiset of coarse types — layout shape, not labels.
+        TreeMap<Integer, TreeMap<String, Integer>> byCol = new TreeMap<>();
+        for (CellEvidence cell : cells) {
+            byCol.computeIfAbsent(cell.colNum(), c -> new TreeMap<>())
+                    .merge(coarseType(cell.valueType()), 1, Integer::sum);
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<Integer, TreeMap<String, Integer>> e : byCol.entrySet()) {
+            if (sb.length() > 0) {
+                sb.append(';');
+            }
+            sb.append(e.getKey()).append(':');
+            sb.append(e.getValue());
+        }
+        return sb.toString();
+    }
+
+    private static String coarseType(String valueType) {
+        if (valueType == null) {
+            return "?";
+        }
+        return switch (valueType) {
+            case "number", "bool", "date" -> "N";
+            case "formula", "error" -> "F";
+            case "text", "quantity_text" -> "T";
+            default -> "O";
+        };
     }
 
     private static List<CellEvidence> cellsInRows(

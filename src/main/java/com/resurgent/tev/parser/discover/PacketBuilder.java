@@ -130,7 +130,7 @@ final class PacketBuilder {
                 found = true;
             }
         }
-        return found || memberSet.size() <= 2;
+        return found;
     }
 
     private static void appendFormulaContext(

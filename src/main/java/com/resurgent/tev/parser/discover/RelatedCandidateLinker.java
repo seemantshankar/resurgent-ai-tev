@@ -1,7 +1,9 @@
 package com.resurgent.tev.parser.discover;
 
 import com.resurgent.tev.parser.db.CandidateRow;
+import com.resurgent.tev.parser.db.CellPacketView;
 import com.resurgent.tev.parser.db.CellReferenceEdge;
+import com.resurgent.tev.parser.db.PersistedCellReference;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -27,11 +29,22 @@ final class RelatedCandidateLinker {
         }
 
         Map<Long, List<CandidateRow>> byCell = indexCandidatesByMember(repo, candidates);
-        List<CellReferenceEdge> edges = repo.selectCellReferencesForParseRun(parseRunId);
+        List<PersistedCellReference> edges = repo.selectPersistedCellReferencesForParseRun(parseRunId);
         Set<String> seen = new HashSet<>();
 
-        for (CellReferenceEdge edge : edges) {
+        for (PersistedCellReference persisted : edges) {
+            CellReferenceEdge edge = persisted.edge();
             Long targetCellId = edge.resolvedCellId();
+            if (targetCellId == null
+                    && edge.targetWorksheetId() != null
+                    && edge.targetRange() != null) {
+                List<CellPacketView> targets =
+                        repo.selectCellsInTargetRange(edge.targetWorksheetId(), edge.targetRange());
+                if (targets.isEmpty()) {
+                    continue;
+                }
+                targetCellId = targets.get(0).cellId();
+            }
             if (targetCellId == null) {
                 continue;
             }

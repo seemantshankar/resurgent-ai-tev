@@ -339,12 +339,13 @@ class DiscoverServiceTest {
                 row.createCell(2).setCellValue(r * 2.0);
                 row.createCell(3).setCellValue(r * 3.0);
             }
+            // Section B: same column band but text-only values — signature change across spacer
             for (int r = 5; r <= 7; r++) {
                 Row row = sheet.createRow(r);
-                row.createCell(0).setCellValue("B" + r);
-                row.createCell(1).setCellValue(r);
-                row.createCell(2).setCellValue(r * 2.0);
-                row.createCell(3).setCellValue(r * 3.0);
+                row.createCell(0).setCellValue("Note" + r);
+                row.createCell(1).setCellValue("x");
+                row.createCell(2).setCellValue("y");
+                row.createCell(3).setCellValue("z");
             }
             Row distant = sheet.createRow(20);
             distant.createCell(10).setCellValue("meta");
