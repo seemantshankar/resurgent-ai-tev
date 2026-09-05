@@ -6,10 +6,13 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * JDBC repository for FM Loader ingest: source files, parse runs, worksheets, cells,
- * shared cell styles, reference edges, workbook metadata, provenance, and audit trail.
+ * JDBC repository for FM Loader ingest and region discovery: source files, parse runs,
+ * worksheets, cells, shared cell styles, reference edges, Candidates, workbook metadata,
+ * provenance, and audit trail.
  */
 public final class WorkspaceRepository {
 
@@ -652,6 +655,245 @@ public final class WorkspaceRepository {
 
     public long countCellReferences() throws SQLException {
         return count("SELECT COUNT(*) FROM cell_reference");
+    }
+
+    public long insertCandidate(CandidateWrite write, List<Long> memberCellIds) throws SQLException {
+        long candidateId;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO candidate (parse_run_id, worksheet_id, candidate_kind,"
+                        + " parent_candidate_id, bbox_min_row, bbox_min_col, bbox_max_row, bbox_max_col,"
+                        + " internal_whitespace, anchors, structural_signatures,"
+                        + " isolated_hidden_worksheet, structural_confidence,"
+                        + " structural_confidence_rationale, explanation, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, write.parseRunId());
+            ps.setLong(2, write.worksheetId());
+            ps.setString(3, write.candidateKind());
+            setLong(ps, 4, write.parentCandidateId());
+            setInteger(ps, 5, write.bboxMinRow());
+            setInteger(ps, 6, write.bboxMinCol());
+            setInteger(ps, 7, write.bboxMaxRow());
+            setInteger(ps, 8, write.bboxMaxCol());
+            ps.setString(9, write.internalWhitespaceJson());
+            ps.setString(10, write.anchorsJson());
+            ps.setString(11, write.structuralSignaturesJson());
+            ps.setInt(12, write.isolatedHiddenWorksheet() ? 1 : 0);
+            if (write.structuralConfidence() == null) {
+                ps.setNull(13, java.sql.Types.REAL);
+            } else {
+                ps.setDouble(13, write.structuralConfidence());
+            }
+            ps.setString(14, write.structuralConfidenceRationale());
+            ps.setString(15, write.explanation());
+            ps.setString(16, Timestamps.now());
+            ps.executeUpdate();
+            candidateId = generatedId(ps);
+        }
+        insertCandidateMembers(candidateId, memberCellIds);
+        return candidateId;
+    }
+
+    public void replaceCandidatesForParseRun(long parseRunId, List<CandidateWithMembers> batch)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM candidate WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.executeUpdate();
+        }
+        for (CandidateWithMembers item : batch) {
+            insertCandidate(item.write(), item.memberCellIds());
+        }
+    }
+
+    public CandidateRow selectCandidate(long candidateId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT candidate_id, parse_run_id, worksheet_id, candidate_kind,"
+                        + " parent_candidate_id, bbox_min_row, bbox_min_col, bbox_max_row, bbox_max_col,"
+                        + " internal_whitespace, anchors, structural_signatures,"
+                        + " isolated_hidden_worksheet, structural_confidence,"
+                        + " structural_confidence_rationale, explanation, created_at"
+                        + " FROM candidate WHERE candidate_id = ?")) {
+            ps.setLong(1, candidateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    throw new SQLException("candidate not found: " + candidateId);
+                }
+                return mapCandidateRow(rs);
+            }
+        }
+    }
+
+    public List<CandidateRow> selectCandidatesForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT candidate_id, parse_run_id, worksheet_id, candidate_kind,"
+                        + " parent_candidate_id, bbox_min_row, bbox_min_col, bbox_max_row, bbox_max_col,"
+                        + " internal_whitespace, anchors, structural_signatures,"
+                        + " isolated_hidden_worksheet, structural_confidence,"
+                        + " structural_confidence_rationale, explanation, created_at"
+                        + " FROM candidate WHERE parse_run_id = ?"
+                        + " ORDER BY worksheet_id, candidate_id")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<CandidateRow> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(mapCandidateRow(rs));
+                }
+                return rows;
+            }
+        }
+    }
+
+    public List<Long> selectCandidateMemberCellIds(long candidateId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT cell_id FROM candidate_member WHERE candidate_id = ?"
+                        + " ORDER BY cell_id")) {
+            ps.setLong(1, candidateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<Long> ids = new ArrayList<>();
+                while (rs.next()) {
+                    ids.add(rs.getLong(1));
+                }
+                return ids;
+            }
+        }
+    }
+
+    public long countCandidatesForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COUNT(*) FROM candidate WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getLong(1);
+            }
+        }
+    }
+
+    public boolean parseRunExists(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT 1 FROM parse_run WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    public List<WorksheetRef> selectWorksheetsForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT worksheet_id, sheet_name, sheet_index, sheet_state"
+                        + " FROM worksheet WHERE parse_run_id = ?"
+                        + " ORDER BY sheet_index, worksheet_id")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<WorksheetRef> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new WorksheetRef(
+                            rs.getLong("worksheet_id"),
+                            rs.getString("sheet_name"),
+                            rs.getInt("sheet_index"),
+                            rs.getString("sheet_state")));
+                }
+                return rows;
+            }
+        }
+    }
+
+    public List<CellCoordRef> selectCellsForWorksheet(long worksheetId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT cell_id, coord, row_num, col_num FROM cell"
+                        + " WHERE worksheet_id = ?"
+                        + " ORDER BY row_num, col_num, cell_id")) {
+            ps.setLong(1, worksheetId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<CellCoordRef> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new CellCoordRef(
+                            rs.getLong("cell_id"),
+                            rs.getString("coord"),
+                            rs.getInt("row_num"),
+                            rs.getInt("col_num")));
+                }
+                return rows;
+            }
+        }
+    }
+
+    /**
+     * True when any cell_reference edge links this worksheet to a different visible worksheet
+     * (or vice versa) in the same parse run.
+     */
+    public boolean worksheetHasEdgeToOrFromVisibleSheet(long parseRunId, long worksheetId)
+            throws SQLException {
+        String sql = "SELECT 1"
+                + " FROM cell_reference cr"
+                + " JOIN cell from_cell ON from_cell.cell_id = cr.from_cell_id"
+                + " JOIN worksheet from_ws ON from_ws.worksheet_id = from_cell.worksheet_id"
+                + " LEFT JOIN cell resolved ON resolved.cell_id = cr.resolved_cell_id"
+                + " LEFT JOIN worksheet target_ws ON target_ws.worksheet_id = COALESCE("
+                + " cr.target_worksheet_id, resolved.worksheet_id)"
+                + " WHERE from_ws.parse_run_id = ?"
+                + " AND ("
+                + " (from_ws.worksheet_id = ?"
+                + " AND target_ws.worksheet_id IS NOT NULL"
+                + " AND target_ws.worksheet_id != ?"
+                + " AND COALESCE(target_ws.sheet_state, 'visible') = 'visible')"
+                + " OR"
+                + " (target_ws.worksheet_id = ?"
+                + " AND from_ws.worksheet_id != ?"
+                + " AND COALESCE(from_ws.sheet_state, 'visible') = 'visible')"
+                + " )"
+                + " LIMIT 1";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, worksheetId);
+            ps.setLong(3, worksheetId);
+            ps.setLong(4, worksheetId);
+            ps.setLong(5, worksheetId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    private void insertCandidateMembers(long candidateId, List<Long> memberCellIds)
+            throws SQLException {
+        if (memberCellIds == null || memberCellIds.isEmpty()) {
+            return;
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO candidate_member (candidate_id, cell_id) VALUES (?, ?)")) {
+            for (Long cellId : memberCellIds) {
+                ps.setLong(1, candidateId);
+                ps.setLong(2, cellId);
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
+    }
+
+    private static CandidateRow mapCandidateRow(ResultSet rs) throws SQLException {
+        double confidence = rs.getDouble("structural_confidence");
+        Double structuralConfidence = rs.wasNull() ? null : confidence;
+        return new CandidateRow(
+                rs.getLong("candidate_id"),
+                rs.getLong("parse_run_id"),
+                rs.getLong("worksheet_id"),
+                rs.getString("candidate_kind"),
+                getNullableLong(rs, "parent_candidate_id"),
+                getNullableInteger(rs, "bbox_min_row"),
+                getNullableInteger(rs, "bbox_min_col"),
+                getNullableInteger(rs, "bbox_max_row"),
+                getNullableInteger(rs, "bbox_max_col"),
+                rs.getString("internal_whitespace"),
+                rs.getString("anchors"),
+                rs.getString("structural_signatures"),
+                rs.getInt("isolated_hidden_worksheet") == 1,
+                structuralConfidence,
+                rs.getString("structural_confidence_rationale"),
+                rs.getString("explanation"),
+                rs.getString("created_at"));
     }
 
     private static void setInteger(PreparedStatement ps, int index, Integer value)

@@ -1,0 +1,3 @@
+# Persist Candidates with the parse run; derive Packets
+
+Region discovery writes Candidates into the workspace database, keyed by parse run and worksheet. These rows are structural (membership, kind, relationships, explanation), not a revival of the dropped semantic `region` table. Packets are computed from a Candidate plus the cell graph when a caller asks. Amounts stay on `cell` rows only. We rejected Packet snapshots and Packet files because they would duplicate client amounts outside the cell graph. A later ingest is a new parse run and a new Candidate set; discovery does not rewrite or diff Candidates from an earlier parse run.
