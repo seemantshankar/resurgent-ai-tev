@@ -81,9 +81,9 @@ public final class DiscoverService {
                                 narrow.bboxMinCol(),
                                 narrow.bboxMaxRow(),
                                 narrow.bboxMaxCol(),
-                                null,
-                                null,
-                                null,
+                                narrow.internalWhitespaceJson(),
+                                narrow.anchorsJson(),
+                                narrow.structuralSignaturesJson(),
                                 false,
                                 narrow.structuralConfidence(),
                                 narrow.structuralConfidenceRationale(),
@@ -106,7 +106,8 @@ public final class DiscoverService {
                         worksheets.size(),
                         candidateCount,
                         isolatedHidden,
-                        true);
+                        true,
+                        DiscoverSummary.UNAVAILABLE_INGEST_SIGNALS);
             } catch (SQLException | DiscoverException e) {
                 repo.rollback();
                 throw e;
@@ -196,6 +197,7 @@ public final class DiscoverService {
         String explanation = isolatedHidden
                 ? "Coverage parent for isolated hidden worksheet '" + worksheet.sheetName() + "'"
                 : "Coverage parent for worksheet '" + worksheet.sheetName() + "'";
+        Set<Long> occupied = CandidateStructuralEvidence.occupiedPackedCoords(cells);
         CandidateWrite write = new CandidateWrite(
                 parseRunId,
                 worksheet.worksheetId(),
@@ -205,9 +207,10 @@ public final class DiscoverService {
                 minCol,
                 maxRow,
                 maxCol,
-                null,
-                null,
-                null,
+                CandidateStructuralEvidence.internalWhitespaceJson(
+                        minRow, minCol, maxRow, maxCol, occupied),
+                CandidateStructuralEvidence.anchorsJson(cells),
+                CandidateStructuralEvidence.structuralSignaturesJson(cells),
                 isolatedHidden,
                 1.0,
                 "mandatory coverage parent for every persisted cell on the worksheet",

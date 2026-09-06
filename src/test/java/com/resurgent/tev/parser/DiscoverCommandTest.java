@@ -56,6 +56,11 @@ class DiscoverCommandTest {
 
         assertThat(result.exitCode()).isZero();
         assertThat(result.stdout()).contains("worksheets").contains("candidates");
+        assertThat(result.stdout()).contains("Unavailable ingest signals");
+        assertThat(result.stdout()).contains("column_width");
+        assertThat(result.stdout()).contains("font");
+        assertThat(result.stdout()).contains("comments");
+        assertThat(result.stdout()).contains("drawings");
         assertThat(result.stdout()).doesNotContain("\"core\"").doesNotContain("Packet");
         assertThat(result.stdout()).doesNotContain("{");
 

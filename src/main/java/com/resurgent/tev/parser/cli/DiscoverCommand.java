@@ -38,6 +38,12 @@ public final class DiscoverCommand implements Callable<Integer> {
                     summary.candidateCount(),
                     summary.isolatedHiddenWorksheetCount(),
                     summary.coverageCheckPassed() ? "ok" : "FAILED");
+            if (summary.unavailableIngestSignals() != null
+                    && !summary.unavailableIngestSignals().isEmpty()) {
+                out.printf(
+                        "Unavailable ingest signals (not read from workbook): %s.%n",
+                        String.join(", ", summary.unavailableIngestSignals()));
+            }
             return 0;
         } catch (DiscoverException e) {
             err.println("discover rejected: " + e.getMessage());
