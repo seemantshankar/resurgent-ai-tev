@@ -99,9 +99,9 @@ public final class ClassifyService {
                     List<LayerBLineJudgment> lines = llm.classifyLayerB(
                             new LayerBPrompt(redacted, slice, judgment, parent));
                     for (LayerBLineJudgment line : lines) {
-                        NomenclatureBinding binding = materializeBinding(
+                        NomenclatureBinding binding = tryMaterializeBinding(
                                 catalog, mandateId, slice, packet, candidate, parseRunId, line);
-                        if (!boundCells.add(binding.cellId())) {
+                        if (binding == null || !boundCells.add(binding.cellId())) {
                             continue;
                         }
                         bindings.add(binding);
@@ -143,6 +143,23 @@ public final class ClassifyService {
         } catch (Exception e) {
             String msg = e.getMessage() != null ? e.getMessage() : e.toString();
             throw new ClassifyException("classify failed: " + msg, e);
+        }
+    }
+
+    private static NomenclatureBinding tryMaterializeBinding(
+            NomenclatureCatalog catalog,
+            long mandateId,
+            OntologySlice slice,
+            Packet packet,
+            CandidateRow candidate,
+            long parseRunId,
+            LayerBLineJudgment line) {
+        try {
+            return materializeBinding(
+                    catalog, mandateId, slice, packet, candidate, parseRunId, line);
+        } catch (ClassifyException e) {
+            // Live models often propose labels or invented mid-levels; skip those lines.
+            return null;
         }
     }
 

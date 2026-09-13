@@ -21,20 +21,23 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Live OpenRouter Layer A against Om Arham. Disabled unless {@code -Dtev.liveLlm=true}
- * so ordinary {@code mvn test} stays fake/offline. Skips when {@code .env} is absent.
+ * Live OpenRouter Layer A + Layer B against Om Arham. Disabled unless
+ * {@code -Dtev.liveLlm=true} so ordinary {@code mvn test} stays fake/offline.
+ * Uses {@code Project Docs/OM Arham Ventures.xlsx} and credentials from {@code .env}.
  */
 class RealWorkbookLiveClassifyIT {
 
     private static final Path WORKBOOK =
             Path.of("Project Docs", "OM Arham Ventures.xlsx");
     private static final Set<String> LIVE_SHEETS = Set.of("ASSETS", "CAPITAL COST");
+    private static final String HOTEL_AC_PATH =
+            "Project Cost > Plant & Machinery > Air Conditioning";
 
     @TempDir
     Path tempDir;
 
     @Test
-    void liveLayerAOnOmArhamCapexSheets() throws Exception {
+    void liveLayerAAndLayerBOnOmArhamCapexSheets() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getProperty("tev.liveLlm")),
                 "set -Dtev.liveLlm=true to call OpenRouter");
         assumeTrue(LlmEnvironment.liveConfigured(),
@@ -64,7 +67,8 @@ class RealWorkbookLiveClassifyIT {
         assertThat(liveCandidates).isNotEmpty();
 
         ClassifierLlm openRouter = LlmEnvironment.classifierOrUnconfigured();
-        AtomicInteger liveCalls = new AtomicInteger();
+        AtomicInteger liveLayerA = new AtomicInteger();
+        AtomicInteger liveLayerB = new AtomicInteger();
         ClassifierLlm mixed = new ClassifierLlm() {
             @Override
             public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
@@ -73,22 +77,32 @@ class RealWorkbookLiveClassifyIT {
                             ScheduleFamily.ASSUMPTIONS, Triage.ORPHAN, Relevance.NOISE,
                             List.of(), List.of(), null);
                 }
-                liveCalls.incrementAndGet();
+                liveLayerA.incrementAndGet();
                 System.err.printf("OpenRouter Layer A %d/%d candidate %d cheapPass=%s%n",
-                        liveCalls.get(), liveCandidates.size(),
+                        liveLayerA.get(), liveCandidates.size(),
                         prompt.packet().candidateId(), prompt.cheapPass());
                 return openRouter.classifyLayerA(prompt);
             }
 
             @Override
             public List<LayerBLineJudgment> classifyLayerB(LayerBPrompt prompt) {
-                return List.of();
+                if (!liveWorksheetIds.contains(prompt.packet().worksheetId())) {
+                    return List.of();
+                }
+                liveLayerB.incrementAndGet();
+                System.err.printf("OpenRouter Layer B %d candidate %d cells=%d%n",
+                        liveLayerB.get(),
+                        prompt.packet().candidateId(),
+                        prompt.packet().cells().size());
+                return openRouter.classifyLayerB(prompt);
             }
         };
 
         ClassifySummary summary = new ClassifyService(mixed).classify(db, ingest.parseRunId());
         assertThat(summary.dispositionCount()).isGreaterThan(liveCandidates.size());
-        assertThat(liveCalls.get()).isEqualTo(liveCandidates.size());
+        assertThat(liveLayerA.get()).isEqualTo(liveCandidates.size());
+        assertThat(liveLayerB.get()).isGreaterThan(0);
+        assertThat(summary.bindingCount()).isGreaterThan(0);
 
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
@@ -111,12 +125,22 @@ class RealWorkbookLiveClassifyIT {
                     .as("live model should not collapse every Packet to the stub")
                     .anyMatch(row -> !ScheduleFamily.ASSUMPTIONS.equals(row.scheduleFamily())
                             || !Triage.ORPHAN.equals(row.triage()));
-            long families = liveRows.stream().map(PacketDisposition::scheduleFamily).distinct().count();
-            assertThat(families).isGreaterThanOrEqualTo(1);
 
-            Path report = Path.of("target", "om-arham-live-layer-a.txt");
+            List<NomenclatureBinding> bindings = repo.selectNomenclatureBindingsForParseRun(
+                    ingest.parseRunId());
+            assertThat(bindings).isNotEmpty();
+            assertThat(bindings).allMatch(b -> AmountRole.isKnown(b.amountRole()));
+            assertThat(bindings).allMatch(b -> b.path() != null && !b.path().isBlank());
+            assertThat(bindings).allMatch(b -> b.verbatim() != null && !b.verbatim().isBlank());
+            assertThat(bindings).noneMatch(b -> liveRows.stream()
+                    .anyMatch(d -> d.candidateId() == b.candidateId() && d.cheapPass()));
+
+            Path report = Path.of("target", "om-arham-live-layer-ab.txt");
             StringBuilder body = new StringBuilder();
-            body.append("live calls=").append(liveCalls.get()).append('\n');
+            body.append("liveLayerA=").append(liveLayerA.get())
+                    .append(" liveLayerB=").append(liveLayerB.get())
+                    .append(" bindings=").append(bindings.size())
+                    .append('\n');
             for (PacketDisposition row : liveRows) {
                 CandidateRow candidate = liveCandidates.stream()
                         .filter(c -> c.candidateId() == row.candidateId())
@@ -135,8 +159,24 @@ class RealWorkbookLiveClassifyIT {
                         .append(row.packetDefaultHead() == null ? "" : row.packetDefaultHead())
                         .append('\n');
             }
+            body.append("--- bindings ---\n");
+            for (NomenclatureBinding binding : bindings) {
+                body.append(binding.cellId())
+                        .append('\t')
+                        .append(binding.amountRole())
+                        .append('\t')
+                        .append(binding.softLeaf())
+                        .append('\t')
+                        .append(binding.path())
+                        .append('\t')
+                        .append(binding.verbatim())
+                        .append('\n');
+            }
+            double acAdd = repo.sumAddAmountsForPath(ingest.parseRunId(), HOTEL_AC_PATH);
+            body.append("sumAdd(").append(HOTEL_AC_PATH).append(")=").append(acAdd).append('\n');
             Files.createDirectories(report.getParent());
             Files.writeString(report, body.toString());
+            System.err.println("Wrote " + report.toAbsolutePath());
         }
     }
 }

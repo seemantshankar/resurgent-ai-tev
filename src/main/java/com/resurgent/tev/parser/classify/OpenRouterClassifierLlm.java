@@ -53,12 +53,31 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
     @Override
     public java.util.List<LayerBLineJudgment> classifyLayerB(LayerBPrompt prompt) {
-        // Layer B live JSON schema lands with later tickets; #107 keeps OpenRouter Layer A-only.
-        return java.util.List.of();
+        String system = LayerBPromptAssembler.SYSTEM;
+        String user = LayerBPromptAssembler.userMessage(prompt);
+        String completion = client.completeLayerB(system, user);
+        try {
+            return LayerBResponseParser.parse(completion);
+        } catch (RuntimeException first) {
+            String retry = client.completeLayerB(
+                    system + "\nReturn only {\"lines\":[...]} with amountRole add|deduct|total|helper."
+                            + " No markdown.",
+                    user + "\n\nYour previous JSON was rejected: " + first.getMessage());
+            try {
+                return LayerBResponseParser.parse(retry);
+            } catch (RuntimeException second) {
+                throw new IllegalStateException(
+                        "OpenRouter Layer B invalid after retry: " + second.getMessage(), second);
+            }
+        }
     }
 
     interface CompletionsClient {
         String complete(String system, String user);
+
+        default String completeLayerB(String system, String user) {
+            return complete(system, user);
+        }
     }
 
     @FunctionalInterface
@@ -128,8 +147,17 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
         @Override
         public String complete(String system, String user) {
+            return completeWithFormat(system, user, layerAResponseFormat());
+        }
+
+        @Override
+        public String completeLayerB(String system, String user) {
+            return completeWithFormat(system, user, layerBResponseFormat());
+        }
+
+        private String completeWithFormat(String system, String user, ObjectNode responseFormat) {
             try {
-                String body = requestBody(model, system, user);
+                String body = requestBody(model, system, user, responseFormat);
                 IllegalStateException last = null;
                 for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
                     ExchangeResponse response = exchange.send(body);
@@ -179,6 +207,12 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
          * {@code response_format} {@code json_schema} (not {@code json_object}).
          */
         static String requestBody(String model, String system, String user) throws Exception {
+            return requestBody(model, system, user, layerAResponseFormat());
+        }
+
+        static String requestBody(
+                String model, String system, String user, ObjectNode responseFormat)
+                throws Exception {
             ObjectNode root = MAPPER.createObjectNode();
             root.put("model", model);
             root.put("temperature", 0);
@@ -190,7 +224,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             provider.put("data_collection", "deny");
             ArrayNode plugins = root.putArray("plugins");
             plugins.addObject().put("id", "response-healing");
-            root.set("response_format", layerAResponseFormat());
+            root.set("response_format", responseFormat);
             ArrayNode messages = root.putArray("messages");
             ObjectNode systemNode = messages.addObject();
             systemNode.put("role", "system");
@@ -237,6 +271,47 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             required.add("rowLabels");
             required.add("columnHeaders");
             required.add("packetDefaultHead");
+            return format;
+        }
+
+        static ObjectNode layerBResponseFormat() {
+            ObjectNode format = MAPPER.createObjectNode();
+            format.put("type", "json_schema");
+            ObjectNode jsonSchema = format.putObject("json_schema");
+            jsonSchema.put("name", "layer_b_bindings");
+            jsonSchema.put("strict", true);
+            ObjectNode schema = jsonSchema.putObject("schema");
+            schema.put("type", "object");
+            schema.put("additionalProperties", false);
+            ObjectNode properties = schema.putObject("properties");
+            ObjectNode lines = properties.putObject("lines");
+            lines.put("type", "array");
+            lines.put("description", "money-line bindings; empty if none");
+            ObjectNode items = lines.putObject("items");
+            items.put("type", "object");
+            items.put("additionalProperties", false);
+            ObjectNode itemProps = items.putObject("properties");
+            objectProperty(itemProps, "coord", "amount cell coord in the Packet");
+            objectProperty(itemProps, "verbatim", "client label evidence");
+            objectProperty(itemProps, "path", "nomenclature leaf path");
+            enumProperty(itemProps, "amountRole",
+                    "add, deduct, total, or helper",
+                    AmountRole.ADD, AmountRole.DEDUCT, AmountRole.TOTAL, AmountRole.HELPER);
+            stringArrayProperty(itemProps, "aliases", "optional soft-leaf synonyms");
+            ObjectNode confidence = itemProps.putObject("confidence");
+            ArrayNode confidenceType = confidence.putArray("type");
+            confidenceType.add("number");
+            confidenceType.add("null");
+            confidence.put("description", "0..1 or null");
+            ArrayNode itemRequired = items.putArray("required");
+            itemRequired.add("coord");
+            itemRequired.add("verbatim");
+            itemRequired.add("path");
+            itemRequired.add("amountRole");
+            itemRequired.add("aliases");
+            itemRequired.add("confidence");
+            ArrayNode required = schema.putArray("required");
+            required.add("lines");
             return format;
         }
 

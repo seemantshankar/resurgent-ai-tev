@@ -1,9 +1,7 @@
 package com.resurgent.tev.parser.classify;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.resurgent.tev.parser.classify.ClassifyException;
 import com.resurgent.tev.parser.db.CandidateRow;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
@@ -438,9 +436,12 @@ class ClassifyServiceTest {
                     .orElse(List.of());
         };
 
-        assertThatThrownBy(() -> new ClassifyService(llm).classify(db, ingest.parseRunId()))
-                .isInstanceOf(ClassifyException.class)
-                .hasMessageContaining("cannot invent mid-level");
+        ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
+        assertThat(summary.bindingCount()).isZero();
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId())).isEmpty();
+        }
     }
 
     /** Scripted LLM for tests: records prompts and returns fixed Layer A / Layer B judgments. */
