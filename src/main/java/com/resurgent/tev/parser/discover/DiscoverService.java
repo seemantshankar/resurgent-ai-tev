@@ -131,12 +131,21 @@ public final class DiscoverService {
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(absolute)) {
             WorkspaceRepository repo = new WorkspaceRepository(db.connection());
-            return packetBuilder.build(repo, candidateId);
+            return buildPacket(repo, candidateId);
         } catch (DiscoverException e) {
             throw e;
         } catch (Exception e) {
             String msg = e.getMessage() != null ? e.getMessage() : e.toString();
             throw new DiscoverException("packet build failed: " + msg, e);
+        }
+    }
+
+    /** Build a Packet from an already-open workspace (amounts read from the cell graph). */
+    public Packet buildPacket(WorkspaceRepository repo, long candidateId) throws DiscoverException {
+        try {
+            return packetBuilder.build(repo, candidateId);
+        } catch (SQLException e) {
+            throw new DiscoverException("packet build failed: " + e.getMessage(), e);
         }
     }
 

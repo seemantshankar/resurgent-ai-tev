@@ -30,7 +30,7 @@ Coordinates inside a Candidate’s envelope that have no persisted cell. They ar
 _Avoid_: blank member, omitted evidence
 
 **Packet**:
-The LLM-facing payload for one Candidate: core cells plus appended context cells, kept distinct, with provenance intact. A Packet is built on demand from the Candidate and the cell graph; it is not stored as a second copy of amounts. Context may include cells from another worksheet only when a persisted reference edge supports the link. A large range on an edge is recorded as the range and the edge, not copied in as context cells. Packet selection: a Packet for every Candidate except the coverage parent; a coverage-parent Packet only when it is the sole Candidate on that worksheet or a child cannot stand alone through context closure. This increment does not call the LLM or store classifications.
+The LLM-facing payload for one Candidate: core cells plus appended context cells, kept distinct, with provenance intact. A Packet is built on demand from the Candidate and the cell graph; it is not stored as a second copy of amounts. Context may include cells from another worksheet only when a persisted reference edge supports the link. A large range on an edge is recorded as the range and the edge, not copied in as context cells. Packet selection: a Packet for every Candidate except the coverage parent; a coverage-parent Packet only when it is the sole Candidate on that worksheet or a child cannot stand alone through context closure. Classify number-redacts Packets at send time and persists Layer A on the Candidate; amounts stay on the cell graph.
 _Avoid_: prompt, region payload, analysis table
 
 **Core cell**:
@@ -78,10 +78,11 @@ _Avoid_: cost-head table, per-FM dictionary, Unmapped parking lot
 - **Redacted export v1** (`tev-parse redact`): after a successful ingest, export one `.xlsx` tab from the original file with numeric literals redacted. Requires `--input`, `--db`, `--mandate-id`, `--sheet`, `--output-dir`. Output: `{output-dir}/{basename}-redacted.xlsx`. Tied to ingest so file hash and parse run stay in sync. `.xlsx` only; one named tab for testing; all tabs in production later.
 - **Region discovery** (`tev-parse discover --db --parse-run`): DB-only pass that writes Candidates for an ingested parse run — always a coverage parent per worksheet (isolated hidden sheets flagged, not skipped), plus local child/parallel/overlap Candidates, formula-reference related links, and on-demand Packets (core vs context; amounts stay on the cell graph). Re-run replaces that parse run’s Candidates. [#90](https://github.com/seemantshankar/resurgent-ai-tev/issues/90)–[#93](https://github.com/seemantshankar/resurgent-ai-tev/issues/93).
 - **Nomenclature catalog**: frozen global spine plus industry leaf packs and a mandate soft-leaf overlay, assembled as the ontology slice classify will send. Missing industry uses a non-blocking infer/confirm stub. [#105](https://github.com/seemantshankar/resurgent-ai-tev/issues/105).
+- **Packet classification (Layer A)**: `tev-parse classify --db --parse-run` consumes derived Packets, sends number-redacted payloads plus the ontology slice through a narrow LLM port, and persists schedule family / triage / relevance / axes per Candidate. Coverage parents get a cheap pass first; children see that parent disposition. Re-classify replaces that parse run’s Layer A rows only. [#106](https://github.com/seemantshankar/resurgent-ai-tev/issues/106).
 
 ## Planned (not in repo yet)
 
-- LLM Packet classification: Layer A disposition + Layer B nomenclature bindings (including amount role and line peers), discrepancy engine, and analyst review (triage soft; no per-finding review queue for dictionary growth)
+- LLM Packet classification Layer B nomenclature bindings (including amount role and line peers), discrepancy engine, and analyst review (triage soft; no per-finding review queue for dictionary growth)
 
 ## Out of scope — do not reintroduce without ADR
 
