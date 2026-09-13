@@ -79,10 +79,11 @@ _Avoid_: cost-head table, per-FM dictionary, Unmapped parking lot
 - **Region discovery** (`tev-parse discover --db --parse-run`): DB-only pass that writes Candidates for an ingested parse run — always a coverage parent per worksheet (isolated hidden sheets flagged, not skipped), plus local child/parallel/overlap Candidates, formula-reference related links, and on-demand Packets (core vs context; amounts stay on the cell graph). Re-run replaces that parse run’s Candidates. [#90](https://github.com/seemantshankar/resurgent-ai-tev/issues/90)–[#93](https://github.com/seemantshankar/resurgent-ai-tev/issues/93).
 - **Nomenclature catalog**: frozen global spine plus industry leaf packs and a mandate soft-leaf overlay, assembled as the ontology slice classify will send. Missing industry uses a non-blocking infer/confirm stub. [#105](https://github.com/seemantshankar/resurgent-ai-tev/issues/105).
 - **Packet classification (Layer A)**: `tev-parse classify --db --parse-run` consumes derived Packets, sends number-redacted payloads plus the ontology slice through a narrow LLM port, and persists schedule family / triage / relevance / axes per Candidate. Coverage parents get a cheap pass first; children see that parent disposition. Re-classify replaces that parse run’s Layer A rows only. [#106](https://github.com/seemantshankar/resurgent-ai-tev/issues/106).
+- **Packet classification (Layer B)**: the same classify pass binds money lines to nomenclature paths with verbatim evidence, soft/alias metadata, and `amount_role` (`add` | `deduct` | `total` | `helper`). Soft leaves attach under known mid-levels; coverage parents still get no line lists; default `SUM(path)` includes `add` only. Line peers are not persisted yet. [#107](https://github.com/seemantshankar/resurgent-ai-tev/issues/107).
 
 ## Planned (not in repo yet)
 
-- LLM Packet classification Layer B nomenclature bindings (including amount role and line peers), discrepancy engine, and analyst review (triage soft; no per-finding review queue for dictionary growth)
+- Line peers on Layer B bindings, ProjectFact bindings, cell-meaning query, discrepancy engine, and analyst review (triage soft; no per-finding review queue for dictionary growth)
 
 ## Out of scope — do not reintroduce without ADR
 

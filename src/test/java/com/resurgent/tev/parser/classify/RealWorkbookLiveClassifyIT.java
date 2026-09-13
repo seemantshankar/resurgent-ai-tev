@@ -65,17 +65,25 @@ class RealWorkbookLiveClassifyIT {
 
         ClassifierLlm openRouter = LlmEnvironment.classifierOrUnconfigured();
         AtomicInteger liveCalls = new AtomicInteger();
-        ClassifierLlm mixed = prompt -> {
-            if (!liveWorksheetIds.contains(prompt.packet().worksheetId())) {
-                return new LayerAJudgment(
-                        ScheduleFamily.ASSUMPTIONS, Triage.ORPHAN, Relevance.NOISE,
-                        List.of(), List.of(), null);
+        ClassifierLlm mixed = new ClassifierLlm() {
+            @Override
+            public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
+                if (!liveWorksheetIds.contains(prompt.packet().worksheetId())) {
+                    return new LayerAJudgment(
+                            ScheduleFamily.ASSUMPTIONS, Triage.ORPHAN, Relevance.NOISE,
+                            List.of(), List.of(), null);
+                }
+                liveCalls.incrementAndGet();
+                System.err.printf("OpenRouter Layer A %d/%d candidate %d cheapPass=%s%n",
+                        liveCalls.get(), liveCandidates.size(),
+                        prompt.packet().candidateId(), prompt.cheapPass());
+                return openRouter.classifyLayerA(prompt);
             }
-            liveCalls.incrementAndGet();
-            System.err.printf("OpenRouter Layer A %d/%d candidate %d cheapPass=%s%n",
-                    liveCalls.get(), liveCandidates.size(),
-                    prompt.packet().candidateId(), prompt.cheapPass());
-            return openRouter.classifyLayerA(prompt);
+
+            @Override
+            public List<LayerBLineJudgment> classifyLayerB(LayerBPrompt prompt) {
+                return List.of();
+            }
         };
 
         ClassifySummary summary = new ClassifyService(mixed).classify(db, ingest.parseRunId());

@@ -51,6 +51,12 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         }
     }
 
+    @Override
+    public java.util.List<LayerBLineJudgment> classifyLayerB(LayerBPrompt prompt) {
+        // Layer B live JSON schema lands with later tickets; #107 keeps OpenRouter Layer A-only.
+        return java.util.List.of();
+    }
+
     interface CompletionsClient {
         String complete(String system, String user);
     }

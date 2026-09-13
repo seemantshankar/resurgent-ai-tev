@@ -2,6 +2,7 @@ package com.resurgent.tev.parser.db;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.resurgent.tev.parser.classify.NomenclatureBinding;
 import com.resurgent.tev.parser.classify.PacketDisposition;
 import com.resurgent.tev.parser.ingest.NormalizedCell;
 import com.resurgent.tev.parser.nomenclature.IndustryResolution;
@@ -12,12 +13,13 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * JDBC repository for FM Loader ingest, region discovery, the nomenclature
- * catalog, and Layer A Packet dispositions.
+ * catalog, Layer A Packet dispositions, and Layer B bindings.
  */
 public final class WorkspaceRepository {
 
@@ -1287,6 +1289,91 @@ public final class WorkspaceRepository {
                             rs.getInt("cheap_pass") == 1));
                 }
                 return rows;
+            }
+        }
+    }
+
+    public void deleteNomenclatureBindingsForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM nomenclature_binding WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.executeUpdate();
+        }
+    }
+
+    public long insertNomenclatureBinding(NomenclatureBinding row) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO nomenclature_binding (parse_run_id, candidate_id, cell_id, verbatim,"
+                        + " path, amount_role, soft_leaf, via_alias, confidence, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, row.parseRunId());
+            ps.setLong(2, row.candidateId());
+            ps.setLong(3, row.cellId());
+            ps.setString(4, row.verbatim());
+            ps.setString(5, row.path());
+            ps.setString(6, row.amountRole());
+            ps.setInt(7, row.softLeaf() ? 1 : 0);
+            ps.setInt(8, row.viaAlias() ? 1 : 0);
+            if (row.confidence() == null) {
+                ps.setNull(9, Types.REAL);
+            } else {
+                ps.setDouble(9, row.confidence());
+            }
+            ps.setString(10, Timestamps.now());
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    public List<NomenclatureBinding> selectNomenclatureBindingsForParseRun(long parseRunId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT cell_id, parse_run_id, candidate_id, verbatim, path, amount_role,"
+                        + " soft_leaf, via_alias, confidence FROM nomenclature_binding"
+                        + " WHERE parse_run_id = ? ORDER BY binding_id")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<NomenclatureBinding> rows = new ArrayList<>();
+                while (rs.next()) {
+                    double confidence = rs.getDouble("confidence");
+                    Double confidenceValue = rs.wasNull() ? null : confidence;
+                    rows.add(new NomenclatureBinding(
+                            rs.getLong("cell_id"),
+                            rs.getLong("parse_run_id"),
+                            rs.getLong("candidate_id"),
+                            rs.getString("verbatim"),
+                            rs.getString("path"),
+                            rs.getString("amount_role"),
+                            rs.getInt("soft_leaf") == 1,
+                            rs.getInt("via_alias") == 1,
+                            confidenceValue));
+                }
+                return rows;
+            }
+        }
+    }
+
+    /**
+     * Default leaf rollup: sum numeric amounts for bindings on {@code path} with
+     * {@code amount_role = add} only, excluding Packets whose Layer A relevance is
+     * {@code noise}.
+     */
+    public double sumAddAmountsForPath(long parseRunId, String path) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COALESCE(SUM(c.numeric_value), 0) AS total"
+                        + " FROM nomenclature_binding b"
+                        + " JOIN cell c ON c.cell_id = b.cell_id"
+                        + " JOIN packet_disposition d"
+                        + "   ON d.parse_run_id = b.parse_run_id"
+                        + "  AND d.candidate_id = b.candidate_id"
+                        + " WHERE b.parse_run_id = ? AND b.path = ? AND b.amount_role = 'add'"
+                        + "   AND d.relevance != 'noise'")) {
+            ps.setLong(1, parseRunId);
+            ps.setString(2, path);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getDouble("total");
             }
         }
     }

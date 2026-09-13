@@ -1,7 +1,9 @@
 package com.resurgent.tev.parser.classify;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.resurgent.tev.parser.classify.ClassifyException;
 import com.resurgent.tev.parser.db.CandidateRow;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
@@ -20,8 +22,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Seam: {@link ClassifyService} — Layer A disposition from derived Packets plus
- * a fake LLM, without rewriting Candidate geometry (#106).
+ * Seam: {@link ClassifyService} — Layer A disposition and Layer B bindings from
+ * derived Packets plus a fake LLM, without rewriting Candidate geometry (#106/#107).
  */
 class ClassifyServiceTest {
 
@@ -249,17 +251,239 @@ class ClassifyServiceTest {
         }
     }
 
-    /** Scripted LLM for tests: records prompts and returns a fixed Layer A judgment. */
+    @Test
+    void layerBBindingsPersistWithAmountRolesAndAddOnlyRollup() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Costs");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Item");
+            header.createCell(1).setCellValue("Amount");
+            header.createCell(4).setCellValue("Other");
+            header.createCell(5).setCellValue("Amt");
+            Row add = sheet.createRow(1);
+            add.createCell(0).setCellValue("Civil Works");
+            add.createCell(1).setCellValue(100.0);
+            add.createCell(4).setCellValue("Less: AC");
+            add.createCell(5).setCellValue(15.0);
+            Row more = sheet.createRow(2);
+            more.createCell(0).setCellValue("Steel");
+            more.createCell(1).setCellValue(40.0);
+            more.createCell(4).setCellValue("Glass");
+            more.createCell(5).setCellValue(20.0);
+            xlsx = writeWorkbook(workbook, "roles.xlsx");
+        }
+        Path db = tempDir.resolve("layer-b.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.layerBFactory = prompt -> {
+            if (llm.layerBPrompts.size() > 1) {
+                return List.of();
+            }
+            List<PacketCell> amounts = prompt.packet().cells().stream()
+                    .filter(cell -> "number".equals(cell.valueType())
+                            && (cell.formulaText() == null || cell.formulaText().isBlank()))
+                    .toList();
+            if (amounts.size() < 2) {
+                return List.of();
+            }
+            return List.of(
+                    new LayerBLineJudgment(
+                            amounts.get(0).coord(), "Civil Works",
+                            "Project Cost > Civil Works > Structure",
+                            AmountRole.ADD, List.of(), 0.95),
+                    new LayerBLineJudgment(
+                            amounts.get(1).coord(), "Less: AC",
+                            "Project Cost > Plant & Machinery > Air Conditioning",
+                            AmountRole.DEDUCT, List.of("AC Tear-out"), 0.8));
+        };
+
+        ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
+        assertThat(summary.bindingCount()).isGreaterThanOrEqualTo(2);
+        assertThat(llm.layerBPrompts).isNotEmpty();
+        assertThat(llm.layerBPrompts)
+                .noneMatch(prompt -> "coverage_parent".equals(prompt.packet().candidateKind()));
+
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<NomenclatureBinding> bindings = repo.selectNomenclatureBindingsForParseRun(
+                    ingest.parseRunId());
+            assertThat(bindings).hasSizeGreaterThanOrEqualTo(2);
+            assertThat(bindings).anyMatch(b -> AmountRole.ADD.equals(b.amountRole())
+                    && "Project Cost > Civil Works > Structure".equals(b.path())
+                    && "Civil Works".equals(b.verbatim())
+                    && b.softLeaf());
+            assertThat(bindings).anyMatch(b -> AmountRole.DEDUCT.equals(b.amountRole())
+                    && b.path().endsWith("Air Conditioning")
+                    && b.softLeaf());
+            assertThat(repo.sumAddAmountsForPath(
+                    ingest.parseRunId(), "Project Cost > Civil Works > Structure"))
+                    .isGreaterThanOrEqualTo(100.0);
+            assertThat(repo.sumAddAmountsForPath(
+                    ingest.parseRunId(),
+                    "Project Cost > Plant & Machinery > Air Conditioning"))
+                    .isEqualTo(0.0);
+        }
+    }
+
+    @Test
+    void coverageParentClassifyEmitsNoLayerBLineBindings() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Parallel");
+            for (int r = 0; r < 3; r++) {
+                Row row = sheet.createRow(r);
+                row.createCell(0).setCellValue("L" + r);
+                row.createCell(1).setCellValue(10.0 + r);
+                row.createCell(4).setCellValue("R" + r);
+                row.createCell(5).setCellValue(20.0 + r);
+            }
+            xlsx = writeWorkbook(workbook, "no-parent-bindings.xlsx");
+        }
+        Path db = tempDir.resolve("no-parent-bindings.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.bindFirstAmountAsCivilAdd = true;
+        new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        assertThat(llm.layerBPrompts)
+                .noneMatch(prompt -> "coverage_parent".equals(prompt.packet().candidateKind()));
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<PacketDisposition> parents = repo.selectPacketDispositionsForParseRun(
+                    ingest.parseRunId()).stream()
+                    .filter(PacketDisposition::cheapPass)
+                    .toList();
+            assertThat(parents).isNotEmpty();
+            List<NomenclatureBinding> bindings = repo.selectNomenclatureBindingsForParseRun(
+                    ingest.parseRunId());
+            assertThat(bindings).noneMatch(b -> parents.stream()
+                    .anyMatch(p -> p.candidateId() == b.candidateId() && p.cheapPass()));
+        }
+    }
+
+    @Test
+    void scratchPacketsCanStillSoftBindLayerB() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Parallel");
+            for (int r = 0; r < 3; r++) {
+                Row row = sheet.createRow(r);
+                row.createCell(0).setCellValue("L" + r);
+                row.createCell(1).setCellValue(10.0 + r);
+                row.createCell(4).setCellValue("R" + r);
+                row.createCell(5).setCellValue(20.0 + r);
+            }
+            xlsx = writeWorkbook(workbook, "scratch-bind.xlsx");
+        }
+        Path db = tempDir.resolve("scratch-bind.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.judgment = new LayerAJudgment(
+                ScheduleFamily.ASSUMPTIONS, Triage.SCRATCH, Relevance.NOISE,
+                List.of(), List.of(), null);
+        llm.bindFirstAmountAsCivilAdd = true;
+        ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        assertThat(summary.bindingCount()).isGreaterThanOrEqualTo(1);
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectPacketDispositionsForParseRun(ingest.parseRunId()))
+                    .allMatch(row -> Triage.SCRATCH.equals(row.triage())
+                            && Relevance.NOISE.equals(row.relevance()));
+            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
+                    .isNotEmpty();
+        }
+    }
+
+    @Test
+    void inventingMidLevelPathIsRejected() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Parallel");
+            for (int r = 0; r < 3; r++) {
+                Row row = sheet.createRow(r);
+                row.createCell(0).setCellValue("L" + r);
+                row.createCell(1).setCellValue(10.0 + r);
+                row.createCell(4).setCellValue("R" + r);
+                row.createCell(5).setCellValue(20.0 + r);
+            }
+            xlsx = writeWorkbook(workbook, "mid-level.xlsx");
+        }
+        Path db = tempDir.resolve("mid-level.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.layerBFactory = prompt -> {
+            if (llm.layerBPrompts.size() > 1) {
+                return List.of();
+            }
+            return prompt.packet().cells().stream()
+                    .filter(cell -> "number".equals(cell.valueType()))
+                    .findFirst()
+                    .map(cell -> List.of(new LayerBLineJudgment(
+                            cell.coord(),
+                            "Invented",
+                            "Brand New Mid Level > Leaf",
+                            AmountRole.ADD,
+                            List.of(),
+                            null)))
+                    .orElse(List.of());
+        };
+
+        assertThatThrownBy(() -> new ClassifyService(llm).classify(db, ingest.parseRunId()))
+                .isInstanceOf(ClassifyException.class)
+                .hasMessageContaining("cannot invent mid-level");
+    }
+
+    /** Scripted LLM for tests: records prompts and returns fixed Layer A / Layer B judgments. */
     static final class FakeClassifierLlm implements ClassifierLlm {
         final List<LayerAPrompt> prompts = new ArrayList<>();
+        final List<LayerBPrompt> layerBPrompts = new ArrayList<>();
         LayerAJudgment judgment = new LayerAJudgment(
                 ScheduleFamily.CAPEX_DETAIL, Triage.MAIN, Relevance.PRIMARY,
                 List.of(), List.of(), null);
+        List<LayerBLineJudgment> layerBLines = List.of();
+        java.util.function.Function<LayerBPrompt, List<LayerBLineJudgment>> layerBFactory = null;
+        boolean bindFirstAmountAsCivilAdd;
 
         @Override
         public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
             prompts.add(prompt);
             return judgment;
+        }
+
+        @Override
+        public List<LayerBLineJudgment> classifyLayerB(LayerBPrompt prompt) {
+            layerBPrompts.add(prompt);
+            if (layerBFactory != null) {
+                return layerBFactory.apply(prompt);
+            }
+            if (!layerBLines.isEmpty()) {
+                return layerBLines;
+            }
+            if (!bindFirstAmountAsCivilAdd) {
+                return List.of();
+            }
+            return prompt.packet().cells().stream()
+                    .filter(cell -> "number".equals(cell.valueType())
+                            && (cell.formulaText() == null || cell.formulaText().isBlank()))
+                    .findFirst()
+                    .map(cell -> List.of(new LayerBLineJudgment(
+                            cell.coord(),
+                            "Civil Works",
+                            "Project Cost > Civil Works > Structure",
+                            AmountRole.ADD,
+                            List.of(),
+                            0.9)))
+                    .orElse(List.of());
         }
     }
 

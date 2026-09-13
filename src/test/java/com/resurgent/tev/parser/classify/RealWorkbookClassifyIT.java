@@ -222,6 +222,11 @@ class RealWorkbookClassifyIT {
                     null);
         }
 
+        @Override
+        public List<LayerBLineJudgment> classifyLayerB(LayerBPrompt prompt) {
+            return List.of();
+        }
+
         private static boolean isBareAmountLine(PacketCell cell) {
             if (cell.formulaText() != null && !cell.formulaText().isBlank()) {
                 return false;

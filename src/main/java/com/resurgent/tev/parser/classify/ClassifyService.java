@@ -5,19 +5,25 @@ import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import com.resurgent.tev.parser.discover.DiscoverService;
 import com.resurgent.tev.parser.discover.Packet;
+import com.resurgent.tev.parser.discover.PacketCell;
 import com.resurgent.tev.parser.nomenclature.NomenclatureCatalog;
+import com.resurgent.tev.parser.nomenclature.NomenclatureException;
+import com.resurgent.tev.parser.nomenclature.NomenclatureNode;
 import com.resurgent.tev.parser.nomenclature.OntologySlice;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
- * Packet classification application service: Layer A disposition for one parse run.
- * Consumes derived Packets; does not rewrite Candidate geometry.
+ * Packet classification application service: Layer A disposition and Layer B
+ * nomenclature bindings for one parse run. Consumes derived Packets; does not
+ * rewrite Candidate geometry. Peers are out of scope for #107.
  */
 public final class ClassifyService {
 
@@ -45,7 +51,8 @@ public final class ClassifyService {
                 throw new ClassifyException("parse run not found: " + parseRunId);
             }
             long mandateId = repo.selectParseRunMandateId(parseRunId);
-            OntologySlice slice = new NomenclatureCatalog(repo).sliceForMandate(mandateId);
+            NomenclatureCatalog catalog = new NomenclatureCatalog(repo);
+            OntologySlice slice = catalog.sliceForMandate(mandateId);
             List<CandidateRow> candidates = repo.selectCandidatesForParseRun(parseRunId);
             if (candidates.isEmpty()) {
                 throw new ClassifyException("no Candidates for parse run " + parseRunId
@@ -53,10 +60,12 @@ public final class ClassifyService {
             }
 
             // LLM calls stay outside the write transaction so long classify runs do not
-            // hold a SQLite write lock. Collect validated dispositions, then replace.
+            // hold a SQLite write lock. Collect validated rows, then replace.
             List<PacketDisposition> dispositions = new ArrayList<>();
+            List<NomenclatureBinding> bindings = new ArrayList<>();
             Map<Long, LayerAJudgment> judged = new HashMap<>();
             Map<Long, LayerAJudgment> coverageByWorksheet = new HashMap<>();
+            java.util.Set<Long> boundCells = new java.util.HashSet<>();
             int coverageParents = 0;
             for (CandidateRow candidate : orderForLayerA(candidates)) {
                 boolean cheapPass = "coverage_parent".equals(candidate.candidateKind());
@@ -86,6 +95,19 @@ public final class ClassifyService {
                         judgment.packetDefaultHead(),
                         candidate.parentCandidateId(),
                         cheapPass));
+                if (!cheapPass) {
+                    List<LayerBLineJudgment> lines = llm.classifyLayerB(
+                            new LayerBPrompt(redacted, slice, judgment, parent));
+                    for (LayerBLineJudgment line : lines) {
+                        NomenclatureBinding binding = materializeBinding(
+                                catalog, mandateId, slice, packet, candidate, parseRunId, line);
+                        if (!boundCells.add(binding.cellId())) {
+                            continue;
+                        }
+                        bindings.add(binding);
+                        slice = catalog.sliceForMandate(mandateId);
+                    }
+                }
             }
 
             db.connection().setAutoCommit(false);
@@ -96,12 +118,17 @@ public final class ClassifyService {
                             "Candidates changed during classify for parse run " + parseRunId
                                     + "; re-run discover then classify");
                 }
+                repo.deleteNomenclatureBindingsForParseRun(parseRunId);
                 repo.deletePacketDispositionsForParseRun(parseRunId);
                 for (PacketDisposition disposition : dispositions) {
                     repo.insertPacketDisposition(disposition);
                 }
+                for (NomenclatureBinding binding : bindings) {
+                    repo.insertNomenclatureBinding(binding);
+                }
                 repo.commit();
-                return new ClassifySummary(parseRunId, dispositions.size(), coverageParents);
+                return new ClassifySummary(
+                        parseRunId, dispositions.size(), coverageParents, bindings.size());
             } catch (ClassifyException e) {
                 repo.rollback();
                 throw e;
@@ -117,6 +144,96 @@ public final class ClassifyService {
             String msg = e.getMessage() != null ? e.getMessage() : e.toString();
             throw new ClassifyException("classify failed: " + msg, e);
         }
+    }
+
+    private static NomenclatureBinding materializeBinding(
+            NomenclatureCatalog catalog,
+            long mandateId,
+            OntologySlice slice,
+            Packet packet,
+            CandidateRow candidate,
+            long parseRunId,
+            LayerBLineJudgment line) throws ClassifyException {
+        String role = line.amountRole() == null
+                ? null
+                : line.amountRole().trim().toLowerCase(Locale.ROOT);
+        if (!AmountRole.isKnown(role)) {
+            throw new ClassifyException(
+                    "invalid amount_role '" + line.amountRole()
+                            + "' for coord " + line.coord());
+        }
+        PacketCell cell = findCell(packet, line.coord())
+                .orElseThrow(() -> new ClassifyException(
+                        "Layer B coord not in Packet: " + line.coord()));
+        if (!isAmountCell(cell)) {
+            throw new ClassifyException(
+                    "Layer B binding requires an amount cell at " + line.coord());
+        }
+        String path = line.path().trim();
+        boolean viaAlias = slice.aliases().stream()
+                .anyMatch(alias -> OntologySlice.normalize(alias.aliasText())
+                        .equals(OntologySlice.normalize(line.verbatim()))
+                        && alias.leafPath().equals(path));
+        boolean softLeaf = false;
+        Optional<NomenclatureNode> existing = slice.node(path);
+        if (existing.isPresent()) {
+            if (!existing.get().leaf()) {
+                throw new ClassifyException(
+                        "Layer B path must be a leaf join key, not mid-level: '" + path + "'");
+            }
+            softLeaf = NomenclatureNode.LAYER_MANDATE_SOFT.equals(existing.get().layer());
+        } else {
+            int sep = path.lastIndexOf(" > ");
+            if (sep <= 0) {
+                throw new ClassifyException(
+                        "cannot invent mid-level path for Layer B binding: '" + path + "'");
+            }
+            String parentPath = path.substring(0, sep);
+            String leafName = path.substring(sep + 3).trim();
+            NomenclatureNode parent = slice.node(parentPath).orElse(null);
+            if (parent == null || parent.leaf()) {
+                throw new ClassifyException(
+                        "cannot invent mid-level '" + parentPath
+                                + "'; soft leaves attach under known mid-levels");
+            }
+            try {
+                catalog.putSoftLeaf(mandateId, parentPath, leafName, line.aliases());
+            } catch (NomenclatureException e) {
+                throw new ClassifyException(e.getMessage(), e);
+            }
+            softLeaf = true;
+        }
+        return new NomenclatureBinding(
+                cell.cellId(),
+                parseRunId,
+                candidate.candidateId(),
+                line.verbatim(),
+                path,
+                role,
+                softLeaf,
+                viaAlias,
+                line.confidence());
+    }
+
+    private static boolean isAmountCell(PacketCell cell) {
+        if (cell.formulaText() != null && !cell.formulaText().isBlank()) {
+            return false;
+        }
+        return "number".equals(cell.valueType())
+                || (cell.numericValue() != null && !cell.numericValue().isBlank());
+    }
+
+    private static Optional<PacketCell> findCell(Packet packet, String coord) {
+        if (coord == null || coord.isBlank()) {
+            return Optional.empty();
+        }
+        String needle = coord.trim().toUpperCase(Locale.ROOT);
+        for (PacketCell cell : packet.cells()) {
+            if (cell.coord() != null && cell.coord().toUpperCase(Locale.ROOT).equals(needle)) {
+                return Optional.of(cell);
+            }
+        }
+        return Optional.empty();
     }
 
     private static boolean sameCandidateIds(List<CandidateRow> expected, List<CandidateRow> actual) {
