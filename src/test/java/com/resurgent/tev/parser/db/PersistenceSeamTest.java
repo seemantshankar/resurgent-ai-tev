@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 import com.resurgent.tev.parser.ingest.NormalizedCell;
+import com.resurgent.tev.parser.nomenclature.NomenclatureAlias;
 import com.resurgent.tev.parser.nomenclature.NomenclatureCatalog;
 import com.resurgent.tev.parser.nomenclature.NomenclatureNode;
 import com.resurgent.tev.parser.nomenclature.OntologySlice;
@@ -208,6 +209,18 @@ class PersistenceSeamTest {
                     .isEqualTo("Project Cost > Civil Works > Interior Fit-out");
             assertThat(slice.leafPathForAlias("Building Cost").orElseThrow())
                     .isEqualTo("Project Cost > Civil Works");
+        }
+    }
+
+    @Test
+    void nomenclatureAliasIsUniqueWithinLayerScope() throws Exception {
+        try (WorkspaceDatabase db = openDb("alias-unique.db")) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            new NomenclatureCatalog(repo);
+            assertThatThrownBy(() -> repo.insertNomenclatureAlias(
+                    new NomenclatureAlias("Building Cost", "Project Cost > Civil Works"),
+                    NomenclatureNode.LAYER_SPINE, null, null, Timestamps.now()))
+                    .isInstanceOf(java.sql.SQLException.class);
         }
     }
 

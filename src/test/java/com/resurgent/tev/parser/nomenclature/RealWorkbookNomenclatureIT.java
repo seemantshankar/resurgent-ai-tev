@@ -3,14 +3,19 @@ package com.resurgent.tev.parser.nomenclature;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import com.resurgent.tev.parser.db.CandidateRow;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
+import com.resurgent.tev.parser.discover.DiscoverService;
 import com.resurgent.tev.parser.ingest.IngestService;
+import com.resurgent.tev.parser.ingest.IngestSummary;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.ResultSet;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -68,6 +73,9 @@ class RealWorkbookNomenclatureIT {
     private static Path db;
     private static Set<String> ingestedTexts;
     private static OntologySlice slice;
+    private static long parseRunId;
+    private static List<CandidateRow> candidatesBeforeCatalog;
+    private static Map<Long, List<Long>> membersBeforeCatalog;
 
     @BeforeAll
     static void ingestAndSliceOnce() throws Exception {
@@ -76,9 +84,17 @@ class RealWorkbookNomenclatureIT {
                         + " -- place the client FM at Project Docs/OM Arham Ventures.xlsx"
                         + " to run this integration test; skipping.");
         db = tempDir.resolve("real-workbook-nomenclature.db");
-        new IngestService().ingest(WORKBOOK, 1L, db);
+        IngestSummary ingest = new IngestService().ingest(WORKBOOK, 1L, db);
+        parseRunId = ingest.parseRunId();
+        new DiscoverService().discover(db, parseRunId);
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            candidatesBeforeCatalog = List.copyOf(repo.selectCandidatesForParseRun(parseRunId));
+            membersBeforeCatalog = new HashMap<>();
+            for (CandidateRow row : candidatesBeforeCatalog) {
+                membersBeforeCatalog.put(row.candidateId(),
+                        List.copyOf(repo.selectCandidateMemberCellIds(row.candidateId())));
+            }
             NomenclatureCatalog catalog = new NomenclatureCatalog(repo);
             catalog.confirmIndustry(1L, "hotel");
             slice = catalog.sliceForMandate(1L);
@@ -107,11 +123,15 @@ class RealWorkbookNomenclatureIT {
 
     @Test
     void candidateGeometryTablesStayUntouchedByCatalogSeed() throws Exception {
-        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db);
-                ResultSet rs = workspace.connection().createStatement().executeQuery(
-                        "SELECT COUNT(*) FROM candidate")) {
-            rs.next();
-            assertThat(rs.getLong(1)).isZero();
+        assertThat(candidatesBeforeCatalog).isNotEmpty();
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<CandidateRow> after = repo.selectCandidatesForParseRun(parseRunId);
+            assertThat(after).isEqualTo(candidatesBeforeCatalog);
+            for (CandidateRow row : after) {
+                assertThat(repo.selectCandidateMemberCellIds(row.candidateId()))
+                        .isEqualTo(membersBeforeCatalog.get(row.candidateId()));
+            }
         }
     }
 

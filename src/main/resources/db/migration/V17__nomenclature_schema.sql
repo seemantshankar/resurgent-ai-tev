@@ -39,6 +39,18 @@ CREATE TABLE nomenclature_alias (
     created_at TEXT NOT NULL
 );
 
+CREATE UNIQUE INDEX idx_nomenclature_alias_spine_text
+    ON nomenclature_alias (alias_text)
+    WHERE layer = 'spine';
+
+CREATE UNIQUE INDEX idx_nomenclature_alias_industry_text
+    ON nomenclature_alias (industry_tag, alias_text)
+    WHERE layer = 'industry';
+
+CREATE UNIQUE INDEX idx_nomenclature_alias_mandate_text
+    ON nomenclature_alias (mandate_id, alias_text)
+    WHERE layer = 'mandate_soft';
+
 CREATE INDEX idx_nomenclature_alias_leaf ON nomenclature_alias (leaf_path);
 
 CREATE TABLE mandate_industry (

@@ -2,10 +2,14 @@ package com.resurgent.tev.parser.nomenclature;
 
 import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 
 /**
  * Loads the frozen bank spine and assembles the ontology slice a mandate's
@@ -18,8 +22,10 @@ public final class NomenclatureCatalog {
     public NomenclatureCatalog(WorkspaceRepository repo) {
         this.repo = Objects.requireNonNull(repo, "repo");
         try {
-            seedSpineIfEmpty();
-            seedHotelPackIfEmpty();
+            inTransaction(() -> {
+                seedSpineIfEmpty();
+                seedHotelPackIfEmpty();
+            });
         } catch (SQLException e) {
             throw new NomenclatureException("failed to seed nomenclature catalog", e);
         }
@@ -69,25 +75,44 @@ public final class NomenclatureCatalog {
                             + "'; soft leaves attach under known mid-levels");
         }
         String path = parentPath + " > " + leafName;
-        try {
-            String now = Timestamps.now();
-            repo.insertNomenclatureNode(new NomenclatureNode(
-                    path,
-                    leafName,
-                    parentPath,
-                    NomenclatureNode.LAYER_MANDATE_SOFT,
-                    false,
-                    true,
-                    null,
-                    mandateId), now);
-            for (String aliasText : aliasTexts) {
-                repo.insertNomenclatureAlias(
-                        new NomenclatureAlias(aliasText, path),
-                        NomenclatureNode.LAYER_MANDATE_SOFT,
-                        null,
-                        mandateId,
-                        now);
+        if (current.node(path).isPresent()) {
+            throw new NomenclatureException(
+                    "soft leaf path already exists in the ontology slice: '" + path + "'");
+        }
+        for (String aliasText : aliasTexts) {
+            if (aliasText == null || aliasText.isBlank()) {
+                continue;
             }
+            Optional<String> bound = leafPathForNormalizedAlias(current, aliasText);
+            if (bound.isPresent() && !bound.get().equals(path)) {
+                throw new NomenclatureException(
+                        "alias '" + aliasText + "' already maps to '" + bound.get() + "'");
+            }
+        }
+        try {
+            inTransaction(() -> {
+                String now = Timestamps.now();
+                repo.insertNomenclatureNode(new NomenclatureNode(
+                        path,
+                        leafName,
+                        parentPath,
+                        NomenclatureNode.LAYER_MANDATE_SOFT,
+                        false,
+                        true,
+                        null,
+                        mandateId), now);
+                for (String aliasText : aliasTexts) {
+                    if (aliasText == null || aliasText.isBlank()) {
+                        continue;
+                    }
+                    repo.insertNomenclatureAlias(
+                            new NomenclatureAlias(aliasText, path),
+                            NomenclatureNode.LAYER_MANDATE_SOFT,
+                            null,
+                            mandateId,
+                            now);
+                }
+            });
         } catch (SQLException e) {
             throw new NomenclatureException(
                     "failed to store soft leaf '" + path + "' for mandate " + mandateId, e);
@@ -124,11 +149,18 @@ public final class NomenclatureCatalog {
     }
 
     private void seedSpineIfEmpty() throws SQLException {
-        if (repo.countNomenclatureSpine() > 0) {
+        Set<String> existingPaths = pathsOf(repo.selectNomenclatureSpine());
+        Set<String> existingAliases = aliasKeys(repo.selectNomenclatureAliases(
+                NomenclatureNode.LAYER_SPINE, null, null));
+        if (existingPaths.containsAll(NomenclatureSeed.SPINE_PATHS)
+                && existingAliases.containsAll(aliasKeys(NomenclatureSeed.SPINE_ALIASES))) {
             return;
         }
         String now = Timestamps.now();
         for (String path : NomenclatureSeed.SPINE_PATHS) {
+            if (existingPaths.contains(path)) {
+                continue;
+            }
             repo.insertNomenclatureNode(new NomenclatureNode(
                     path,
                     NomenclatureSeed.nameOf(path),
@@ -140,17 +172,27 @@ public final class NomenclatureCatalog {
                     null), now);
         }
         for (NomenclatureAlias alias : NomenclatureSeed.SPINE_ALIASES) {
+            if (existingAliases.contains(aliasKey(alias))) {
+                continue;
+            }
             repo.insertNomenclatureAlias(
                     alias, NomenclatureNode.LAYER_SPINE, null, null, now);
         }
     }
 
     private void seedHotelPackIfEmpty() throws SQLException {
-        if (repo.countNomenclatureIndustry(NomenclatureSeed.HOTEL) > 0) {
+        Set<String> existingPaths = pathsOf(repo.selectNomenclatureIndustry(NomenclatureSeed.HOTEL));
+        Set<String> existingAliases = aliasKeys(repo.selectNomenclatureAliases(
+                NomenclatureNode.LAYER_INDUSTRY, NomenclatureSeed.HOTEL, null));
+        if (existingPaths.containsAll(NomenclatureSeed.HOTEL_LEAVES)
+                && existingAliases.containsAll(aliasKeys(NomenclatureSeed.HOTEL_ALIASES))) {
             return;
         }
         String now = Timestamps.now();
         for (String path : NomenclatureSeed.HOTEL_LEAVES) {
+            if (existingPaths.contains(path)) {
+                continue;
+            }
             repo.insertNomenclatureNode(new NomenclatureNode(
                     path,
                     NomenclatureSeed.nameOf(path),
@@ -162,8 +204,69 @@ public final class NomenclatureCatalog {
                     null), now);
         }
         for (NomenclatureAlias alias : NomenclatureSeed.HOTEL_ALIASES) {
+            if (existingAliases.contains(aliasKey(alias))) {
+                continue;
+            }
             repo.insertNomenclatureAlias(
                     alias, NomenclatureNode.LAYER_INDUSTRY, NomenclatureSeed.HOTEL, null, now);
         }
+    }
+
+    private void inTransaction(SqlWork work) throws SQLException {
+        Connection connection = repo.connection();
+        boolean autoCommit = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        try {
+            work.run();
+            repo.commit();
+        } catch (SQLException e) {
+            repo.rollback();
+            throw e;
+        } catch (RuntimeException e) {
+            try {
+                repo.rollback();
+            } catch (SQLException rollback) {
+                e.addSuppressed(rollback);
+            }
+            throw e;
+        } finally {
+            connection.setAutoCommit(autoCommit);
+        }
+    }
+
+    private static Optional<String> leafPathForNormalizedAlias(OntologySlice slice, String aliasText) {
+        String needle = OntologySlice.normalize(aliasText);
+        if (needle.isEmpty()) {
+            return Optional.empty();
+        }
+        return slice.aliases().stream()
+                .filter(alias -> OntologySlice.normalize(alias.aliasText()).equals(needle))
+                .map(NomenclatureAlias::leafPath)
+                .findFirst();
+    }
+
+    private static Set<String> pathsOf(List<NomenclatureNode> nodes) {
+        Set<String> paths = new HashSet<>();
+        for (NomenclatureNode node : nodes) {
+            paths.add(node.path());
+        }
+        return paths;
+    }
+
+    private static Set<String> aliasKeys(List<NomenclatureAlias> aliases) {
+        Set<String> keys = new HashSet<>();
+        for (NomenclatureAlias alias : aliases) {
+            keys.add(aliasKey(alias));
+        }
+        return keys;
+    }
+
+    private static String aliasKey(NomenclatureAlias alias) {
+        return alias.aliasText() + '\0' + alias.leafPath();
+    }
+
+    @FunctionalInterface
+    private interface SqlWork {
+        void run() throws SQLException;
     }
 }

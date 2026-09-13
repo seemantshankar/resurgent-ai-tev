@@ -3,8 +3,11 @@ package com.resurgent.tev.parser.nomenclature;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.resurgent.tev.parser.db.CandidateWrite;
+import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
+import com.resurgent.tev.parser.ingest.NormalizedCell;
 import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -140,6 +143,70 @@ class NomenclatureCatalogTest {
                     "Chillers", List.of()))
                     .isInstanceOf(NomenclatureException.class)
                     .hasMessageContaining("mid-level");
+            assertThatThrownBy(() -> catalog.putSoftLeaf(
+                    9L, "Project Cost > Plant & Machinery", "Air Conditioning", List.of()))
+                    .isInstanceOf(NomenclatureException.class)
+                    .hasMessageContaining("already exists");
+            assertThatThrownBy(() -> catalog.putSoftLeaf(
+                    9L, "Project Cost > Plant & Machinery", "Chiller Plant",
+                    List.of("Lift")))
+                    .isInstanceOf(NomenclatureException.class)
+                    .hasMessageContaining("alias");
+        }
+    }
+
+    @Test
+    void partialSpineSeedIsCompletedOnNextCatalogConstruction() throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(tempDir.resolve("partial-seed.db"))) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            repo.insertNomenclatureNode(new NomenclatureNode(
+                    "Project Cost",
+                    "Project Cost",
+                    null,
+                    NomenclatureNode.LAYER_SPINE,
+                    true,
+                    false,
+                    null,
+                    null), Timestamps.now());
+
+            NomenclatureCatalog catalog = new NomenclatureCatalog(repo);
+            assertThat(catalog.spine()).extracting(NomenclatureNode::path)
+                    .containsAll(NomenclatureSeed.SPINE_PATHS);
+            assertThat(catalog.sliceForMandate(1L).leafPathForAlias("Building Cost"))
+                    .contains("Project Cost > Civil Works");
+        }
+    }
+
+    @Test
+    void catalogSeedLeavesPreexistingCandidateGeometryUnchanged() throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(tempDir.resolve("geometry.db"))) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            long sourceFileId = repo.insertSourceFile(1L, "c.xlsx", "hash", "fm_xlsx",
+                    Timestamps.now(), "0.1.0", null);
+            long parseRunId = repo.insertParseRun(sourceFileId, 1L, "0.1.0", "cfg",
+                    Timestamps.now(), Timestamps.now(), "success", null);
+            long worksheetId = repo.insertWorksheet(parseRunId, "Sheet1", 0, "visible");
+            long cellA1 = repo.insertCell(worksheetId, new NormalizedCell(
+                    "A1", 1, 1,
+                    "x", "string", "string", "x", "x",
+                    null, null, null,
+                    null, null, null, null, false,
+                    false, null,
+                    false, false, null, "cell", false, false, false));
+            CandidateWrite write = new CandidateWrite(
+                    parseRunId, worksheetId, "coverage_parent", null,
+                    1, 1, 1, 1,
+                    null, null, null,
+                    false, 1.0, "sole coverage parent",
+                    "Coverage parent for Sheet1");
+            long candidateId = repo.insertCandidate(write, List.of(cellA1));
+
+            new NomenclatureCatalog(repo);
+
+            assertThat(repo.countCandidatesForParseRun(parseRunId)).isEqualTo(1);
+            assertThat(repo.selectCandidate(candidateId).candidateKind())
+                    .isEqualTo("coverage_parent");
+            assertThat(repo.selectCandidateMemberCellIds(candidateId)).containsExactly(cellA1);
         }
     }
 
