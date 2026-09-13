@@ -10,6 +10,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * OpenRouter chat-completions adapter for Layer A. Config-gated; tests inject
@@ -54,46 +55,116 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         String complete(String system, String user);
     }
 
+    @FunctionalInterface
+    interface HttpExchange {
+        ExchangeResponse send(String jsonBody) throws Exception;
+    }
+
+    @FunctionalInterface
+    interface Sleeper {
+        void sleep(Duration delay) throws InterruptedException;
+    }
+
+    record ExchangeResponse(int statusCode, String body, Optional<String> retryAfter) {
+        ExchangeResponse {
+            Objects.requireNonNull(retryAfter, "retryAfter");
+        }
+    }
+
     static final class HttpCompletionsClient implements CompletionsClient {
         private static final ObjectMapper MAPPER = new ObjectMapper();
-        private final String apiKey;
+        static final int MAX_ATTEMPTS = 4;
+        static final Duration MAX_BACKOFF = Duration.ofSeconds(30);
+
         private final String model;
-        private final URI uri;
-        private final HttpClient http;
+        private final HttpExchange exchange;
+        private final Sleeper sleeper;
 
         HttpCompletionsClient(String apiKey, String model, String url) {
-            this.apiKey = Objects.requireNonNull(apiKey, "apiKey");
+            this(apiKey, model, url, null, delay -> Thread.sleep(delay.toMillis()));
+        }
+
+        HttpCompletionsClient(
+                String apiKey,
+                String model,
+                String url,
+                HttpExchange exchange,
+                Sleeper sleeper) {
+            Objects.requireNonNull(apiKey, "apiKey");
             this.model = Objects.requireNonNull(model, "model");
-            this.uri = URI.create(url);
-            this.http = HttpClient.newBuilder()
-                    .connectTimeout(Duration.ofSeconds(20))
-                    .build();
+            URI uri = URI.create(url);
+            this.sleeper = Objects.requireNonNull(sleeper, "sleeper");
+            if (exchange != null) {
+                this.exchange = exchange;
+            } else {
+                HttpClient http = HttpClient.newBuilder()
+                        .connectTimeout(Duration.ofSeconds(20))
+                        .build();
+                this.exchange = body -> {
+                    HttpRequest request = HttpRequest.newBuilder(uri)
+                            .timeout(Duration.ofMinutes(2))
+                            .header("Authorization", "Bearer " + apiKey)
+                            .header("Content-Type", "application/json")
+                            .header("HTTP-Referer",
+                                    "https://github.com/seemantshankar/resurgent-ai-tev")
+                            .header("X-OpenRouter-Title", "TEV Parser")
+                            .POST(HttpRequest.BodyPublishers.ofString(body))
+                            .build();
+                    HttpResponse<String> response = http.send(
+                            request, HttpResponse.BodyHandlers.ofString());
+                    return new ExchangeResponse(
+                            response.statusCode(),
+                            response.body(),
+                            response.headers().firstValue("Retry-After"));
+                };
+            }
         }
 
         @Override
         public String complete(String system, String user) {
             try {
-                HttpRequest request = HttpRequest.newBuilder(uri)
-                        .timeout(Duration.ofMinutes(2))
-                        .header("Authorization", "Bearer " + apiKey)
-                        .header("Content-Type", "application/json")
-                        .header("HTTP-Referer", "https://github.com/seemantshankar/resurgent-ai-tev")
-                        .header("X-OpenRouter-Title", "TEV Parser")
-                        .POST(HttpRequest.BodyPublishers.ofString(requestBody(model, system, user)))
-                        .build();
-                HttpResponse<String> response = http.send(
-                        request, HttpResponse.BodyHandlers.ofString());
-                if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                    throw new IllegalStateException(
-                            "OpenRouter HTTP " + response.statusCode()
-                                    + " " + snippet(response.body()));
+                String body = requestBody(model, system, user);
+                IllegalStateException last = null;
+                for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+                    ExchangeResponse response = exchange.send(body);
+                    if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                        return content(response.body());
+                    }
+                    if (response.statusCode() != 429 || attempt == MAX_ATTEMPTS) {
+                        throw new IllegalStateException(
+                                "OpenRouter HTTP " + response.statusCode()
+                                        + " " + snippet(response.body()));
+                    }
+                    last = new IllegalStateException(
+                            "OpenRouter HTTP 429 " + snippet(response.body()));
+                    sleeper.sleep(retryDelay(response.retryAfter(), attempt));
                 }
-                return content(response.body());
+                throw last != null ? last : new IllegalStateException("OpenRouter HTTP 429");
             } catch (IllegalStateException e) {
                 throw e;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("OpenRouter call interrupted", e);
             } catch (Exception e) {
                 throw new IllegalStateException("OpenRouter call failed: " + e.getMessage(), e);
             }
+        }
+
+        static Duration retryDelay(Optional<String> retryAfter, int attempt) {
+            if (retryAfter != null && retryAfter.isPresent()) {
+                String raw = retryAfter.get().trim();
+                try {
+                    long seconds = Long.parseLong(raw);
+                    if (seconds >= 0) {
+                        Duration parsed = Duration.ofSeconds(seconds);
+                        return parsed.compareTo(MAX_BACKOFF) > 0 ? MAX_BACKOFF : parsed;
+                    }
+                } catch (NumberFormatException ignored) {
+                    // Fall through to exponential backoff.
+                }
+            }
+            long millis = Math.min(MAX_BACKOFF.toMillis(), 500L << Math.max(0, attempt - 1));
+            return Duration.ofMillis(millis);
         }
 
         /**
@@ -110,6 +181,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             reasoning.put("exclude", true);
             ObjectNode provider = root.putObject("provider");
             provider.put("require_parameters", true);
+            provider.put("data_collection", "deny");
             ArrayNode plugins = root.putArray("plugins");
             plugins.addObject().put("id", "response-healing");
             root.set("response_format", layerAResponseFormat());

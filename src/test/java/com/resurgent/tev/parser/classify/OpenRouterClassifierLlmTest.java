@@ -9,7 +9,10 @@ import com.resurgent.tev.parser.discover.PacketCell;
 import com.resurgent.tev.parser.nomenclature.IndustryResolution;
 import com.resurgent.tev.parser.nomenclature.NomenclatureNode;
 import com.resurgent.tev.parser.nomenclature.OntologySlice;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -102,8 +105,75 @@ class OpenRouterClassifierLlmTest {
                 .contains("scratch")
                 .contains("orphan");
         assertThat(root.path("provider").path("require_parameters").asBoolean()).isTrue();
+        assertThat(root.path("provider").path("data_collection").asText()).isEqualTo("deny");
         assertThat(root.path("plugins").toString()).contains("response-healing");
         assertThat(root.path("messages").get(0).path("role").asText()).isEqualTo("system");
         assertThat(root.path("messages").get(1).path("content").asText()).isEqualTo("user");
+    }
+
+    @Test
+    void retriesHttp429UsingRetryAfterThenSucceeds() {
+        AtomicInteger calls = new AtomicInteger();
+        List<Duration> sleeps = new ArrayList<>();
+        OpenRouterClassifierLlm.HttpCompletionsClient client =
+                new OpenRouterClassifierLlm.HttpCompletionsClient(
+                        "key",
+                        "model",
+                        OpenRouterClassifierLlm.DEFAULT_URL,
+                        body -> {
+                            if (calls.incrementAndGet() == 1) {
+                                return new OpenRouterClassifierLlm.ExchangeResponse(
+                                        429,
+                                        "{\"error\":\"rate limited\"}",
+                                        Optional.of("2"));
+                            }
+                            return new OpenRouterClassifierLlm.ExchangeResponse(
+                                    200,
+                                    "{\"choices\":[{\"message\":{\"content\":"
+                                            + "\"{\\\"scheduleFamily\\\":\\\"assumptions\\\","
+                                            + "\\\"triage\\\":\\\"main\\\","
+                                            + "\\\"relevance\\\":\\\"supporting\\\","
+                                            + "\\\"rowLabels\\\":[],\\\"columnHeaders\\\":[],"
+                                            + "\\\"packetDefaultHead\\\":null}\"}}]}",
+                                    Optional.empty());
+                        },
+                        sleeps::add);
+
+        String content = client.complete("system", "user");
+        assertThat(calls.get()).isEqualTo(2);
+        assertThat(sleeps).containsExactly(Duration.ofSeconds(2));
+        assertThat(content).contains("assumptions");
+    }
+
+    @Test
+    void failsNon429HttpErrorsWithoutRetry() {
+        AtomicInteger calls = new AtomicInteger();
+        OpenRouterClassifierLlm.HttpCompletionsClient client =
+                new OpenRouterClassifierLlm.HttpCompletionsClient(
+                        "key",
+                        "model",
+                        OpenRouterClassifierLlm.DEFAULT_URL,
+                        body -> {
+                            calls.incrementAndGet();
+                            return new OpenRouterClassifierLlm.ExchangeResponse(
+                                    500, "boom", Optional.empty());
+                        },
+                        delay -> {
+                            throw new AssertionError("should not sleep for non-429");
+                        });
+
+        org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalStateException.class, () -> client.complete("system", "user"));
+        assertThat(calls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void retryDelayFallsBackToCappedExponentialBackoff() {
+        assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(Optional.empty(), 1))
+                .isEqualTo(Duration.ofMillis(500));
+        assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(Optional.empty(), 3))
+                .isEqualTo(Duration.ofMillis(2000));
+        assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(Optional.of("999"), 1))
+                .isEqualTo(OpenRouterClassifierLlm.HttpCompletionsClient.MAX_BACKOFF);
     }
 }

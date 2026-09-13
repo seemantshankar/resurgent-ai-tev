@@ -52,43 +52,56 @@ public final class ClassifyService {
                         + "; run discover first");
             }
 
+            // LLM calls stay outside the write transaction so long classify runs do not
+            // hold a SQLite write lock. Collect validated dispositions, then replace.
+            List<PacketDisposition> dispositions = new ArrayList<>();
+            Map<Long, LayerAJudgment> judged = new HashMap<>();
+            Map<Long, LayerAJudgment> coverageByWorksheet = new HashMap<>();
+            int coverageParents = 0;
+            for (CandidateRow candidate : orderForLayerA(candidates)) {
+                boolean cheapPass = "coverage_parent".equals(candidate.candidateKind());
+                if (cheapPass) {
+                    coverageParents++;
+                }
+                Packet packet = discover.buildPacket(repo, candidate.candidateId());
+                Packet redacted = PacketRedactor.redact(packet, cheapPass);
+                LayerAJudgment parent = cheapPass
+                        ? null
+                        : parentContext(candidate, judged, coverageByWorksheet);
+                LayerAJudgment judgment = requireJudgment(
+                        llm.classifyLayerA(new LayerAPrompt(redacted, slice, parent, cheapPass)),
+                        candidate.candidateId());
+                judged.put(candidate.candidateId(), judgment);
+                if (cheapPass) {
+                    coverageByWorksheet.put(candidate.worksheetId(), judgment);
+                }
+                dispositions.add(new PacketDisposition(
+                        candidate.candidateId(),
+                        parseRunId,
+                        judgment.scheduleFamily(),
+                        judgment.triage(),
+                        judgment.relevance(),
+                        judgment.rowLabels(),
+                        judgment.columnHeaders(),
+                        judgment.packetDefaultHead(),
+                        candidate.parentCandidateId(),
+                        cheapPass));
+            }
+
             db.connection().setAutoCommit(false);
             try {
+                List<CandidateRow> current = repo.selectCandidatesForParseRun(parseRunId);
+                if (!sameCandidateIds(candidates, current)) {
+                    throw new ClassifyException(
+                            "Candidates changed during classify for parse run " + parseRunId
+                                    + "; re-run discover then classify");
+                }
                 repo.deletePacketDispositionsForParseRun(parseRunId);
-                Map<Long, LayerAJudgment> judged = new HashMap<>();
-                Map<Long, LayerAJudgment> coverageByWorksheet = new HashMap<>();
-                int coverageParents = 0;
-                for (CandidateRow candidate : orderForLayerA(candidates)) {
-                    boolean cheapPass = "coverage_parent".equals(candidate.candidateKind());
-                    if (cheapPass) {
-                        coverageParents++;
-                    }
-                    Packet packet = discover.buildPacket(repo, candidate.candidateId());
-                    Packet redacted = PacketRedactor.redact(packet, cheapPass);
-                    LayerAJudgment parent = cheapPass
-                            ? null
-                            : parentContext(candidate, judged, coverageByWorksheet);
-                    LayerAJudgment judgment = requireJudgment(
-                            llm.classifyLayerA(new LayerAPrompt(redacted, slice, parent, cheapPass)),
-                            candidate.candidateId());
-                    judged.put(candidate.candidateId(), judgment);
-                    if (cheapPass) {
-                        coverageByWorksheet.put(candidate.worksheetId(), judgment);
-                    }
-                    repo.insertPacketDisposition(new PacketDisposition(
-                            candidate.candidateId(),
-                            parseRunId,
-                            judgment.scheduleFamily(),
-                            judgment.triage(),
-                            judgment.relevance(),
-                            judgment.rowLabels(),
-                            judgment.columnHeaders(),
-                            judgment.packetDefaultHead(),
-                            candidate.parentCandidateId(),
-                            cheapPass));
+                for (PacketDisposition disposition : dispositions) {
+                    repo.insertPacketDisposition(disposition);
                 }
                 repo.commit();
-                return new ClassifySummary(parseRunId, judged.size(), coverageParents);
+                return new ClassifySummary(parseRunId, dispositions.size(), coverageParents);
             } catch (ClassifyException e) {
                 repo.rollback();
                 throw e;
@@ -104,6 +117,26 @@ public final class ClassifyService {
             String msg = e.getMessage() != null ? e.getMessage() : e.toString();
             throw new ClassifyException("classify failed: " + msg, e);
         }
+    }
+
+    private static boolean sameCandidateIds(List<CandidateRow> expected, List<CandidateRow> actual) {
+        if (expected.size() != actual.size()) {
+            return false;
+        }
+        Map<Long, CandidateRow> byId = new HashMap<>();
+        for (CandidateRow row : actual) {
+            byId.put(row.candidateId(), row);
+        }
+        for (CandidateRow row : expected) {
+            CandidateRow current = byId.get(row.candidateId());
+            if (current == null
+                    || !Objects.equals(row.candidateKind(), current.candidateKind())
+                    || !Objects.equals(row.parentCandidateId(), current.parentCandidateId())
+                    || row.worksheetId() != current.worksheetId()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static List<CandidateRow> orderForLayerA(List<CandidateRow> candidates) {
