@@ -52,15 +52,36 @@ _Avoid_: confidence threshold, score cutoff
 The feature name for the deterministic pass that emits Candidates and Packets from the cell graph. Not a type name and not a persisted entity.
 _Avoid_: using “region” for Candidate, Packet, or any code identifier
 
+**Layer A (Packet disposition)**:
+LLM judgment on what kind of island a Packet is: schedule family, Scratch/Orphan triage, axis labels where present, and relevance (`primary` | `supporting` | `noise`). Not a nomenclature path.
+_Avoid_: classification (alone), region type, cost head
+
+**Layer B (nomenclature binding)**:
+LLM binding of a money line to a controlled vocabulary path. Verbatim client text stays evidence; the leaf is the join key; synonyms are aliases of one leaf.
+_Avoid_: tagging, cost-head guess, dictionary entry (for the binding itself)
+
+**Amount role**:
+How a bound money amount participates economically: `add`, `deduct`, `total`, or `helper`. Lives on the Layer B line binding, not on Layer A. Default leaf rollups include `add` only; `deduct`, `total`, and `helper` are excluded so totals and anti-double-count tear-outs do not distort `SUM(path)`.
+_Avoid_: sign, polarity, debit/credit
+
+**Line peer**:
+An optional link from one Layer B binding to other amount cells that represent the same economic leaf in a different role (for example a Civil “Less: AC” deduct peer of the P&M Air Conditioning add). The deduct line’s nomenclature path is the **economic leaf** (same path as the add), not the geometric section that drew the row. Peers should share that path; mismatched paths stay stored but are not treated as a resolved peer pair. Peers may sit outside the current Packet when they resolve to real cells. Packet context prefers existing formula-driven closure; the LLM may still name a real sheet-qualified peer coord that was not in the dump. `peer_reason` starts as `anti_double_count` only until a real FM forces another value. Peers are never required to store a binding. When both sides are seen, peers are written on both bindings.
+_Avoid_: related Candidate, formula edge (alone), cross-reference note, Packet-level contra flag
+
+**Nomenclature spine**:
+The frozen global bank mid-levels (CapEx + Means of Finance + working-capital margin hard; thin P&L/BS/CF). Industry packs add leaves on top; a mandate overlay holds soft leaves and aliases under known parents. Classify sends an ontology slice: spine + selected pack + overlay. Missing industry infers a stub and asks for one confirm; it does not block the slice.
+_Avoid_: cost-head table, per-FM dictionary, Unmapped parking lot
+
 ## Phase 1 (current scope)
 
 - **FM Loader**: file adapters (xlsx / xls / csv), safety limits, SQLite persistence, ingest QA (cell / reference / formula reconciliation). Cell contract: coord, typed values, formula text + `formula_normalized` + cached value, merges, hidden flags, `style_id` → shared cell style (bold, `number_format`, fill FG + pattern, per-side borders), and reference edges at ingest — no quantity parsing, header labels, font name/size, or fill background (ADR 0013).
 - **Redacted export v1** (`tev-parse redact`): after a successful ingest, export one `.xlsx` tab from the original file with numeric literals redacted. Requires `--input`, `--db`, `--mandate-id`, `--sheet`, `--output-dir`. Output: `{output-dir}/{basename}-redacted.xlsx`. Tied to ingest so file hash and parse run stay in sync. `.xlsx` only; one named tab for testing; all tabs in production later.
 - **Region discovery** (`tev-parse discover --db --parse-run`): DB-only pass that writes Candidates for an ingested parse run — always a coverage parent per worksheet (isolated hidden sheets flagged, not skipped), plus local child/parallel/overlap Candidates, formula-reference related links, and on-demand Packets (core vs context; amounts stay on the cell graph). Re-run replaces that parse run’s Candidates. [#90](https://github.com/seemantshankar/resurgent-ai-tev/issues/90)–[#93](https://github.com/seemantshankar/resurgent-ai-tev/issues/93).
+- **Nomenclature catalog**: frozen global spine plus industry leaf packs and a mandate soft-leaf overlay, assembled as the ontology slice classify will send. Missing industry uses a non-blocking infer/confirm stub. [#105](https://github.com/seemantshankar/resurgent-ai-tev/issues/105).
 
 ## Planned (not in repo yet)
 
-- LLM classification of Packets, discrepancy engine, and analyst review
+- LLM Packet classification: Layer A disposition + Layer B nomenclature bindings (including amount role and line peers), discrepancy engine, and analyst review (triage soft; no per-finding review queue for dictionary growth)
 
 ## Out of scope — do not reintroduce without ADR
 
