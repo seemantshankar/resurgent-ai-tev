@@ -1,5 +1,8 @@
 package com.resurgent.tev.parser.db;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.resurgent.tev.parser.classify.PacketDisposition;
 import com.resurgent.tev.parser.ingest.NormalizedCell;
 import com.resurgent.tev.parser.nomenclature.IndustryResolution;
 import com.resurgent.tev.parser.nomenclature.NomenclatureAlias;
@@ -13,10 +16,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * JDBC repository for FM Loader ingest, region discovery, and the nomenclature
- * catalog: source files, parse runs, worksheets, cells, shared cell styles,
- * reference edges, Candidates, workbook metadata, provenance, audit trail, and
- * controlled-vocabulary nodes.
+ * JDBC repository for FM Loader ingest, region discovery, the nomenclature
+ * catalog, and Layer A Packet dispositions.
  */
 public final class WorkspaceRepository {
 
@@ -964,6 +965,19 @@ public final class WorkspaceRepository {
         }
     }
 
+    public long selectParseRunMandateId(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT mandate_id FROM parse_run WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    throw new SQLException("parse run not found: " + parseRunId);
+                }
+                return rs.getLong(1);
+            }
+        }
+    }
+
     public List<WorksheetRef> selectWorksheetsForParseRun(long parseRunId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT worksheet_id, sheet_name, sheet_index, sheet_state"
@@ -1218,6 +1232,65 @@ public final class WorkspaceRepository {
         }
     }
 
+    public void deletePacketDispositionsForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM packet_disposition WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.executeUpdate();
+        }
+    }
+
+    public long insertPacketDisposition(PacketDisposition row) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO packet_disposition (parse_run_id, candidate_id, schedule_family,"
+                        + " triage, relevance, row_labels, column_headers, packet_default_head,"
+                        + " parent_candidate_id, cheap_pass, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, row.parseRunId());
+            ps.setLong(2, row.candidateId());
+            ps.setString(3, row.scheduleFamily());
+            ps.setString(4, row.triage());
+            ps.setString(5, row.relevance());
+            ps.setString(6, jsonList(row.rowLabels()));
+            ps.setString(7, jsonList(row.columnHeaders()));
+            ps.setString(8, row.packetDefaultHead());
+            setLong(ps, 9, row.parentCandidateId());
+            ps.setInt(10, row.cheapPass() ? 1 : 0);
+            ps.setString(11, Timestamps.now());
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    public List<PacketDisposition> selectPacketDispositionsForParseRun(long parseRunId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT candidate_id, parse_run_id, schedule_family, triage, relevance,"
+                        + " row_labels, column_headers, packet_default_head, parent_candidate_id,"
+                        + " cheap_pass FROM packet_disposition WHERE parse_run_id = ?"
+                        + " ORDER BY disposition_id")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<PacketDisposition> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new PacketDisposition(
+                            rs.getLong("candidate_id"),
+                            rs.getLong("parse_run_id"),
+                            rs.getString("schedule_family"),
+                            rs.getString("triage"),
+                            rs.getString("relevance"),
+                            readStringList(rs.getString("row_labels")),
+                            readStringList(rs.getString("column_headers")),
+                            rs.getString("packet_default_head"),
+                            getNullableLong(rs, "parent_candidate_id"),
+                            rs.getInt("cheap_pass") == 1));
+                }
+                return rows;
+            }
+        }
+    }
+
     private void insertCandidateMembers(long candidateId, List<Long> memberCellIds)
             throws SQLException {
         if (memberCellIds == null || memberCellIds.isEmpty()) {
@@ -1331,6 +1404,28 @@ public final class WorkspaceRepository {
                 rs.getInt("leaf") == 1,
                 rs.getString("industry_tag"),
                 getNullableLong(rs, "mandate_id"));
+    }
+
+    private static String jsonList(List<String> values) throws SQLException {
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        try {
+            return Jsonb.toJson(values);
+        } catch (JsonProcessingException e) {
+            throw new SQLException("failed to serialize string list", e);
+        }
+    }
+
+    private static List<String> readStringList(String json) throws SQLException {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            return Jsonb.fromJson(json, new TypeReference<List<String>>() {});
+        } catch (JsonProcessingException e) {
+            throw new SQLException("failed to parse string list", e);
+        }
     }
 
     private static int bindNullableBooleanPair(PreparedStatement ps, int index, Boolean value)

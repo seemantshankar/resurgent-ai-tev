@@ -12,6 +12,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import java.util.List;
 import java.util.Map;
 
+import com.resurgent.tev.parser.classify.PacketDisposition;
 import com.resurgent.tev.parser.ingest.NormalizedCell;
 import com.resurgent.tev.parser.nomenclature.NomenclatureAlias;
 import com.resurgent.tev.parser.nomenclature.NomenclatureCatalog;
@@ -107,10 +108,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(17);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(18);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(17);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(18);
         }
     }
 
@@ -120,7 +121,8 @@ class PersistenceSeamTest {
             List<String> tables = tableNames(db.connection());
             assertThat(tables).contains(
                     "candidate", "candidate_member", "candidate_related",
-                    "nomenclature_node", "nomenclature_alias", "mandate_industry");
+                    "nomenclature_node", "nomenclature_alias", "mandate_industry",
+                    "packet_disposition");
             assertThat(tables).doesNotContain("region", "cost_head");
 
             WorkspaceRepository repo = new WorkspaceRepository(db.connection());
@@ -161,6 +163,14 @@ class PersistenceSeamTest {
             assertThat(repo.selectCandidateMemberCellIds(candidateId))
                     .containsExactlyInAnyOrder(cellA1, cellB2);
 
+            repo.insertPacketDisposition(new PacketDisposition(
+                    candidateId, parseRunId, "capex_detail", "main", "primary",
+                    List.of("Item"), List.of("Amount"), "Project Cost", null, true));
+            PacketDisposition disposition = repo.selectPacketDispositionsForParseRun(parseRunId).get(0);
+            assertThat(disposition.scheduleFamily()).isEqualTo("capex_detail");
+            assertThat(disposition.rowLabels()).containsExactly("Item");
+            assertThat(disposition.cheapPass()).isTrue();
+
             CandidateWrite replacement = new CandidateWrite(
                     parseRunId, worksheetId, "coverage_parent", null,
                     1, 1, 1, 1,
@@ -176,6 +186,7 @@ class PersistenceSeamTest {
             assertThat(after.get(0).isolatedHiddenWorksheet()).isTrue();
             assertThat(repo.selectCandidateMemberCellIds(after.get(0).candidateId()))
                     .containsExactly(cellA1);
+            assertThat(repo.selectPacketDispositionsForParseRun(parseRunId)).isEmpty();
         }
     }
 
@@ -433,7 +444,7 @@ class PersistenceSeamTest {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(17);
+            assertThat(count(c, "schema_migration")).isEqualTo(18);
             assertThat(tableNames(c)).contains("cell_reference");
             assertThat(tableNames(c)).doesNotContain("cell_error_root");
 
@@ -481,7 +492,7 @@ class PersistenceSeamTest {
     void v15MigrationRestoresAdr0013IngestSignalsWithoutHeuristicStack() throws Exception {
         try (WorkspaceDatabase db = openDb("v15.db")) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(17);
+            assertThat(count(c, "schema_migration")).isEqualTo(18);
             assertThat(tableNames(c)).contains("cell_style", "cell_reference", "candidate");
             assertThat(tableNames(c)).doesNotContain(
                     "region",
@@ -653,7 +664,7 @@ class PersistenceSeamTest {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(
                 dbPath, WorkspaceDatabase.OpenOptions.allowDestructiveReset())) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(17);
+            assertThat(count(c, "schema_migration")).isEqualTo(18);
             assertThat(count(c, "cell")).isZero();
             assertThat(count(c, "source_file")).isZero();
             assertThat(tableNames(c)).doesNotContain("cost_head", "region");

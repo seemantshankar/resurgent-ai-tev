@@ -262,6 +262,7 @@ class NomenclatureCatalogTest {
             }
             assertThat(tables).contains(
                     "nomenclature_node", "nomenclature_alias", "mandate_industry",
+                    "packet_disposition",
                     "candidate", "candidate_member", "candidate_related");
             assertThat(tables).doesNotContain("region", "cost_head");
 
