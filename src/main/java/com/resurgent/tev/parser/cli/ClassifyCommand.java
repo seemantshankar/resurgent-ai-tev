@@ -4,7 +4,7 @@ import com.resurgent.tev.parser.classify.ClassifierLlm;
 import com.resurgent.tev.parser.classify.ClassifyException;
 import com.resurgent.tev.parser.classify.ClassifyService;
 import com.resurgent.tev.parser.classify.ClassifySummary;
-import com.resurgent.tev.parser.classify.UnconfiguredClassifierLlm;
+import com.resurgent.tev.parser.classify.LlmEnvironment;
 import java.io.PrintWriter;
 import java.nio.file.Path;
 import java.util.concurrent.Callable;
@@ -29,7 +29,7 @@ public final class ClassifyCommand implements Callable<Integer> {
     private final ClassifierLlm llm;
 
     public ClassifyCommand() {
-        this(new UnconfiguredClassifierLlm());
+        this(LlmEnvironment.classifierOrUnconfigured());
     }
 
     public ClassifyCommand(ClassifierLlm llm) {
