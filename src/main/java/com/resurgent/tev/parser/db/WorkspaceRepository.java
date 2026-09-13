@@ -1,6 +1,9 @@
 package com.resurgent.tev.parser.db;
 
 import com.resurgent.tev.parser.ingest.NormalizedCell;
+import com.resurgent.tev.parser.nomenclature.IndustryResolution;
+import com.resurgent.tev.parser.nomenclature.NomenclatureAlias;
+import com.resurgent.tev.parser.nomenclature.NomenclatureNode;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -10,9 +13,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * JDBC repository for FM Loader ingest and region discovery: source files, parse runs,
- * worksheets, cells, shared cell styles, reference edges, Candidates, workbook metadata,
- * provenance, and audit trail.
+ * JDBC repository for FM Loader ingest, region discovery, and the nomenclature
+ * catalog: source files, parse runs, worksheets, cells, shared cell styles,
+ * reference edges, Candidates, workbook metadata, provenance, audit trail, and
+ * controlled-vocabulary nodes.
  */
 public final class WorkspaceRepository {
 
@@ -1070,6 +1074,150 @@ public final class WorkspaceRepository {
         }
     }
 
+    public long insertNomenclatureNode(NomenclatureNode node, String createdAt) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO nomenclature_node (path, name, parent_path, layer, frozen, leaf,"
+                        + " industry_tag, mandate_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setString(1, node.path());
+            ps.setString(2, node.name());
+            ps.setString(3, node.parentPath());
+            ps.setString(4, node.layer());
+            ps.setInt(5, node.frozen() ? 1 : 0);
+            ps.setInt(6, node.leaf() ? 1 : 0);
+            ps.setString(7, node.industryTag());
+            setLong(ps, 8, node.mandateId());
+            ps.setString(9, createdAt);
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    public long countNomenclatureSpine() throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COUNT(*) FROM nomenclature_node WHERE layer = 'spine'");
+                ResultSet rs = ps.executeQuery()) {
+            rs.next();
+            return rs.getLong(1);
+        }
+    }
+
+    public List<NomenclatureNode> selectNomenclatureSpine() throws SQLException {
+        return selectNomenclatureByLayer("spine", null);
+    }
+
+    public long countNomenclatureIndustry(String industryTag) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COUNT(*) FROM nomenclature_node WHERE layer = 'industry' AND industry_tag = ?")) {
+            ps.setString(1, industryTag);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getLong(1);
+            }
+        }
+    }
+
+    public List<NomenclatureNode> selectNomenclatureIndustry(String industryTag) throws SQLException {
+        return selectNomenclatureByLayer("industry", industryTag);
+    }
+
+    public List<NomenclatureNode> selectNomenclatureOverlay(long mandateId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT path, name, parent_path, layer, frozen, leaf, industry_tag, mandate_id"
+                        + " FROM nomenclature_node WHERE layer = 'mandate_soft' AND mandate_id = ?"
+                        + " ORDER BY node_id")) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<NomenclatureNode> nodes = new ArrayList<>();
+                while (rs.next()) {
+                    nodes.add(readNomenclatureNode(rs));
+                }
+                return nodes;
+            }
+        }
+    }
+
+    public long insertNomenclatureAlias(NomenclatureAlias alias, String layer, String industryTag,
+            Long mandateId, String createdAt) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO nomenclature_alias (alias_text, leaf_path, layer, industry_tag,"
+                        + " mandate_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setString(1, alias.aliasText());
+            ps.setString(2, alias.leafPath());
+            ps.setString(3, layer);
+            ps.setString(4, industryTag);
+            setLong(ps, 5, mandateId);
+            ps.setString(6, createdAt);
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    public List<NomenclatureAlias> selectNomenclatureAliases(String layer, String industryTag,
+            Long mandateId) throws SQLException {
+        StringBuilder sql = new StringBuilder(
+                "SELECT alias_text, leaf_path FROM nomenclature_alias WHERE layer = ?");
+        if (mandateId != null) {
+            sql.append(" AND mandate_id = ?");
+        } else {
+            sql.append(" AND mandate_id IS NULL");
+            if (industryTag != null) {
+                sql.append(" AND industry_tag = ?");
+            }
+        }
+        sql.append(" ORDER BY alias_id");
+        try (PreparedStatement ps = connection.prepareStatement(sql.toString())) {
+            ps.setString(1, layer);
+            if (mandateId != null) {
+                ps.setLong(2, mandateId);
+            } else if (industryTag != null) {
+                ps.setString(2, industryTag);
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                List<NomenclatureAlias> aliases = new ArrayList<>();
+                while (rs.next()) {
+                    aliases.add(new NomenclatureAlias(
+                            rs.getString("alias_text"), rs.getString("leaf_path")));
+                }
+                return aliases;
+            }
+        }
+    }
+
+    public void upsertMandateIndustry(long mandateId, String industryTag, boolean confirmed,
+            boolean inferred) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO mandate_industry (mandate_id, industry_tag, confirmed, inferred, updated_at)"
+                        + " VALUES (?, ?, ?, ?, ?)"
+                        + " ON CONFLICT (mandate_id) DO UPDATE SET industry_tag = excluded.industry_tag,"
+                        + " confirmed = excluded.confirmed, inferred = excluded.inferred,"
+                        + " updated_at = excluded.updated_at")) {
+            ps.setLong(1, mandateId);
+            ps.setString(2, industryTag);
+            ps.setInt(3, confirmed ? 1 : 0);
+            ps.setInt(4, inferred ? 1 : 0);
+            ps.setString(5, Timestamps.now());
+            ps.executeUpdate();
+        }
+    }
+
+    public IndustryResolution selectMandateIndustry(long mandateId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT industry_tag, confirmed, inferred FROM mandate_industry WHERE mandate_id = ?")) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                boolean confirmed = rs.getInt("confirmed") == 1;
+                boolean inferred = rs.getInt("inferred") == 1;
+                return new IndustryResolution(
+                        rs.getString("industry_tag"), confirmed, inferred);
+            }
+        }
+    }
+
     private void insertCandidateMembers(long candidateId, List<Long> memberCellIds)
             throws SQLException {
         if (memberCellIds == null || memberCellIds.isEmpty()) {
@@ -1149,6 +1297,40 @@ public final class WorkspaceRepository {
         ps.setString(10, style.borderBottomColor());
         ps.setString(11, style.borderLeftStyle());
         ps.setString(12, style.borderLeftColor());
+    }
+
+    private List<NomenclatureNode> selectNomenclatureByLayer(String layer, String industryTag)
+            throws SQLException {
+        String sql = industryTag == null
+                ? "SELECT path, name, parent_path, layer, frozen, leaf, industry_tag, mandate_id"
+                        + " FROM nomenclature_node WHERE layer = ? ORDER BY node_id"
+                : "SELECT path, name, parent_path, layer, frozen, leaf, industry_tag, mandate_id"
+                        + " FROM nomenclature_node WHERE layer = ? AND industry_tag = ? ORDER BY node_id";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, layer);
+            if (industryTag != null) {
+                ps.setString(2, industryTag);
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                List<NomenclatureNode> nodes = new ArrayList<>();
+                while (rs.next()) {
+                    nodes.add(readNomenclatureNode(rs));
+                }
+                return nodes;
+            }
+        }
+    }
+
+    private static NomenclatureNode readNomenclatureNode(ResultSet rs) throws SQLException {
+        return new NomenclatureNode(
+                rs.getString("path"),
+                rs.getString("name"),
+                rs.getString("parent_path"),
+                rs.getString("layer"),
+                rs.getInt("frozen") == 1,
+                rs.getInt("leaf") == 1,
+                rs.getString("industry_tag"),
+                getNullableLong(rs, "mandate_id"));
     }
 
     private static int bindNullableBooleanPair(PreparedStatement ps, int index, Boolean value)

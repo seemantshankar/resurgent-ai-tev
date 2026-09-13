@@ -13,6 +13,9 @@ import java.util.List;
 import java.util.Map;
 
 import com.resurgent.tev.parser.ingest.NormalizedCell;
+import com.resurgent.tev.parser.nomenclature.NomenclatureCatalog;
+import com.resurgent.tev.parser.nomenclature.NomenclatureNode;
+import com.resurgent.tev.parser.nomenclature.OntologySlice;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -103,10 +106,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(16);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(17);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(16);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(17);
         }
     }
 
@@ -114,8 +117,10 @@ class PersistenceSeamTest {
     void candidateTablesExistAndRoundTripMembers() throws Exception {
         try (WorkspaceDatabase db = openDb("candidate.db")) {
             List<String> tables = tableNames(db.connection());
-            assertThat(tables).contains("candidate", "candidate_member", "candidate_related");
-            assertThat(tables).doesNotContain("region");
+            assertThat(tables).contains(
+                    "candidate", "candidate_member", "candidate_related",
+                    "nomenclature_node", "nomenclature_alias", "mandate_industry");
+            assertThat(tables).doesNotContain("region", "cost_head");
 
             WorkspaceRepository repo = new WorkspaceRepository(db.connection());
             long sourceFileId = repo.insertSourceFile(1L, "c.xlsx", "hash", "fm_xlsx",
@@ -170,6 +175,39 @@ class PersistenceSeamTest {
             assertThat(after.get(0).isolatedHiddenWorksheet()).isTrue();
             assertThat(repo.selectCandidateMemberCellIds(after.get(0).candidateId()))
                     .containsExactly(cellA1);
+        }
+    }
+
+    @Test
+    void nomenclatureSpinePackAndOverlayRoundTripThroughRepository() throws Exception {
+        Path dbPath = tempDir.resolve("nomenclature.db");
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            NomenclatureCatalog catalog = new NomenclatureCatalog(repo);
+            catalog.confirmIndustry(11L, "hotel");
+            catalog.putSoftLeaf(11L, "Project Cost > Civil Works", "Interior Fit-out",
+                    List.of("Interior"));
+            assertThat(repo.selectNomenclatureSpine())
+                    .extracting(NomenclatureNode::path)
+                    .contains("Project Cost > Civil Works", "Means of Finance > Term Loan",
+                            "Profit & Loss");
+            assertThat(repo.selectNomenclatureIndustry("hotel"))
+                    .extracting(NomenclatureNode::path)
+                    .contains("Project Cost > Plant & Machinery > Air Conditioning");
+            assertThat(repo.selectNomenclatureOverlay(11L))
+                    .extracting(NomenclatureNode::path)
+                    .containsExactly("Project Cost > Civil Works > Interior Fit-out");
+        }
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            OntologySlice slice = new NomenclatureCatalog(repo).sliceForMandate(11L);
+            assertThat(slice.industry().confirmed()).isTrue();
+            assertThat(slice.node("Project Cost > Plant & Machinery > Air Conditioning")).isPresent();
+            assertThat(slice.node("Project Cost > Civil Works > Interior Fit-out")).isPresent();
+            assertThat(slice.leafPathForAlias("Interior").orElseThrow())
+                    .isEqualTo("Project Cost > Civil Works > Interior Fit-out");
+            assertThat(slice.leafPathForAlias("Building Cost").orElseThrow())
+                    .isEqualTo("Project Cost > Civil Works");
         }
     }
 
@@ -382,7 +420,7 @@ class PersistenceSeamTest {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(16);
+            assertThat(count(c, "schema_migration")).isEqualTo(17);
             assertThat(tableNames(c)).contains("cell_reference");
             assertThat(tableNames(c)).doesNotContain("cell_error_root");
 
@@ -430,7 +468,7 @@ class PersistenceSeamTest {
     void v15MigrationRestoresAdr0013IngestSignalsWithoutHeuristicStack() throws Exception {
         try (WorkspaceDatabase db = openDb("v15.db")) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(16);
+            assertThat(count(c, "schema_migration")).isEqualTo(17);
             assertThat(tableNames(c)).contains("cell_style", "cell_reference", "candidate");
             assertThat(tableNames(c)).doesNotContain(
                     "region",
@@ -602,7 +640,7 @@ class PersistenceSeamTest {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(
                 dbPath, WorkspaceDatabase.OpenOptions.allowDestructiveReset())) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(16);
+            assertThat(count(c, "schema_migration")).isEqualTo(17);
             assertThat(count(c, "cell")).isZero();
             assertThat(count(c, "source_file")).isZero();
             assertThat(tableNames(c)).doesNotContain("cost_head", "region");
