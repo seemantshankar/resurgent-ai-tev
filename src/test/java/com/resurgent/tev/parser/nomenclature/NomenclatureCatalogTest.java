@@ -90,6 +90,25 @@ class NomenclatureCatalogTest {
     }
 
     @Test
+    void hotelSliceResolvesOmArhamVerbatimLabelsOntoBankPaths() throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(tempDir.resolve("resolve.db"))) {
+            NomenclatureCatalog catalog = new NomenclatureCatalog(
+                    new WorkspaceRepository(db.connection()));
+            catalog.confirmIndustry(1L, "hotel");
+            OntologySlice slice = catalog.sliceForMandate(1L);
+
+            assertThat(slice.resolve("Air Conditioning (Supplier-Ashi Associates)"))
+                    .contains("Project Cost > Plant & Machinery > Air Conditioning");
+            assertThat(slice.resolve("Less : AC as per Quotation included Below"))
+                    .contains("Project Cost > Plant & Machinery > Air Conditioning");
+            assertThat(slice.resolve("DETAILS OF PLANT & MACHINERIES"))
+                    .contains("Project Cost > Plant & Machinery");
+            assertThat(slice.resolve("Elevator (Supplier - Kone Elevator India Pvt. Ltd.)"))
+                    .contains("Project Cost > Plant & Machinery > Elevator / Lift");
+        }
+    }
+
+    @Test
     void mandateOverlayHoldsSoftLeavesUnderKnownParentsOnly() throws Exception {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(tempDir.resolve("overlay.db"))) {
             NomenclatureCatalog catalog = new NomenclatureCatalog(

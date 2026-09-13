@@ -33,8 +33,30 @@ final class NomenclatureSeed {
                     "Project Cost > Civil Works"),
             new NomenclatureAlias("Civil - Building",
                     "Project Cost > Civil Works"),
+            new NomenclatureAlias("DETAILS OF PLANT & MACHINERIES",
+                    "Project Cost > Plant & Machinery"),
+            new NomenclatureAlias("PLANT & MACHINERIES",
+                    "Project Cost > Plant & Machinery"),
+            new NomenclatureAlias("PRELIMINARY & PREOPERATIVE EXPENSES",
+                    "Project Cost > Preliminary & Pre-operative Expenses"),
+            new NomenclatureAlias("PRELIMINARY & PRE-OPERATIVE EXPENSES",
+                    "Project Cost > Preliminary & Pre-operative Expenses"),
+            new NomenclatureAlias("MARGIN MONEY / INVSTT. FOR WORKING CAPITAL",
+                    "Project Cost > Margin Money / Working Capital Margin"),
+            new NomenclatureAlias("DETAILS OF MISCELLANEOUS FIXED ASSETS / FURNITURES & FIXTURES",
+                    "Project Cost > Misc. Fixed Assets / Furniture & Fixtures"),
+            new NomenclatureAlias("ELECTRIFICATIONS & ELECTRICAL INSTALLATIONS",
+                    "Project Cost > Electrical Installations"),
+            new NomenclatureAlias("MEANS OF FINANCES",
+                    "Means of Finance"),
             new NomenclatureAlias("Term Loan From Financial Institutions",
-                    "Means of Finance > Term Loan"));
+                    "Means of Finance > Term Loan"),
+            new NomenclatureAlias("TERM LOAN FROM BANKS",
+                    "Means of Finance > Term Loan"),
+            new NomenclatureAlias("Partners' Capital",
+                    "Means of Finance > Promoter / Partners' Capital"),
+            new NomenclatureAlias("PARTNERS' CAPITAL",
+                    "Means of Finance > Promoter / Partners' Capital"));
 
     static final String HOTEL = "hotel";
 
@@ -51,6 +73,10 @@ final class NomenclatureSeed {
                     "Project Cost > Plant & Machinery > Elevator / Lift"),
             new NomenclatureAlias("Kitchen Equipment",
                     "Project Cost > Plant & Machinery > Kitchen Equipments"),
+            new NomenclatureAlias("Wastewater Engineering Services",
+                    "Project Cost > Plant & Machinery > Wastewater / ETP"),
+            new NomenclatureAlias("Less : AC as per Quotation included Below",
+                    "Project Cost > Plant & Machinery > Air Conditioning"),
             new NomenclatureAlias("AC",
                     "Project Cost > Plant & Machinery > Air Conditioning"));
 
