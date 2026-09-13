@@ -32,14 +32,23 @@ class LayerAResponseParserTest {
     void extractsJsonFromMarkdownFenceAndNormalizesAliases() {
         LayerAJudgment judgment = LayerAResponseParser.parse("""
                 ```json
-                {"schedule_family":"CapEx Detail","triage":"Scratchpad","relevance":"Secondary"}
+                {"schedule_family":"CapEx Detail","triage":"main","relevance":"Secondary"}
                 ```
                 """);
         assertThat(judgment.scheduleFamily()).isEqualTo(ScheduleFamily.CAPEX_DETAIL);
-        assertThat(judgment.triage()).isEqualTo(Triage.SCRATCH);
+        assertThat(judgment.triage()).isEqualTo(Triage.MAIN);
         assertThat(judgment.relevance()).isEqualTo(Relevance.SUPPORTING);
         assertThat(judgment.rowLabels()).isEqualTo(List.of());
         assertThat(judgment.packetDefaultHead()).isNull();
+    }
+
+    @Test
+    void normalizesScratchpadAliasAndForcesNoise() {
+        LayerAJudgment judgment = LayerAResponseParser.parse("""
+                {"scheduleFamily":"assumptions","triage":"Scratchpad","relevance":"Secondary"}
+                """);
+        assertThat(judgment.triage()).isEqualTo(Triage.SCRATCH);
+        assertThat(judgment.relevance()).isEqualTo(Relevance.NOISE);
     }
 
     @Test
@@ -49,6 +58,24 @@ class LayerAResponseParserTest {
                 """))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("triage=maybe");
+    }
+
+    @Test
+    void rejectsUncertainRelevanceInsteadOfMappingToNoise() {
+        assertThatThrownBy(() -> LayerAResponseParser.parse("""
+                {"scheduleFamily":"capex_detail","triage":"main","relevance":"unknown"}
+                """))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("relevance=unknown");
+    }
+
+    @Test
+    void softTriageForcesRelevanceNoise() {
+        LayerAJudgment judgment = LayerAResponseParser.parse("""
+                {"scheduleFamily":"assumptions","triage":"scratch","relevance":"primary"}
+                """);
+        assertThat(judgment.triage()).isEqualTo(Triage.SCRATCH);
+        assertThat(judgment.relevance()).isEqualTo(Relevance.NOISE);
     }
 
     @Test

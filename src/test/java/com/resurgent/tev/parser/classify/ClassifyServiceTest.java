@@ -226,6 +226,29 @@ class ClassifyServiceTest {
         }
     }
 
+    @Test
+    void softTriageCoercesNonNoiseRelevanceBeforePersist() throws Exception {
+        Path xlsx = costScheduleWorkbook();
+        Path db = tempDir.resolve("soft-triage.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.judgment = new LayerAJudgment(
+                ScheduleFamily.ASSUMPTIONS, Triage.ORPHAN, Relevance.PRIMARY,
+                List.of(), List.of(), null);
+        new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<PacketDisposition> rows = repo.selectPacketDispositionsForParseRun(
+                    ingest.parseRunId());
+            assertThat(rows).isNotEmpty();
+            assertThat(rows).allMatch(row -> Triage.ORPHAN.equals(row.triage()));
+            assertThat(rows).allMatch(row -> Relevance.NOISE.equals(row.relevance()));
+        }
+    }
+
     /** Scripted LLM for tests: records prompts and returns a fixed Layer A judgment. */
     static final class FakeClassifierLlm implements ClassifierLlm {
         final List<LayerAPrompt> prompts = new ArrayList<>();

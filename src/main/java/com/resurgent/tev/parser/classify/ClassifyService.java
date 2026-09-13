@@ -138,23 +138,20 @@ public final class ClassifyService {
             throws ClassifyException {
         if (judgment == null
                 || judgment.scheduleFamily() == null || judgment.scheduleFamily().isBlank()
-                || !isTriage(judgment.triage())
-                || !isRelevance(judgment.relevance())) {
+                || !Triage.isKnown(judgment.triage())
+                || !Relevance.isKnown(judgment.relevance())) {
             throw new ClassifyException(
                     "LLM returned an invalid Layer A judgment for candidate " + candidateId);
         }
+        if (Triage.isSoft(judgment.triage()) && !Relevance.NOISE.equals(judgment.relevance())) {
+            return new LayerAJudgment(
+                    judgment.scheduleFamily(),
+                    judgment.triage(),
+                    Relevance.NOISE,
+                    judgment.rowLabels(),
+                    judgment.columnHeaders(),
+                    judgment.packetDefaultHead());
+        }
         return judgment;
-    }
-
-    private static boolean isTriage(String value) {
-        return Triage.MAIN.equals(value)
-                || Triage.SCRATCH.equals(value)
-                || Triage.ORPHAN.equals(value);
-    }
-
-    private static boolean isRelevance(String value) {
-        return Relevance.PRIMARY.equals(value)
-                || Relevance.SUPPORTING.equals(value)
-                || Relevance.NOISE.equals(value);
     }
 }

@@ -22,6 +22,9 @@ final class LayerAResponseParser {
             String family = normalizeFamily(text(root, "scheduleFamily", "schedule_family"));
             String triage = normalizeTriage(text(root, "triage"));
             String relevance = normalizeRelevance(text(root, "relevance"));
+            if (Triage.isSoft(triage)) {
+                relevance = Relevance.NOISE;
+            }
             List<String> rowLabels = stringList(root, "rowLabels", "row_labels");
             List<String> columnHeaders = stringList(root, "columnHeaders", "column_headers");
             String head = text(root, "packetDefaultHead", "packet_default_head");
@@ -29,8 +32,8 @@ final class LayerAResponseParser {
                 head = null;
             }
             if (family == null || family.isBlank()
-                    || !isTriage(triage)
-                    || !isRelevance(relevance)) {
+                    || !Triage.isKnown(triage)
+                    || !Relevance.isKnown(relevance)) {
                 throw new IllegalStateException(
                         "invalid Layer A JSON fields family=" + family
                                 + " triage=" + triage
@@ -136,22 +139,9 @@ final class LayerAResponseParser {
             case "primary", "core", "main" -> Relevance.PRIMARY;
             case "supporting", "support", "secondary", "ancillary", "detail" ->
                     Relevance.SUPPORTING;
-            case "noise", "ignore", "irrelevant", "unknown", "n_a", "na", "none" ->
-                    Relevance.NOISE;
+            case "noise", "irrelevant" -> Relevance.NOISE;
             default -> key;
         };
-    }
-
-    private static boolean isTriage(String value) {
-        return Triage.MAIN.equals(value)
-                || Triage.SCRATCH.equals(value)
-                || Triage.ORPHAN.equals(value);
-    }
-
-    private static boolean isRelevance(String value) {
-        return Relevance.PRIMARY.equals(value)
-                || Relevance.SUPPORTING.equals(value)
-                || Relevance.NOISE.equals(value);
     }
 
     private static String snippet(String completion) {

@@ -8,4 +8,8 @@ public final class Relevance {
     public static final String NOISE = "noise";
 
     private Relevance() {}
+
+    public static boolean isKnown(String value) {
+        return PRIMARY.equals(value) || SUPPORTING.equals(value) || NOISE.equals(value);
+    }
 }

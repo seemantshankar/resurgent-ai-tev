@@ -9,9 +9,6 @@ import com.resurgent.tev.parser.discover.PacketRangeRef;
 import com.resurgent.tev.parser.nomenclature.NomenclatureAlias;
 import com.resurgent.tev.parser.nomenclature.NomenclatureNode;
 import com.resurgent.tev.parser.nomenclature.OntologySlice;
-import java.util.LinkedHashMap;
-import java.util.Map;
-
 /** Assembles the Layer A system/user messages sent through the LLM port. */
 final class LayerAPromptAssembler {
 
@@ -26,6 +23,7 @@ final class LayerAPromptAssembler {
               rowLabels: array of distinct row-axis labels you can see (empty if none)
               columnHeaders: array of distinct column-axis headers you can see (empty if none)
               packetDefaultHead: optional nomenclature path from the ontology slice, or null
+            When triage is scratch or orphan, relevance MUST be noise (soft-triage leftovers).
             If cheapPass is true this is a coverage-parent overview: broad sheet meaning only,
             no line lists. Numeric literals are dummy stand-ins; formulas and labels are real.
             """;
@@ -99,12 +97,5 @@ final class LayerAPromptAssembler {
         if (value != null && !value.isBlank()) {
             node.put(field, value);
         }
-    }
-
-    static Map<String, String> messages(LayerAPrompt prompt) {
-        Map<String, String> messages = new LinkedHashMap<>();
-        messages.put("system", SYSTEM);
-        messages.put("user", userMessage(prompt));
-        return messages;
     }
 }

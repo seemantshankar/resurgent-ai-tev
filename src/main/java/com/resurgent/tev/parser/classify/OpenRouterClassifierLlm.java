@@ -142,7 +142,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                             + "orphan is unattached",
                     Triage.MAIN, Triage.SCRATCH, Triage.ORPHAN);
             enumProperty(properties, "relevance",
-                    "primary, supporting, or noise",
+                    "primary, supporting, or noise; must be noise when triage is scratch or orphan",
                     Relevance.PRIMARY, Relevance.SUPPORTING, Relevance.NOISE);
             stringArrayProperty(properties, "rowLabels", "distinct row-axis labels; empty if none");
             stringArrayProperty(properties, "columnHeaders",
