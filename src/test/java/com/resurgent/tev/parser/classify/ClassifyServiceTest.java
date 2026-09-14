@@ -277,9 +277,6 @@ class ClassifyServiceTest {
 
         FakeClassifierLlm llm = new FakeClassifierLlm();
         llm.layerBFactory = prompt -> {
-            if (llm.layerBPrompts.size() > 1) {
-                return List.of();
-            }
             List<PacketCell> amounts = prompt.packet().cells().stream()
                     .filter(cell -> "number".equals(cell.valueType())
                             && (cell.formulaText() == null || cell.formulaText().isBlank()))
@@ -501,22 +498,17 @@ class ClassifyServiceTest {
         new DiscoverService().discover(db, ingest.parseRunId());
 
         FakeClassifierLlm llm = new FakeClassifierLlm();
-        llm.layerBFactory = prompt -> {
-            if (llm.layerBPrompts.size() > 1) {
-                return List.of();
-            }
-            return prompt.packet().cells().stream()
-                    .filter(cell -> "number".equals(cell.valueType()))
-                    .findFirst()
-                    .map(cell -> List.of(new LayerBLineJudgment(
-                            cell.coord(),
-                            "Invented",
-                            "Brand New Mid Level > Leaf",
-                            AmountRole.ADD,
-                            List.of(),
-                            null)))
-                    .orElse(List.of());
-        };
+        llm.layerBFactory = prompt -> prompt.packet().cells().stream()
+                .filter(cell -> "number".equals(cell.valueType()))
+                .findFirst()
+                .map(cell -> List.of(new LayerBLineJudgment(
+                        cell.coord(),
+                        "Invented",
+                        "Brand New Mid Level > Leaf",
+                        AmountRole.ADD,
+                        List.of(),
+                        null)))
+                .orElse(List.of());
 
         ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
         assertThat(summary.bindingCount()).isZero();
