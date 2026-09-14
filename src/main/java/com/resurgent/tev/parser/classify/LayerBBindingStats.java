@@ -69,7 +69,24 @@ public final class LayerBBindingStats {
                 + " accepted=" + accepted
                 + " rejected=" + rejected
                 + " duplicate=" + duplicate
-                + " reasons=" + rejectReasons;
+                + " reasons=" + formatRejectReasons();
+    }
+
+    /** Plain-text tallies for CLI output (no map/JSON braces). */
+    private String formatRejectReasons() {
+        if (rejectReasons.isEmpty()) {
+            return "none";
+        }
+        StringBuilder sb = new StringBuilder();
+        boolean first = true;
+        for (Map.Entry<String, Integer> entry : rejectReasons.entrySet()) {
+            if (!first) {
+                sb.append(", ");
+            }
+            sb.append(entry.getKey()).append('=').append(entry.getValue());
+            first = false;
+        }
+        return sb.toString();
     }
 
     private static String shorten(String reason) {
