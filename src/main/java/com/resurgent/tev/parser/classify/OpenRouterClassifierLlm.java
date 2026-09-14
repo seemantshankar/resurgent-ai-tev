@@ -9,11 +9,13 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * OpenRouter chat-completions adapter for Layer A. Config-gated; tests inject
+ * OpenRouter chat-completions adapter for Layer A/B. Config-gated; tests inject
  * a {@link CompletionsClient} so the suite stays fake/offline.
  */
 public final class OpenRouterClassifierLlm implements ClassifierLlm {
@@ -21,6 +23,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
     static final String DEFAULT_URL = "https://openrouter.ai/api/v1/chat/completions";
 
     private final CompletionsClient client;
+    private final List<LlmCallMetric> metrics = new CopyOnWriteArrayList<>();
 
     public OpenRouterClassifierLlm(String apiKey, String model) {
         this(new HttpCompletionsClient(apiKey, model, DEFAULT_URL));
@@ -30,21 +33,31 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         this.client = Objects.requireNonNull(client, "client");
     }
 
+    public List<LlmCallMetric> metrics() {
+        return List.copyOf(metrics);
+    }
+
     @Override
     public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
         String system = LayerAPromptAssembler.SYSTEM;
         String user = LayerAPromptAssembler.userMessage(prompt);
-        String completion = client.complete(system, user);
+        long started = System.nanoTime();
+        CompletionResult first = client.completeDetailed(system, user);
         try {
-            return LayerAResponseParser.parse(completion);
-        } catch (RuntimeException first) {
-            String retry = client.complete(
+            LayerAJudgment judgment = LayerAResponseParser.parse(first.content());
+            recordMetric("A", user, first, started, 1);
+            return judgment;
+        } catch (RuntimeException firstError) {
+            CompletionResult retry = client.completeDetailed(
                     system + "\nReturn only a valid JSON object. triage must be main|scratch|orphan;"
                             + " relevance must be primary|supporting|noise. No markdown.",
-                    user + "\n\nYour previous JSON was rejected: " + first.getMessage());
+                    user + "\n\nYour previous JSON was rejected: " + firstError.getMessage());
             try {
-                return LayerAResponseParser.parse(retry);
+                LayerAJudgment judgment = LayerAResponseParser.parse(retry.content());
+                recordMetric("A", user, retry, started, 2);
+                return judgment;
             } catch (RuntimeException second) {
+                recordMetric("A", user, retry, started, 2);
                 throw new IllegalStateException(
                         "OpenRouter Layer A invalid after retry: " + second.getMessage(), second);
             }
@@ -52,31 +65,88 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
     }
 
     @Override
-    public java.util.List<LayerBLineJudgment> classifyLayerB(LayerBPrompt prompt) {
+    public List<LayerBLineJudgment> classifyLayerB(LayerBPrompt prompt) {
         String system = LayerBPromptAssembler.SYSTEM;
-        String user = LayerBPromptAssembler.userMessage(prompt);
-        String completion = client.completeLayerB(system, user);
+        LayerBPromptAssembler.Assembled assembled = LayerBPromptAssembler.assemble(prompt);
+        String user = assembled.userMessage();
+        long started = System.nanoTime();
+        CompletionResult first = client.completeLayerBDetailed(system, user);
         try {
-            return LayerBResponseParser.parse(completion);
-        } catch (RuntimeException first) {
-            String retry = client.completeLayerB(
-                    system + "\nReturn only {\"lines\":[...]} with amountRole add|deduct|total|helper."
+            List<LayerBLineJudgment> lines =
+                    LayerBResponseParser.parse(first.content(), assembled.index());
+            recordMetric("B", user, first, started, 1);
+            return lines;
+        } catch (RuntimeException firstError) {
+            CompletionResult retry = client.completeLayerBDetailed(
+                    system + "\nReturn only {\"lines\":[[cellIndex,pathIndex,roleCode],...],"
+                            + "\"soft\":[]} with roleCode 0=add 1=deduct 2=total 3=helper."
                             + " No markdown.",
-                    user + "\n\nYour previous JSON was rejected: " + first.getMessage());
+                    user + "\n\nYour previous JSON was rejected: " + firstError.getMessage());
             try {
-                return LayerBResponseParser.parse(retry);
+                List<LayerBLineJudgment> lines =
+                        LayerBResponseParser.parse(retry.content(), assembled.index());
+                recordMetric("B", user, retry, started, 2);
+                return lines;
             } catch (RuntimeException second) {
+                recordMetric("B", user, retry, started, 2);
                 throw new IllegalStateException(
                         "OpenRouter Layer B invalid after retry: " + second.getMessage(), second);
             }
         }
     }
 
+    private void recordMetric(
+            String layer, String user, CompletionResult result, long startedNanos, int attempts) {
+        long durationMs = (System.nanoTime() - startedNanos) / 1_000_000L;
+        metrics.add(new LlmCallMetric(
+                layer,
+                user == null ? 0 : user.length(),
+                result.promptTokens(),
+                result.completionTokens(),
+                durationMs,
+                attempts));
+        System.err.printf(
+                "OpenRouter %s promptBytes=%d promptTok=%s completionTok=%s durationMs=%d attempts=%d%n",
+                layer,
+                user == null ? 0 : user.length(),
+                result.promptTokens() == null ? "?" : result.promptTokens(),
+                result.completionTokens() == null ? "?" : result.completionTokens(),
+                durationMs,
+                attempts);
+    }
+
+    /** One timed OpenRouter call for live-IT reporting. */
+    public record LlmCallMetric(
+            String layer,
+            int promptBytes,
+            Integer promptTokens,
+            Integer completionTokens,
+            long durationMs,
+            int attempts) {}
+
+    record CompletionResult(String content, Integer promptTokens, Integer completionTokens) {
+        CompletionResult {
+            Objects.requireNonNull(content, "content");
+        }
+
+        static CompletionResult of(String content) {
+            return new CompletionResult(content, null, null);
+        }
+    }
+
     interface CompletionsClient {
         String complete(String system, String user);
 
+        default CompletionResult completeDetailed(String system, String user) {
+            return CompletionResult.of(complete(system, user));
+        }
+
         default String completeLayerB(String system, String user) {
             return complete(system, user);
+        }
+
+        default CompletionResult completeLayerBDetailed(String system, String user) {
+            return CompletionResult.of(completeLayerB(system, user));
         }
     }
 
@@ -147,22 +217,33 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
         @Override
         public String complete(String system, String user) {
+            return completeDetailed(system, user).content();
+        }
+
+        @Override
+        public CompletionResult completeDetailed(String system, String user) {
             return completeWithFormat(system, user, layerAResponseFormat());
         }
 
         @Override
         public String completeLayerB(String system, String user) {
+            return completeLayerBDetailed(system, user).content();
+        }
+
+        @Override
+        public CompletionResult completeLayerBDetailed(String system, String user) {
             return completeWithFormat(system, user, layerBResponseFormat());
         }
 
-        private String completeWithFormat(String system, String user, ObjectNode responseFormat) {
+        private CompletionResult completeWithFormat(
+                String system, String user, ObjectNode responseFormat) {
             try {
                 String body = requestBody(model, system, user, responseFormat);
                 IllegalStateException last = null;
                 for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
                     ExchangeResponse response = exchange.send(body);
                     if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                        return content(response.body());
+                        return contentWithUsage(response.body());
                     }
                     if (response.statusCode() != 429 || attempt == MAX_ATTEMPTS) {
                         throw new IllegalStateException(
@@ -284,40 +365,51 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             schema.put("type", "object");
             schema.put("additionalProperties", false);
             ObjectNode properties = schema.putObject("properties");
+
             ObjectNode lines = properties.putObject("lines");
             lines.put("type", "array");
-            lines.put("description", "money-line bindings; empty if none");
-            ObjectNode items = lines.putObject("items");
-            items.put("type", "object");
-            items.put("additionalProperties", false);
-            ObjectNode itemProps = items.putObject("properties");
-            objectProperty(itemProps, "coord", "amount cell coord in the Packet");
-            objectProperty(itemProps, "verbatim", "client label evidence");
-            objectProperty(itemProps, "path", "nomenclature leaf path");
-            enumProperty(itemProps, "amountRole",
-                    "add, deduct, total, or helper",
-                    AmountRole.ADD, AmountRole.DEDUCT, AmountRole.TOTAL, AmountRole.HELPER);
-            stringArrayProperty(itemProps, "aliases", "optional soft-leaf synonyms");
-            ObjectNode confidence = itemProps.putObject("confidence");
-            ArrayNode confidenceType = confidence.putArray("type");
-            confidenceType.add("number");
-            confidenceType.add("null");
-            confidence.put("description", "0..1 or null");
-            ArrayNode itemRequired = items.putArray("required");
-            itemRequired.add("coord");
-            itemRequired.add("verbatim");
-            itemRequired.add("path");
-            itemRequired.add("amountRole");
-            itemRequired.add("aliases");
-            itemRequired.add("confidence");
+            lines.put("description",
+                    "bindings as [cellIndex, pathIndex, roleCode]; roleCode 0=add 1=deduct 2=total 3=helper");
+            ObjectNode lineItems = lines.putObject("items");
+            lineItems.put("type", "array");
+            lineItems.put("minItems", 3);
+            lineItems.put("maxItems", 3);
+            lineItems.putObject("items").put("type", "integer");
+
+            ObjectNode soft = properties.putObject("soft");
+            soft.put("type", "array");
+            soft.put("description", "new soft leaves only; empty when binding existing leaves");
+            ObjectNode softItems = soft.putObject("items");
+            softItems.put("type", "object");
+            softItems.put("additionalProperties", false);
+            ObjectNode softProps = softItems.putObject("properties");
+            integerProperty(softProps, "c", "cellIndex into amounts[]");
+            integerProperty(softProps, "pp", "parentPathIndex into paths[] (mid-level)");
+            objectProperty(softProps, "n", "new soft leaf name under parent");
+            stringArrayProperty(softProps, "a", "optional aliases for the soft leaf");
+            integerProperty(softProps, "r", "roleCode 0=add 1=deduct 2=total 3=helper");
+            ArrayNode softRequired = softItems.putArray("required");
+            softRequired.add("c");
+            softRequired.add("pp");
+            softRequired.add("n");
+            softRequired.add("a");
+            softRequired.add("r");
+
             ArrayNode required = schema.putArray("required");
             required.add("lines");
+            required.add("soft");
             return format;
         }
 
         private static void objectProperty(ObjectNode properties, String name, String description) {
             ObjectNode node = properties.putObject(name);
             node.put("type", "string");
+            node.put("description", description);
+        }
+
+        private static void integerProperty(ObjectNode properties, String name, String description) {
+            ObjectNode node = properties.putObject(name);
+            node.put("type", "integer");
             node.put("description", description);
         }
 
@@ -341,6 +433,10 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         }
 
         static String content(String responseJson) throws Exception {
+            return contentWithUsage(responseJson).content();
+        }
+
+        static CompletionResult contentWithUsage(String responseJson) throws Exception {
             JsonNode root = MAPPER.readTree(responseJson);
             JsonNode error = root.path("error");
             if (error.isObject()) {
@@ -359,16 +455,25 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                         "OpenRouter response had no message content "
                                 + snippet(responseJson));
             }
+            String text;
             if (content.isObject() || content.isArray()) {
-                return MAPPER.writeValueAsString(content);
+                text = MAPPER.writeValueAsString(content);
+            } else {
+                text = content.asText();
             }
-            String text = content.asText();
             if (text == null || text.isBlank()) {
                 throw new IllegalStateException(
                         "OpenRouter response had empty message content "
                                 + snippet(responseJson));
             }
-            return text;
+            JsonNode usage = root.path("usage");
+            Integer promptTokens = usage.path("prompt_tokens").isIntegralNumber()
+                    ? usage.path("prompt_tokens").intValue()
+                    : null;
+            Integer completionTokens = usage.path("completion_tokens").isIntegralNumber()
+                    ? usage.path("completion_tokens").intValue()
+                    : null;
+            return new CompletionResult(text, promptTokens, completionTokens);
         }
 
         private static String snippet(String value) {

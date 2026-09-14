@@ -57,12 +57,24 @@ LLM judgment on what kind of island a Packet is: schedule family, Scratch/Orphan
 _Avoid_: classification (alone), region type, cost head
 
 **Layer B (nomenclature binding)**:
-LLM binding of a money line to a controlled vocabulary path. Verbatim client text stays evidence; the leaf is the join key; synonyms are aliases of one leaf.
+LLM binding of a money line to a controlled vocabulary path. Verbatim client text stays evidence; the leaf is the join key; synonyms are aliases of one leaf. Prompt numerics are tagged `money|quantity|rate|percent|unknown`; cost roles require money.
 _Avoid_: tagging, cost-head guess, dictionary entry (for the binding itself)
 
 **Amount role**:
 How a bound money amount participates economically: `add`, `deduct`, `total`, or `helper`. Lives on the Layer B line binding, not on Layer A. Default leaf rollups include `add` only; `deduct`, `total`, and `helper` are excluded so totals and anti-double-count tear-outs do not distort `SUM(path)`.
 _Avoid_: sign, polarity, debit/credit
+
+**Numeric cell**:
+Any Packet cell with a number or a formula that caches a number. Includes money, quantities, rates, and percents. Not every numeric cell is a money line.
+_Avoid_: amount cell (alone — ambiguous)
+
+**Money cell**:
+A numeric cell the application classifies as currency/cost (labels, column headers, currency display cues). Only money cells may take Layer B roles `add`, `deduct`, or `total`.
+_Avoid_: treating every number as a cost
+
+**Quantity / rate cell**:
+Numeric supporting drivers (units, area, capacity, price per unit, percents). They may appear in the Layer B prompt for interpretation and may bind only as `helper` when intentionally supported — never as cost `add`/`deduct`/`total`.
+_Avoid_: amount, cost line
 
 **Line peer**:
 An optional link from one Layer B binding to other amount cells that represent the same economic leaf in a different role (for example a Civil “Less: AC” deduct peer of the P&M Air Conditioning add). The deduct line’s nomenclature path is the **economic leaf** (same path as the add), not the geometric section that drew the row. Peers should share that path; mismatched paths stay stored but are not treated as a resolved peer pair. Peers may sit outside the current Packet when they resolve to real cells. Packet context prefers existing formula-driven closure; the LLM may still name a real sheet-qualified peer coord that was not in the dump. `peer_reason` starts as `anti_double_count` only until a real FM forces another value. Peers are never required to store a binding. When both sides are seen, peers are written on both bindings.

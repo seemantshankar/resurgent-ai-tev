@@ -44,11 +44,12 @@ public final class ClassifyCommand implements Callable<Integer> {
             ClassifySummary summary = new ClassifyService(llm).classify(db, parseRunId);
             out.printf(
                     "Classified parse_run %d: %d dispositions (%d coverage parents),"
-                            + " %d Layer B bindings.%n",
+                            + " %d Layer B bindings (%s).%n",
                     summary.parseRunId(),
                     summary.dispositionCount(),
                     summary.coverageParentCount(),
-                    summary.bindingCount());
+                    summary.bindingCount(),
+                    summary.layerBStats().summaryLine());
             return 0;
         } catch (ClassifyException e) {
             err.println("classify rejected: " + e.getMessage());

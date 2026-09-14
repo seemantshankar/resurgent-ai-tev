@@ -300,6 +300,8 @@ class ClassifyServiceTest {
 
         ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
         assertThat(summary.bindingCount()).isGreaterThanOrEqualTo(2);
+        assertThat(summary.layerBStats().accepted()).isGreaterThanOrEqualTo(2);
+        assertThat(summary.layerBStats().proposed()).isGreaterThanOrEqualTo(2);
         assertThat(llm.layerBPrompts).isNotEmpty();
         assertThat(llm.layerBPrompts)
                 .noneMatch(prompt -> "coverage_parent".equals(prompt.packet().candidateKind()));
@@ -401,6 +403,86 @@ class ClassifyServiceTest {
     }
 
     @Test
+    void skipsLayerBWhenPacketHasNoAmountCells() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Labels");
+            Row row = sheet.createRow(0);
+            row.createCell(0).setCellValue("Only labels");
+            row.createCell(1).setCellValue("No amounts");
+            xlsx = writeWorkbook(workbook, "no-amounts.xlsx");
+        }
+        Path db = tempDir.resolve("no-amounts.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.bindFirstAmountAsCivilAdd = true;
+        ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        assertThat(summary.bindingCount()).isZero();
+        assertThat(llm.layerBPrompts).isEmpty();
+    }
+
+    @Test
+    void formulaHelperAmountsCanBindButFormulaAddIsRejected() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Parallel");
+            for (int r = 0; r < 3; r++) {
+                Row row = sheet.createRow(r);
+                row.createCell(0).setCellValue("L" + r);
+                row.createCell(1).setCellValue(10.0 + r);
+                row.createCell(4).setCellValue("R" + r);
+                row.createCell(5).setCellValue(20.0 + r);
+            }
+            Row total = sheet.createRow(3);
+            total.createCell(0).setCellValue("Total");
+            total.createCell(1).setCellFormula("B1+B2+B3");
+            total.createCell(4).setCellValue("TotalR");
+            total.createCell(5).setCellFormula("F1+F2+F3");
+            workbook.getCreationHelper().createFormulaEvaluator().evaluateAll();
+            xlsx = writeWorkbook(workbook, "formula-roles.xlsx");
+        }
+        Path db = tempDir.resolve("formula-roles.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.layerBFactory = prompt -> {
+            PacketCell formula = prompt.packet().cells().stream()
+                    .filter(cell -> cell.formulaText() != null && !cell.formulaText().isBlank())
+                    .findFirst()
+                    .orElse(null);
+            if (formula == null) {
+                return List.of();
+            }
+            return List.of(
+                    new LayerBLineJudgment(
+                            formula.coord(), "Total",
+                            "Project Cost > Civil Works > Structure",
+                            AmountRole.ADD, List.of(), 0.5),
+                    new LayerBLineJudgment(
+                            formula.coord(), "Total",
+                            "Project Cost > Civil Works > Structure",
+                            AmountRole.HELPER, List.of(), 0.9));
+        };
+
+        ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
+        assertThat(llm.layerBPrompts).isNotEmpty();
+        assertThat(summary.layerBStats().proposed()).isGreaterThanOrEqualTo(2);
+        assertThat(summary.layerBStats().accepted()).isGreaterThanOrEqualTo(1);
+        assertThat(summary.layerBStats().rejected()).isGreaterThanOrEqualTo(1);
+        assertThat(summary.layerBStats().rejectReasons())
+                .containsKey("formula_role_mismatch");
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
+                    .anyMatch(b -> AmountRole.HELPER.equals(b.amountRole()));
+        }
+    }
+
+    @Test
     void inventingMidLevelPathIsRejected() throws Exception {
         Path xlsx;
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
@@ -446,8 +528,8 @@ class ClassifyServiceTest {
 
     /** Scripted LLM for tests: records prompts and returns fixed Layer A / Layer B judgments. */
     static final class FakeClassifierLlm implements ClassifierLlm {
-        final List<LayerAPrompt> prompts = new ArrayList<>();
-        final List<LayerBPrompt> layerBPrompts = new ArrayList<>();
+        final List<LayerAPrompt> prompts = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final List<LayerBPrompt> layerBPrompts = new java.util.concurrent.CopyOnWriteArrayList<>();
         LayerAJudgment judgment = new LayerAJudgment(
                 ScheduleFamily.CAPEX_DETAIL, Triage.MAIN, Relevance.PRIMARY,
                 List.of(), List.of(), null);

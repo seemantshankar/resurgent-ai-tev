@@ -14,11 +14,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * Packet classification application service: Layer A disposition and Layer B
@@ -26,6 +32,8 @@ import java.util.Optional;
  * rewrite Candidate geometry. Peers are out of scope for #107.
  */
 public final class ClassifyService {
+
+    static final int LAYER_B_PARALLELISM = 8;
 
     private final ClassifierLlm llm;
     private final DiscoverService discover;
@@ -60,12 +68,12 @@ public final class ClassifyService {
             }
 
             // LLM calls stay outside the write transaction so long classify runs do not
-            // hold a SQLite write lock. Collect validated rows, then replace.
+            // hold a SQLite write lock. Layer A stays ordered (parent before child);
+            // Layer B LLM fans out, then bindings materialize serially.
             List<PacketDisposition> dispositions = new ArrayList<>();
-            List<NomenclatureBinding> bindings = new ArrayList<>();
+            List<LayerBJob> layerBJobs = new ArrayList<>();
             Map<Long, LayerAJudgment> judged = new HashMap<>();
             Map<Long, LayerAJudgment> coverageByWorksheet = new HashMap<>();
-            java.util.Set<Long> boundCells = new java.util.HashSet<>();
             int coverageParents = 0;
             for (CandidateRow candidate : orderForLayerA(candidates)) {
                 boolean cheapPass = "coverage_parent".equals(candidate.candidateKind());
@@ -95,20 +103,17 @@ public final class ClassifyService {
                         judgment.packetDefaultHead(),
                         candidate.parentCandidateId(),
                         cheapPass));
-                if (!cheapPass) {
-                    List<LayerBLineJudgment> lines = llm.classifyLayerB(
-                            new LayerBPrompt(redacted, slice, judgment, parent));
-                    for (LayerBLineJudgment line : lines) {
-                        NomenclatureBinding binding = tryMaterializeBinding(
-                                catalog, mandateId, slice, packet, candidate, parseRunId, line);
-                        if (binding == null || !boundCells.add(binding.cellId())) {
-                            continue;
-                        }
-                        bindings.add(binding);
-                        slice = catalog.sliceForMandate(mandateId);
-                    }
+                if (!cheapPass && LayerBAmountSupport.hasAmountCells(redacted)) {
+                    layerBJobs.add(new LayerBJob(
+                            candidate,
+                            packet,
+                            new LayerBPrompt(redacted, slice, judgment, parent)));
                 }
             }
+
+            List<NomenclatureBinding> bindings;
+            LayerBBindingStats layerBStats = new LayerBBindingStats();
+            bindings = materializeLayerB(catalog, mandateId, slice, parseRunId, layerBJobs, layerBStats);
 
             db.connection().setAutoCommit(false);
             try {
@@ -128,7 +133,11 @@ public final class ClassifyService {
                 }
                 repo.commit();
                 return new ClassifySummary(
-                        parseRunId, dispositions.size(), coverageParents, bindings.size());
+                        parseRunId,
+                        dispositions.size(),
+                        coverageParents,
+                        bindings.size(),
+                        layerBStats);
             } catch (ClassifyException e) {
                 repo.rollback();
                 throw e;
@@ -146,7 +155,107 @@ public final class ClassifyService {
         }
     }
 
-    private static NomenclatureBinding tryMaterializeBinding(
+    /**
+     * Layer B LLM calls fan out in parallel against the pre-Layer-B ontology slice.
+     * Soft leaves created by earlier packets are <em>not</em> visible to concurrent
+     * prompts; reconciliation happens here during serial materialize: reload the
+     * slice after each accept, and if {@code putSoftLeaf} races on an already-created
+     * path, treat it as an existing leaf.
+     */
+    private List<NomenclatureBinding> materializeLayerB(
+            NomenclatureCatalog catalog,
+            long mandateId,
+            OntologySlice slice,
+            long parseRunId,
+            List<LayerBJob> jobs,
+            LayerBBindingStats stats) throws ClassifyException {
+        if (jobs.isEmpty()) {
+            return List.of();
+        }
+        List<List<LayerBLineJudgment>> judgmentsByJob = invokeLayerBParallel(jobs);
+        List<NomenclatureBinding> bindings = new ArrayList<>();
+        Set<Long> boundCells = new HashSet<>();
+        OntologySlice currentSlice = slice;
+        for (int i = 0; i < jobs.size(); i++) {
+            LayerBJob job = jobs.get(i);
+            List<LayerBLineJudgment> lines = judgmentsByJob.get(i);
+            stats.addProposed(lines.size());
+            for (LayerBLineJudgment line : lines) {
+                MaterializeResult result = tryMaterializeBinding(
+                        catalog,
+                        mandateId,
+                        currentSlice,
+                        job.packet(),
+                        job.candidate(),
+                        parseRunId,
+                        line);
+                if (result.binding() == null) {
+                    stats.addRejected(result.rejectReason());
+                    continue;
+                }
+                if (!boundCells.add(result.binding().cellId())) {
+                    stats.addDuplicate();
+                    continue;
+                }
+                bindings.add(result.binding());
+                stats.addAccepted();
+                currentSlice = catalog.sliceForMandate(mandateId);
+            }
+        }
+        return bindings;
+    }
+
+    private List<List<LayerBLineJudgment>> invokeLayerBParallel(List<LayerBJob> jobs)
+            throws ClassifyException {
+        int workers = Math.min(LAYER_B_PARALLELISM, jobs.size());
+        if (workers <= 1) {
+            List<List<LayerBLineJudgment>> out = new ArrayList<>(jobs.size());
+            for (LayerBJob job : jobs) {
+                out.add(llm.classifyLayerB(job.prompt()));
+            }
+            return out;
+        }
+        ExecutorService pool = Executors.newFixedThreadPool(workers);
+        try {
+            List<Future<List<LayerBLineJudgment>>> futures = new ArrayList<>(jobs.size());
+            for (LayerBJob job : jobs) {
+                futures.add(pool.submit(() -> llm.classifyLayerB(job.prompt())));
+            }
+            List<List<LayerBLineJudgment>> out = new ArrayList<>(jobs.size());
+            for (Future<List<LayerBLineJudgment>> future : futures) {
+                try {
+                    out.add(future.get());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new ClassifyException("Layer B interrupted", e);
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause() == null ? e : e.getCause();
+                    if (cause instanceof RuntimeException runtime) {
+                        throw runtime;
+                    }
+                    throw new ClassifyException(
+                            "Layer B failed: " + cause.getMessage(), cause);
+                }
+            }
+            return out;
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private record LayerBJob(CandidateRow candidate, Packet packet, LayerBPrompt prompt) {}
+
+    private record MaterializeResult(NomenclatureBinding binding, String rejectReason) {
+        static MaterializeResult ok(NomenclatureBinding binding) {
+            return new MaterializeResult(binding, null);
+        }
+
+        static MaterializeResult reject(String reason) {
+            return new MaterializeResult(null, reason);
+        }
+    }
+
+    private static MaterializeResult tryMaterializeBinding(
             NomenclatureCatalog catalog,
             long mandateId,
             OntologySlice slice,
@@ -155,11 +264,10 @@ public final class ClassifyService {
             long parseRunId,
             LayerBLineJudgment line) {
         try {
-            return materializeBinding(
-                    catalog, mandateId, slice, packet, candidate, parseRunId, line);
+            return MaterializeResult.ok(materializeBinding(
+                    catalog, mandateId, slice, packet, candidate, parseRunId, line));
         } catch (ClassifyException e) {
-            // Live models often propose labels or invented mid-levels; skip those lines.
-            return null;
+            return MaterializeResult.reject(e.getMessage());
         }
     }
 
@@ -182,7 +290,22 @@ public final class ClassifyService {
         PacketCell cell = findCell(packet, line.coord())
                 .orElseThrow(() -> new ClassifyException(
                         "Layer B coord not in Packet: " + line.coord()));
-        if (!isAmountCell(cell)) {
+        if (!LayerBAmountSupport.isBindableForRole(packet, cell, role)) {
+            NumericKind kind = LayerBAmountSupport.classifyKind(packet, cell);
+            if (!kind.allowsCostRole()
+                    && (AmountRole.ADD.equals(role)
+                            || AmountRole.DEDUCT.equals(role)
+                            || AmountRole.TOTAL.equals(role))) {
+                throw new ClassifyException(
+                        "non_money_numeric kind=" + kind.name().toLowerCase(Locale.ROOT)
+                                + " at " + line.coord()
+                                + " cannot use cost role " + role);
+            }
+            if (LayerBAmountSupport.isFormulaNumeric(cell)) {
+                throw new ClassifyException(
+                        "formula amount at " + line.coord()
+                                + " requires helper|total role, got " + role);
+            }
             throw new ClassifyException(
                     "Layer B binding requires an amount cell at " + line.coord());
         }
@@ -215,10 +338,17 @@ public final class ClassifyService {
             }
             try {
                 catalog.putSoftLeaf(mandateId, parentPath, leafName, line.aliases());
+                softLeaf = true;
             } catch (NomenclatureException e) {
-                throw new ClassifyException(e.getMessage(), e);
+                // Parallel Layer B may have already created this soft leaf serially earlier.
+                OntologySlice refreshed = catalog.sliceForMandate(mandateId);
+                Optional<NomenclatureNode> raced = refreshed.node(path);
+                if (raced.isPresent() && raced.get().leaf()) {
+                    softLeaf = NomenclatureNode.LAYER_MANDATE_SOFT.equals(raced.get().layer());
+                } else {
+                    throw new ClassifyException(e.getMessage(), e);
+                }
             }
-            softLeaf = true;
         }
         return new NomenclatureBinding(
                 cell.cellId(),
@@ -230,14 +360,6 @@ public final class ClassifyService {
                 softLeaf,
                 viaAlias,
                 line.confidence());
-    }
-
-    private static boolean isAmountCell(PacketCell cell) {
-        if (cell.formulaText() != null && !cell.formulaText().isBlank()) {
-            return false;
-        }
-        return "number".equals(cell.valueType())
-                || (cell.numericValue() != null && !cell.numericValue().isBlank());
     }
 
     private static Optional<PacketCell> findCell(Packet packet, String coord) {

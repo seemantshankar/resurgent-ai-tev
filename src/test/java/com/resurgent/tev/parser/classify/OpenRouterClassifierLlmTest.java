@@ -121,17 +121,20 @@ class OpenRouterClassifierLlmTest {
         JsonNode root = new ObjectMapper().readTree(json);
         assertThat(root.path("response_format").path("json_schema").path("name").asText())
                 .isEqualTo("layer_b_bindings");
-        assertThat(root.path("response_format").path("json_schema").path("schema")
-                .path("properties").path("lines").path("items").path("properties")
-                .path("amountRole").path("enum").toString())
-                .contains("add")
-                .contains("deduct");
+        JsonNode schema = root.path("response_format").path("json_schema").path("schema");
+        assertThat(schema.path("properties").path("lines").path("items").path("type").asText())
+                .isEqualTo("array");
+        assertThat(schema.path("properties").path("soft").path("type").asText())
+                .isEqualTo("array");
+        assertThat(schema.path("required").toString()).contains("lines").contains("soft");
         assertThat(root.path("provider").path("data_collection").asText()).isEqualTo("deny");
     }
 
     @Test
     void classifyLayerBParsesLinesFromCompletionsClient() {
         Packet packet = new Packet(1L, 1L, 1L, "child", List.of(
+                new PacketCell(10L, 1L, "A2", 2, 1, PacketCell.ROLE_CORE, "string",
+                        "Civil Works", "Civil Works", null, null, false, false),
                 new PacketCell(1L, 1L, "B2", 2, 2, PacketCell.ROLE_CORE, "number",
                         null, "100", "100", null, false, false)),
                 List.of(), true);
@@ -147,14 +150,13 @@ class OpenRouterClassifierLlmTest {
                 List.of(), List.of(), null);
         OpenRouterClassifierLlm llm = new OpenRouterClassifierLlm(
                 (system, user) -> """
-                        {"lines":[{"coord":"B2","verbatim":"Civil Works",
-                         "path":"Project Cost > Civil Works > Structure",
-                         "amountRole":"add","aliases":[],"confidence":0.8}]}
+                        {"lines":[[0,0,0]],"soft":[]}
                         """);
         List<LayerBLineJudgment> lines = llm.classifyLayerB(
                 new LayerBPrompt(packet, slice, layerA, null));
         assertThat(lines).hasSize(1);
         assertThat(lines.get(0).coord()).isEqualTo("B2");
+        assertThat(lines.get(0).verbatim()).isEqualTo("Civil Works");
         assertThat(lines.get(0).amountRole()).isEqualTo(AmountRole.ADD);
     }
 
