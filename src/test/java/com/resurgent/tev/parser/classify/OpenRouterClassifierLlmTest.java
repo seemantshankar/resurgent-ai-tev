@@ -112,6 +112,55 @@ class OpenRouterClassifierLlmTest {
     }
 
     @Test
+    void layerBRequestSchemaRequiresLines() throws Exception {
+        String json = OpenRouterClassifierLlm.HttpCompletionsClient.requestBody(
+                "~z-ai/glm-flash-latest",
+                "system",
+                "user",
+                OpenRouterClassifierLlm.HttpCompletionsClient.layerBResponseFormat());
+        JsonNode root = new ObjectMapper().readTree(json);
+        assertThat(root.path("response_format").path("json_schema").path("name").asText())
+                .isEqualTo("layer_b_bindings");
+        JsonNode schema = root.path("response_format").path("json_schema").path("schema");
+        assertThat(schema.path("properties").path("lines").path("items").path("type").asText())
+                .isEqualTo("array");
+        assertThat(schema.path("properties").path("soft").path("type").asText())
+                .isEqualTo("array");
+        assertThat(schema.path("required").toString()).contains("lines").contains("soft");
+        assertThat(root.path("provider").path("data_collection").asText()).isEqualTo("deny");
+    }
+
+    @Test
+    void classifyLayerBParsesLinesFromCompletionsClient() {
+        Packet packet = new Packet(1L, 1L, 1L, "child", List.of(
+                new PacketCell(10L, 1L, "A2", 2, 1, PacketCell.ROLE_CORE, "string",
+                        "Civil Works", "Civil Works", null, null, false, false),
+                new PacketCell(1L, 1L, "B2", 2, 2, PacketCell.ROLE_CORE, "number",
+                        null, "100", "100", null, false, false)),
+                List.of(), true);
+        OntologySlice slice = new OntologySlice(
+                IndustryResolution.confirmed("hotel"),
+                List.of(new NomenclatureNode(
+                        "Project Cost > Civil Works > Structure", "Structure",
+                        "Project Cost > Civil Works",
+                        NomenclatureNode.LAYER_MANDATE_SOFT, false, true, null, 1L)),
+                List.of());
+        LayerAJudgment layerA = new LayerAJudgment(
+                ScheduleFamily.CAPEX_DETAIL, Triage.MAIN, Relevance.PRIMARY,
+                List.of(), List.of(), null);
+        OpenRouterClassifierLlm llm = new OpenRouterClassifierLlm(
+                (system, user) -> """
+                        {"lines":[[0,0,0]],"soft":[]}
+                        """);
+        List<LayerBLineJudgment> lines = llm.classifyLayerB(
+                new LayerBPrompt(packet, slice, layerA, null));
+        assertThat(lines).hasSize(1);
+        assertThat(lines.get(0).coord()).isEqualTo("B2");
+        assertThat(lines.get(0).verbatim()).isEqualTo("Civil Works");
+        assertThat(lines.get(0).amountRole()).isEqualTo(AmountRole.ADD);
+    }
+
+    @Test
     void retriesHttp429UsingRetryAfterThenSucceeds() {
         AtomicInteger calls = new AtomicInteger();
         List<Duration> sleeps = new ArrayList<>();

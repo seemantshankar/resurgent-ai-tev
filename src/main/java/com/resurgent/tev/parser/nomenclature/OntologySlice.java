@@ -64,7 +64,7 @@ public record OntologySlice(
         return Optional.ofNullable(bestPath);
     }
 
-    static String normalize(String text) {
+    public static String normalize(String text) {
         return text.replace('\u00a0', ' ').replaceAll("\\s+", " ").trim()
                 .toLowerCase(Locale.ROOT);
     }

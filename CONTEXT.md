@@ -57,12 +57,24 @@ LLM judgment on what kind of island a Packet is: schedule family, Scratch/Orphan
 _Avoid_: classification (alone), region type, cost head
 
 **Layer B (nomenclature binding)**:
-LLM binding of a money line to a controlled vocabulary path. Verbatim client text stays evidence; the leaf is the join key; synonyms are aliases of one leaf.
+LLM binding of a money line to a controlled vocabulary path. Verbatim client text stays evidence; the leaf is the join key; synonyms are aliases of one leaf. Prompt numerics are tagged `money|quantity|rate|percent|unknown`; cost roles require money.
 _Avoid_: tagging, cost-head guess, dictionary entry (for the binding itself)
 
 **Amount role**:
 How a bound money amount participates economically: `add`, `deduct`, `total`, or `helper`. Lives on the Layer B line binding, not on Layer A. Default leaf rollups include `add` only; `deduct`, `total`, and `helper` are excluded so totals and anti-double-count tear-outs do not distort `SUM(path)`.
 _Avoid_: sign, polarity, debit/credit
+
+**Numeric cell**:
+Any Packet cell with a number or a formula that caches a number. Includes money, quantities, rates, and percents. Not every numeric cell is a money line.
+_Avoid_: amount cell (alone — ambiguous)
+
+**Money cell**:
+A numeric cell the application classifies as currency/cost (labels, column headers, currency display cues). Only money cells may take Layer B roles `add`, `deduct`, or `total`.
+_Avoid_: treating every number as a cost
+
+**Quantity / rate cell**:
+Numeric supporting drivers (units, area, capacity, price per unit, percents). They may appear in the Layer B prompt for interpretation and may bind only as `helper` when intentionally supported — never as cost `add`/`deduct`/`total`.
+_Avoid_: amount, cost line
 
 **Line peer**:
 An optional link from one Layer B binding to other amount cells that represent the same economic leaf in a different role (for example a Civil “Less: AC” deduct peer of the P&M Air Conditioning add). The deduct line’s nomenclature path is the **economic leaf** (same path as the add), not the geometric section that drew the row. Peers should share that path; mismatched paths stay stored but are not treated as a resolved peer pair. Peers may sit outside the current Packet when they resolve to real cells. Packet context prefers existing formula-driven closure; the LLM may still name a real sheet-qualified peer coord that was not in the dump. `peer_reason` starts as `anti_double_count` only until a real FM forces another value. Peers are never required to store a binding. When both sides are seen, peers are written on both bindings.
@@ -79,10 +91,11 @@ _Avoid_: cost-head table, per-FM dictionary, Unmapped parking lot
 - **Region discovery** (`tev-parse discover --db --parse-run`): DB-only pass that writes Candidates for an ingested parse run — always a coverage parent per worksheet (isolated hidden sheets flagged, not skipped), plus local child/parallel/overlap Candidates, formula-reference related links, and on-demand Packets (core vs context; amounts stay on the cell graph). Re-run replaces that parse run’s Candidates. [#90](https://github.com/seemantshankar/resurgent-ai-tev/issues/90)–[#93](https://github.com/seemantshankar/resurgent-ai-tev/issues/93).
 - **Nomenclature catalog**: frozen global spine plus industry leaf packs and a mandate soft-leaf overlay, assembled as the ontology slice classify will send. Missing industry uses a non-blocking infer/confirm stub. [#105](https://github.com/seemantshankar/resurgent-ai-tev/issues/105).
 - **Packet classification (Layer A)**: `tev-parse classify --db --parse-run` consumes derived Packets, sends number-redacted payloads plus the ontology slice through a narrow LLM port, and persists schedule family / triage / relevance / axes per Candidate. Coverage parents get a cheap pass first; children see that parent disposition. Re-classify replaces that parse run’s Layer A rows only. [#106](https://github.com/seemantshankar/resurgent-ai-tev/issues/106).
+- **Packet classification (Layer B)**: the same classify pass binds money lines to nomenclature paths with verbatim evidence, soft/alias metadata, and `amount_role` (`add` | `deduct` | `total` | `helper`). Soft leaves attach under known mid-levels; coverage parents still get no line lists; default `SUM(path)` includes `add` only. Line peers are not persisted yet. [#107](https://github.com/seemantshankar/resurgent-ai-tev/issues/107).
 
 ## Planned (not in repo yet)
 
-- LLM Packet classification Layer B nomenclature bindings (including amount role and line peers), discrepancy engine, and analyst review (triage soft; no per-finding review queue for dictionary growth)
+- Line peers on Layer B bindings, ProjectFact bindings, cell-meaning query, discrepancy engine, and analyst review (triage soft; no per-finding review queue for dictionary growth)
 
 ## Out of scope — do not reintroduce without ADR
 

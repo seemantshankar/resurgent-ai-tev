@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.resurgent.tev.parser.classify.ClassifierLlm;
 import com.resurgent.tev.parser.classify.LayerAJudgment;
+import com.resurgent.tev.parser.classify.LayerAPrompt;
+import com.resurgent.tev.parser.classify.LayerBLineJudgment;
+import com.resurgent.tev.parser.classify.LayerBPrompt;
 import com.resurgent.tev.parser.classify.Relevance;
 import com.resurgent.tev.parser.classify.ScheduleFamily;
 import com.resurgent.tev.parser.classify.Triage;
@@ -61,9 +64,19 @@ class ClassifyCommandTest {
         IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
         new DiscoverService().discover(db, ingest.parseRunId());
 
-        ClassifierLlm fake = prompt -> new LayerAJudgment(
-                ScheduleFamily.CAPEX_DETAIL, Triage.MAIN, Relevance.PRIMARY,
-                List.of(), List.of(), null);
+        ClassifierLlm fake = new ClassifierLlm() {
+            @Override
+            public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
+                return new LayerAJudgment(
+                        ScheduleFamily.CAPEX_DETAIL, Triage.MAIN, Relevance.PRIMARY,
+                        List.of(), List.of(), null);
+            }
+
+            @Override
+            public List<LayerBLineJudgment> classifyLayerB(LayerBPrompt prompt) {
+                return List.of();
+            }
+        };
         CommandLine commandLine = new CommandLine(new ClassifyCommand(fake));
         RunResult result = run(commandLine,
                 "--db", db.toString(),
