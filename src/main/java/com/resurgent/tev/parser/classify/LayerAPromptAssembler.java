@@ -15,6 +15,8 @@ final class LayerAPromptAssembler {
     static final String SYSTEM = """
             You classify one financial-model Packet at Layer A only.
             Do not bind individual money lines (no Layer B paths per cell, no amount roles, no peers).
+            Optional ProjectFacts (identity/ops, never under Project Cost): facts array of
+            {coord?, verbatim, factPath} using projectFactFields from the ontology slice.
             Return a single JSON object with keys:
               scheduleFamily: snake_case family (capex_detail, means_of_finance, profit_and_loss,
                 balance_sheet, cash_flow, assumptions, project_summary, or another short snake_case name)
@@ -23,6 +25,7 @@ final class LayerAPromptAssembler {
               rowLabels: array of distinct row-axis labels you can see (empty if none)
               columnHeaders: array of distinct column-axis headers you can see (empty if none)
               packetDefaultHead: optional nomenclature path from the ontology slice, or null
+              facts: optional array as above (empty if none)
             When triage is scratch or orphan, relevance MUST be noise (soft-triage leftovers).
             If cheapPass is true this is a coverage-parent overview: broad sheet meaning only,
             no line lists. Numeric literals are dummy stand-ins; formulas and labels are real.
@@ -76,6 +79,12 @@ final class LayerAPromptAssembler {
             ArrayNode aliases = ontology.putArray("aliases");
             for (NomenclatureAlias alias : slice.aliases()) {
                 aliases.add(alias.aliasText() + " -> " + alias.leafPath());
+            }
+            if (!slice.projectFactFields().isEmpty()) {
+                ArrayNode factFields = ontology.putArray("projectFactFields");
+                for (var field : slice.projectFactFields()) {
+                    factFields.add(field.path());
+                }
             }
             if (prompt.parentDisposition() != null) {
                 LayerAJudgment parent = prompt.parentDisposition();

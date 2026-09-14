@@ -37,7 +37,10 @@ final class LayerBPromptAssembler {
             Formula=true cells may only use 2=total or 3=helper.
             Prefer lines over soft when a leaf already exists. Empty lines/soft allowed.
             Use context[] (headers, units, section labels) to disambiguate quantity/rate/total.
-            Peers are out of scope. Numeric literals are dummy stand-ins; labels/formulas are real.
+            Optional peers on a line: peers:[{coord,reason}] with reason=anti_double_count only.
+            Peer coords may be sheet-qualified (SHEET!F31) and may sit outside this Packet.
+            Deduct lines use the economic leaf path (same as the add), not a geometric Civil leaf.
+            Numeric literals are dummy stand-ins; labels/formulas are real.
             """;
 
     private static final ObjectMapper MAPPER = new ObjectMapper();

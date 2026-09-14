@@ -116,7 +116,13 @@ final class LayerBResponseParser {
         NomenclatureNode pathNode = index.path(pathIndex);
         String verbatim = amount.label().isBlank() ? amount.coord() : amount.label();
         return new LayerBLineJudgment(
-                amount.coord(), verbatim, pathNode.path(), role, List.of(), null);
+                amount.coord(),
+                verbatim,
+                pathNode.path(),
+                role,
+                List.of(),
+                null,
+                parsePeers(item, completion));
     }
 
     private static LayerBLineJudgment parseSoftLeaf(
@@ -162,7 +168,13 @@ final class LayerBResponseParser {
         String path = parent.path() + " > " + name.trim();
         String verbatim = amount.label().isBlank() ? name.trim() : amount.label();
         return new LayerBLineJudgment(
-                amount.coord(), verbatim, path, role, aliases, number(item, "confidence"));
+                amount.coord(),
+                verbatim,
+                path,
+                role,
+                aliases,
+                number(item, "confidence"),
+                parsePeers(item, completion));
     }
 
     private static LayerBLineJudgment parseLegacyLine(JsonNode item, String completion) {
@@ -182,7 +194,42 @@ final class LayerBResponseParser {
                             + " role=" + role
                             + " snippet=" + snippet(completion));
         }
-        return new LayerBLineJudgment(coord, verbatim, path, role, aliases, confidence);
+        return new LayerBLineJudgment(
+                coord, verbatim, path, role, aliases, confidence, parsePeers(item, completion));
+    }
+
+    private static List<LinePeerRef> parsePeers(JsonNode item, String completion) {
+        JsonNode peersNode = item.get("peers");
+        if (peersNode == null || !peersNode.isArray()) {
+            return List.of();
+        }
+        List<LinePeerRef> peers = new ArrayList<>();
+        for (JsonNode peer : peersNode) {
+            if (peer == null || peer.isNull()) {
+                continue;
+            }
+            String coord;
+            String reason;
+            if (peer.isTextual()) {
+                coord = peer.asText();
+                reason = PeerReason.ANTI_DOUBLE_COUNT;
+            } else {
+                coord = text(peer, "coord", "cell", "peerCoord", "peer_coord");
+                reason = text(peer, "reason", "peerReason", "peer_reason");
+                if (reason == null) {
+                    reason = PeerReason.ANTI_DOUBLE_COUNT;
+                }
+            }
+            if (coord == null || coord.isBlank()) {
+                continue;
+            }
+            if (!PeerReason.isKnown(reason)) {
+                throw new IllegalStateException(
+                        "invalid peer reason '" + reason + "' snippet=" + snippet(completion));
+            }
+            peers.add(new LinePeerRef(coord, reason));
+        }
+        return List.copyOf(peers);
     }
 
     static String roleFromCode(int code) {

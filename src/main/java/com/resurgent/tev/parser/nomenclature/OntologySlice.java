@@ -11,7 +11,23 @@ import java.util.Optional;
 public record OntologySlice(
         IndustryResolution industry,
         List<NomenclatureNode> nodes,
-        List<NomenclatureAlias> aliases) {
+        List<NomenclatureAlias> aliases,
+        List<ProjectFactField> projectFactFields) {
+
+    public OntologySlice(
+            IndustryResolution industry,
+            List<NomenclatureNode> nodes,
+            List<NomenclatureAlias> aliases) {
+        this(industry, nodes, aliases, List.of());
+    }
+
+    public OntologySlice {
+        projectFactFields = projectFactFields == null ? List.of() : List.copyOf(projectFactFields);
+    }
+
+    public Optional<ProjectFactField> projectFactField(String path) {
+        return projectFactFields.stream().filter(f -> f.path().equals(path)).findFirst();
+    }
 
     public Optional<NomenclatureNode> node(String path) {
         return nodes.stream().filter(n -> n.path().equals(path)).findFirst();

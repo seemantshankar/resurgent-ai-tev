@@ -25,6 +25,7 @@ public final class NomenclatureCatalog {
             inTransaction(() -> {
                 seedSpineIfEmpty();
                 seedHotelPackIfEmpty();
+                seedProjectFactFieldsIfEmpty();
             });
         } catch (SQLException e) {
             throw new NomenclatureException("failed to seed nomenclature catalog", e);
@@ -145,7 +146,8 @@ public final class NomenclatureCatalog {
         nodes.addAll(repo.selectNomenclatureOverlay(mandateId));
         aliases.addAll(repo.selectNomenclatureAliases(
                 NomenclatureNode.LAYER_MANDATE_SOFT, null, mandateId));
-        return new OntologySlice(industry, List.copyOf(nodes), List.copyOf(aliases));
+        List<ProjectFactField> facts = repo.selectProjectFactFields();
+        return new OntologySlice(industry, List.copyOf(nodes), List.copyOf(aliases), List.copyOf(facts));
     }
 
     private void seedSpineIfEmpty() throws SQLException {
@@ -177,6 +179,22 @@ public final class NomenclatureCatalog {
             }
             repo.insertNomenclatureAlias(
                     alias, NomenclatureNode.LAYER_SPINE, null, null, now);
+        }
+    }
+
+    private void seedProjectFactFieldsIfEmpty() throws SQLException {
+        Set<String> existing = new HashSet<>();
+        for (ProjectFactField field : repo.selectProjectFactFields()) {
+            existing.add(field.path());
+        }
+        if (existing.containsAll(ProjectFactSeed.FIELDS.stream().map(ProjectFactField::path).toList())) {
+            return;
+        }
+        String now = Timestamps.now();
+        for (ProjectFactField field : ProjectFactSeed.FIELDS) {
+            if (!existing.contains(field.path())) {
+                repo.insertProjectFactField(field, now);
+            }
         }
     }
 

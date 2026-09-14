@@ -109,10 +109,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(19);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(20);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(19);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(20);
         }
     }
 
@@ -123,7 +123,8 @@ class PersistenceSeamTest {
             assertThat(tables).contains(
                     "candidate", "candidate_member", "candidate_related",
                     "nomenclature_node", "nomenclature_alias", "mandate_industry",
-                    "packet_disposition", "nomenclature_binding");
+                    "packet_disposition", "nomenclature_binding",
+                    "nomenclature_binding_peer", "project_fact_field", "project_fact_binding");
             assertThat(tables).doesNotContain("region", "cost_head");
 
             WorkspaceRepository repo = new WorkspaceRepository(db.connection());
@@ -455,7 +456,7 @@ class PersistenceSeamTest {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(19);
+            assertThat(count(c, "schema_migration")).isEqualTo(20);
             assertThat(tableNames(c)).contains("cell_reference");
             assertThat(tableNames(c)).doesNotContain("cell_error_root");
 
@@ -503,7 +504,7 @@ class PersistenceSeamTest {
     void v15MigrationRestoresAdr0013IngestSignalsWithoutHeuristicStack() throws Exception {
         try (WorkspaceDatabase db = openDb("v15.db")) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(19);
+            assertThat(count(c, "schema_migration")).isEqualTo(20);
             assertThat(tableNames(c)).contains("cell_style", "cell_reference", "candidate");
             assertThat(tableNames(c)).doesNotContain(
                     "region",
@@ -675,7 +676,7 @@ class PersistenceSeamTest {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(
                 dbPath, WorkspaceDatabase.OpenOptions.allowDestructiveReset())) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(19);
+            assertThat(count(c, "schema_migration")).isEqualTo(20);
             assertThat(count(c, "cell")).isZero();
             assertThat(count(c, "source_file")).isZero();
             assertThat(tableNames(c)).doesNotContain("cost_head", "region");

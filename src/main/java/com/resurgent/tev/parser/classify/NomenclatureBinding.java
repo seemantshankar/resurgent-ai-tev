@@ -2,7 +2,7 @@ package com.resurgent.tev.parser.classify;
 
 /**
  * Persisted Layer B nomenclature binding for one amount cell in a parse run.
- * Peers are out of scope for #107.
+ * Line peers are stored separately ({@link BindingPeer}).
  */
 public record NomenclatureBinding(
         long cellId,

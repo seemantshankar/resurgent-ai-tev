@@ -2,8 +2,11 @@ package com.resurgent.tev.parser.db;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.resurgent.tev.parser.classify.BindingPeer;
 import com.resurgent.tev.parser.classify.NomenclatureBinding;
 import com.resurgent.tev.parser.classify.PacketDisposition;
+import com.resurgent.tev.parser.classify.ProjectFactBinding;
+import com.resurgent.tev.parser.nomenclature.ProjectFactField;
 import com.resurgent.tev.parser.ingest.NormalizedCell;
 import com.resurgent.tev.parser.nomenclature.IndustryResolution;
 import com.resurgent.tev.parser.nomenclature.NomenclatureAlias;
@@ -16,6 +19,7 @@ import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * JDBC repository for FM Loader ingest, region discovery, the nomenclature
@@ -1359,6 +1363,231 @@ public final class WorkspaceRepository {
      * {@code amount_role = add} only, excluding Packets whose Layer A relevance is
      * {@code noise}.
      */
+    public void deleteBindingPeersForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM nomenclature_binding_peer WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.executeUpdate();
+        }
+    }
+
+    public void insertBindingPeer(BindingPeer row) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO nomenclature_binding_peer (parse_run_id, cell_id, peer_cell_id,"
+                        + " peer_reason, path_resolved, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?)")) {
+            ps.setLong(1, row.parseRunId());
+            ps.setLong(2, row.cellId());
+            ps.setLong(3, row.peerCellId());
+            ps.setString(4, row.peerReason());
+            ps.setInt(5, row.pathResolved() ? 1 : 0);
+            ps.setString(6, Timestamps.now());
+            ps.executeUpdate();
+        }
+    }
+
+    public List<BindingPeer> selectBindingPeersForCell(long parseRunId, long cellId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT parse_run_id, cell_id, peer_cell_id, peer_reason, path_resolved"
+                        + " FROM nomenclature_binding_peer"
+                        + " WHERE parse_run_id = ? AND cell_id = ?"
+                        + " ORDER BY peer_id")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, cellId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<BindingPeer> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new BindingPeer(
+                            rs.getLong("parse_run_id"),
+                            rs.getLong("cell_id"),
+                            rs.getLong("peer_cell_id"),
+                            rs.getString("peer_reason"),
+                            rs.getInt("path_resolved") == 1));
+                }
+                return rows;
+            }
+        }
+    }
+
+    public Optional<NomenclatureBinding> selectNomenclatureBindingForCell(
+            long parseRunId, long cellId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT cell_id, parse_run_id, candidate_id, verbatim, path, amount_role,"
+                        + " soft_leaf, via_alias, confidence FROM nomenclature_binding"
+                        + " WHERE parse_run_id = ? AND cell_id = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, cellId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return Optional.empty();
+                }
+                double confidence = rs.getDouble("confidence");
+                Double confidenceValue = rs.wasNull() ? null : confidence;
+                return Optional.of(new NomenclatureBinding(
+                        rs.getLong("cell_id"),
+                        rs.getLong("parse_run_id"),
+                        rs.getLong("candidate_id"),
+                        rs.getString("verbatim"),
+                        rs.getString("path"),
+                        rs.getString("amount_role"),
+                        rs.getInt("soft_leaf") == 1,
+                        rs.getInt("via_alias") == 1,
+                        confidenceValue));
+            }
+        }
+    }
+
+    public List<CandidateRow> selectCandidatesForCell(long parseRunId, long cellId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT c.candidate_id, c.parse_run_id, c.worksheet_id, c.candidate_kind,"
+                        + " c.parent_candidate_id, c.bbox_min_row, c.bbox_min_col, c.bbox_max_row,"
+                        + " c.bbox_max_col, c.internal_whitespace, c.anchors, c.structural_signatures,"
+                        + " c.isolated_hidden_worksheet, c.structural_confidence,"
+                        + " c.structural_confidence_rationale, c.explanation, c.created_at"
+                        + " FROM candidate c"
+                        + " JOIN candidate_member m ON m.candidate_id = c.candidate_id"
+                        + " WHERE c.parse_run_id = ? AND m.cell_id = ?"
+                        + " ORDER BY c.candidate_id")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, cellId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<CandidateRow> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(mapCandidateRow(rs));
+                }
+                return rows;
+            }
+        }
+    }
+
+    public Optional<PacketDisposition> selectPacketDisposition(long parseRunId, long candidateId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT candidate_id, parse_run_id, schedule_family, triage, relevance,"
+                        + " row_labels, column_headers, packet_default_head, parent_candidate_id,"
+                        + " cheap_pass FROM packet_disposition"
+                        + " WHERE parse_run_id = ? AND candidate_id = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, candidateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(new PacketDisposition(
+                        rs.getLong("candidate_id"),
+                        rs.getLong("parse_run_id"),
+                        rs.getString("schedule_family"),
+                        rs.getString("triage"),
+                        rs.getString("relevance"),
+                        readStringList(rs.getString("row_labels")),
+                        readStringList(rs.getString("column_headers")),
+                        rs.getString("packet_default_head"),
+                        getNullableLong(rs, "parent_candidate_id"),
+                        rs.getInt("cheap_pass") == 1));
+            }
+        }
+    }
+
+    public void deleteProjectFactBindingsForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM project_fact_binding WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.executeUpdate();
+        }
+    }
+
+    public void insertProjectFactField(ProjectFactField field, String createdAt)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO project_fact_field (path, name, created_at) VALUES (?, ?, ?)")) {
+            ps.setString(1, field.path());
+            ps.setString(2, field.name());
+            ps.setString(3, createdAt);
+            ps.executeUpdate();
+        }
+    }
+
+    public List<ProjectFactField> selectProjectFactFields() throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT path, name FROM project_fact_field ORDER BY field_id")) {
+            try (ResultSet rs = ps.executeQuery()) {
+                List<ProjectFactField> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new ProjectFactField(rs.getString("path"), rs.getString("name")));
+                }
+                return rows;
+            }
+        }
+    }
+
+    public void insertProjectFactBinding(ProjectFactBinding row) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO project_fact_binding (parse_run_id, candidate_id, cell_id,"
+                        + " verbatim, fact_path, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?)")) {
+            ps.setLong(1, row.parseRunId());
+            ps.setLong(2, row.candidateId());
+            if (row.cellId() == null) {
+                ps.setNull(3, Types.INTEGER);
+            } else {
+                ps.setLong(3, row.cellId());
+            }
+            ps.setString(4, row.verbatim());
+            ps.setString(5, row.factPath());
+            ps.setString(6, Timestamps.now());
+            ps.executeUpdate();
+        }
+    }
+
+    public List<ProjectFactBinding> selectProjectFactBindingsForParseRun(long parseRunId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT parse_run_id, candidate_id, cell_id, verbatim, fact_path"
+                        + " FROM project_fact_binding WHERE parse_run_id = ? ORDER BY fact_binding_id")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<ProjectFactBinding> rows = new ArrayList<>();
+                while (rs.next()) {
+                    long cellId = rs.getLong("cell_id");
+                    Long cellIdValue = rs.wasNull() ? null : cellId;
+                    rows.add(new ProjectFactBinding(
+                            rs.getLong("parse_run_id"),
+                            rs.getLong("candidate_id"),
+                            cellIdValue,
+                            rs.getString("verbatim"),
+                            rs.getString("fact_path")));
+                }
+                return rows;
+            }
+        }
+    }
+
+    public List<ProjectFactBinding> selectProjectFactBindingsForCell(long parseRunId, long cellId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT parse_run_id, candidate_id, cell_id, verbatim, fact_path"
+                        + " FROM project_fact_binding"
+                        + " WHERE parse_run_id = ? AND cell_id = ?"
+                        + " ORDER BY fact_binding_id")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, cellId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<ProjectFactBinding> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new ProjectFactBinding(
+                            rs.getLong("parse_run_id"),
+                            rs.getLong("candidate_id"),
+                            cellId,
+                            rs.getString("verbatim"),
+                            rs.getString("fact_path")));
+                }
+                return rows;
+            }
+        }
+    }
+
     public double sumAddAmountsForPath(long parseRunId, String path) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT COALESCE(SUM(c.numeric_value), 0) AS total"
