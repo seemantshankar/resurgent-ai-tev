@@ -40,7 +40,8 @@ final class LayerAResponseParser {
                                 + " relevance=" + relevance
                                 + " snippet=" + snippet(completion));
             }
-            return new LayerAJudgment(family, triage, relevance, rowLabels, columnHeaders, head);
+            List<ProjectFactJudgment> facts = parseFacts(root);
+            return new LayerAJudgment(family, triage, relevance, rowLabels, columnHeaders, head, facts);
         } catch (IllegalStateException e) {
             throw e;
         } catch (Exception e) {
@@ -75,6 +76,30 @@ final class LayerAResponseParser {
             }
         }
         return null;
+    }
+
+    private static List<ProjectFactJudgment> parseFacts(JsonNode root) {
+        JsonNode node = root.get("facts");
+        if (node == null) {
+            node = root.get("projectFacts");
+        }
+        if (node == null || !node.isArray()) {
+            return List.of();
+        }
+        List<ProjectFactJudgment> facts = new ArrayList<>();
+        for (JsonNode item : node) {
+            if (item == null || item.isNull()) {
+                continue;
+            }
+            String coord = text(item, "coord", "cell", "address");
+            String verbatim = text(item, "verbatim", "label", "text", "value");
+            String path = text(item, "factPath", "fact_path", "path");
+            if (verbatim == null || verbatim.isBlank() || path == null || path.isBlank()) {
+                continue;
+            }
+            facts.add(new ProjectFactJudgment(coord, verbatim, path));
+        }
+        return List.copyOf(facts);
     }
 
     private static List<String> stringList(JsonNode root, String... names) {

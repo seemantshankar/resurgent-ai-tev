@@ -29,7 +29,7 @@ import java.util.concurrent.Future;
 /**
  * Packet classification application service: Layer A disposition and Layer B
  * nomenclature bindings for one parse run. Consumes derived Packets; does not
- * rewrite Candidate geometry. Peers are out of scope for #107.
+ * rewrite Candidate geometry. Peers and ProjectFacts persist in separate tables.
  */
 public final class ClassifyService {
 
@@ -71,6 +71,7 @@ public final class ClassifyService {
             // hold a SQLite write lock. Layer A stays ordered (parent before child);
             // Layer B LLM fans out, then bindings materialize serially.
             List<PacketDisposition> dispositions = new ArrayList<>();
+            List<ProjectFactBinding> factBindings = new ArrayList<>();
             List<LayerBJob> layerBJobs = new ArrayList<>();
             Map<Long, LayerAJudgment> judged = new HashMap<>();
             Map<Long, LayerAJudgment> coverageByWorksheet = new HashMap<>();
@@ -103,6 +104,10 @@ public final class ClassifyService {
                         judgment.packetDefaultHead(),
                         candidate.parentCandidateId(),
                         cheapPass));
+                for (ProjectFactJudgment fact : judgment.facts()) {
+                    materializeFact(slice, candidate, parseRunId, packet, fact)
+                            .ifPresent(factBindings::add);
+                }
                 if (!cheapPass && LayerBAmountSupport.hasAmountCells(redacted)) {
                     layerBJobs.add(new LayerBJob(
                             candidate,
@@ -111,9 +116,17 @@ public final class ClassifyService {
                 }
             }
 
-            List<NomenclatureBinding> bindings;
             LayerBBindingStats layerBStats = new LayerBBindingStats();
-            bindings = materializeLayerB(catalog, mandateId, slice, parseRunId, layerBJobs, layerBStats);
+            LayerBMaterializeResult layerB = materializeLayerB(
+                    catalog, mandateId, slice, parseRunId, layerBJobs, layerBStats);
+            List<NomenclatureBinding> bindings = layerB.bindings();
+            List<BindingPeer> bindingPeers;
+            try {
+                bindingPeers = BindingPeerWriter.buildPeers(
+                        repo, parseRunId, bindings, layerB.pendingPeers());
+            } catch (PeerCoordResolver.PeerCoordException e) {
+                throw new ClassifyException(e.getMessage(), e);
+            }
 
             db.connection().setAutoCommit(false);
             try {
@@ -123,13 +136,21 @@ public final class ClassifyService {
                             "Candidates changed during classify for parse run " + parseRunId
                                     + "; re-run discover then classify");
                 }
+                repo.deleteBindingPeersForParseRun(parseRunId);
+                repo.deleteProjectFactBindingsForParseRun(parseRunId);
                 repo.deleteNomenclatureBindingsForParseRun(parseRunId);
                 repo.deletePacketDispositionsForParseRun(parseRunId);
                 for (PacketDisposition disposition : dispositions) {
                     repo.insertPacketDisposition(disposition);
                 }
+                for (ProjectFactBinding fact : factBindings) {
+                    repo.insertProjectFactBinding(fact);
+                }
                 for (NomenclatureBinding binding : bindings) {
                     repo.insertNomenclatureBinding(binding);
+                }
+                for (BindingPeer peer : bindingPeers) {
+                    repo.insertBindingPeer(peer);
                 }
                 repo.commit();
                 return new ClassifySummary(
@@ -162,7 +183,11 @@ public final class ClassifyService {
      * slice after each accept, and if {@code putSoftLeaf} races on an already-created
      * path, treat it as an existing leaf.
      */
-    private List<NomenclatureBinding> materializeLayerB(
+    private record LayerBMaterializeResult(
+            List<NomenclatureBinding> bindings,
+            List<BindingPeerWriter.PendingPeerLine> pendingPeers) {}
+
+    private LayerBMaterializeResult materializeLayerB(
             NomenclatureCatalog catalog,
             long mandateId,
             OntologySlice slice,
@@ -170,10 +195,11 @@ public final class ClassifyService {
             List<LayerBJob> jobs,
             LayerBBindingStats stats) throws ClassifyException {
         if (jobs.isEmpty()) {
-            return List.of();
+            return new LayerBMaterializeResult(List.of(), List.of());
         }
         List<List<LayerBLineJudgment>> judgmentsByJob = invokeLayerBParallel(jobs);
         List<NomenclatureBinding> bindings = new ArrayList<>();
+        List<BindingPeerWriter.PendingPeerLine> pendingPeers = new ArrayList<>();
         Set<Long> boundCells = new HashSet<>();
         OntologySlice currentSlice = slice;
         for (int i = 0; i < jobs.size(); i++) {
@@ -198,11 +224,18 @@ public final class ClassifyService {
                     continue;
                 }
                 bindings.add(result.binding());
+                if (!line.peers().isEmpty()) {
+                    pendingPeers.add(new BindingPeerWriter.PendingPeerLine(
+                            result.binding().cellId(),
+                            job.candidate().worksheetId(),
+                            result.binding().path(),
+                            line.peers()));
+                }
                 stats.addAccepted();
                 currentSlice = catalog.sliceForMandate(mandateId);
             }
         }
-        return bindings;
+        return new LayerBMaterializeResult(bindings, pendingPeers);
     }
 
     private List<List<LayerBLineJudgment>> invokeLayerBParallel(List<LayerBJob> jobs)
@@ -362,6 +395,27 @@ public final class ClassifyService {
                 line.confidence());
     }
 
+    private static Optional<ProjectFactBinding> materializeFact(
+            OntologySlice slice,
+            CandidateRow candidate,
+            long parseRunId,
+            Packet packet,
+            ProjectFactJudgment fact) {
+        String path = fact.factPath().trim();
+        if (path.startsWith("Project Cost")) {
+            return Optional.empty();
+        }
+        if (slice.projectFactField(path).isEmpty()) {
+            return Optional.empty();
+        }
+        Long cellId = null;
+        if (fact.coord() != null) {
+            cellId = findCell(packet, fact.coord()).map(PacketCell::cellId).orElse(null);
+        }
+        return Optional.of(new ProjectFactBinding(
+                parseRunId, candidate.candidateId(), cellId, fact.verbatim(), path));
+    }
+
     private static Optional<PacketCell> findCell(Packet packet, String coord) {
         if (coord == null || coord.isBlank()) {
             return Optional.empty();
@@ -439,7 +493,8 @@ public final class ClassifyService {
                     Relevance.NOISE,
                     judgment.rowLabels(),
                     judgment.columnHeaders(),
-                    judgment.packetDefaultHead());
+                    judgment.packetDefaultHead(),
+                    judgment.facts());
         }
         return judgment;
     }

@@ -137,6 +137,25 @@ class RealWorkbookClassifyIT {
     }
 
     @Test
+    void cellMeaningLookupRunsAfterClassifyWithoutAmountOracles() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            long worksheetId = repo.selectWorksheetsForParseRun(parseRunId).stream()
+                    .filter(w -> "ASSETS".equalsIgnoreCase(w.sheetName()))
+                    .findFirst()
+                    .orElseThrow()
+                    .worksheetId();
+            String anyCoord = repo.selectCellsForWorksheet(worksheetId).stream()
+                    .map(c -> c.coord())
+                    .findFirst()
+                    .orElseThrow();
+            CellMeaning meaning = new CellMeaningService().lookup(db, parseRunId, "ASSETS!" + anyCoord);
+            assertThat(meaning.cell()).isNotNull();
+            assertThat(meaning.qualifiedCoord()).startsWith("ASSETS!");
+        }
+    }
+
+    @Test
     void classifyDoesNotRewriteCandidateGeometry() throws Exception {
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());

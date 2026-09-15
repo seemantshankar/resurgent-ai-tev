@@ -480,6 +480,150 @@ class ClassifyServiceTest {
     }
 
     @Test
+    void antiDoubleCountPeersPersistOnBothSidesWhenPathsMatch() throws Exception {
+        Path xlsx = rolesPeerWorkbook("f31-peers.xlsx");
+        Path db = tempDir.resolve("f31-peers.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        String acPath = "Project Cost > Plant & Machinery > Air Conditioning";
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.layerBFactory = prompt -> {
+            List<PacketCell> amounts = amountLiterals(prompt);
+            if (amounts.size() < 2) {
+                return List.of();
+            }
+            PacketCell add = amounts.get(0);
+            PacketCell deduct = amounts.get(1);
+            String sheet = "Costs";
+            return List.of(
+                    new LayerBLineJudgment(
+                            add.coord(),
+                            "Air Conditioning",
+                            acPath,
+                            AmountRole.ADD,
+                            List.of(),
+                            null,
+                            List.of()),
+                    new LayerBLineJudgment(
+                            deduct.coord(),
+                            "Less: AC",
+                            acPath,
+                            AmountRole.DEDUCT,
+                            List.of(),
+                            null,
+                            List.of(new LinePeerRef(sheet + "!" + add.coord(), PeerReason.ANTI_DOUBLE_COUNT))));
+        };
+
+        new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<NomenclatureBinding> bindings = repo.selectNomenclatureBindingsForParseRun(
+                    ingest.parseRunId());
+            assertThat(bindings).hasSizeGreaterThanOrEqualTo(2);
+            NomenclatureBinding deduct = bindings.stream()
+                    .filter(b -> AmountRole.DEDUCT.equals(b.amountRole()))
+                    .findFirst()
+                    .orElseThrow();
+            NomenclatureBinding add = bindings.stream()
+                    .filter(b -> AmountRole.ADD.equals(b.amountRole()))
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(repo.selectBindingPeersForCell(ingest.parseRunId(), deduct.cellId()))
+                    .anyMatch(p -> p.peerCellId() == add.cellId() && p.pathResolved());
+            assertThat(repo.selectBindingPeersForCell(ingest.parseRunId(), add.cellId()))
+                    .anyMatch(p -> p.peerCellId() == deduct.cellId() && p.pathResolved());
+            assertThat(repo.sumAddAmountsForPath(ingest.parseRunId(), acPath)).isGreaterThan(0.0);
+        }
+    }
+
+    @Test
+    void pathMismatchedPeersAreStoredButNotResolved() throws Exception {
+        Path xlsx = rolesPeerWorkbook("mismatch-peers.xlsx");
+        Path db = tempDir.resolve("mismatch-peers.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.layerBFactory = prompt -> {
+            List<PacketCell> amounts = amountLiterals(prompt);
+            if (amounts.size() < 2) {
+                return List.of();
+            }
+            PacketCell add = amounts.get(0);
+            PacketCell deduct = amounts.get(1);
+            return List.of(
+                    new LayerBLineJudgment(
+                            add.coord(),
+                            "Air Conditioning",
+                            "Project Cost > Plant & Machinery > Air Conditioning",
+                            AmountRole.ADD,
+                            List.of(),
+                            null,
+                            List.of()),
+                    new LayerBLineJudgment(
+                            deduct.coord(),
+                            "Less: AC",
+                            "Project Cost > Civil Works > Structure",
+                            AmountRole.DEDUCT,
+                            List.of(),
+                            null,
+                            List.of(new LinePeerRef("Costs!" + add.coord(), PeerReason.ANTI_DOUBLE_COUNT))));
+        };
+
+        new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            NomenclatureBinding deduct = repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId())
+                    .stream()
+                    .filter(b -> AmountRole.DEDUCT.equals(b.amountRole()))
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(repo.selectBindingPeersForCell(ingest.parseRunId(), deduct.cellId()))
+                    .anyMatch(p -> !p.pathResolved());
+        }
+    }
+
+    @Test
+    void projectFactsPersistOutsideProjectCost() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("AT GLANCE");
+            Row row = sheet.createRow(0);
+            row.createCell(0).setCellValue("Legal Name");
+            row.createCell(1).setCellValue("Demo Hotel LLP");
+            xlsx = writeWorkbook(workbook, "facts.xlsx");
+        }
+        Path db = tempDir.resolve("facts.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.judgment = new LayerAJudgment(
+                ScheduleFamily.PROJECT_SUMMARY,
+                Triage.MAIN,
+                Relevance.PRIMARY,
+                List.of(),
+                List.of(),
+                null,
+                List.of(
+                        new ProjectFactJudgment("B1", "Demo Hotel LLP", "Project Identity > Legal Name"),
+                        new ProjectFactJudgment("B1", "Sneaky", "Project Cost > Civil Works")));
+
+        new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<ProjectFactBinding> facts = repo.selectProjectFactBindingsForParseRun(ingest.parseRunId());
+            assertThat(facts).hasSize(1);
+            assertThat(facts.get(0).factPath()).isEqualTo("Project Identity > Legal Name");
+            assertThat(facts.get(0).factPath()).doesNotStartWith("Project Cost");
+        }
+    }
+
+    @Test
     void inventingMidLevelPathIsRejected() throws Exception {
         Path xlsx;
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
@@ -564,5 +708,34 @@ class ClassifyServiceTest {
 
     private static String nullToEmpty(String value) {
         return value == null ? "" : value;
+    }
+
+    private Path rolesPeerWorkbook(String name) throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Costs");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Item");
+            header.createCell(1).setCellValue("Amount");
+            header.createCell(4).setCellValue("Other");
+            header.createCell(5).setCellValue("Amt");
+            Row add = sheet.createRow(1);
+            add.createCell(0).setCellValue("Civil Works");
+            add.createCell(1).setCellValue(100.0);
+            add.createCell(4).setCellValue("Less: AC");
+            add.createCell(5).setCellValue(500.0);
+            Row more = sheet.createRow(2);
+            more.createCell(0).setCellValue("Steel");
+            more.createCell(1).setCellValue(40.0);
+            more.createCell(4).setCellValue("Glass");
+            more.createCell(5).setCellValue(20.0);
+            return writeWorkbook(workbook, name);
+        }
+    }
+
+    private static List<PacketCell> amountLiterals(LayerBPrompt prompt) {
+        return prompt.packet().cells().stream()
+                .filter(cell -> "number".equals(cell.valueType())
+                        && (cell.formulaText() == null || cell.formulaText().isBlank()))
+                .toList();
     }
 }
