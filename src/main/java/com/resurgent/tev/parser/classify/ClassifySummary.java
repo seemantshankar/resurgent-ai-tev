@@ -6,6 +6,7 @@ public record ClassifySummary(
         int dispositionCount,
         int coverageParentCount,
         int bindingCount,
+        int interpretationCount,
         LayerBBindingStats layerBStats) {
 
     public ClassifySummary {
@@ -16,6 +17,15 @@ public record ClassifySummary(
 
     public ClassifySummary(
             long parseRunId, int dispositionCount, int coverageParentCount, int bindingCount) {
-        this(parseRunId, dispositionCount, coverageParentCount, bindingCount, new LayerBBindingStats());
+        this(parseRunId, dispositionCount, coverageParentCount, bindingCount, 0, new LayerBBindingStats());
+    }
+
+    public ClassifySummary(
+            long parseRunId,
+            int dispositionCount,
+            int coverageParentCount,
+            int bindingCount,
+            LayerBBindingStats layerBStats) {
+        this(parseRunId, dispositionCount, coverageParentCount, bindingCount, 0, layerBStats);
     }
 }
