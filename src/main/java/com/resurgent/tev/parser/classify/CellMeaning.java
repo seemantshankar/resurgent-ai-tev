@@ -12,4 +12,25 @@ public record CellMeaning(
         List<PacketDisposition> dispositions,
         NomenclatureBinding nomenclatureBinding,
         List<BindingPeer> peers,
-        List<ProjectFactBinding> projectFacts) {}
+        List<ProjectFactBinding> projectFacts,
+        CellInterpretation interpretation) {
+
+    public CellMeaning(
+            String qualifiedCoord,
+            CellPacketView cell,
+            List<CandidateRow> candidates,
+            List<PacketDisposition> dispositions,
+            NomenclatureBinding nomenclatureBinding,
+            List<BindingPeer> peers,
+            List<ProjectFactBinding> projectFacts) {
+        this(
+                qualifiedCoord,
+                cell,
+                candidates,
+                dispositions,
+                nomenclatureBinding,
+                peers,
+                projectFacts,
+                null);
+    }
+}

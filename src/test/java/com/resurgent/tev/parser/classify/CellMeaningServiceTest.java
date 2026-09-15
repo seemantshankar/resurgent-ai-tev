@@ -89,6 +89,9 @@ class CellMeaningServiceTest {
         assertThat(deduct.peers().get(0).pathResolved()).isTrue();
         assertThat(deduct.candidates()).isNotEmpty();
         assertThat(deduct.dispositions()).isNotEmpty();
+        assertThat(deduct.interpretation()).isNotNull();
+        assertThat(deduct.interpretation().nomenclatureStatus()).isEqualTo(NomenclatureStatus.BOUND);
+        assertThat(deduct.interpretation().amountRole()).isEqualTo(AmountRole.DEDUCT);
 
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());

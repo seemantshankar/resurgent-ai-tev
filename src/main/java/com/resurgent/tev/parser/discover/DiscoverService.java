@@ -48,6 +48,7 @@ public final class DiscoverService {
 
             db.connection().setAutoCommit(false);
             try {
+                repo.deleteInterpretationsForParseRun(parseRunId);
                 repo.deleteCandidatesForParseRun(parseRunId);
 
                 for (WorksheetRef worksheet : worksheets) {
