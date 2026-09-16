@@ -44,21 +44,16 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         long started = System.nanoTime();
         CompletionResult first = client.completeDetailed(system, user);
         try {
-            rejectIfTruncated("A", first);
             LayerAJudgment judgment = LayerAResponseParser.parse(first.content());
             recordMetric("A", user, first, started, 1);
             return judgment;
-        } catch (TruncatedCompletionException e) {
-            recordMetric("A", user, first, started, 1);
-            throw e;
         } catch (RuntimeException firstError) {
             CompletionResult retry = client.completeDetailed(
-                    system + "\nReturn only a valid JSON object. triage must be main|scratch|orphan;"
-                            + " relevance must be primary|supporting|noise. No markdown."
-                            + " Keep rowLabels/columnHeaders short (at most a few distinct axes).",
+                    system + "\nReturn only a compact valid JSON object. triage must be"
+                            + " main|scratch|orphan; relevance must be primary|supporting|noise."
+                            + " Empty rowLabels/columnHeaders unless essential. No markdown.",
                     user + "\n\nYour previous JSON was rejected: " + firstError.getMessage());
             try {
-                rejectIfTruncated("A", retry);
                 LayerAJudgment judgment = LayerAResponseParser.parse(retry.content());
                 recordMetric("A", user, retry, started, 2);
                 return judgment;
@@ -210,8 +205,13 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
     }
 
     /** Firm Layer A completion budget — disposition JSON is bounded (#122). */
-    public static final int LAYER_A_MAX_COMPLETION_TOKENS = 512;
-    /** Small reasoning budget for Layer A (exclude still hides text; usage may count it). */
+    public static final int LAYER_A_MAX_COMPLETION_TOKENS = 2_048;
+    /**
+     * OpenRouter rejects {@code reasoning.effort} and {@code reasoning.max_tokens}
+     * on the same request. Layer A uses {@code effort=low} plus
+     * {@link #LAYER_A_MAX_COMPLETION_TOKENS}; this constant is the intended
+     * reasoning budget if a provider later allows both.
+     */
     public static final int LAYER_A_REASONING_MAX_TOKENS = 128;
     public static final int LAYER_B_TOKENS_PER_CANDIDATE_LINE = 24;
     public static final int LAYER_B_SOFT_BUDGET_TOKENS = 400;
@@ -326,7 +326,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                     user,
                     layerAResponseFormat(),
                     LAYER_A_MAX_COMPLETION_TOKENS,
-                    LAYER_A_REASONING_MAX_TOKENS);
+                    0);
         }
 
         @Override
@@ -403,9 +403,9 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         }
 
         /**
-         * Official OpenRouter chat-completions body for GLM Flash Latest:
-         * mandatory {@code reasoning.effort} of {@code low|high|max}, and
-         * {@code response_format} {@code json_schema} (not {@code json_object}).
+         * OpenRouter chat-completions body: {@code response_format} {@code json_schema},
+         * and reasoning as <em>either</em> {@code max_tokens} (Layer A budget) or
+         * {@code effort} (Layer B). The provider rejects both on one request.
          */
         static String requestBody(String model, String system, String user) throws Exception {
             return requestBody(
@@ -414,7 +414,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                     user,
                     layerAResponseFormat(),
                     LAYER_A_MAX_COMPLETION_TOKENS,
-                    LAYER_A_REASONING_MAX_TOKENS);
+                    0);
         }
 
         static String requestBody(
@@ -423,7 +423,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             String schemaName = responseFormat.path("json_schema").path("name").asText("");
             boolean layerA = "layer_a_judgment".equals(schemaName);
             int maxTokens = layerA ? LAYER_A_MAX_COMPLETION_TOKENS : LAYER_B_MIN_COMPLETION_TOKENS;
-            int reasoning = layerA ? LAYER_A_REASONING_MAX_TOKENS : 0;
+            int reasoning = 0;
             return requestBody(model, system, user, responseFormat, maxTokens, reasoning);
         }
 
@@ -440,10 +440,11 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             root.put("temperature", 0);
             root.put("max_tokens", maxCompletionTokens);
             ObjectNode reasoning = root.putObject("reasoning");
-            reasoning.put("effort", "low");
             reasoning.put("exclude", true);
             if (reasoningMaxTokens > 0) {
                 reasoning.put("max_tokens", reasoningMaxTokens);
+            } else {
+                reasoning.put("effort", "low");
             }
             ObjectNode provider = root.putObject("provider");
             provider.put("require_parameters", true);
@@ -618,21 +619,22 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                     : choice.path("finish_reason").asText();
             boolean truncated = "length".equalsIgnoreCase(finishReason);
             JsonNode content = choice.path("message").path("content");
-            if (content.isMissingNode() || content.isNull()) {
-                throw new IllegalStateException(
-                        "OpenRouter response had no message content "
-                                + snippet(responseJson));
-            }
-            String text;
-            if (content.isObject() || content.isArray()) {
-                text = MAPPER.writeValueAsString(content);
-            } else {
-                text = content.asText();
+            String text = "";
+            if (!content.isMissingNode() && !content.isNull()) {
+                if (content.isObject() || content.isArray()) {
+                    text = MAPPER.writeValueAsString(content);
+                } else {
+                    text = content.asText();
+                }
             }
             if (text == null || text.isBlank()) {
-                throw new IllegalStateException(
-                        "OpenRouter response had empty message content "
-                                + snippet(responseJson));
+                if (truncated) {
+                    text = "{}";
+                } else {
+                    throw new IllegalStateException(
+                            "OpenRouter response had no message content "
+                                    + snippet(responseJson));
+                }
             }
             JsonNode usage = root.path("usage");
             Integer promptTokens = usage.path("prompt_tokens").isIntegralNumber()
