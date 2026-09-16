@@ -341,6 +341,60 @@ class OpenRouterClassifierLlmTest {
     }
 
     @Test
+    void retriesSocketTimeoutThenSucceeds() {
+        AtomicInteger calls = new AtomicInteger();
+        List<Duration> sleeps = new ArrayList<>();
+        OpenRouterClassifierLlm.HttpCompletionsClient client =
+                new OpenRouterClassifierLlm.HttpCompletionsClient(
+                        "key",
+                        "model",
+                        OpenRouterClassifierLlm.DEFAULT_URL,
+                        body -> {
+                            if (calls.incrementAndGet() == 1) {
+                                throw new java.io.IOException("Operation timed out");
+                            }
+                            return new OpenRouterClassifierLlm.ExchangeResponse(
+                                    200,
+                                    "{\"choices\":[{\"message\":{\"content\":"
+                                            + "\"{\\\"scheduleFamily\\\":\\\"assumptions\\\","
+                                            + "\\\"triage\\\":\\\"main\\\","
+                                            + "\\\"relevance\\\":\\\"supporting\\\","
+                                            + "\\\"rowLabels\\\":[],\\\"columnHeaders\\\":[],"
+                                            + "\\\"packetDefaultHead\\\":null}\"}}]}",
+                                    Optional.empty());
+                        },
+                        sleeps::add);
+
+        String content = client.complete("system", "user");
+        assertThat(calls.get()).isEqualTo(2);
+        assertThat(sleeps).isNotEmpty();
+        assertThat(content).contains("assumptions");
+    }
+
+    @Test
+    void doesNotRetryInterruptedHttpSend() {
+        AtomicInteger calls = new AtomicInteger();
+        OpenRouterClassifierLlm.HttpCompletionsClient client =
+                new OpenRouterClassifierLlm.HttpCompletionsClient(
+                        "key",
+                        "model",
+                        OpenRouterClassifierLlm.DEFAULT_URL,
+                        body -> {
+                            calls.incrementAndGet();
+                            throw new InterruptedException("classify cancelled");
+                        },
+                        delay -> {
+                            throw new AssertionError("should not sleep after interrupt");
+                        });
+
+        org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalStateException.class, () -> client.complete("system", "user"));
+        assertThat(calls.get()).isEqualTo(1);
+        assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        Thread.interrupted();
+    }
+
+    @Test
     void retryDelayFallsBackToCappedExponentialBackoff() {
         assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(Optional.empty(), 1))
                 .isEqualTo(Duration.ofMillis(500));
