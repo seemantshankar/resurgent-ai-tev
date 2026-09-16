@@ -44,15 +44,21 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         long started = System.nanoTime();
         CompletionResult first = client.completeDetailed(system, user);
         try {
+            rejectIfTruncated("A", first);
             LayerAJudgment judgment = LayerAResponseParser.parse(first.content());
             recordMetric("A", user, first, started, 1);
             return judgment;
+        } catch (TruncatedCompletionException e) {
+            recordMetric("A", user, first, started, 1);
+            throw e;
         } catch (RuntimeException firstError) {
             CompletionResult retry = client.completeDetailed(
                     system + "\nReturn only a valid JSON object. triage must be main|scratch|orphan;"
-                            + " relevance must be primary|supporting|noise. No markdown.",
+                            + " relevance must be primary|supporting|noise. No markdown."
+                            + " Keep rowLabels/columnHeaders short (at most a few distinct axes).",
                     user + "\n\nYour previous JSON was rejected: " + firstError.getMessage());
             try {
+                rejectIfTruncated("A", retry);
                 LayerAJudgment judgment = LayerAResponseParser.parse(retry.content());
                 recordMetric("A", user, retry, started, 2);
                 return judgment;
@@ -69,20 +75,43 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         String system = LayerBPromptAssembler.SYSTEM;
         LayerBPromptAssembler.Assembled assembled = LayerBPromptAssembler.assemble(prompt);
         String user = assembled.userMessage();
+        int candidateLines = assembled.index().amounts().size();
         long started = System.nanoTime();
-        CompletionResult first = client.completeLayerBDetailed(system, user);
+        CompletionResult first = client.completeLayerBDetailed(system, user, candidateLines);
         try {
+            rejectIfTruncated("B", first);
             List<LayerBLineJudgment> lines =
                     LayerBResponseParser.parse(first.content(), assembled.index());
             recordMetric("B", user, first, started, 1);
             return lines;
+        } catch (TruncatedCompletionException e) {
+            // Soft safeguard: one truncation retry asking for lines-only (no soft spam).
+            CompletionResult retry = client.completeLayerBDetailed(
+                    system + "\nPrior response was TRUNCATED. Return only {\"lines\":[...],\"soft\":[]}"
+                            + " with soft empty. Prefer existing paths. No markdown.",
+                    user + "\n\nRetry after truncation: omit soft leaves; bind existing paths only.",
+                    candidateLines);
+            try {
+                rejectIfTruncated("B", retry);
+                List<LayerBLineJudgment> lines =
+                        LayerBResponseParser.parse(retry.content(), assembled.index());
+                recordMetric("B", user, retry, started, 2);
+                return lines;
+            } catch (RuntimeException second) {
+                recordMetric("B", user, retry, started, 2);
+                throw new IllegalStateException(
+                        "OpenRouter Layer B truncated/invalid after retry: " + second.getMessage(),
+                        second);
+            }
         } catch (RuntimeException firstError) {
             CompletionResult retry = client.completeLayerBDetailed(
                     system + "\nReturn only {\"lines\":[[cellIndex,pathIndex,roleCode],...],"
                             + "\"soft\":[]} with roleCode 0=add 1=deduct 2=total 3=helper."
                             + " No markdown.",
-                    user + "\n\nYour previous JSON was rejected: " + firstError.getMessage());
+                    user + "\n\nYour previous JSON was rejected: " + firstError.getMessage(),
+                    candidateLines);
             try {
+                rejectIfTruncated("B", retry);
                 List<LayerBLineJudgment> lines =
                         LayerBResponseParser.parse(retry.content(), assembled.index());
                 recordMetric("B", user, retry, started, 2);
@@ -95,43 +124,107 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         }
     }
 
+    private static void rejectIfTruncated(String layer, CompletionResult result) {
+        if (result != null && result.truncated()) {
+            throw new TruncatedCompletionException(
+                    "OpenRouter Layer " + layer + " truncated (finish_reason="
+                            + result.finishReason() + ")");
+        }
+    }
+
     private void recordMetric(
-            String layer, String user, CompletionResult result, long startedNanos, int attempts) {
+            String layer, String user, CompletionResult result, long startedNanos, int parseAttempts) {
         long durationMs = (System.nanoTime() - startedNanos) / 1_000_000L;
+        int visible = result.content() == null ? 0 : result.content().length();
         metrics.add(new LlmCallMetric(
                 layer,
                 user == null ? 0 : user.length(),
                 result.promptTokens(),
                 result.completionTokens(),
+                result.reasoningTokens(),
+                visible,
+                result.finishReason(),
+                result.truncated(),
                 durationMs,
-                attempts));
+                parseAttempts,
+                result.httpAttempts()));
         System.err.printf(
-                "OpenRouter %s promptBytes=%d promptTok=%s completionTok=%s durationMs=%d attempts=%d%n",
+                "OpenRouter %s promptBytes=%d promptTok=%s completionTok=%s reasoningTok=%s"
+                        + " visibleChars=%d finish=%s truncated=%s durationMs=%d"
+                        + " parseAttempts=%d httpAttempts=%d%n",
                 layer,
                 user == null ? 0 : user.length(),
                 result.promptTokens() == null ? "?" : result.promptTokens(),
                 result.completionTokens() == null ? "?" : result.completionTokens(),
+                result.reasoningTokens() == null ? "?" : result.reasoningTokens(),
+                visible,
+                result.finishReason() == null ? "?" : result.finishReason(),
+                result.truncated(),
                 durationMs,
-                attempts);
+                parseAttempts,
+                result.httpAttempts());
     }
 
-    /** One timed OpenRouter call for live-IT reporting. */
+    /** One timed OpenRouter call for live-IT reporting (#122). */
     public record LlmCallMetric(
             String layer,
             int promptBytes,
             Integer promptTokens,
             Integer completionTokens,
+            Integer reasoningTokens,
+            int visibleContentChars,
+            String finishReason,
+            boolean truncated,
             long durationMs,
-            int attempts) {}
+            int parseAttempts,
+            int httpAttempts) {
 
-    record CompletionResult(String content, Integer promptTokens, Integer completionTokens) {
+        /** Backward-compatible view used by older report printers. */
+        public int attempts() {
+            return parseAttempts;
+        }
+    }
+
+    record CompletionResult(
+            String content,
+            Integer promptTokens,
+            Integer completionTokens,
+            Integer reasoningTokens,
+            String finishReason,
+            boolean truncated,
+            int httpAttempts) {
         CompletionResult {
             Objects.requireNonNull(content, "content");
         }
 
         static CompletionResult of(String content) {
-            return new CompletionResult(content, null, null);
+            return new CompletionResult(content, null, null, null, null, false, 1);
         }
+    }
+
+    /** Thrown when the provider stopped because the completion token budget was hit. */
+    public static final class TruncatedCompletionException extends IllegalStateException {
+        TruncatedCompletionException(String message) {
+            super(message);
+        }
+    }
+
+    /** Firm Layer A completion budget — disposition JSON is bounded (#122). */
+    public static final int LAYER_A_MAX_COMPLETION_TOKENS = 512;
+    /** Small reasoning budget for Layer A (exclude still hides text; usage may count it). */
+    public static final int LAYER_A_REASONING_MAX_TOKENS = 128;
+    public static final int LAYER_B_TOKENS_PER_CANDIDATE_LINE = 24;
+    public static final int LAYER_B_SOFT_BUDGET_TOKENS = 400;
+    public static final int LAYER_B_MIN_COMPLETION_TOKENS = 800;
+    public static final int LAYER_B_MAX_COMPLETION_TOKENS = 8_000;
+    public static final int LAYER_A_LABEL_MAX_ITEMS = 32;
+
+    /** Generous Layer B completion allowance from the number of bindable amount lines. */
+    public static int layerBMaxCompletionTokens(int candidateLines) {
+        int lines = Math.max(0, candidateLines);
+        int estimated = lines * LAYER_B_TOKENS_PER_CANDIDATE_LINE + LAYER_B_SOFT_BUDGET_TOKENS;
+        return Math.min(
+                LAYER_B_MAX_COMPLETION_TOKENS, Math.max(LAYER_B_MIN_COMPLETION_TOKENS, estimated));
     }
 
     interface CompletionsClient {
@@ -146,6 +239,11 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         }
 
         default CompletionResult completeLayerBDetailed(String system, String user) {
+            return completeLayerBDetailed(system, user, 0);
+        }
+
+        default CompletionResult completeLayerBDetailed(
+                String system, String user, int candidateLines) {
             return CompletionResult.of(completeLayerB(system, user));
         }
     }
@@ -170,6 +268,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         private static final ObjectMapper MAPPER = new ObjectMapper();
         static final int MAX_ATTEMPTS = 4;
         static final Duration MAX_BACKOFF = Duration.ofSeconds(30);
+        static final Duration ATTEMPT_DEADLINE = ClassifyLimits.DEFAULT_ATTEMPT_DEADLINE;
 
         private final String model;
         private final HttpExchange exchange;
@@ -197,7 +296,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                         .build();
                 this.exchange = body -> {
                     HttpRequest request = HttpRequest.newBuilder(uri)
-                            .timeout(Duration.ofMinutes(2))
+                            .timeout(ATTEMPT_DEADLINE)
                             .header("Authorization", "Bearer " + apiKey)
                             .header("Content-Type", "application/json")
                             .header("HTTP-Referer",
@@ -222,28 +321,49 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
         @Override
         public CompletionResult completeDetailed(String system, String user) {
-            return completeWithFormat(system, user, layerAResponseFormat());
+            return completeWithFormat(
+                    system,
+                    user,
+                    layerAResponseFormat(),
+                    LAYER_A_MAX_COMPLETION_TOKENS,
+                    LAYER_A_REASONING_MAX_TOKENS);
         }
 
         @Override
         public String completeLayerB(String system, String user) {
-            return completeLayerBDetailed(system, user).content();
+            return completeLayerBDetailed(system, user, 0).content();
         }
 
         @Override
         public CompletionResult completeLayerBDetailed(String system, String user) {
-            return completeWithFormat(system, user, layerBResponseFormat());
+            return completeLayerBDetailed(system, user, 0);
+        }
+
+        @Override
+        public CompletionResult completeLayerBDetailed(
+                String system, String user, int candidateLines) {
+            return completeWithFormat(
+                    system,
+                    user,
+                    layerBResponseFormat(),
+                    layerBMaxCompletionTokens(candidateLines),
+                    0);
         }
 
         private CompletionResult completeWithFormat(
-                String system, String user, ObjectNode responseFormat) {
+                String system,
+                String user,
+                ObjectNode responseFormat,
+                int maxCompletionTokens,
+                int reasoningMaxTokens) {
             try {
-                String body = requestBody(model, system, user, responseFormat);
+                String body = requestBody(
+                        model, system, user, responseFormat, maxCompletionTokens, reasoningMaxTokens);
                 IllegalStateException last = null;
                 for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
                     ExchangeResponse response = exchange.send(body);
                     if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                        return contentWithUsage(response.body());
+                        return contentWithUsage(response.body(), attempt);
                     }
                     if (response.statusCode() != 429 || attempt == MAX_ATTEMPTS) {
                         throw new IllegalStateException(
@@ -288,18 +408,43 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
          * {@code response_format} {@code json_schema} (not {@code json_object}).
          */
         static String requestBody(String model, String system, String user) throws Exception {
-            return requestBody(model, system, user, layerAResponseFormat());
+            return requestBody(
+                    model,
+                    system,
+                    user,
+                    layerAResponseFormat(),
+                    LAYER_A_MAX_COMPLETION_TOKENS,
+                    LAYER_A_REASONING_MAX_TOKENS);
         }
 
         static String requestBody(
                 String model, String system, String user, ObjectNode responseFormat)
                 throws Exception {
+            String schemaName = responseFormat.path("json_schema").path("name").asText("");
+            boolean layerA = "layer_a_judgment".equals(schemaName);
+            int maxTokens = layerA ? LAYER_A_MAX_COMPLETION_TOKENS : LAYER_B_MIN_COMPLETION_TOKENS;
+            int reasoning = layerA ? LAYER_A_REASONING_MAX_TOKENS : 0;
+            return requestBody(model, system, user, responseFormat, maxTokens, reasoning);
+        }
+
+        static String requestBody(
+                String model,
+                String system,
+                String user,
+                ObjectNode responseFormat,
+                int maxCompletionTokens,
+                int reasoningMaxTokens)
+                throws Exception {
             ObjectNode root = MAPPER.createObjectNode();
             root.put("model", model);
             root.put("temperature", 0);
+            root.put("max_tokens", maxCompletionTokens);
             ObjectNode reasoning = root.putObject("reasoning");
             reasoning.put("effort", "low");
             reasoning.put("exclude", true);
+            if (reasoningMaxTokens > 0) {
+                reasoning.put("max_tokens", reasoningMaxTokens);
+            }
             ObjectNode provider = root.putObject("provider");
             provider.put("require_parameters", true);
             provider.put("data_collection", "deny");
@@ -337,9 +482,14 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             enumProperty(properties, "relevance",
                     "primary, supporting, or noise; must be noise when triage is scratch or orphan",
                     Relevance.PRIMARY, Relevance.SUPPORTING, Relevance.NOISE);
-            stringArrayProperty(properties, "rowLabels", "distinct row-axis labels; empty if none");
+            stringArrayProperty(properties, "rowLabels",
+                    "distinct row-axis labels; empty if none; at most "
+                            + LAYER_A_LABEL_MAX_ITEMS + " items",
+                    LAYER_A_LABEL_MAX_ITEMS);
             stringArrayProperty(properties, "columnHeaders",
-                    "distinct column-axis headers; empty if none");
+                    "distinct column-axis headers; empty if none; at most "
+                            + LAYER_A_LABEL_MAX_ITEMS + " items",
+                    LAYER_A_LABEL_MAX_ITEMS);
             ObjectNode head = properties.putObject("packetDefaultHead");
             ArrayNode headType = head.putArray("type");
             headType.add("string");
@@ -426,17 +576,30 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
         private static void stringArrayProperty(
                 ObjectNode properties, String name, String description) {
+            stringArrayProperty(properties, name, description, -1);
+        }
+
+        private static void stringArrayProperty(
+                ObjectNode properties, String name, String description, int maxItems) {
             ObjectNode node = properties.putObject(name);
             node.put("type", "array");
             node.put("description", description);
             node.putObject("items").put("type", "string");
+            if (maxItems > 0) {
+                node.put("maxItems", maxItems);
+            }
         }
 
         static String content(String responseJson) throws Exception {
-            return contentWithUsage(responseJson).content();
+            return contentWithUsage(responseJson, 1).content();
         }
 
         static CompletionResult contentWithUsage(String responseJson) throws Exception {
+            return contentWithUsage(responseJson, 1);
+        }
+
+        static CompletionResult contentWithUsage(String responseJson, int httpAttempts)
+                throws Exception {
             JsonNode root = MAPPER.readTree(responseJson);
             JsonNode error = root.path("error");
             if (error.isObject()) {
@@ -449,6 +612,11 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                 throw new IllegalStateException(
                         "OpenRouter choice error: " + snippet(choiceError.toString()));
             }
+            String finishReason = choice.path("finish_reason").isMissingNode()
+                            || choice.path("finish_reason").isNull()
+                    ? null
+                    : choice.path("finish_reason").asText();
+            boolean truncated = "length".equalsIgnoreCase(finishReason);
             JsonNode content = choice.path("message").path("content");
             if (content.isMissingNode() || content.isNull()) {
                 throw new IllegalStateException(
@@ -473,7 +641,21 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             Integer completionTokens = usage.path("completion_tokens").isIntegralNumber()
                     ? usage.path("completion_tokens").intValue()
                     : null;
-            return new CompletionResult(text, promptTokens, completionTokens);
+            Integer reasoningTokens = null;
+            JsonNode details = usage.path("completion_tokens_details");
+            if (details.path("reasoning_tokens").isIntegralNumber()) {
+                reasoningTokens = details.path("reasoning_tokens").intValue();
+            } else if (usage.path("reasoning_tokens").isIntegralNumber()) {
+                reasoningTokens = usage.path("reasoning_tokens").intValue();
+            }
+            return new CompletionResult(
+                    text,
+                    promptTokens,
+                    completionTokens,
+                    reasoningTokens,
+                    finishReason,
+                    truncated,
+                    Math.max(1, httpAttempts));
         }
 
         private static String snippet(String value) {

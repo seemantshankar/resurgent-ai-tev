@@ -240,8 +240,13 @@ class RealWorkbookLiveClassifyIT {
                             .append('\t').append(metric.promptBytes())
                             .append('\t').append(metric.promptTokens())
                             .append('\t').append(metric.completionTokens())
+                            .append('\t').append(metric.reasoningTokens())
+                            .append('\t').append(metric.visibleContentChars())
+                            .append('\t').append(metric.finishReason())
+                            .append('\t').append(metric.truncated())
                             .append('\t').append(metric.durationMs())
-                            .append('\t').append(metric.attempts())
+                            .append('\t').append(metric.parseAttempts())
+                            .append('\t').append(metric.httpAttempts())
                             .append('\n');
                     if ("A".equals(metric.layer())) {
                         layerAMs += metric.durationMs();
@@ -264,13 +269,13 @@ class RealWorkbookLiveClassifyIT {
                         .append('\n');
                 body.append("timeShare layerAMs=").append(layerAMs)
                         .append(" layerBMs=").append(layerBMs)
-                        .append(" (Layer B wall is parallel; sums overlap)")
+                        .append(" (Layer A/B may overlap; sums are not wall clock)")
                         .append(" layerAAttempts=").append(layerAAttempts)
                         .append(" layerBAttempts=").append(layerBAttempts)
                         .append('\n');
                 if (layerAMs > layerBMs) {
-                    body.append("note: Layer A serial time dominates wall clock;"
-                            + " bounded parent/child concurrency is a follow-up\n");
+                    body.append("note: Layer A token-time still dominates summed duration;"
+                            + " wall clock should overlap A/B via the classify pool\n");
                 }
             }
             body.append("quality expectedMatched=").append(EXPECTED.size())

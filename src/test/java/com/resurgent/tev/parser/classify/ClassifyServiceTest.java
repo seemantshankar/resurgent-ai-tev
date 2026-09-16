@@ -663,7 +663,7 @@ class ClassifyServiceTest {
     }
 
     /** Scripted LLM for tests: records prompts and returns fixed Layer A / Layer B judgments. */
-    static final class FakeClassifierLlm implements ClassifierLlm {
+    static class FakeClassifierLlm implements ClassifierLlm {
         final List<LayerAPrompt> prompts = new java.util.concurrent.CopyOnWriteArrayList<>();
         final List<LayerBPrompt> layerBPrompts = new java.util.concurrent.CopyOnWriteArrayList<>();
         LayerAJudgment judgment = new LayerAJudgment(
