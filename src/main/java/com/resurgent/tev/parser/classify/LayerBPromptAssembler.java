@@ -41,6 +41,7 @@ final class LayerBPromptAssembler {
             Peer coords may be sheet-qualified (SHEET!F31) and may sit outside this Packet.
             Deduct lines use the economic leaf path (same as the add), not a geometric Civil leaf.
             Numeric literals are dummy stand-ins; labels/formulas are real.
+            When amounts[] is a chunk of a larger Packet, bind only the listed amounts.
             """;
 
     private static final ObjectMapper MAPPER = new ObjectMapper();

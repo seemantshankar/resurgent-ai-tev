@@ -340,12 +340,21 @@ public final class ClassifyService {
                                             parent));
                             jobs.put(id, job);
                             submitTask(phaser, pool, failure, deadlineNanos, () -> {
-                                List<LayerBLineJudgment> lines = callLlm(
-                                        () -> llm.classifyLayerB(job.prompt()),
-                                        "Layer B candidate " + id,
-                                        watchdog,
-                                        deadlineNanos);
-                                judgments.put(id, lines);
+                                List<LayerBLineJudgment> lines = new ArrayList<>();
+                                List<LayerBPrompt> chunks = LayerBJobSplitter.chunks(job.prompt());
+                                for (int i = 0; i < chunks.size(); i++) {
+                                    LayerBPrompt chunk = chunks.get(i);
+                                    String label = chunks.size() == 1
+                                            ? "Layer B candidate " + id
+                                            : "Layer B candidate " + id
+                                                    + " chunk " + (i + 1) + "/" + chunks.size();
+                                    lines.addAll(callLlm(
+                                            () -> llm.classifyLayerB(chunk),
+                                            label,
+                                            watchdog,
+                                            deadlineNanos));
+                                }
+                                judgments.put(id, List.copyOf(lines));
                             });
                         }
                         submitReady[0].run();
