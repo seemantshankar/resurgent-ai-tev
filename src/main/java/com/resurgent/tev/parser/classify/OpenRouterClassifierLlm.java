@@ -8,8 +8,10 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -268,7 +270,12 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         private static final ObjectMapper MAPPER = new ObjectMapper();
         static final int MAX_ATTEMPTS = 4;
         static final Duration MAX_BACKOFF = Duration.ofSeconds(30);
-        static final Duration ATTEMPT_DEADLINE = ClassifyLimits.DEFAULT_ATTEMPT_DEADLINE;
+        /**
+         * Per-send HTTP budget. Must stay shorter than
+         * {@link ClassifyLimits#DEFAULT_ATTEMPT_DEADLINE} so a stalled TCP read
+         * can time out and retry before the classify attempt watchdog fires.
+         */
+        static final Duration HTTP_TIMEOUT = Duration.ofSeconds(75);
 
         private final String model;
         private final HttpExchange exchange;
@@ -296,7 +303,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                         .build();
                 this.exchange = body -> {
                     HttpRequest request = HttpRequest.newBuilder(uri)
-                            .timeout(ATTEMPT_DEADLINE)
+                            .timeout(HTTP_TIMEOUT)
                             .header("Authorization", "Bearer " + apiKey)
                             .header("Content-Type", "application/json")
                             .header("HTTP-Referer",
@@ -359,30 +366,72 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             try {
                 String body = requestBody(
                         model, system, user, responseFormat, maxCompletionTokens, reasoningMaxTokens);
-                IllegalStateException last = null;
+                Exception last = null;
                 for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-                    ExchangeResponse response = exchange.send(body);
-                    if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                        return contentWithUsage(response.body(), attempt);
+                    try {
+                        ExchangeResponse response = exchange.send(body);
+                        if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                            return contentWithUsage(response.body(), attempt);
+                        }
+                        if (response.statusCode() != 429 || attempt == MAX_ATTEMPTS) {
+                            throw new IllegalStateException(
+                                    "OpenRouter HTTP " + response.statusCode()
+                                            + " " + snippet(response.body()));
+                        }
+                        last = new IllegalStateException(
+                                "OpenRouter HTTP 429 " + snippet(response.body()));
+                        sleeper.sleep(retryDelay(response.retryAfter(), attempt));
+                    } catch (IllegalStateException e) {
+                        throw e;
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("OpenRouter call interrupted", e);
+                    } catch (Exception e) {
+                        if (!retryableTransport(e) || attempt == MAX_ATTEMPTS) {
+                            throw new IllegalStateException(
+                                    "OpenRouter call failed: " + e.getMessage(), e);
+                        }
+                        last = e;
+                        sleeper.sleep(retryDelay(Optional.empty(), attempt));
                     }
-                    if (response.statusCode() != 429 || attempt == MAX_ATTEMPTS) {
-                        throw new IllegalStateException(
-                                "OpenRouter HTTP " + response.statusCode()
-                                        + " " + snippet(response.body()));
-                    }
-                    last = new IllegalStateException(
-                            "OpenRouter HTTP 429 " + snippet(response.body()));
-                    sleeper.sleep(retryDelay(response.retryAfter(), attempt));
                 }
-                throw last != null ? last : new IllegalStateException("OpenRouter HTTP 429");
+                if (last instanceof RuntimeException runtime) {
+                    throw runtime;
+                }
+                throw new IllegalStateException(
+                        "OpenRouter call failed: "
+                                + (last != null ? last.getMessage() : "exhausted retries"),
+                        last);
             } catch (IllegalStateException e) {
                 throw e;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("OpenRouter call interrupted", e);
             } catch (Exception e) {
                 throw new IllegalStateException("OpenRouter call failed: " + e.getMessage(), e);
             }
+        }
+
+        static boolean retryableTransport(Throwable error) {
+            if (error instanceof InterruptedException) {
+                return false;
+            }
+            for (Throwable cursor = error; cursor != null; cursor = cursor.getCause()) {
+                if (cursor instanceof InterruptedException) {
+                    return false;
+                }
+                if (cursor instanceof HttpTimeoutException
+                        || cursor instanceof java.net.SocketTimeoutException) {
+                    return true;
+                }
+                if (cursor instanceof java.io.IOException) {
+                    String message = cursor.getMessage();
+                    if (message != null) {
+                        String lower = message.toLowerCase(Locale.ROOT);
+                        if (lower.contains("timed out") || lower.contains("timeout")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
         }
 
         static Duration retryDelay(Optional<String> retryAfter, int attempt) {
