@@ -13,7 +13,6 @@ import com.resurgent.tev.parser.ingest.IngestSummary;
 import com.resurgent.tev.parser.nomenclature.NomenclatureCatalog;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -93,7 +92,10 @@ class RealWorkbookLiveClassifyIT {
                 System.err.printf("OpenRouter Layer A %d/%d candidate %d cheapPass=%s%n",
                         liveLayerA.get(), liveCandidates.size(),
                         prompt.packet().candidateId(), prompt.cheapPass());
-                return openRouter.classifyLayerA(prompt);
+                LayerAJudgment judgment = openRouter.classifyLayerA(prompt);
+                System.err.printf("OpenRouter Layer A done candidate %d%n",
+                        prompt.packet().candidateId());
+                return judgment;
             }
 
             @Override
@@ -106,16 +108,17 @@ class RealWorkbookLiveClassifyIT {
                         liveLayerB.get(),
                         prompt.packet().candidateId(),
                         LayerBAmountSupport.amountCells(prompt.packet()).size());
-                return openRouter.classifyLayerB(prompt);
+                List<LayerBLineJudgment> lines = openRouter.classifyLayerB(prompt);
+                System.err.printf("OpenRouter Layer B done candidate %d lines=%d%n",
+                        prompt.packet().candidateId(), lines.size());
+                return lines;
             }
         };
 
         long classifyStarted = System.nanoTime();
-        ClassifyLimits liveLimits = new ClassifyLimits(
-                ClassifyLimits.DEFAULT_PARALLELISM,
-                Duration.ofMinutes(10),
-                Duration.ofMinutes(20));
-        ClassifySummary summary = new ClassifyService(mixed, new DiscoverService(), liveLimits)
+        // Use production hang budgets so a stalled OpenRouter send fails closed
+        // inside the 5-minute wall gate instead of sitting for 10–20 minutes.
+        ClassifySummary summary = new ClassifyService(mixed, new DiscoverService())
                 .classify(db, ingest.parseRunId());
         long classifyMs = (System.nanoTime() - classifyStarted) / 1_000_000L;
         assertThat(summary.dispositionCount()).isGreaterThan(liveCandidates.size());
@@ -199,14 +202,13 @@ class RealWorkbookLiveClassifyIT {
             assertThat(meaning.interpretation().nomenclaturePath())
                     .isEqualTo(sampleBinding.path());
 
-            for (ExpectedBinding expected : EXPECTED) {
-                assertThat(bindings)
-                        .as("expected binding path~%s role=%s label~%s",
-                                expected.pathContains(), expected.role(), expected.verbatimContains())
-                        .anyMatch(expected::matches);
-            }
             double acAdd = repo.sumAddAmountsForPath(ingest.parseRunId(), HOTEL_AC_PATH);
-            assertThat(acAdd).as("Air Conditioning add rollup").isGreaterThan(0.0);
+            int expectedMatched = 0;
+            for (ExpectedBinding expected : EXPECTED) {
+                if (bindings.stream().anyMatch(expected::matches)) {
+                    expectedMatched++;
+                }
+            }
 
             Path report = Path.of("target", "om-arham-live-layer-ab.txt");
             StringBuilder body = new StringBuilder();
@@ -284,7 +286,7 @@ class RealWorkbookLiveClassifyIT {
                             + " wall clock should overlap A/B via the classify pool\n");
                 }
             }
-            body.append("quality expectedMatched=").append(EXPECTED.size())
+            body.append("quality expectedMatched=").append(expectedMatched)
                     .append('/').append(EXPECTED.size())
                     .append(" sumAddAC=").append(acAdd)
                     .append('\n');
@@ -330,8 +332,15 @@ class RealWorkbookLiveClassifyIT {
                     summary.interpretationCount(),
                     cellCount,
                     summary.layerBStats().summaryLine(),
-                    EXPECTED.size(),
+                    expectedMatched,
                     EXPECTED.size());
+            for (ExpectedBinding expected : EXPECTED) {
+                assertThat(bindings)
+                        .as("expected binding path~%s role=%s label~%s",
+                                expected.pathContains(), expected.role(), expected.verbatimContains())
+                        .anyMatch(expected::matches);
+            }
+            assertThat(acAdd).as("Air Conditioning add rollup").isGreaterThan(0.0);
             assertThat(classifyMs)
                     .as("Om Arham ASSETS+CAPITAL COST classify wall vs 5-minute gate")
                     .isLessThan(300_000L);
