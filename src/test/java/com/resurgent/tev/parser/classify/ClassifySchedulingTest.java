@@ -185,6 +185,42 @@ class ClassifySchedulingTest {
 
     @Test
     @Timeout(15)
+    void layerBAttemptDeadlineDropsThatCallAndKeepsTheRun() throws Exception {
+        Path xlsx = twoSheetCosts("layer-b-deadline.xlsx");
+        Path db = tempDir.resolve("layer-b-deadline.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        ClassifyServiceTest.FakeClassifierLlm slow = new ClassifyServiceTest.FakeClassifierLlm() {
+            @Override
+            public List<LayerBLineJudgment> classifyLayerB(LayerBPrompt prompt) {
+                sleepQuietly(2_000);
+                return super.classifyLayerB(prompt);
+            }
+        };
+        slow.judgment = new LayerAJudgment(
+                ScheduleFamily.CAPEX_DETAIL, Triage.MAIN, Relevance.PRIMARY,
+                List.of(), List.of(), null);
+
+        ClassifyLimits tight = new ClassifyLimits(
+                8, Duration.ofMillis(300), Duration.ofSeconds(10));
+        ClassifySummary summary = new ClassifyService(slow, new DiscoverService(), tight)
+                .classify(db, ingest.parseRunId());
+
+        assertThat(summary.layerBStats().failedCalls()).isPositive();
+        assertThat(summary.layerBStats().failedCallSamples())
+                .anyMatch(sample -> sample.contains("exceeded attempt deadline"));
+        assertThat(summary.bindingCount()).isZero();
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectPacketDispositionsForParseRun(ingest.parseRunId()))
+                    .as("Layer A dispositions survive a dropped Layer B call")
+                    .isNotEmpty();
+        }
+    }
+
+    @Test
+    @Timeout(15)
     void classifyDeadlineAbortsAsIncompleteWithoutWriting() throws Exception {
         Path xlsx = twoSheetCosts("classify-deadline.xlsx");
         Path db = tempDir.resolve("classify-deadline.db");

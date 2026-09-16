@@ -19,6 +19,16 @@ final class LayerBResponseParser {
     private LayerBResponseParser() {}
 
     static List<LayerBLineJudgment> parse(String completion, LayerBPromptIndex index) {
+        return parseDetailed(completion, index).lines();
+    }
+
+    /**
+     * A malformed individual item costs only that item. Structural failures (no
+     * JSON, no {@code lines} array) and responses where every item is unusable
+     * still throw, because those are worth a retry; a response with one bad item
+     * among many good ones is not.
+     */
+    static Parsed parseDetailed(String completion, LayerBPromptIndex index) {
         if (completion == null || completion.isBlank()) {
             throw new IllegalStateException("LLM returned an empty Layer B completion");
         }
@@ -38,16 +48,17 @@ final class LayerBResponseParser {
                         "Layer B lines must be an array snippet=" + snippet(completion));
             }
             List<LayerBLineJudgment> lines = new ArrayList<>();
+            List<String> dropped = new ArrayList<>();
             for (JsonNode item : linesNode) {
                 if (item == null || item.isNull()) {
                     continue;
                 }
-                LayerBLineJudgment compact = parseCompactLine(item, index, completion);
-                if (compact != null) {
-                    lines.add(compact);
-                    continue;
+                try {
+                    LayerBLineJudgment compact = parseCompactLine(item, index, completion);
+                    lines.add(compact != null ? compact : parseLegacyLine(item, completion));
+                } catch (IllegalStateException e) {
+                    dropped.add(e.getMessage());
                 }
-                lines.add(parseLegacyLine(item, completion));
             }
             JsonNode softNode = root.get("soft");
             if (softNode != null && softNode.isArray()) {
@@ -55,10 +66,17 @@ final class LayerBResponseParser {
                     if (item == null || item.isNull()) {
                         continue;
                     }
-                    lines.add(parseSoftLeaf(item, index, completion));
+                    try {
+                        lines.add(parseSoftLeaf(item, index, completion));
+                    } catch (IllegalStateException e) {
+                        dropped.add(e.getMessage());
+                    }
                 }
             }
-            return List.copyOf(lines);
+            if (lines.isEmpty() && !dropped.isEmpty()) {
+                throw new IllegalStateException(dropped.get(0));
+            }
+            return new Parsed(List.copyOf(lines), List.copyOf(dropped));
         } catch (IllegalStateException e) {
             throw e;
         } catch (Exception e) {
@@ -66,6 +84,9 @@ final class LayerBResponseParser {
                     "LLM returned unparseable Layer B JSON: " + e.getMessage(), e);
         }
     }
+
+    /** Usable judgments plus the reason each unusable item was skipped. */
+    record Parsed(List<LayerBLineJudgment> lines, List<String> dropped) {}
 
     /** @deprecated Prefer {@link #parse(String, LayerBPromptIndex)}. */
     static List<LayerBLineJudgment> parse(String completion) {
@@ -160,19 +181,20 @@ final class LayerBResponseParser {
         }
         LayerBPromptIndex.AmountRow amount = index.amount(cellIndex);
         NomenclatureNode parent = index.path(parentIndex);
-        if (parent.leaf()) {
-            throw new IllegalStateException(
-                    "Layer B soft parentPathIndex must be mid-level, got leaf "
-                            + parent.path());
-        }
-        String path = parent.path() + " > " + name.trim();
+        // A soft leaf proposed under an existing leaf means the model wanted finer
+        // granularity than the ontology offers. Bind to the leaf rather than lose
+        // the line: the leaf is the join key, and the invented name adds no rollup.
+        String path = parent.leaf()
+                ? parent.path()
+                : parent.path() + " > " + name.trim();
+        List<String> leafAliases = parent.leaf() ? List.of() : aliases;
         String verbatim = amount.label().isBlank() ? name.trim() : amount.label();
         return new LayerBLineJudgment(
                 amount.coord(),
                 verbatim,
                 path,
                 role,
-                aliases,
+                leafAliases,
                 number(item, "confidence"),
                 parsePeers(item, completion));
     }

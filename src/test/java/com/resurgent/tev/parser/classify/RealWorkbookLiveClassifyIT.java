@@ -34,10 +34,14 @@ class RealWorkbookLiveClassifyIT {
     private static final String HOTEL_AC_PATH =
             "Project Cost > Plant & Machinery > Air Conditioning";
 
-    /** Named Om Arham bindings that must survive latency changes (path + role + label). */
+    /**
+     * Named Om Arham bindings that must survive latency changes (path + role + label).
+     * Path fragments stay short: a derived soft leaf is named from the workbook's own
+     * row label, so the exact leaf spelling is data, not an ontology guarantee.
+     */
     private static final List<ExpectedBinding> EXPECTED = List.of(
             new ExpectedBinding("Genset", AmountRole.ADD, "Volvo Penta Genset"),
-            new ExpectedBinding("CCTV System", AmountRole.ADD, "CCTV"),
+            new ExpectedBinding("CCTV", AmountRole.ADD, "CCTV"),
             new ExpectedBinding("Fitness Equipments", AmountRole.ADD, "Fitness"),
             new ExpectedBinding("Plumbing Works", AmountRole.ADD, "Plumbing"),
             new ExpectedBinding(

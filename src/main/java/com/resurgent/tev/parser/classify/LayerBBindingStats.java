@@ -16,8 +16,10 @@ public final class LayerBBindingStats {
     private int accepted;
     private int rejected;
     private int duplicate;
+    private int failedCalls;
     private final Map<String, Integer> rejectReasons = new LinkedHashMap<>();
     private final List<String> rejectSamples = new ArrayList<>();
+    private final List<String> failedCallSamples = new ArrayList<>();
 
     public void addProposed(int count) {
         proposed += count;
@@ -29,6 +31,14 @@ public final class LayerBBindingStats {
 
     public void addDuplicate() {
         duplicate++;
+    }
+
+    /** A Layer B call or chunk the model never answered usably; its lines are lost. */
+    public void addFailedCall(String reason) {
+        failedCalls++;
+        if (failedCallSamples.size() < 12) {
+            failedCallSamples.add(reason == null || reason.isBlank() ? "unknown" : reason);
+        }
     }
 
     public void addRejected(String reason) {
@@ -64,11 +74,20 @@ public final class LayerBBindingStats {
         return List.copyOf(rejectSamples);
     }
 
+    public int failedCalls() {
+        return failedCalls;
+    }
+
+    public List<String> failedCallSamples() {
+        return List.copyOf(failedCallSamples);
+    }
+
     public String summaryLine() {
         return "layerB proposed=" + proposed
                 + " accepted=" + accepted
                 + " rejected=" + rejected
                 + " duplicate=" + duplicate
+                + " failedCalls=" + failedCalls
                 + " reasons=" + formatRejectReasons();
     }
 
