@@ -21,10 +21,16 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.concurrent.Phaser;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Packet classification application service: Layer A disposition and Layer B
@@ -33,18 +39,22 @@ import java.util.concurrent.Future;
  */
 public final class ClassifyService {
 
-    static final int LAYER_B_PARALLELISM = 8;
-
     private final ClassifierLlm llm;
     private final DiscoverService discover;
+    private final ClassifyLimits limits;
 
     public ClassifyService(ClassifierLlm llm) {
-        this(llm, new DiscoverService());
+        this(llm, new DiscoverService(), ClassifyLimits.defaults());
     }
 
     public ClassifyService(ClassifierLlm llm, DiscoverService discover) {
+        this(llm, discover, ClassifyLimits.defaults());
+    }
+
+    public ClassifyService(ClassifierLlm llm, DiscoverService discover, ClassifyLimits limits) {
         this.llm = Objects.requireNonNull(llm, "llm");
         this.discover = Objects.requireNonNull(discover, "discover");
+        this.limits = Objects.requireNonNull(limits, "limits");
     }
 
     public ClassifySummary classify(Path dbPath, long parseRunId) throws ClassifyException {
@@ -68,57 +78,33 @@ public final class ClassifyService {
             }
 
             // LLM calls stay outside the write transaction so long classify runs do not
-            // hold a SQLite write lock. Layer A stays ordered (parent before child);
-            // Layer B LLM fans out, then bindings materialize serially.
-            List<PacketDisposition> dispositions = new ArrayList<>();
-            List<ProjectFactBinding> factBindings = new ArrayList<>();
-            List<LayerBJob> layerBJobs = new ArrayList<>();
-            Map<Long, LayerAJudgment> judged = new HashMap<>();
-            Map<Long, LayerAJudgment> coverageByWorksheet = new HashMap<>();
+            // hold a SQLite write lock. Packets are built serially; Layer A/B run
+            // concurrently with parent-before-child and A→B pipelining; bindings
+            // materialize serially after all LLM work completes or the run is incomplete.
+            List<PreparedPacket> prepared = new ArrayList<>();
             int coverageParents = 0;
-            for (CandidateRow candidate : orderForLayerA(candidates)) {
+            for (CandidateRow candidate : candidates) {
                 boolean cheapPass = "coverage_parent".equals(candidate.candidateKind());
                 if (cheapPass) {
                     coverageParents++;
                 }
                 Packet packet = discover.buildPacket(repo, candidate.candidateId());
                 Packet redacted = PacketRedactor.redact(packet, cheapPass);
-                LayerAJudgment parent = cheapPass
-                        ? null
-                        : parentContext(candidate, judged, coverageByWorksheet);
-                LayerAJudgment judgment = requireJudgment(
-                        llm.classifyLayerA(new LayerAPrompt(redacted, slice, parent, cheapPass)),
-                        candidate.candidateId());
-                judged.put(candidate.candidateId(), judgment);
-                if (cheapPass) {
-                    coverageByWorksheet.put(candidate.worksheetId(), judgment);
-                }
-                dispositions.add(new PacketDisposition(
-                        candidate.candidateId(),
-                        parseRunId,
-                        judgment.scheduleFamily(),
-                        judgment.triage(),
-                        judgment.relevance(),
-                        judgment.rowLabels(),
-                        judgment.columnHeaders(),
-                        judgment.packetDefaultHead(),
-                        candidate.parentCandidateId(),
-                        cheapPass));
-                for (ProjectFactJudgment fact : judgment.facts()) {
-                    materializeFact(slice, candidate, parseRunId, packet, fact)
-                            .ifPresent(factBindings::add);
-                }
-                if (!cheapPass && LayerBAmountSupport.hasAmountCells(redacted)) {
-                    layerBJobs.add(new LayerBJob(
-                            candidate,
-                            packet,
-                            new LayerBPrompt(redacted, slice, judgment, parent)));
-                }
+                prepared.add(new PreparedPacket(candidate, packet, redacted, cheapPass));
             }
 
+            LlmPhaseResult llmPhase = runLlmPhase(slice, parseRunId, prepared);
             LayerBBindingStats layerBStats = new LayerBBindingStats();
             LayerBMaterializeResult layerB = materializeLayerB(
-                    catalog, mandateId, slice, parseRunId, layerBJobs, layerBStats);
+                    catalog,
+                    mandateId,
+                    slice,
+                    parseRunId,
+                    llmPhase.jobs(),
+                    llmPhase.judgments(),
+                    layerBStats);
+            List<PacketDisposition> dispositions = llmPhase.dispositions();
+            List<ProjectFactBinding> factBindings = llmPhase.facts();
             List<NomenclatureBinding> bindings = layerB.bindings();
             List<BindingPeer> bindingPeers;
             try {
@@ -177,11 +163,11 @@ public final class ClassifyService {
     }
 
     /**
-     * Layer B LLM calls fan out in parallel against the pre-Layer-B ontology slice.
-     * Soft leaves created by earlier packets are <em>not</em> visible to concurrent
-     * prompts; reconciliation happens here during serial materialize: reload the
-     * slice after each accept, and if {@code putSoftLeaf} races on an already-created
-     * path, treat it as an existing leaf.
+     * Layer B LLM calls are submitted as each Packet's Layer A finishes so A and B
+     * overlap. Soft leaves created by earlier packets are <em>not</em> visible to
+     * concurrent prompts; reconciliation happens here during serial materialize:
+     * reload the slice after each accept, and if {@code putSoftLeaf} races on an
+     * already-created path, treat it as an existing leaf.
      */
     private record LayerBMaterializeResult(
             List<NomenclatureBinding> bindings,
@@ -193,11 +179,11 @@ public final class ClassifyService {
             OntologySlice slice,
             long parseRunId,
             List<LayerBJob> jobs,
-            LayerBBindingStats stats) throws ClassifyException {
+            List<List<LayerBLineJudgment>> judgmentsByJob,
+            LayerBBindingStats stats) {
         if (jobs.isEmpty()) {
             return new LayerBMaterializeResult(List.of(), List.of());
         }
-        List<List<LayerBLineJudgment>> judgmentsByJob = invokeLayerBParallel(jobs);
         List<NomenclatureBinding> bindings = new ArrayList<>();
         List<BindingPeerWriter.PendingPeerLine> pendingPeers = new ArrayList<>();
         Set<Long> boundCells = new HashSet<>();
@@ -238,45 +224,279 @@ public final class ClassifyService {
         return new LayerBMaterializeResult(bindings, pendingPeers);
     }
 
-    private List<List<LayerBLineJudgment>> invokeLayerBParallel(List<LayerBJob> jobs)
-            throws ClassifyException {
-        int workers = Math.min(LAYER_B_PARALLELISM, jobs.size());
-        if (workers <= 1) {
-            List<List<LayerBLineJudgment>> out = new ArrayList<>(jobs.size());
-            for (LayerBJob job : jobs) {
-                out.add(llm.classifyLayerB(job.prompt()));
-            }
-            return out;
+    private record LayerBJob(CandidateRow candidate, Packet packet, LayerBPrompt prompt) {}
+
+    private record PreparedPacket(
+            CandidateRow candidate, Packet packet, Packet redacted, boolean cheapPass) {}
+
+    private record LayerAWork(
+            PreparedPacket prepared,
+            LayerAJudgment judgment,
+            PacketDisposition disposition,
+            List<ProjectFactBinding> facts) {}
+
+    private LayerAWork layerAWork(
+            OntologySlice slice,
+            long parseRunId,
+            PreparedPacket prepared,
+            LayerAJudgment parent,
+            ScheduledExecutorService watchdog,
+            long deadlineNanos) throws ClassifyException {
+        CandidateRow candidate = prepared.candidate();
+        LayerAJudgment judgment = requireJudgment(
+                callLlm(
+                        () -> llm.classifyLayerA(new LayerAPrompt(
+                                prepared.redacted(), slice, parent, prepared.cheapPass())),
+                        "Layer A candidate " + candidate.candidateId(),
+                        watchdog,
+                        deadlineNanos),
+                candidate.candidateId());
+        PacketDisposition disposition = new PacketDisposition(
+                candidate.candidateId(),
+                parseRunId,
+                judgment.scheduleFamily(),
+                judgment.triage(),
+                judgment.relevance(),
+                judgment.rowLabels(),
+                judgment.columnHeaders(),
+                judgment.packetDefaultHead(),
+                candidate.parentCandidateId(),
+                prepared.cheapPass());
+        List<ProjectFactBinding> facts = new ArrayList<>();
+        for (ProjectFactJudgment fact : judgment.facts()) {
+            materializeFact(slice, candidate, parseRunId, prepared.packet(), fact)
+                    .ifPresent(facts::add);
         }
-        ExecutorService pool = Executors.newFixedThreadPool(workers);
-        try {
-            List<Future<List<LayerBLineJudgment>>> futures = new ArrayList<>(jobs.size());
-            for (LayerBJob job : jobs) {
-                futures.add(pool.submit(() -> llm.classifyLayerB(job.prompt())));
-            }
-            List<List<LayerBLineJudgment>> out = new ArrayList<>(jobs.size());
-            for (Future<List<LayerBLineJudgment>> future : futures) {
-                try {
-                    out.add(future.get());
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new ClassifyException("Layer B interrupted", e);
-                } catch (ExecutionException e) {
-                    Throwable cause = e.getCause() == null ? e : e.getCause();
-                    if (cause instanceof RuntimeException runtime) {
-                        throw runtime;
+        return new LayerAWork(prepared, judgment, disposition, facts);
+    }
+
+    private record LlmPhaseResult(
+            List<PacketDisposition> dispositions,
+            List<ProjectFactBinding> facts,
+            List<LayerBJob> jobs,
+            List<List<LayerBLineJudgment>> judgments) {}
+
+    @FunctionalInterface
+    private interface ClassifyTask {
+        void run() throws ClassifyException;
+    }
+
+    private LlmPhaseResult runLlmPhase(
+            OntologySlice slice, long parseRunId, List<PreparedPacket> prepared)
+            throws ClassifyException {
+        long deadlineNanos = System.nanoTime() + limits.classifyDeadline().toNanos();
+        Map<Long, LayerAJudgment> judged = new ConcurrentHashMap<>();
+        Map<Long, LayerAJudgment> coverageByWorksheet = new ConcurrentHashMap<>();
+        Map<Long, PacketDisposition> dispositions = new ConcurrentHashMap<>();
+        Map<Long, List<ProjectFactBinding>> facts = new ConcurrentHashMap<>();
+        Map<Long, LayerBJob> jobs = new ConcurrentHashMap<>();
+        Map<Long, List<LayerBLineJudgment>> judgments = new ConcurrentHashMap<>();
+        Set<Long> submittedA = ConcurrentHashMap.newKeySet();
+        AtomicReference<ClassifyException> failure = new AtomicReference<>();
+        Object scheduleLock = new Object();
+
+        ExecutorService pool = Executors.newFixedThreadPool(limits.parallelism());
+        ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread thread = new Thread(r, "classify-watchdog");
+            thread.setDaemon(true);
+            return thread;
+        });
+        Phaser phaser = new Phaser(1);
+        Runnable[] submitReady = new Runnable[1];
+        submitReady[0] = () -> {
+            synchronized (scheduleLock) {
+                for (PreparedPacket packet : prepared) {
+                    long id = packet.candidate().candidateId();
+                    if (!submittedA.add(id)) {
+                        continue;
                     }
-                    throw new ClassifyException(
-                            "Layer B failed: " + cause.getMessage(), cause);
+                    if (!packet.cheapPass()
+                            && parentContext(packet.candidate(), judged, coverageByWorksheet)
+                                    == null) {
+                        submittedA.remove(id);
+                        continue;
+                    }
+                    submitTask(phaser, pool, failure, deadlineNanos, () -> {
+                        LayerAJudgment parent = parentContext(
+                                packet.candidate(), judged, coverageByWorksheet);
+                        LayerAWork work = layerAWork(
+                                slice, parseRunId, packet, parent, watchdog, deadlineNanos);
+                        judged.put(id, work.judgment());
+                        if (packet.cheapPass()) {
+                            coverageByWorksheet.put(
+                                    packet.candidate().worksheetId(), work.judgment());
+                        }
+                        dispositions.put(id, work.disposition());
+                        facts.put(id, work.facts());
+                        if (!packet.cheapPass()
+                                && LayerBAmountSupport.hasAmountCells(packet.redacted())) {
+                            LayerBJob job = new LayerBJob(
+                                    packet.candidate(),
+                                    packet.packet(),
+                                    new LayerBPrompt(
+                                            packet.redacted(),
+                                            slice,
+                                            work.judgment(),
+                                            parent));
+                            jobs.put(id, job);
+                            submitTask(phaser, pool, failure, deadlineNanos, () -> {
+                                List<LayerBLineJudgment> lines = callLlm(
+                                        () -> llm.classifyLayerB(job.prompt()),
+                                        "Layer B candidate " + id,
+                                        watchdog,
+                                        deadlineNanos);
+                                judgments.put(id, lines);
+                            });
+                        }
+                        submitReady[0].run();
+                    });
                 }
             }
-            return out;
+        };
+        try {
+            submitReady[0].run();
+            long remaining = deadlineNanos - System.nanoTime();
+            if (remaining <= 0) {
+                throw new ClassifyException("incomplete: classify deadline exceeded");
+            }
+            int phase = phaser.arrive();
+            try {
+                phaser.awaitAdvanceInterruptibly(phase, remaining, TimeUnit.NANOSECONDS);
+            } catch (TimeoutException e) {
+                failure.compareAndSet(
+                        null, new ClassifyException("incomplete: classify deadline exceeded"));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new ClassifyException("classify interrupted", e);
+            }
+            if (failure.get() != null) {
+                throw failure.get();
+            }
+            return assemblePhase(prepared, dispositions, facts, jobs, judgments);
         } finally {
             pool.shutdownNow();
+            watchdog.shutdownNow();
         }
     }
 
-    private record LayerBJob(CandidateRow candidate, Packet packet, LayerBPrompt prompt) {}
+    private static void submitTask(
+            Phaser phaser,
+            ExecutorService pool,
+            AtomicReference<ClassifyException> failure,
+            long deadlineNanos,
+            ClassifyTask task) {
+        if (failure.get() != null) {
+            return;
+        }
+        if (System.nanoTime() >= deadlineNanos) {
+            failure.compareAndSet(
+                    null, new ClassifyException("incomplete: classify deadline exceeded"));
+            return;
+        }
+        phaser.register();
+        pool.submit(() -> {
+            try {
+                if (failure.get() != null) {
+                    return;
+                }
+                if (System.nanoTime() >= deadlineNanos) {
+                    failure.compareAndSet(
+                            null,
+                            new ClassifyException("incomplete: classify deadline exceeded"));
+                    return;
+                }
+                task.run();
+            } catch (ClassifyException e) {
+                failure.compareAndSet(null, e);
+            } catch (RuntimeException e) {
+                failure.compareAndSet(
+                        null, new ClassifyException("classify failed: " + e.getMessage(), e));
+            } finally {
+                phaser.arriveAndDeregister();
+            }
+        });
+    }
+
+    private <T> T callLlm(
+            Callable<T> call,
+            String label,
+            ScheduledExecutorService watchdog,
+            long deadlineNanos) throws ClassifyException {
+        long remainingClassify = deadlineNanos - System.nanoTime();
+        if (remainingClassify <= 0) {
+            throw new ClassifyException("incomplete: classify deadline exceeded");
+        }
+        long attemptNanos = Math.min(limits.attemptDeadline().toNanos(), remainingClassify);
+        Thread worker = Thread.currentThread();
+        ScheduledFuture<?> abort = watchdog.schedule(
+                worker::interrupt, attemptNanos, TimeUnit.NANOSECONDS);
+        try {
+            return call.call();
+        } catch (ClassifyException e) {
+            throw e;
+        } catch (Exception e) {
+            if (interrupted(e)) {
+                Thread.currentThread().interrupt();
+                throw new ClassifyException(
+                        "incomplete: " + label + " exceeded attempt deadline", e);
+            }
+            if (e instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw new ClassifyException("classify failed: " + e.getMessage(), e);
+        } finally {
+            abort.cancel(false);
+            Thread.interrupted();
+        }
+    }
+
+    private static boolean interrupted(Throwable error) {
+        if (Thread.currentThread().isInterrupted()) {
+            return true;
+        }
+        Throwable cursor = error;
+        while (cursor != null) {
+            if (cursor instanceof InterruptedException) {
+                return true;
+            }
+            cursor = cursor.getCause();
+        }
+        return false;
+    }
+
+    private static LlmPhaseResult assemblePhase(
+            List<PreparedPacket> prepared,
+            Map<Long, PacketDisposition> dispositions,
+            Map<Long, List<ProjectFactBinding>> facts,
+            Map<Long, LayerBJob> jobs,
+            Map<Long, List<LayerBLineJudgment>> judgments) throws ClassifyException {
+        List<PacketDisposition> orderedDispositions = new ArrayList<>();
+        List<ProjectFactBinding> orderedFacts = new ArrayList<>();
+        List<LayerBJob> orderedJobs = new ArrayList<>();
+        List<List<LayerBLineJudgment>> orderedJudgments = new ArrayList<>();
+        for (PreparedPacket packet : prepared) {
+            long id = packet.candidate().candidateId();
+            PacketDisposition disposition = dispositions.get(id);
+            if (disposition == null) {
+                throw new ClassifyException(
+                        "incomplete: missing Layer A for candidate " + id);
+            }
+            orderedDispositions.add(disposition);
+            orderedFacts.addAll(facts.getOrDefault(id, List.of()));
+            LayerBJob job = jobs.get(id);
+            if (job != null) {
+                List<LayerBLineJudgment> lines = judgments.get(id);
+                if (lines == null) {
+                    throw new ClassifyException(
+                            "incomplete: missing Layer B for candidate " + id);
+                }
+                orderedJobs.add(job);
+                orderedJudgments.add(lines);
+            }
+        }
+        return new LlmPhaseResult(
+                orderedDispositions, orderedFacts, orderedJobs, orderedJudgments);
+    }
 
     private record MaterializeResult(NomenclatureBinding binding, String rejectReason) {
         static MaterializeResult ok(NomenclatureBinding binding) {
@@ -447,21 +667,6 @@ public final class ClassifyService {
             }
         }
         return true;
-    }
-
-    private static List<CandidateRow> orderForLayerA(List<CandidateRow> candidates) {
-        List<CandidateRow> ordered = new ArrayList<>();
-        for (CandidateRow candidate : candidates) {
-            if ("coverage_parent".equals(candidate.candidateKind())) {
-                ordered.add(candidate);
-            }
-        }
-        for (CandidateRow candidate : candidates) {
-            if (!"coverage_parent".equals(candidate.candidateKind())) {
-                ordered.add(candidate);
-            }
-        }
-        return ordered;
     }
 
     private static LayerAJudgment parentContext(

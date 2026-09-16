@@ -96,7 +96,14 @@ class OpenRouterClassifierLlmTest {
         JsonNode root = new ObjectMapper().readTree(json);
         assertThat(root.path("model").asText()).isEqualTo("~z-ai/glm-flash-latest");
         assertThat(root.path("reasoning").path("effort").asText()).isEqualTo("low");
+        assertThat(root.path("reasoning").path("max_tokens").asInt())
+                .isEqualTo(OpenRouterClassifierLlm.LAYER_A_REASONING_MAX_TOKENS);
+        assertThat(root.path("max_tokens").asInt())
+                .isEqualTo(OpenRouterClassifierLlm.LAYER_A_MAX_COMPLETION_TOKENS);
         assertThat(root.path("response_format").path("type").asText()).isEqualTo("json_schema");
+        assertThat(root.path("response_format").path("json_schema").path("schema")
+                .path("properties").path("rowLabels").path("maxItems").asInt())
+                .isEqualTo(OpenRouterClassifierLlm.LAYER_A_LABEL_MAX_ITEMS);
         assertThat(root.path("response_format").path("json_schema").path("strict").asBoolean())
                 .isTrue();
         assertThat(root.path("response_format").path("json_schema").path("schema")
@@ -128,6 +135,65 @@ class OpenRouterClassifierLlmTest {
                 .isEqualTo("array");
         assertThat(schema.path("required").toString()).contains("lines").contains("soft");
         assertThat(root.path("provider").path("data_collection").asText()).isEqualTo("deny");
+        assertThat(root.path("max_tokens").asInt())
+                .isEqualTo(OpenRouterClassifierLlm.LAYER_B_MIN_COMPLETION_TOKENS);
+        assertThat(root.path("reasoning").path("max_tokens").isMissingNode()).isTrue();
+    }
+
+    @Test
+    void layerBMaxCompletionTokensScalesWithCandidateLinesWithoutBlunt800Cap() {
+        assertThat(OpenRouterClassifierLlm.layerBMaxCompletionTokens(10))
+                .isEqualTo(OpenRouterClassifierLlm.LAYER_B_MIN_COMPLETION_TOKENS);
+        assertThat(OpenRouterClassifierLlm.layerBMaxCompletionTokens(100))
+                .isGreaterThan(800)
+                .isEqualTo(100 * OpenRouterClassifierLlm.LAYER_B_TOKENS_PER_CANDIDATE_LINE
+                        + OpenRouterClassifierLlm.LAYER_B_SOFT_BUDGET_TOKENS);
+        assertThat(OpenRouterClassifierLlm.layerBMaxCompletionTokens(10_000))
+                .isEqualTo(OpenRouterClassifierLlm.LAYER_B_MAX_COMPLETION_TOKENS);
+    }
+
+    @Test
+    void contentWithUsageCapturesFinishReasonReasoningAndTruncation() throws Exception {
+        OpenRouterClassifierLlm.CompletionResult result =
+                OpenRouterClassifierLlm.HttpCompletionsClient.contentWithUsage(
+                        "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":"
+                                + "\"{\\\"lines\\\":[]}\"}}],"
+                                + "\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":900,"
+                                + "\"completion_tokens_details\":{\"reasoning_tokens\":700}}}",
+                        3);
+        assertThat(result.truncated()).isTrue();
+        assertThat(result.finishReason()).isEqualTo("length");
+        assertThat(result.reasoningTokens()).isEqualTo(700);
+        assertThat(result.completionTokens()).isEqualTo(900);
+        assertThat(result.httpAttempts()).isEqualTo(3);
+        assertThat(result.content()).contains("lines");
+    }
+
+    @Test
+    void rejectsTruncatedLayerACompletion() {
+        OpenRouterClassifierLlm.HttpCompletionsClient client =
+                new OpenRouterClassifierLlm.HttpCompletionsClient(
+                        "key",
+                        "model",
+                        OpenRouterClassifierLlm.DEFAULT_URL,
+                        body -> new OpenRouterClassifierLlm.ExchangeResponse(
+                                200,
+                                "{\"choices\":[{\"finish_reason\":\"length\","
+                                        + "\"message\":{\"content\":\"{\\\"scheduleFamily\\\":\\\"capex_detail\\\","
+                                        + "\\\"triage\\\":\\\"main\\\",\\\"relevance\\\":\\\"primary\\\","
+                                        + "\\\"rowLabels\\\":[],\\\"columnHeaders\\\":[],"
+                                        + "\\\"packetDefaultHead\\\":null}\"}}]}",
+                                Optional.empty()),
+                        delay -> {
+                            throw new AssertionError("no sleep");
+                        });
+        OpenRouterClassifierLlm llm = new OpenRouterClassifierLlm(client);
+        Packet packet = new Packet(1L, 1L, 1L, "child", List.of(), List.of(), true);
+        OntologySlice slice = new OntologySlice(
+                IndustryResolution.unspecified(), List.of(), List.of());
+        org.junit.jupiter.api.Assertions.assertThrows(
+                OpenRouterClassifierLlm.TruncatedCompletionException.class,
+                () -> llm.classifyLayerA(new LayerAPrompt(packet, slice, null, false)));
     }
 
     @Test
@@ -158,6 +224,55 @@ class OpenRouterClassifierLlmTest {
         assertThat(lines.get(0).coord()).isEqualTo("B2");
         assertThat(lines.get(0).verbatim()).isEqualTo("Civil Works");
         assertThat(lines.get(0).amountRole()).isEqualTo(AmountRole.ADD);
+    }
+
+    @Test
+    void retriesTruncatedLayerBThenParsesLines() {
+        Packet packet = new Packet(1L, 1L, 1L, "child", List.of(
+                new PacketCell(10L, 1L, "A2", 2, 1, PacketCell.ROLE_CORE, "string",
+                        "Civil Works", "Civil Works", null, null, false, false),
+                new PacketCell(1L, 1L, "B2", 2, 2, PacketCell.ROLE_CORE, "number",
+                        null, "100", "100", null, false, false)),
+                List.of(), true);
+        OntologySlice slice = new OntologySlice(
+                IndustryResolution.confirmed("hotel"),
+                List.of(new NomenclatureNode(
+                        "Project Cost > Civil Works > Structure", "Structure",
+                        "Project Cost > Civil Works",
+                        NomenclatureNode.LAYER_MANDATE_SOFT, false, true, null, 1L)),
+                List.of());
+        LayerAJudgment layerA = new LayerAJudgment(
+                ScheduleFamily.CAPEX_DETAIL, Triage.MAIN, Relevance.PRIMARY,
+                List.of(), List.of(), null);
+        AtomicInteger calls = new AtomicInteger();
+        OpenRouterClassifierLlm.HttpCompletionsClient client =
+                new OpenRouterClassifierLlm.HttpCompletionsClient(
+                        "key",
+                        "model",
+                        OpenRouterClassifierLlm.DEFAULT_URL,
+                        body -> {
+                            if (calls.incrementAndGet() == 1) {
+                                return new OpenRouterClassifierLlm.ExchangeResponse(
+                                        200,
+                                        "{\"choices\":[{\"finish_reason\":\"length\","
+                                                + "\"message\":{\"content\":\"{\\\"lines\\\":[\"}}]}",
+                                        Optional.empty());
+                            }
+                            return new OpenRouterClassifierLlm.ExchangeResponse(
+                                    200,
+                                    "{\"choices\":[{\"finish_reason\":\"stop\","
+                                            + "\"message\":{\"content\":\"{\\\"lines\\\":[[0,0,0]],"
+                                            + "\\\"soft\\\":[]}\"}}]}",
+                                    Optional.empty());
+                        },
+                        delay -> {
+                            throw new AssertionError("no sleep");
+                        });
+        List<LayerBLineJudgment> lines = new OpenRouterClassifierLlm(client).classifyLayerB(
+                new LayerBPrompt(packet, slice, layerA, null));
+        assertThat(calls.get()).isEqualTo(2);
+        assertThat(lines).hasSize(1);
+        assertThat(lines.get(0).coord()).isEqualTo("B2");
     }
 
     @Test
