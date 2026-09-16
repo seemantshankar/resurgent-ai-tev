@@ -3,6 +3,7 @@ package com.resurgent.tev.parser.db;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.resurgent.tev.parser.classify.BindingPeer;
+import com.resurgent.tev.parser.classify.CellInterpretation;
 import com.resurgent.tev.parser.classify.NomenclatureBinding;
 import com.resurgent.tev.parser.classify.PacketDisposition;
 import com.resurgent.tev.parser.classify.ProjectFactBinding;
@@ -23,7 +24,7 @@ import java.util.Optional;
 
 /**
  * JDBC repository for FM Loader ingest, region discovery, the nomenclature
- * catalog, Layer A Packet dispositions, and Layer B bindings.
+ * catalog, Layer A Packet dispositions, Layer B bindings, and Cell interpretations.
  */
 public final class WorkspaceRepository {
 
@@ -1588,6 +1589,135 @@ public final class WorkspaceRepository {
         }
     }
 
+    public long countCellsForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COUNT(*) FROM cell c"
+                        + " JOIN worksheet w ON w.worksheet_id = c.worksheet_id"
+                        + " WHERE w.parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getLong(1);
+            }
+        }
+    }
+
+    public List<InterpretationCellView> selectInterpretationCellsForParseRun(long parseRunId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT c.cell_id, c.worksheet_id, c.coord, c.value_type, c.text_value,"
+                        + " c.display_value, c.numeric_value, c.bool_value, c.date_value,"
+                        + " c.formula_text, c.formula_state, c.cached_value, c.cache_state,"
+                        + " c.is_error, c.error_type, c.is_merged_participant, c.value_source"
+                        + " FROM cell c"
+                        + " JOIN worksheet w ON w.worksheet_id = c.worksheet_id"
+                        + " WHERE w.parse_run_id = ?"
+                        + " ORDER BY c.worksheet_id, c.row_num, c.col_num")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<InterpretationCellView> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(mapInterpretationCellView(rs));
+                }
+                return rows;
+            }
+        }
+    }
+
+    public void deleteInterpretationsForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM cell_interpretation WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.executeUpdate();
+        }
+    }
+
+    public void insertCellInterpretation(CellInterpretation row) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cell_interpretation (parse_run_id, cell_id, value_origin,"
+                        + " resulting_value, result_source, formula_text, formula_state,"
+                        + " cache_state, is_error, error_type, nomenclature_path, amount_role,"
+                        + " soft_leaf, via_alias, nomenclature_status, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setLong(1, row.parseRunId());
+            ps.setLong(2, row.cellId());
+            ps.setString(3, row.valueOrigin());
+            ps.setString(4, row.resultingValue());
+            ps.setString(5, row.resultSource());
+            ps.setString(6, row.formulaText());
+            ps.setString(7, row.formulaState());
+            ps.setString(8, row.cacheState());
+            ps.setInt(9, row.isError() ? 1 : 0);
+            ps.setString(10, row.errorType());
+            ps.setString(11, row.nomenclaturePath());
+            ps.setString(12, row.amountRole());
+            if (row.softLeaf() == null) {
+                ps.setNull(13, Types.INTEGER);
+            } else {
+                ps.setInt(13, row.softLeaf() ? 1 : 0);
+            }
+            if (row.viaAlias() == null) {
+                ps.setNull(14, Types.INTEGER);
+            } else {
+                ps.setInt(14, row.viaAlias() ? 1 : 0);
+            }
+            ps.setString(15, row.nomenclatureStatus());
+            ps.setString(16, Timestamps.now());
+            ps.executeUpdate();
+        }
+    }
+
+    public Optional<CellInterpretation> selectCellInterpretation(long parseRunId, long cellId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT parse_run_id, cell_id, value_origin, resulting_value, result_source,"
+                        + " formula_text, formula_state, cache_state, is_error, error_type,"
+                        + " nomenclature_path, amount_role, soft_leaf, via_alias,"
+                        + " nomenclature_status"
+                        + " FROM cell_interpretation"
+                        + " WHERE parse_run_id = ? AND cell_id = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, cellId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(mapCellInterpretation(rs));
+            }
+        }
+    }
+
+    public long countInterpretationsForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COUNT(*) FROM cell_interpretation WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getLong(1);
+            }
+        }
+    }
+
+    public List<CellInterpretation> selectCellInterpretationsForParseRun(long parseRunId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT parse_run_id, cell_id, value_origin, resulting_value, result_source,"
+                        + " formula_text, formula_state, cache_state, is_error, error_type,"
+                        + " nomenclature_path, amount_role, soft_leaf, via_alias,"
+                        + " nomenclature_status"
+                        + " FROM cell_interpretation WHERE parse_run_id = ?"
+                        + " ORDER BY interpretation_id")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<CellInterpretation> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(mapCellInterpretation(rs));
+                }
+                return rows;
+            }
+        }
+    }
+
     public double sumAddAmountsForPath(long parseRunId, String path) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT COALESCE(SUM(c.numeric_value), 0) AS total"
@@ -1644,6 +1774,53 @@ public final class WorkspaceRepository {
                 rs.getString("structural_confidence_rationale"),
                 rs.getString("explanation"),
                 rs.getString("created_at"));
+    }
+
+    private static InterpretationCellView mapInterpretationCellView(ResultSet rs)
+            throws SQLException {
+        int boolRaw = rs.getInt("bool_value");
+        Boolean boolValue = rs.wasNull() ? null : boolRaw == 1;
+        return new InterpretationCellView(
+                rs.getLong("cell_id"),
+                rs.getLong("worksheet_id"),
+                rs.getString("coord"),
+                rs.getString("value_type"),
+                rs.getString("text_value"),
+                rs.getString("display_value"),
+                rs.getString("numeric_value"),
+                boolValue,
+                rs.getString("date_value"),
+                rs.getString("formula_text"),
+                rs.getString("formula_state"),
+                rs.getString("cached_value"),
+                rs.getString("cache_state"),
+                rs.getInt("is_error") == 1,
+                rs.getString("error_type"),
+                rs.getInt("is_merged_participant") == 1,
+                rs.getString("value_source"));
+    }
+
+    private static CellInterpretation mapCellInterpretation(ResultSet rs) throws SQLException {
+        int softRaw = rs.getInt("soft_leaf");
+        Boolean softLeaf = rs.wasNull() ? null : softRaw == 1;
+        int aliasRaw = rs.getInt("via_alias");
+        Boolean viaAlias = rs.wasNull() ? null : aliasRaw == 1;
+        return new CellInterpretation(
+                rs.getLong("parse_run_id"),
+                rs.getLong("cell_id"),
+                rs.getString("value_origin"),
+                rs.getString("resulting_value"),
+                rs.getString("result_source"),
+                rs.getString("formula_text"),
+                rs.getString("formula_state"),
+                rs.getString("cache_state"),
+                rs.getInt("is_error") == 1,
+                rs.getString("error_type"),
+                rs.getString("nomenclature_path"),
+                rs.getString("amount_role"),
+                softLeaf,
+                viaAlias,
+                rs.getString("nomenclature_status"));
     }
 
     private static void setInteger(PreparedStatement ps, int index, Integer value)

@@ -29,7 +29,8 @@ import java.util.concurrent.Future;
 /**
  * Packet classification application service: Layer A disposition and Layer B
  * nomenclature bindings for one parse run. Consumes derived Packets; does not
- * rewrite Candidate geometry. Peers and ProjectFacts persist in separate tables.
+ * rewrite Candidate geometry. Peers, ProjectFacts, and Cell interpretations
+ * persist in separate tables.
  */
 public final class ClassifyService {
 
@@ -37,14 +38,22 @@ public final class ClassifyService {
 
     private final ClassifierLlm llm;
     private final DiscoverService discover;
+    private final InterpretationWriter interpretationWriter;
 
     public ClassifyService(ClassifierLlm llm) {
-        this(llm, new DiscoverService());
+        this(llm, new DiscoverService(), new InterpretationWriter());
     }
 
     public ClassifyService(ClassifierLlm llm, DiscoverService discover) {
+        this(llm, discover, new InterpretationWriter());
+    }
+
+    public ClassifyService(
+            ClassifierLlm llm, DiscoverService discover, InterpretationWriter interpretationWriter) {
         this.llm = Objects.requireNonNull(llm, "llm");
         this.discover = Objects.requireNonNull(discover, "discover");
+        this.interpretationWriter =
+                Objects.requireNonNull(interpretationWriter, "interpretationWriter");
     }
 
     public ClassifySummary classify(Path dbPath, long parseRunId) throws ClassifyException {
@@ -152,12 +161,15 @@ public final class ClassifyService {
                 for (BindingPeer peer : bindingPeers) {
                     repo.insertBindingPeer(peer);
                 }
+                int interpretationCount =
+                        interpretationWriter.write(repo, parseRunId, bindings);
                 repo.commit();
                 return new ClassifySummary(
                         parseRunId,
                         dispositions.size(),
                         coverageParents,
                         bindings.size(),
+                        interpretationCount,
                         layerBStats);
             } catch (ClassifyException e) {
                 repo.rollback();

@@ -149,6 +149,50 @@ class RealWorkbookLiveClassifyIT {
             assertThat(bindings).noneMatch(b -> liveRows.stream()
                     .anyMatch(d -> d.candidateId() == b.candidateId() && d.cheapPass()));
 
+            long cellCount = repo.countCellsForParseRun(ingest.parseRunId());
+            assertThat(summary.interpretationCount())
+                    .as("interpretation coverage equals persisted cells")
+                    .isEqualTo((int) cellCount);
+            assertThat(repo.countInterpretationsForParseRun(ingest.parseRunId()))
+                    .isEqualTo(cellCount);
+            List<CellInterpretation> interpretations =
+                    repo.selectCellInterpretationsForParseRun(ingest.parseRunId());
+            assertThat(interpretations)
+                    .as("status vocabulary covers Layer B outcomes")
+                    .anyMatch(row -> NomenclatureStatus.BOUND.equals(row.nomenclatureStatus()))
+                    .anyMatch(row -> NomenclatureStatus.UNBOUND.equals(row.nomenclatureStatus())
+                            || NomenclatureStatus.NOT_APPLICABLE.equals(row.nomenclatureStatus()));
+            assertThat(interpretations.stream()
+                            .filter(row -> NomenclatureStatus.BOUND.equals(row.nomenclatureStatus()))
+                            .toList())
+                    .as("bound rows carry lean Layer B snapshot")
+                    .isNotEmpty()
+                    .allMatch(row -> row.nomenclaturePath() != null
+                            && !row.nomenclaturePath().isBlank()
+                            && row.amountRole() != null
+                            && AmountRole.isKnown(row.amountRole())
+                            && row.softLeaf() != null
+                            && row.viaAlias() != null);
+
+            NomenclatureBinding sampleBinding = bindings.stream()
+                    .filter(b -> b.path() != null && b.path().contains("Air Conditioning"))
+                    .findFirst()
+                    .orElse(bindings.get(0));
+            var sampleCell = repo.selectCellPacketViews(List.of(sampleBinding.cellId())).get(0);
+            String sheetName = repo.selectWorksheetsForParseRun(ingest.parseRunId()).stream()
+                    .filter(w -> w.worksheetId() == sampleCell.worksheetId())
+                    .findFirst()
+                    .orElseThrow()
+                    .sheetName();
+            String qualified = sheetName + "!" + sampleCell.coord();
+            CellMeaning meaning = new CellMeaningService()
+                    .lookup(db, ingest.parseRunId(), qualified);
+            assertThat(meaning.interpretation()).isNotNull();
+            assertThat(meaning.interpretation().nomenclatureStatus())
+                    .isEqualTo(NomenclatureStatus.BOUND);
+            assertThat(meaning.interpretation().nomenclaturePath())
+                    .isEqualTo(sampleBinding.path());
+
             for (ExpectedBinding expected : EXPECTED) {
                 assertThat(bindings)
                         .as("expected binding path~%s role=%s label~%s",
@@ -160,6 +204,23 @@ class RealWorkbookLiveClassifyIT {
 
             Path report = Path.of("target", "om-arham-live-layer-ab.txt");
             StringBuilder body = new StringBuilder();
+            body.append("interpretations=").append(summary.interpretationCount())
+                    .append(" cells=").append(cellCount)
+                    .append(" bound=")
+                    .append(interpretations.stream()
+                            .filter(row -> NomenclatureStatus.BOUND.equals(row.nomenclatureStatus()))
+                            .count())
+                    .append(" unbound=")
+                    .append(interpretations.stream()
+                            .filter(row -> NomenclatureStatus.UNBOUND.equals(row.nomenclatureStatus()))
+                            .count())
+                    .append(" not_applicable=")
+                    .append(interpretations.stream()
+                            .filter(row -> NomenclatureStatus.NOT_APPLICABLE.equals(
+                                    row.nomenclatureStatus()))
+                            .count())
+                    .append(" sampleMeaning=").append(qualified)
+                    .append('\n');
             body.append("liveLayerA=").append(liveLayerA.get())
                     .append(" liveLayerB=").append(liveLayerB.get())
                     .append(" bindings=").append(bindings.size())
@@ -252,12 +313,34 @@ class RealWorkbookLiveClassifyIT {
             Files.writeString(report, body.toString());
             System.err.println("Wrote " + report.toAbsolutePath());
             System.err.printf(Locale.ROOT,
-                    "Live quality: %d ms, %d bindings, %s, expected %d/%d named bindings%n",
+                    "Live quality: %d ms, %d bindings, %d interpretations/%d cells, %s, expected %d/%d named bindings%n",
                     classifyMs,
                     bindings.size(),
+                    summary.interpretationCount(),
+                    cellCount,
                     summary.layerBStats().summaryLine(),
                     EXPECTED.size(),
                     EXPECTED.size());
+        }
+
+        new DiscoverService().discover(db, ingest.parseRunId());
+        assertThat(new CellMeaningService().lookup(db, ingest.parseRunId(),
+                        findAnyQualifiedCoord(db, ingest.parseRunId())).interpretation())
+                .as("successful rediscover clears interpretations")
+                .isNull();
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            assertThat(new WorkspaceRepository(workspace.connection())
+                            .countInterpretationsForParseRun(ingest.parseRunId()))
+                    .isZero();
+        }
+    }
+
+    private static String findAnyQualifiedCoord(Path db, long parseRunId) throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            WorksheetRef sheet = repo.selectWorksheetsForParseRun(parseRunId).get(0);
+            String coord = repo.selectCellsForWorksheet(sheet.worksheetId()).get(0).coord();
+            return sheet.sheetName() + "!" + coord;
         }
     }
 
