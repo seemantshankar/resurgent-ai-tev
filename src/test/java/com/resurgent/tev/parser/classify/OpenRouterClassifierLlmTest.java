@@ -285,6 +285,55 @@ class OpenRouterClassifierLlmTest {
     }
 
     @Test
+    void retriesTruncatedLayerAWithABiggerBudgetThenParses() {
+        AtomicInteger calls = new AtomicInteger();
+        List<String> bodies = new ArrayList<>();
+        OpenRouterClassifierLlm.HttpCompletionsClient client =
+                new OpenRouterClassifierLlm.HttpCompletionsClient(
+                        "key",
+                        "model",
+                        OpenRouterClassifierLlm.DEFAULT_URL,
+                        body -> {
+                            bodies.add(body);
+                            if (calls.incrementAndGet() == 1) {
+                                return new OpenRouterClassifierLlm.ExchangeResponse(
+                                        200,
+                                        "{\"choices\":[{\"finish_reason\":\"length\","
+                                                + "\"message\":{\"content\":null}}]}",
+                                        Optional.empty());
+                            }
+                            return new OpenRouterClassifierLlm.ExchangeResponse(
+                                    200,
+                                    "{\"choices\":[{\"finish_reason\":\"stop\","
+                                            + "\"message\":{\"content\":"
+                                            + "\"{\\\"scheduleFamily\\\":\\\"capex_detail\\\","
+                                            + "\\\"triage\\\":\\\"main\\\","
+                                            + "\\\"relevance\\\":\\\"primary\\\","
+                                            + "\\\"rowLabels\\\":[],\\\"columnHeaders\\\":[],"
+                                            + "\\\"packetDefaultHead\\\":null}\"}}]}",
+                                    Optional.empty());
+                        },
+                        delay -> {
+                            throw new AssertionError("no sleep");
+                        });
+        Packet packet = new Packet(1L, 1L, 1L, "child", List.of(), List.of(), true);
+        OntologySlice slice = new OntologySlice(
+                IndustryResolution.unspecified(), List.of(), List.of());
+
+        LayerAJudgment judgment = new OpenRouterClassifierLlm(client)
+                .classifyLayerA(new LayerAPrompt(packet, slice, null, false));
+
+        assertThat(calls.get()).isEqualTo(2);
+        assertThat(judgment.triage()).isEqualTo(Triage.MAIN);
+        assertThat(bodies.get(0)).contains(
+                "\"max_tokens\":" + OpenRouterClassifierLlm.LAYER_A_MAX_COMPLETION_TOKENS);
+        assertThat(bodies.get(1))
+                .as("a truncated Layer A retry needs room for the answer")
+                .contains("\"max_tokens\":"
+                        + OpenRouterClassifierLlm.LAYER_A_RETRY_MAX_COMPLETION_TOKENS);
+    }
+
+    @Test
     void retriesHttp429UsingRetryAfterThenSucceeds() {
         AtomicInteger calls = new AtomicInteger();
         List<Duration> sleeps = new ArrayList<>();

@@ -20,9 +20,11 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Phaser;
@@ -31,6 +33,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 
 /**
  * Packet classification application service: Layer A disposition and Layer B
@@ -39,6 +42,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * persist in separate tables.
  */
 public final class ClassifyService {
+
+    private static final Pattern COORD_SHAPED = Pattern.compile("[A-Z]{1,3}[0-9]{1,7}");
 
     private final ClassifierLlm llm;
     private final DiscoverService discover;
@@ -112,6 +117,9 @@ public final class ClassifyService {
 
             LlmPhaseResult llmPhase = runLlmPhase(slice, parseRunId, prepared);
             LayerBBindingStats layerBStats = new LayerBBindingStats();
+            for (String failed : llmPhase.layerBFailures()) {
+                layerBStats.addFailedCall(failed);
+            }
             LayerBMaterializeResult layerB = materializeLayerB(
                     catalog,
                     mandateId,
@@ -294,7 +302,8 @@ public final class ClassifyService {
             List<PacketDisposition> dispositions,
             List<ProjectFactBinding> facts,
             List<LayerBJob> jobs,
-            List<List<LayerBLineJudgment>> judgments) {}
+            List<List<LayerBLineJudgment>> judgments,
+            List<String> layerBFailures) {}
 
     @FunctionalInterface
     private interface ClassifyTask {
@@ -311,6 +320,7 @@ public final class ClassifyService {
         Map<Long, List<ProjectFactBinding>> facts = new ConcurrentHashMap<>();
         Map<Long, LayerBJob> jobs = new ConcurrentHashMap<>();
         Map<Long, List<LayerBLineJudgment>> judgments = new ConcurrentHashMap<>();
+        Queue<String> layerBFailures = new ConcurrentLinkedQueue<>();
         Set<Long> submittedA = ConcurrentHashMap.newKeySet();
         AtomicReference<ClassifyException> failure = new AtomicReference<>();
         Object scheduleLock = new Object();
@@ -368,11 +378,18 @@ public final class ClassifyService {
                                             ? "Layer B candidate " + id
                                             : "Layer B candidate " + id
                                                     + " chunk " + (i + 1) + "/" + chunks.size();
-                                    lines.addAll(callLlm(
-                                            () -> llm.classifyLayerB(chunk),
-                                            label,
-                                            watchdog,
-                                            deadlineNanos));
+                                    try {
+                                        lines.addAll(callLlm(
+                                                () -> llm.classifyLayerB(chunk),
+                                                label,
+                                                watchdog,
+                                                deadlineNanos));
+                                    } catch (AttemptDeadlineException | RuntimeException e) {
+                                        // A chunk the model cannot answer in time, or at all,
+                                        // costs that chunk's bindings and not the run. The
+                                        // run-level classify deadline stays fatal.
+                                        layerBFailures.add(label + ": " + e.getMessage());
+                                    }
                                 }
                                 judgments.put(id, List.copyOf(lines));
                             });
@@ -401,7 +418,8 @@ public final class ClassifyService {
             if (failure.get() != null) {
                 throw failure.get();
             }
-            return assemblePhase(prepared, dispositions, facts, jobs, judgments);
+            return assemblePhase(
+                    prepared, dispositions, facts, jobs, judgments, List.copyOf(layerBFailures));
         } finally {
             pool.shutdownNow();
             watchdog.shutdownNow();
@@ -466,7 +484,7 @@ public final class ClassifyService {
         } catch (Exception e) {
             if (interrupted(e)) {
                 Thread.currentThread().interrupt();
-                throw new ClassifyException(
+                throw new AttemptDeadlineException(
                         "incomplete: " + label + " exceeded attempt deadline", e);
             }
             if (e instanceof RuntimeException runtime) {
@@ -498,7 +516,8 @@ public final class ClassifyService {
             Map<Long, PacketDisposition> dispositions,
             Map<Long, List<ProjectFactBinding>> facts,
             Map<Long, LayerBJob> jobs,
-            Map<Long, List<LayerBLineJudgment>> judgments) throws ClassifyException {
+            Map<Long, List<LayerBLineJudgment>> judgments,
+            List<String> layerBFailures) throws ClassifyException {
         List<PacketDisposition> orderedDispositions = new ArrayList<>();
         List<ProjectFactBinding> orderedFacts = new ArrayList<>();
         List<LayerBJob> orderedJobs = new ArrayList<>();
@@ -524,7 +543,7 @@ public final class ClassifyService {
             }
         }
         return new LlmPhaseResult(
-                orderedDispositions, orderedFacts, orderedJobs, orderedJudgments);
+                orderedDispositions, orderedFacts, orderedJobs, orderedJudgments, layerBFailures);
     }
 
     private record MaterializeResult(NomenclatureBinding binding, String rejectReason) {
@@ -592,10 +611,25 @@ public final class ClassifyService {
                     "Layer B binding requires an amount cell at " + line.coord());
         }
         String path = line.path().trim();
+        boolean derivedLeaf = false;
+        Optional<NomenclatureNode> midLevel = slice.node(path);
+        if (midLevel.isPresent() && !midLevel.get().leaf()) {
+            // The model placed the amount under a mid-level because no leaf fits it.
+            // Name a leaf from the row's own label so the amount still rolls up under
+            // the mid-level it was assigned, instead of discarding the line.
+            String derived = softLeafNameFrom(line.verbatim());
+            if (derived == null) {
+                throw new ClassifyException(
+                        "Layer B path must be a leaf join key, not mid-level: '" + path + "'");
+            }
+            path = path + " > " + derived;
+            derivedLeaf = true;
+        }
+        String resolvedPath = path;
         boolean viaAlias = slice.aliases().stream()
                 .anyMatch(alias -> OntologySlice.normalize(alias.aliasText())
                         .equals(OntologySlice.normalize(line.verbatim()))
-                        && alias.leafPath().equals(path));
+                        && alias.leafPath().equals(resolvedPath));
         boolean softLeaf = false;
         Optional<NomenclatureNode> existing = slice.node(path);
         if (existing.isPresent()) {
@@ -619,7 +653,10 @@ public final class ClassifyService {
                                 + "'; soft leaves attach under known mid-levels");
             }
             try {
-                catalog.putSoftLeaf(mandateId, parentPath, leafName, line.aliases());
+                // A derived leaf takes no aliases: the model's aliases described the
+                // mid-level it asked for, not this row.
+                catalog.putSoftLeaf(mandateId, parentPath, leafName,
+                        derivedLeaf ? List.of() : line.aliases());
                 softLeaf = true;
             } catch (NomenclatureException e) {
                 // Parallel Layer B may have already created this soft leaf serially earlier.
@@ -642,6 +679,23 @@ public final class ClassifyService {
                 softLeaf,
                 viaAlias,
                 line.confidence());
+    }
+
+    /**
+     * A leaf name for an amount the model placed on a mid-level, taken from the
+     * row's own label. Returns null when the label cannot name a leaf: blank, a
+     * bare coord (the parser's fallback when label resolution found nothing), a
+     * path separator that would invent a mid-level, or implausibly long prose.
+     */
+    private static String softLeafNameFrom(String verbatim) {
+        if (verbatim == null) {
+            return null;
+        }
+        String name = verbatim.trim();
+        if (name.isEmpty() || name.contains(">") || name.length() > 120) {
+            return null;
+        }
+        return COORD_SHAPED.matcher(name).matches() ? null : name;
     }
 
     private static Optional<ProjectFactBinding> materializeFact(

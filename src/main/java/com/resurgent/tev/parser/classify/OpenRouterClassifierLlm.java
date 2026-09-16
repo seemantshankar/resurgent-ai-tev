@@ -46,16 +46,39 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         long started = System.nanoTime();
         CompletionResult first = client.completeDetailed(system, user);
         try {
+            rejectIfTruncated("A", first);
             LayerAJudgment judgment = LayerAResponseParser.parse(first.content());
             recordMetric("A", user, first, started, 1);
             return judgment;
+        } catch (TruncatedCompletionException e) {
+            // Deliberation ate the whole budget and left no JSON. Retry with room
+            // for the answer and an instruction to lead with it.
+            CompletionResult retry = client.completeDetailed(
+                    system + "\nPrior response was TRUNCATED with no usable JSON. Emit the"
+                            + " JSON object immediately, shortest form, no deliberation."
+                            + " Empty rowLabels/columnHeaders. No markdown.",
+                    user + "\n\nRetry after truncation: answer with the JSON object only.",
+                    LAYER_A_RETRY_MAX_COMPLETION_TOKENS);
+            try {
+                rejectIfTruncated("A", retry);
+                LayerAJudgment judgment = LayerAResponseParser.parse(retry.content());
+                recordMetric("A", user, retry, started, 2);
+                return judgment;
+            } catch (RuntimeException second) {
+                recordMetric("A", user, retry, started, 2);
+                throw new IllegalStateException(
+                        "OpenRouter Layer A truncated/invalid after retry: " + second.getMessage(),
+                        second);
+            }
         } catch (RuntimeException firstError) {
             CompletionResult retry = client.completeDetailed(
                     system + "\nReturn only a compact valid JSON object. triage must be"
                             + " main|scratch|orphan; relevance must be primary|supporting|noise."
                             + " Empty rowLabels/columnHeaders unless essential. No markdown.",
-                    user + "\n\nYour previous JSON was rejected: " + firstError.getMessage());
+                    user + "\n\nYour previous JSON was rejected: " + firstError.getMessage(),
+                    LAYER_A_RETRY_MAX_COMPLETION_TOKENS);
             try {
+                rejectIfTruncated("A", retry);
                 LayerAJudgment judgment = LayerAResponseParser.parse(retry.content());
                 recordMetric("A", user, retry, started, 2);
                 return judgment;
@@ -78,7 +101,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         try {
             rejectIfTruncated("B", first);
             List<LayerBLineJudgment> lines =
-                    LayerBResponseParser.parse(first.content(), assembled.index());
+                    acceptLayerB(first.content(), assembled.index());
             recordMetric("B", user, first, started, 1);
             return lines;
         } catch (TruncatedCompletionException e) {
@@ -86,12 +109,13 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             CompletionResult retry = client.completeLayerBDetailed(
                     system + "\nPrior response was TRUNCATED. Return only {\"lines\":[...],\"soft\":[]}"
                             + " with soft empty. Prefer existing paths. No markdown.",
-                    user + "\n\nRetry after truncation: omit soft leaves; bind existing paths only.",
+                    user + "\n\nRetry after truncation: omit soft leaves; bind existing paths"
+                            + " only. Prior response was rejected: " + e.getMessage(),
                     candidateLines);
             try {
                 rejectIfTruncated("B", retry);
                 List<LayerBLineJudgment> lines =
-                        LayerBResponseParser.parse(retry.content(), assembled.index());
+                        acceptLayerB(retry.content(), assembled.index());
                 recordMetric("B", user, retry, started, 2);
                 return lines;
             } catch (RuntimeException second) {
@@ -110,7 +134,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             try {
                 rejectIfTruncated("B", retry);
                 List<LayerBLineJudgment> lines =
-                        LayerBResponseParser.parse(retry.content(), assembled.index());
+                        acceptLayerB(retry.content(), assembled.index());
                 recordMetric("B", user, retry, started, 2);
                 return lines;
             } catch (RuntimeException second) {
@@ -119,6 +143,15 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                         "OpenRouter Layer B invalid after retry: " + second.getMessage(), second);
             }
         }
+    }
+
+    private static List<LayerBLineJudgment> acceptLayerB(
+            String content, LayerBPromptIndex index) {
+        LayerBResponseParser.Parsed parsed = LayerBResponseParser.parseDetailed(content, index);
+        for (String dropped : parsed.dropped()) {
+            System.err.println("OpenRouter B dropped item: " + dropped);
+        }
+        return parsed.lines();
     }
 
     private static void rejectIfTruncated(String layer, CompletionResult result) {
@@ -209,6 +242,12 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
     /** Firm Layer A completion budget — disposition JSON is bounded (#122). */
     public static final int LAYER_A_MAX_COMPLETION_TOKENS = 2_048;
     /**
+     * Layer A retry budget after truncation. The firm budget is ample for the
+     * JSON, but a model that deliberates past it emits no visible content at
+     * all; the retry buys room for the answer rather than re-losing the call.
+     */
+    public static final int LAYER_A_RETRY_MAX_COMPLETION_TOKENS = 6_144;
+    /**
      * OpenRouter rejects {@code reasoning.effort} and {@code reasoning.max_tokens}
      * on the same request. Layer A uses {@code effort=low} plus
      * {@link #LAYER_A_MAX_COMPLETION_TOKENS}; this constant is the intended
@@ -234,6 +273,11 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
         default CompletionResult completeDetailed(String system, String user) {
             return CompletionResult.of(complete(system, user));
+        }
+
+        default CompletionResult completeDetailed(
+                String system, String user, int maxCompletionTokens) {
+            return completeDetailed(system, user);
         }
 
         default String completeLayerB(String system, String user) {
@@ -328,11 +372,17 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
         @Override
         public CompletionResult completeDetailed(String system, String user) {
+            return completeDetailed(system, user, LAYER_A_MAX_COMPLETION_TOKENS);
+        }
+
+        @Override
+        public CompletionResult completeDetailed(
+                String system, String user, int maxCompletionTokens) {
             return completeWithFormat(
                     system,
                     user,
                     layerAResponseFormat(),
-                    LAYER_A_MAX_COMPLETION_TOKENS,
+                    maxCompletionTokens,
                     0);
         }
 
