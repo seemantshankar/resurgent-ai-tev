@@ -96,8 +96,7 @@ class OpenRouterClassifierLlmTest {
         JsonNode root = new ObjectMapper().readTree(json);
         assertThat(root.path("model").asText()).isEqualTo("~z-ai/glm-flash-latest");
         assertThat(root.path("reasoning").path("effort").asText()).isEqualTo("low");
-        assertThat(root.path("reasoning").path("max_tokens").asInt())
-                .isEqualTo(OpenRouterClassifierLlm.LAYER_A_REASONING_MAX_TOKENS);
+        assertThat(root.path("reasoning").path("max_tokens").isMissingNode()).isTrue();
         assertThat(root.path("max_tokens").asInt())
                 .isEqualTo(OpenRouterClassifierLlm.LAYER_A_MAX_COMPLETION_TOKENS);
         assertThat(root.path("response_format").path("type").asText()).isEqualTo("json_schema");
@@ -135,6 +134,7 @@ class OpenRouterClassifierLlmTest {
                 .isEqualTo("array");
         assertThat(schema.path("required").toString()).contains("lines").contains("soft");
         assertThat(root.path("provider").path("data_collection").asText()).isEqualTo("deny");
+        assertThat(root.path("reasoning").path("effort").asText()).isEqualTo("low");
         assertThat(root.path("max_tokens").asInt())
                 .isEqualTo(OpenRouterClassifierLlm.LAYER_B_MIN_COMPLETION_TOKENS);
         assertThat(root.path("reasoning").path("max_tokens").isMissingNode()).isTrue();
@@ -170,6 +170,18 @@ class OpenRouterClassifierLlmTest {
     }
 
     @Test
+    void emptyContentWithFinishReasonLengthIsTruncated() throws Exception {
+        OpenRouterClassifierLlm.CompletionResult result =
+                OpenRouterClassifierLlm.HttpCompletionsClient.contentWithUsage(
+                        "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":null}}],"
+                                + "\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":512}}",
+                        1);
+        assertThat(result.truncated()).isTrue();
+        assertThat(result.finishReason()).isEqualTo("length");
+        assertThat(result.content()).isEqualTo("{}");
+    }
+
+    @Test
     void rejectsTruncatedLayerACompletion() {
         OpenRouterClassifierLlm.HttpCompletionsClient client =
                 new OpenRouterClassifierLlm.HttpCompletionsClient(
@@ -179,10 +191,7 @@ class OpenRouterClassifierLlmTest {
                         body -> new OpenRouterClassifierLlm.ExchangeResponse(
                                 200,
                                 "{\"choices\":[{\"finish_reason\":\"length\","
-                                        + "\"message\":{\"content\":\"{\\\"scheduleFamily\\\":\\\"capex_detail\\\","
-                                        + "\\\"triage\\\":\\\"main\\\",\\\"relevance\\\":\\\"primary\\\","
-                                        + "\\\"rowLabels\\\":[],\\\"columnHeaders\\\":[],"
-                                        + "\\\"packetDefaultHead\\\":null}\"}}]}",
+                                        + "\"message\":{\"content\":null}}]}",
                                 Optional.empty()),
                         delay -> {
                             throw new AssertionError("no sleep");
@@ -192,7 +201,7 @@ class OpenRouterClassifierLlmTest {
         OntologySlice slice = new OntologySlice(
                 IndustryResolution.unspecified(), List.of(), List.of());
         org.junit.jupiter.api.Assertions.assertThrows(
-                OpenRouterClassifierLlm.TruncatedCompletionException.class,
+                IllegalStateException.class,
                 () -> llm.classifyLayerA(new LayerAPrompt(packet, slice, null, false)));
     }
 

@@ -13,6 +13,7 @@ import com.resurgent.tev.parser.ingest.IngestSummary;
 import com.resurgent.tev.parser.nomenclature.NomenclatureCatalog;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -110,7 +111,12 @@ class RealWorkbookLiveClassifyIT {
         };
 
         long classifyStarted = System.nanoTime();
-        ClassifySummary summary = new ClassifyService(mixed).classify(db, ingest.parseRunId());
+        ClassifyLimits liveLimits = new ClassifyLimits(
+                ClassifyLimits.DEFAULT_PARALLELISM,
+                Duration.ofMinutes(10),
+                Duration.ofMinutes(20));
+        ClassifySummary summary = new ClassifyService(mixed, new DiscoverService(), liveLimits)
+                .classify(db, ingest.parseRunId());
         long classifyMs = (System.nanoTime() - classifyStarted) / 1_000_000L;
         assertThat(summary.dispositionCount()).isGreaterThan(liveCandidates.size());
         assertThat(liveLayerA.get()).isEqualTo(liveCandidates.size());
@@ -326,6 +332,9 @@ class RealWorkbookLiveClassifyIT {
                     summary.layerBStats().summaryLine(),
                     EXPECTED.size(),
                     EXPECTED.size());
+            assertThat(classifyMs)
+                    .as("Om Arham ASSETS+CAPITAL COST classify wall vs 5-minute gate")
+                    .isLessThan(300_000L);
         }
 
         new DiscoverService().discover(db, ingest.parseRunId());
