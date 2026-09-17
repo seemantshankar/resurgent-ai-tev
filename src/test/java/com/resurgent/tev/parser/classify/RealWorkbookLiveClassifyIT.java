@@ -36,6 +36,8 @@ class RealWorkbookLiveClassifyIT {
 
     /**
      * Named Om Arham bindings that must survive latency changes (path + role + label).
+     * This workbook is one regression fixture, not a special case in production:
+     * roles follow ordinary sheet semantics (e.g. a "Less : …" AC line is {@code deduct}).
      * Path fragments stay short: a derived soft leaf is named from the workbook's own
      * row label, so the exact leaf spelling is data, not an ontology guarantee.
      */
@@ -46,7 +48,8 @@ class RealWorkbookLiveClassifyIT {
             new ExpectedBinding("Plumbing Works", AmountRole.ADD, "Plumbing"),
             new ExpectedBinding(
                     "Centering, Shuttering", AmountRole.ADD, "Centering"),
-            new ExpectedBinding("Air Conditioning", AmountRole.ADD, "Air Conditioning"));
+            new ExpectedBinding(
+                    "Air Conditioning", AmountRole.DEDUCT, "Air Conditioning"));
 
     @TempDir
     Path tempDir;
@@ -206,6 +209,8 @@ class RealWorkbookLiveClassifyIT {
             assertThat(meaning.interpretation().nomenclaturePath())
                     .isEqualTo(sampleBinding.path());
 
+            // Diagnostic only: AC on this sheet is a Less/quotation deduction, so an
+            // add rollup is not a quality gate (and must not become one for other books).
             double acAdd = repo.sumAddAmountsForPath(ingest.parseRunId(), HOTEL_AC_PATH);
             int expectedMatched = 0;
             for (ExpectedBinding expected : EXPECTED) {
@@ -344,7 +349,6 @@ class RealWorkbookLiveClassifyIT {
                                 expected.pathContains(), expected.role(), expected.verbatimContains())
                         .anyMatch(expected::matches);
             }
-            assertThat(acAdd).as("Air Conditioning add rollup").isGreaterThan(0.0);
             assertThat(classifyMs)
                     .as("Om Arham ASSETS+CAPITAL COST classify wall vs 5-minute gate")
                     .isLessThan(300_000L);
