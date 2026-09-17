@@ -31,14 +31,20 @@ public class InterpretationWriter {
     }
 
     /**
-     * Replace all interpretations for the parse run. Returns the number written
-     * (must equal the persisted cell count).
+     * Replace all interpretations for the parse run, recording why each unbound
+     * numeric cell has no path. Returns the number written (must equal the persisted
+     * cell count). Deliberately not overloaded: a convenience overload here is
+     * silently bypassed by anything that substitutes this writer.
      */
     public int write(
-            WorkspaceRepository repo, long parseRunId, List<NomenclatureBinding> bindings)
+            WorkspaceRepository repo,
+            long parseRunId,
+            List<NomenclatureBinding> bindings,
+            Map<Long, UnboundReason> unboundReasons)
             throws SQLException {
         Objects.requireNonNull(repo, "repo");
         Objects.requireNonNull(bindings, "bindings");
+        Objects.requireNonNull(unboundReasons, "unboundReasons");
         Map<Long, NomenclatureBinding> byCell = new HashMap<>();
         for (NomenclatureBinding binding : bindings) {
             byCell.put(binding.cellId(), binding);
@@ -60,7 +66,8 @@ public class InterpretationWriter {
 
         for (InterpretationCellView cell : cells) {
             NomenclatureBinding binding = byCell.get(cell.cellId());
-            repo.insertCellInterpretation(build(parseRunId, cell, binding));
+            repo.insertCellInterpretation(
+                    build(parseRunId, cell, binding, unboundReasons.get(cell.cellId())));
             List<InterpretationEvidence> evidence = InterpretationEvidenceResolver.resolve(
                     parseRunId,
                     cell,
@@ -79,6 +86,14 @@ public class InterpretationWriter {
 
     CellInterpretation build(
             long parseRunId, InterpretationCellView cell, NomenclatureBinding binding) {
+        return build(parseRunId, cell, binding, null);
+    }
+
+    CellInterpretation build(
+            long parseRunId,
+            InterpretationCellView cell,
+            NomenclatureBinding binding,
+            UnboundReason unboundReason) {
         boolean formula = isFormula(cell);
         String valueOrigin = formula ? "formula" : "literal";
         String resultSource;
@@ -128,7 +143,8 @@ public class InterpretationWriter {
                 amountRole,
                 softLeaf,
                 viaAlias,
-                status);
+                status,
+                NomenclatureStatus.UNBOUND.equals(status) ? unboundReason : null);
     }
 
     private static boolean isFormula(InterpretationCellView cell) {

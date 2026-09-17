@@ -686,6 +686,12 @@ final class CellGraphBuilder {
             return (((long) rowNum) << 32) | (colNum & 0xffffffffL);
         }
 
+        /**
+         * A numeric cell: a number, or a formula that is not plainly textual. A
+         * formula whose cache is missing still computes a number — an unevaluated
+         * workbook must not drop out of the graph — so only a cached non-numeric
+         * value rules one out.
+         */
         private static boolean isNumeric(InterpretationCellView cell) {
             if (cell.isError()) {
                 return false;
@@ -696,9 +702,10 @@ final class CellGraphBuilder {
             if ("number".equals(cell.valueType())) {
                 return true;
             }
+            boolean formula = cell.formulaText() != null && !cell.formulaText().isBlank();
             String cached = cell.cachedValue();
             if (cached == null || cached.isBlank()) {
-                return false;
+                return formula;
             }
             try {
                 Double.parseDouble(cached.trim());

@@ -20,6 +20,7 @@ public final class LayerBBindingStats {
     private int catalogPreferred;
     private int softGenericKept;
     private int leafAmbiguous;
+    private int deterministic;
     private final Map<String, Integer> rejectReasons = new LinkedHashMap<>();
     private final List<String> rejectSamples = new ArrayList<>();
     private final List<String> failedCallSamples = new ArrayList<>();
@@ -49,6 +50,15 @@ public final class LayerBBindingStats {
     /** Soft leaf kept because evidence named more than one hard catalog leaf. */
     public void addLeafAmbiguous() {
         leafAmbiguous++;
+    }
+
+    /** Bindings the cell graph proved without asking anything. */
+    public void addDeterministic(int count) {
+        deterministic += count;
+    }
+
+    public int deterministic() {
+        return deterministic;
     }
 
     /** A Layer B call or chunk the model never answered usably; its lines are lost. */
@@ -121,6 +131,7 @@ public final class LayerBBindingStats {
                 + " catalogPreferred=" + catalogPreferred
                 + " softGenericKept=" + softGenericKept
                 + " leafAmbiguous=" + leafAmbiguous
+                + " deterministic=" + deterministic
                 + " reasons=" + formatRejectReasons();
     }
 

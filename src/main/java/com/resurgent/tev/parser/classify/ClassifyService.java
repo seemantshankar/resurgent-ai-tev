@@ -161,17 +161,25 @@ public final class ClassifyService {
                     layerBStats);
             List<PacketDisposition> dispositions = llmPhase.dispositions();
             List<ProjectFactBinding> factBindings = llmPhase.facts();
-            List<NomenclatureBinding> bindings = layerB.bindings();
+            List<NomenclatureBinding> llmBindings = layerB.bindings();
             List<BindingPeer> bindingPeers;
             try {
                 bindingPeers = BindingPeerWriter.buildPeers(
-                        repo, parseRunId, bindings, layerB.pendingPeers());
+                        repo, parseRunId, llmBindings, layerB.pendingPeers());
             } catch (PeerCoordResolver.PeerCoordException e) {
                 throw new ClassifyException(e.getMessage(), e);
             }
 
+            // The graph is read before the write transaction: cells and reference
+            // edges do not change during classify, and holding a write lock over the
+            // whole fixpoint would serialise every other writer behind it.
+            CellGraph graph = new CellGraphBuilder().read(repo, parseRunId);
+            CellTypes cellTypes = new TypePropagation().resolve(graph);
+            Map<Long, Long> candidateByCell = candidateByCell(repo, parseRunId, candidates);
+
             db.connection().setAutoCommit(false);
             int interpretationCount;
+            List<NomenclatureBinding> bindings;
             try {
                 List<CandidateRow> current = repo.selectCandidatesForParseRun(parseRunId);
                 if (!sameCandidateIds(candidates, current)) {
@@ -189,18 +197,31 @@ public final class ClassifyService {
                 for (ProjectFactBinding fact : factBindings) {
                     repo.insertProjectFactBinding(fact);
                 }
+                // The graph and its typing are the evidence behind Layer B: what each
+                // formula composes, with what sign, and what unit every numeric cell
+                // turned out to be. Persisted first so bindings can point at a group.
+                Map<Long, Long> aggregationIds =
+                        new CellGraphWriter().write(repo, graph, cellTypes);
+
+                Set<Long> boundCells = new HashSet<>();
+                for (NomenclatureBinding binding : llmBindings) {
+                    boundCells.add(binding.cellId());
+                }
+                DeterministicBinder.Result deterministic = new DeterministicBinder().bind(
+                        parseRunId, graph, cellTypes, slice, candidateByCell, aggregationIds,
+                        boundCells);
+                bindings = new ArrayList<>(llmBindings);
+                bindings.addAll(deterministic.bindings());
+                layerBStats.addDeterministic(deterministic.bindings().size());
+
                 for (NomenclatureBinding binding : bindings) {
                     repo.insertNomenclatureBinding(binding);
                 }
                 for (BindingPeer peer : bindingPeers) {
                     repo.insertBindingPeer(peer);
                 }
-                interpretationCount = interpretationWriter.write(repo, parseRunId, bindings);
-                // The graph and its typing are persisted as the evidence behind
-                // Layer B: what each formula composes, with what sign, and what unit
-                // every numeric cell turned out to be. Nothing binds from it yet.
-                CellGraph graph = new CellGraphBuilder().read(repo, parseRunId);
-                new CellGraphWriter().write(repo, graph, new TypePropagation().resolve(graph));
+                interpretationCount = interpretationWriter.write(
+                        repo, parseRunId, bindings, deterministic.unboundReasons());
                 repo.commit();
             } catch (ClassifyException e) {
                 repo.rollback();
@@ -915,6 +936,45 @@ public final class ClassifyService {
         }
         return Optional.of(new ProjectFactBinding(
                 parseRunId, candidate.candidateId(), cellId, fact.verbatim(), path));
+    }
+
+    /**
+     * One candidate per cell for binding provenance. A cell can sit in several
+     * Candidates; the narrowest one is the most specific home, and the coverage
+     * parent is only a backstop.
+     */
+    private static Map<Long, Long> candidateByCell(
+            WorkspaceRepository repo, long parseRunId, List<CandidateRow> candidates)
+            throws java.sql.SQLException {
+        Map<Long, CandidateRow> byId = new HashMap<>();
+        for (CandidateRow candidate : candidates) {
+            byId.put(candidate.candidateId(), candidate);
+        }
+        Map<Long, Long> byCell = new HashMap<>();
+        for (long[] pair : repo.selectCandidateMembersForParseRun(parseRunId)) {
+            long candidateId = pair[0];
+            long cellId = pair[1];
+            Long current = byCell.get(cellId);
+            if (current == null || preferCandidate(byId.get(candidateId), byId.get(current))) {
+                byCell.put(cellId, candidateId);
+            }
+        }
+        return Map.copyOf(byCell);
+    }
+
+    private static boolean preferCandidate(CandidateRow candidate, CandidateRow current) {
+        if (candidate == null) {
+            return false;
+        }
+        if (current == null) {
+            return true;
+        }
+        boolean candidateIsParent = "coverage_parent".equals(candidate.candidateKind());
+        boolean currentIsParent = "coverage_parent".equals(current.candidateKind());
+        if (candidateIsParent != currentIsParent) {
+            return currentIsParent;
+        }
+        return candidate.candidateId() < current.candidateId();
     }
 
     private static Optional<PacketCell> findCell(Packet packet, String coord) {
