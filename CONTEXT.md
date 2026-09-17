@@ -93,7 +93,7 @@ Ordered annotated references on a formula Cell interpretation: original expressi
 _Avoid_: second reference graph, economic `SUM(path)` from shared head
 
 **Formula gloss**:
-Optional LLM explanatory prose for a formula Cell interpretation, stored separately from formula facts and deterministic dependency annotations. Built from number-redacted formula text, annotations, header evidence, schedule family, and binding context (ADR 0008 — no cached amounts). Explanation only — not computation, validation, or a modelling rule. Lifecycle follows annotation presence.
+Optional LLM explanatory prose for a formula Cell interpretation, stored separately from formula facts and deterministic dependency annotations. Built from number-redacted formula text, annotations, header evidence, schedule family, and binding context (ADR 0008 — no cached amounts). Explanation only — not computation, validation, or a modelling rule. Lifecycle follows annotation presence. Best-effort per classify run (bounded eligible Candidates / call cap); annotated formulas beyond the budget stay annotated without gloss.
 _Avoid_: second amount store, modelling rule, validation verdict
 
 **Nomenclature status**:

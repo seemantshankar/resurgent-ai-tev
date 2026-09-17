@@ -147,8 +147,43 @@ class CellInterpretationEvidenceTest {
         assertThat(evidence(amount, EvidenceRole.SCALE))
                 .anyMatch(e -> "lakh".equals(e.normalizedValue())
                         && EvidenceResolution.RESOLVED.equals(e.resolution()));
+        assertThat(evidence(amount, EvidenceRole.UNIT))
+                .anyMatch(e -> e.sourceText() != null
+                        && e.sourceText().toLowerCase().contains("sq")
+                        && EvidenceResolution.RESOLVED.equals(e.resolution()));
         // Scale is evidence only — resulting_value stays the workbook magnitude.
         assertThat(amount.interpretation().resultingValue()).doesNotContain("12000");
+    }
+
+    @Test
+    void missingRowHeaderIsNotACoordinateString() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Costs");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Item");
+            header.createCell(1).setCellValue("Amount");
+            header.createCell(4).setCellValue("Other");
+            header.createCell(5).setCellValue("Amt");
+            // Amount with no left label — only a blank col A so Packet-style expand finds nothing.
+            Row body = sheet.createRow(1);
+            body.createCell(1).setCellValue(42.0);
+            body.createCell(4).setCellValue("Glass");
+            body.createCell(5).setCellValue(1.0);
+            xlsx = writeWorkbook(workbook, "missing-row.xlsx");
+        }
+        Path db = tempDir.resolve("missing-row.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+        new ClassifyService(bindingLlm("B2")).classify(db, ingest.parseRunId());
+
+        CellMeaning amount = new CellMeaningService().lookup(db, ingest.parseRunId(), "Costs!B2");
+        assertThat(evidence(amount, EvidenceRole.ROW_HEADER))
+                .isNotEmpty()
+                .allMatch(e -> EvidenceResolution.MISSING.equals(e.resolution())
+                        || (e.sourceText() != null && !e.sourceText().matches("(?i)^[A-Z]+\\d+$")));
+        assertThat(evidence(amount, EvidenceRole.ROW_HEADER))
+                .noneMatch(e -> e.sourceText() != null && e.sourceText().matches("(?i)^[A-Z]+\\d+$"));
     }
 
     @Test
@@ -517,7 +552,7 @@ class CellInterpretationEvidenceTest {
             top.createCell(1).setCellValue("Projected");
             Row mid = sheet.createRow(1);
             mid.createCell(0).setCellValue("");
-            mid.createCell(1).setCellValue("Year 2 (INR lakh)");
+            mid.createCell(1).setCellValue("Year 2 (INR lakh / sq ft)");
             Row body = sheet.createRow(2);
             body.createCell(0).setCellValue("Civil Works");
             body.createCell(1).setCellValue(0.12);

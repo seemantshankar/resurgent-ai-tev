@@ -20,7 +20,8 @@ import java.util.Set;
  *
  * <p>Scope is bounded: annotated formulas on non-noise, non-coverage Candidates
  * (plus any bound formula), capped so a full workbook cannot spawn thousands of
- * external calls.
+ * external calls. Gloss is best-effort explanation — annotated formulas beyond
+ * {@link #MAX_GLOSS_PER_RUN} remain annotated without gloss.
  */
 public final class FormulaGlossWriter {
 

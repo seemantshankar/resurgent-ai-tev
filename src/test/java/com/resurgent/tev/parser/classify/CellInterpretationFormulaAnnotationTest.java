@@ -63,6 +63,41 @@ class CellInterpretationFormulaAnnotationTest {
     }
 
     @Test
+    void wholeColumnRangeReportsTruncatedCompleteness() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Costs");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Item");
+            header.createCell(1).setCellValue("Amount");
+            header.createCell(4).setCellValue("Other");
+            header.createCell(5).setCellValue("Amt");
+            Row body = sheet.createRow(1);
+            body.createCell(0).setCellValue("Civil Works");
+            body.createCell(1).setCellValue(10.0);
+            body.createCell(4).setCellValue("Glass");
+            body.createCell(5).setCellValue(1.0);
+            Row total = sheet.createRow(2);
+            total.createCell(0).setCellValue("Total");
+            total.createCell(1).setCellFormula("SUM(B:B)");
+            total.createCell(4).setCellValue("Misc");
+            total.createCell(5).setCellValue(2.0);
+            workbook.getCreationHelper().createFormulaEvaluator().evaluateAll();
+            xlsx = writeWorkbook(workbook, "whole-col.xlsx");
+        }
+        Path db = tempDir.resolve("whole-col.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+        new ClassifyService(bindingPaths(Map.of("B2", AC_PATH))).classify(db, ingest.parseRunId());
+
+        CellMeaning total = new CellMeaningService().lookup(db, ingest.parseRunId(), "Costs!B3");
+        assertThat(total.formulaAnnotations())
+                .anyMatch(a -> a.rawToken() != null
+                        && a.rawToken().toUpperCase().contains("B:B")
+                        && AnnotationCompleteness.TRUNCATED.equals(a.completeness()));
+    }
+
+    @Test
     void boundedRangeReportsCompletenessWithoutInventingBlankCells() throws Exception {
         Path xlsx = sparseRangeWorkbook();
         Path db = tempDir.resolve("sparse.db");
