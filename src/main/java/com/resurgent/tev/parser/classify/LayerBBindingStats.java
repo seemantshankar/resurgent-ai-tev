@@ -52,6 +52,11 @@ public final class LayerBBindingStats {
         leafAmbiguous++;
     }
 
+    /** Bindings from one group-level answer applied across every cell sharing a label. */
+    public void addLabelBindings(int count) {
+        accepted += count;
+    }
+
     /** Bindings the cell graph proved without asking anything. */
     public void addDeterministic(int count) {
         deterministic += count;

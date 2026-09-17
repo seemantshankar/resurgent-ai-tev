@@ -85,16 +85,11 @@ class DeterministicBinderTest {
         CellGraph graph = new CellGraphBuilder().build(1L, cells, edges);
         CellTypes types = new TypePropagation().resolve(graph);
         Map<Long, Long> candidateByCell = new HashMap<>();
-        Map<Long, Long> aggregationIds = new HashMap<>();
-        long aggregationId = 500L;
         for (InterpretationCellView cell : cells) {
             candidateByCell.put(cell.cellId(), CANDIDATE);
         }
-        for (Aggregation aggregation : graph.aggregations()) {
-            aggregationIds.put(aggregation.headCellId(), aggregationId++);
-        }
         return new DeterministicBinder().bind(
-                1L, graph, types, slice(), candidateByCell, aggregationIds, Set.of());
+                1L, graph, types, slice(), candidateByCell, Set.of());
     }
 
     @Test
@@ -116,7 +111,7 @@ class DeterministicBinderTest {
                     assertThat(binding.path()).isEqualTo(TOTAL_LEAF);
                     assertThat(binding.amountRole()).isEqualTo(AmountRole.TOTAL);
                     assertThat(binding.source()).isEqualTo(BindingSource.AGGREGATION_HEAD);
-                    assertThat(binding.aggregationId()).isEqualTo(500L);
+                    assertThat(result.headCellByCell()).containsEntry(head, head);
                     assertThat(binding.labelKey())
                             .isEqualTo("total operating cost > total operating cost");
                 });
@@ -190,7 +185,7 @@ class DeterministicBinderTest {
         candidateByCell.put(premium, CANDIDATE);
 
         DeterministicBinder.Result result = new DeterministicBinder().bind(
-                1L, graph, types, slice(), candidateByCell, Map.of(), Set.of(premium));
+                1L, graph, types, slice(), candidateByCell, Set.of(premium));
 
         assertThat(result.bindings()).isEmpty();
         assertThat(result.unboundReasons()).doesNotContainKey(premium);

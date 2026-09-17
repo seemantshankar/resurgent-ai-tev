@@ -160,15 +160,17 @@ final class LayerBAmountSupport {
     }
 
     /**
-     * Role gating: formula numerics need helper|total; non-money kinds cannot take
-     * add/deduct/total (helper only, intentionally supported for qty/rate/percent).
+     * Role gating: a non-money kind cannot take add/deduct/total (helper only,
+     * intentionally supported for qty/rate/percent).
+     *
+     * <p>Being a formula is no longer a gate. It was standing in for
+     * anti-double-counting, but 71% of numeric cells are formulas, so it forced
+     * every one of them to helper or total and left the binding table contributing
+     * nothing to any leaf rollup. The cell graph tests double counting directly: a
+     * cell is a rollup exactly when it heads an aggregation.
      */
     static boolean isBindableForRole(Packet packet, PacketCell cell, String role) {
         if (!isPromptNumeric(cell) || !AmountRole.isKnown(role)) {
-            return false;
-        }
-        if (isFormulaNumeric(cell)
-                && !(AmountRole.HELPER.equals(role) || AmountRole.TOTAL.equals(role))) {
             return false;
         }
         NumericKind kind = classifyKind(packet, cell);

@@ -169,6 +169,195 @@ class RealWorkbookClassifyIT {
         }
     }
 
+
+    @Test
+    void noRowCarriesMoreThanOnePathAcrossItsPeriodSeries() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            Map<Long, com.resurgent.tev.parser.db.InterpretationCellView> cells =
+                    repo.selectInterpretationCellsForParseRun(parseRunId).stream()
+                            .collect(java.util.stream.Collectors.toMap(
+                                    com.resurgent.tev.parser.db.InterpretationCellView::cellId,
+                                    cell -> cell));
+            Map<String, Set<String>> pathsByRow = new HashMap<>();
+            for (NomenclatureBinding binding : repo.selectNomenclatureBindingsForParseRun(
+                    parseRunId)) {
+                var cell = cells.get(binding.cellId());
+                if (cell == null) {
+                    continue;
+                }
+                pathsByRow
+                        .computeIfAbsent(cell.worksheetId() + "!" + cell.rowNum(),
+                                key -> new HashSet<>())
+                        .add(binding.path());
+            }
+            assertThat(pathsByRow.values())
+                    .as("a row means one thing across its period columns")
+                    .allSatisfy(paths -> assertThat(paths).hasSize(1));
+        }
+    }
+
+    @Test
+    void noLabelIsGivenConflictingRolesWithinTheRun() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            Map<String, Set<String>> rolesByLabel = new HashMap<>();
+            for (NomenclatureBinding binding : repo.selectNomenclatureBindingsForParseRun(
+                    parseRunId)) {
+                if (binding.labelKey() == null) {
+                    continue;
+                }
+                rolesByLabel
+                        .computeIfAbsent(binding.labelKey(), key -> new HashSet<>())
+                        .add(binding.amountRole());
+            }
+            assertThat(rolesByLabel.values()).allSatisfy(roles -> assertThat(roles).hasSize(1));
+        }
+    }
+
+    @Test
+    void aCellInTwoCandidatesGetsExactlyOneBinding() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<NomenclatureBinding> bindings =
+                    repo.selectNomenclatureBindingsForParseRun(parseRunId);
+            assertThat(bindings).extracting(NomenclatureBinding::cellId).doesNotHaveDuplicates();
+        }
+    }
+
+    @Test
+    void everyUnboundNumericCellCarriesAReason() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<CellInterpretation> unbound =
+                    repo.selectCellInterpretationsForParseRun(parseRunId).stream()
+                            .filter(row -> NomenclatureStatus.UNBOUND.equals(
+                                    row.nomenclatureStatus()))
+                            .toList();
+            assertThat(unbound).isNotEmpty();
+            long withReason = unbound.stream()
+                    .filter(row -> row.unboundReason() != null && !row.unboundReason().isBlank())
+                    .count();
+            assertThat(unbound.stream()
+                    .filter(row -> row.unboundReason() != null)
+                    .map(CellInterpretation::unboundReason))
+                    .allMatch(reason -> UnboundReason.wireNames().contains(reason));
+            assertThat(withReason)
+                    .as("coverage comes from what can be proven; the rest says why not")
+                    .isEqualTo(unbound.size());
+            assertThat(unbound.stream()
+                    .map(CellInterpretation::unboundReason)
+                    .distinct()
+                    .toList())
+                    .as("reasons are specific, not one blanket default")
+                    .hasSizeGreaterThan(1);
+        }
+    }
+
+    @Test
+    void noMemberOfANonMoneyAggregationCarriesACostRole() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            Map<Long, String> roleByCell = new HashMap<>();
+            for (NomenclatureBinding binding : repo.selectNomenclatureBindingsForParseRun(
+                    parseRunId)) {
+                roleByCell.put(binding.cellId(), binding.amountRole());
+            }
+            for (AggregationRow aggregation : repo.selectAggregationsForParseRun(parseRunId)) {
+                if (aggregation.resolvedKind() == null
+                        || aggregation.resolvedKind().allowsCostRole()) {
+                    continue;
+                }
+                for (AggregationMemberRow member
+                        : repo.selectAggregationMembers(aggregation.aggregationId())) {
+                    assertThat(roleByCell.get(member.memberCellId()))
+                            .as("a guest count is not a cost, whatever its sign")
+                            .isNotIn(AmountRole.ADD, AmountRole.DEDUCT, AmountRole.TOTAL);
+                }
+            }
+        }
+    }
+
+    @Test
+    void layerBOutcomeIsReportedForTheRun() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<NomenclatureBinding> bindings =
+                    repo.selectNomenclatureBindingsForParseRun(parseRunId);
+            Map<String, Long> bySource = new HashMap<>();
+            Map<String, Long> byRole = new HashMap<>();
+            for (NomenclatureBinding binding : bindings) {
+                bySource.merge(binding.source(), 1L, Long::sum);
+                byRole.merge(binding.amountRole(), 1L, Long::sum);
+            }
+            Map<String, Long> reasons = new HashMap<>();
+            long unboundInBoundRow = 0;
+            Map<String, Long> boundRows = new HashMap<>();
+            Map<Long, com.resurgent.tev.parser.db.InterpretationCellView> cells =
+                    repo.selectInterpretationCellsForParseRun(parseRunId).stream()
+                            .collect(java.util.stream.Collectors.toMap(
+                                    com.resurgent.tev.parser.db.InterpretationCellView::cellId,
+                                    cell -> cell));
+            for (NomenclatureBinding binding : bindings) {
+                var cell = cells.get(binding.cellId());
+                if (cell != null) {
+                    boundRows.merge(cell.worksheetId() + "!" + cell.rowNum(), 1L, Long::sum);
+                }
+            }
+            for (CellInterpretation row : repo.selectCellInterpretationsForParseRun(parseRunId)) {
+                if (!NomenclatureStatus.UNBOUND.equals(row.nomenclatureStatus())) {
+                    continue;
+                }
+                reasons.merge(row.unboundReason(), 1L, Long::sum);
+                var cell = cells.get(row.cellId());
+                if (cell != null && cell.numericValue() != null
+                        && boundRows.containsKey(cell.worksheetId() + "!" + cell.rowNum())) {
+                    unboundInBoundRow++;
+                }
+            }
+            System.out.println("layer-b outcome: bindings=" + bindings.size()
+                    + " bySource=" + bySource
+                    + " byRole=" + byRole
+                    + " boundRows=" + boundRows.size()
+                    + " unboundNumericInABoundRow=" + unboundInBoundRow);
+            Set<String> awaitingNames = new HashSet<>();
+            for (CellInterpretation row : repo.selectCellInterpretationsForParseRun(parseRunId)) {
+                if (!UnboundReason.LLM_DECLINED.wireName().equals(row.unboundReason())) {
+                    continue;
+                }
+                var cell = cells.get(row.cellId());
+                if (cell != null) {
+                    awaitingNames.add(cell.worksheetId() + "!" + cell.rowNum());
+                }
+            }
+            System.out.println("layer-b unbound reasons: " + reasons);
+            System.out.println("layer-b rows awaiting a name: " + awaitingNames.size());
+
+            // This run uses a fake model that answers no Layer B line, so what binds
+            // here is exactly what the graph proves on its own. Coverage beyond this
+            // comes from the group-level naming question, which needs a live model.
+            assertThat(bindings).isNotEmpty();
+            assertThat(byRole.getOrDefault(AmountRole.ADD, 0L))
+                    .as("add bindings now exist, so a leaf rollup means something")
+                    .isNotZero();
+            assertThat(bySource.getOrDefault(BindingSource.DERIVED, 0L))
+                    .as("a formula cell can finally carry add")
+                    .isNotZero();
+            assertThat(bySource.getOrDefault(BindingSource.AGGREGATION_HEAD, 0L))
+                    .as("a total is a total because it heads an aggregation")
+                    .isNotZero();
+        }
+    }
+
+    @Test
+    void theGraphAndItsTypingAreWrittenForTheRun() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectAggregationsForParseRun(parseRunId)).isNotEmpty();
+            assertThat(repo.selectCellTypesForParseRun(parseRunId)).isNotEmpty();
+        }
+    }
+
     private static Set<String> distinctiveAmounts(WorkspaceDatabase workspace) throws Exception {
         Set<String> sentinels = new LinkedHashSet<>();
         try (ResultSet rs = workspace.connection().createStatement().executeQuery(

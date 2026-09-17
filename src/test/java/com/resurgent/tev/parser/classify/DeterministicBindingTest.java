@@ -150,7 +150,8 @@ class DeterministicBindingTest {
             assertThat(repo.selectCellInterpretation(bound.parseRunId(), totalCellId)
                             .orElseThrow()
                             .unboundReason())
-                    .isEqualTo(UnboundReason.LLM_UNAVAILABLE.wireName());
+                    .as("the group was asked and the model named nothing usable")
+                    .isEqualTo(UnboundReason.LLM_DECLINED.wireName());
             assertThat(repo.selectAggregationsForParseRun(bound.parseRunId()))
                     .anySatisfy(aggregation -> {
                         assertThat(aggregation.headCellId()).isEqualTo(totalCellId);

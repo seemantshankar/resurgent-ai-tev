@@ -744,8 +744,14 @@ class ClassifyServiceTest {
         assertThat(summary.layerBStats().failedCallSamples().get(0))
                 .contains("Layer B invalid after retry");
         assertThat(summary.dispositionCount()).isEqualTo(llm.prompts.size());
-        assertThat(summary.bindingCount()).isEqualTo(summary.layerBStats().accepted());
-        assertThat(summary.bindingCount()).isEqualTo(llm.layerBPrompts.size() - 1);
+        assertThat(summary.bindingCount())
+                .as("the call that failed costs its own bindings, not the run's")
+                .isGreaterThanOrEqualTo(1);
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
+                    .anyMatch(binding -> BindingSource.LLM_LINE.equals(binding.source()));
+        }
     }
 
     @Test
@@ -771,7 +777,8 @@ class ClassifyServiceTest {
     }
 
     @Test
-    void formulaHelperAmountsCanBindButFormulaAddIsRejected() throws Exception {
+    void aFormulaCanTakeAddAndTheAggregationHeadIsWhatStopsDoubleCounting()
+            throws Exception {
         Path xlsx;
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Parallel");
@@ -817,14 +824,25 @@ class ClassifyServiceTest {
         ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
         assertThat(llm.layerBPrompts).isNotEmpty();
         assertThat(summary.layerBStats().proposed()).isGreaterThanOrEqualTo(2);
-        assertThat(summary.layerBStats().accepted()).isGreaterThanOrEqualTo(1);
-        assertThat(summary.layerBStats().rejected()).isGreaterThanOrEqualTo(1);
-        assertThat(summary.layerBStats().rejectReasons())
-                .containsKey("formula_role_mismatch");
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
-            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
-                    .anyMatch(b -> AmountRole.HELPER.equals(b.amountRole()));
+            var bindings = repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId());
+            assertThat(bindings)
+                    .as("being a formula is no longer a reason to refuse a role")
+                    .isNotEmpty();
+            var totals = repo.selectAggregationsForParseRun(ingest.parseRunId());
+            assertThat(totals)
+                    .as("B1+B2+B3 and F1+F2+F3 are the rollups, and the graph knows it")
+                    .hasSize(2);
+            for (var binding : bindings) {
+                boolean isHead = totals.stream()
+                        .anyMatch(total -> total.headCellId() == binding.cellId());
+                if (AmountRole.TOTAL.equals(binding.amountRole())) {
+                    assertThat(isHead)
+                            .as("only an aggregation head is a total")
+                            .isTrue();
+                }
+            }
         }
     }
 

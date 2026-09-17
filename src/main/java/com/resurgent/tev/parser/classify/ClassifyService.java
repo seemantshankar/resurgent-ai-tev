@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -177,6 +178,21 @@ public final class ClassifyService {
             CellTypes cellTypes = new TypePropagation().resolve(graph);
             Map<Long, Long> candidateByCell = candidateByCell(repo, parseRunId, candidates);
 
+            // Precedence is inverted: what the graph proves wins, and the per-cell
+            // Layer B answer only fills cells the graph could not settle. Naming is
+            // asked once per distinct label, never once per cell.
+            DeterministicBinder.Result deterministic = new DeterministicBinder().bind(
+                    parseRunId, graph, cellTypes, slice, candidateByCell, Set.of());
+            GapFillResult gapFill = fillLabelGaps(
+                    catalog, mandateId, slice, parseRunId, graph, deterministic, layerBStats);
+            for (String failure : gapFill.failures()) {
+                layerBStats.addFailedCall(failure);
+            }
+            Set<Long> llmBoundCells = new HashSet<>();
+            for (NomenclatureBinding binding : llmBindings) {
+                llmBoundCells.add(binding.cellId());
+            }
+
             db.connection().setAutoCommit(false);
             int interpretationCount;
             List<NomenclatureBinding> bindings;
@@ -203,15 +219,32 @@ public final class ClassifyService {
                 Map<Long, Long> aggregationIds =
                         new CellGraphWriter().write(repo, graph, cellTypes);
 
-                Set<Long> boundCells = new HashSet<>();
-                for (NomenclatureBinding binding : llmBindings) {
-                    boundCells.add(binding.cellId());
+                // A role the graph proved beats the per-cell answer. Where the graph
+                // only defaulted a role, the per-cell answer stands.
+                bindings = new ArrayList<>();
+                Set<Long> graphBound = new HashSet<>();
+                for (NomenclatureBinding binding : deterministic.bindings()) {
+                    if (llmBoundCells.contains(binding.cellId())
+                            && !deterministic.roleProven(binding.cellId())) {
+                        continue;
+                    }
+                    graphBound.add(binding.cellId());
+                    bindings.add(withAggregation(binding, deterministic, aggregationIds));
                 }
-                DeterministicBinder.Result deterministic = new DeterministicBinder().bind(
-                        parseRunId, graph, cellTypes, slice, candidateByCell, aggregationIds,
-                        boundCells);
-                bindings = new ArrayList<>(llmBindings);
-                bindings.addAll(deterministic.bindings());
+                for (NomenclatureBinding binding : gapFill.bindings()) {
+                    if (llmBoundCells.contains(binding.cellId())
+                            && !deterministic.roleProven(binding.cellId())) {
+                        continue;
+                    }
+                    graphBound.add(binding.cellId());
+                    bindings.add(withAggregation(binding, deterministic, aggregationIds));
+                }
+                for (NomenclatureBinding binding : llmBindings) {
+                    if (graphBound.contains(binding.cellId())) {
+                        continue;
+                    }
+                    bindings.add(binding);
+                }
                 layerBStats.addDeterministic(deterministic.bindings().size());
 
                 for (NomenclatureBinding binding : bindings) {
@@ -220,8 +253,11 @@ public final class ClassifyService {
                 for (BindingPeer peer : bindingPeers) {
                     repo.insertBindingPeer(peer);
                 }
+                Map<Long, UnboundReason> unboundReasons =
+                        new HashMap<>(deterministic.unboundReasons());
+                unboundReasons.putAll(gapFill.reasons());
                 interpretationCount = interpretationWriter.write(
-                        repo, parseRunId, bindings, deterministic.unboundReasons());
+                        repo, parseRunId, bindings, unboundReasons);
                 repo.commit();
             } catch (ClassifyException e) {
                 repo.rollback();
@@ -936,6 +972,197 @@ public final class ClassifyService {
         }
         return Optional.of(new ProjectFactBinding(
                 parseRunId, candidate.candidateId(), cellId, fact.verbatim(), path));
+    }
+
+    /** Bindings the group-level naming question produced, plus what it could not name. */
+    private record GapFillResult(
+            List<NomenclatureBinding> bindings,
+            Map<Long, UnboundReason> reasons,
+            List<String> failures) {}
+
+    /**
+     * Ask once per distinct qualified label for the cells whose role the graph proved
+     * but whose name the catalog does not hold, then apply each answer to every cell
+     * sharing that label. Membership re-projects by construction: the answer is keyed
+     * on the label, so two cells with one label cannot diverge.
+     */
+    private GapFillResult fillLabelGaps(
+            NomenclatureCatalog catalog,
+            long mandateId,
+            OntologySlice slice,
+            long parseRunId,
+            CellGraph graph,
+            DeterministicBinder.Result deterministic,
+            LayerBBindingStats stats) {
+        if (deterministic.queued().isEmpty()) {
+            return new GapFillResult(List.of(), Map.of(), List.of());
+        }
+        List<LabelGapFiller.Queued> queued = new ArrayList<>();
+        Map<String, List<DeterministicBinder.QueuedGroup>> byLabel = new LinkedHashMap<>();
+        for (DeterministicBinder.QueuedGroup group : deterministic.queued()) {
+            byLabel.computeIfAbsent(group.label().key(), key -> new ArrayList<>()).add(group);
+        }
+        for (Map.Entry<String, List<DeterministicBinder.QueuedGroup>> entry : byLabel.entrySet()) {
+            DeterministicBinder.QueuedGroup representative = entry.getValue().get(0);
+            GraphCell cell = graph.cells().get(representative.cellId());
+            if (cell == null) {
+                continue;
+            }
+            PacketCell amount = packetCellOf(cell);
+            queued.add(new LabelGapFiller.Queued(
+                    representative.label(),
+                    amount,
+                    LabelGapFiller.labelCellFor(amount, representative.label().memberLabel()),
+                    representative.candidateId()));
+        }
+
+        LabelGapFiller filler = new LabelGapFiller(llm);
+        Map<String, LayerBLineJudgment> answers = filler.fill(
+                queued,
+                slice,
+                new LayerAJudgment(
+                        ScheduleFamily.CAPEX_DETAIL,
+                        Triage.MAIN,
+                        Relevance.PRIMARY,
+                        List.of(),
+                        List.of(),
+                        null));
+
+        List<NomenclatureBinding> bindings = new ArrayList<>();
+        Map<Long, UnboundReason> reasons = new LinkedHashMap<>();
+        OntologySlice currentSlice = slice;
+        Map<String, String> resolvedPaths = new LinkedHashMap<>();
+        for (Map.Entry<String, List<DeterministicBinder.QueuedGroup>> entry : byLabel.entrySet()) {
+            LayerBLineJudgment answer = answers.get(entry.getKey());
+            if (answer == null) {
+                for (DeterministicBinder.QueuedGroup group : entry.getValue()) {
+                    reasons.put(group.cellId(), UnboundReason.LLM_DECLINED);
+                }
+                continue;
+            }
+            String path = resolvedPaths.get(entry.getKey());
+            if (path == null) {
+                // One leaf per label, minted once, so every cell sharing the label
+                // lands on the same path however many cells that is.
+                path = acceptLeaf(catalog, mandateId, currentSlice, answer,
+                        entry.getValue().get(0).label().memberLabel());
+                if (path == null) {
+                    for (DeterministicBinder.QueuedGroup group : entry.getValue()) {
+                        reasons.put(group.cellId(), UnboundReason.LLM_DECLINED);
+                    }
+                    stats.addRejected("label gap fill path not a leaf join key");
+                    continue;
+                }
+                resolvedPaths.put(entry.getKey(), path);
+                currentSlice = catalog.sliceForMandate(mandateId);
+            }
+            boolean softLeaf = currentSlice.node(path)
+                    .map(node -> NomenclatureNode.LAYER_MANDATE_SOFT.equals(node.layer()))
+                    .orElse(true);
+            for (DeterministicBinder.QueuedGroup group : entry.getValue()) {
+                bindings.add(new NomenclatureBinding(
+                        group.cellId(),
+                        parseRunId,
+                        group.candidateId(),
+                        group.label().memberLabel(),
+                        path,
+                        group.amountRole(),
+                        softLeaf,
+                        false,
+                        answer.confidence(),
+                        BindingSource.LLM_LABEL,
+                        entry.getKey(),
+                        null));
+            }
+        }
+        stats.addLabelBindings(bindings.size());
+        return new GapFillResult(bindings, reasons, filler.failures());
+    }
+
+    /**
+     * The leaf an answer names: an existing leaf, or a soft leaf minted under a known
+     * mid-level. Never invents a mid-level, and never accepts a mid-level as a join
+     * key.
+     */
+    private static String acceptLeaf(
+            NomenclatureCatalog catalog,
+            long mandateId,
+            OntologySlice slice,
+            LayerBLineJudgment answer,
+            String memberLabel) {
+        String path = answer.path() == null ? "" : answer.path().trim();
+        if (path.isEmpty()) {
+            return null;
+        }
+        Optional<NomenclatureNode> existing = slice.node(path);
+        if (existing.isPresent()) {
+            if (existing.get().leaf()) {
+                return path;
+            }
+            // A mid-level is not a join key; name a leaf under it from the label.
+            String leafName = softLeafNameFrom(memberLabel);
+            if (leafName == null) {
+                return null;
+            }
+            return mintSoftLeaf(catalog, mandateId, path, leafName);
+        }
+        int separator = path.lastIndexOf(OntologySlice.SEPARATOR);
+        if (separator <= 0) {
+            return null;
+        }
+        String parentPath = path.substring(0, separator);
+        String leafName = path.substring(separator + OntologySlice.SEPARATOR.length()).trim();
+        Optional<NomenclatureNode> parent = slice.node(parentPath);
+        if (parent.isEmpty() || parent.get().leaf()) {
+            return null;
+        }
+        return mintSoftLeaf(catalog, mandateId, parentPath, leafName);
+    }
+
+    private static String mintSoftLeaf(
+            NomenclatureCatalog catalog, long mandateId, String parentPath, String leafName) {
+        String path = parentPath + OntologySlice.SEPARATOR + leafName;
+        try {
+            catalog.putSoftLeaf(mandateId, parentPath, leafName, List.of());
+            return path;
+        } catch (NomenclatureException e) {
+            // Already minted by an earlier label in this run; that is the same leaf.
+            return catalog.sliceForMandate(mandateId).node(path)
+                    .filter(NomenclatureNode::leaf)
+                    .map(NomenclatureNode::path)
+                    .orElse(null);
+        }
+    }
+
+    /** The graph's view of a cell as a Packet cell, so the existing prompt path works. */
+    private static PacketCell packetCellOf(GraphCell cell) {
+        return new PacketCell(
+                cell.cellId(),
+                cell.worksheetId(),
+                cell.coord(),
+                cell.rowNum(),
+                cell.colNum(),
+                PacketCell.ROLE_CORE,
+                cell.valueType(),
+                null,
+                cell.displayValue(),
+                cell.numericValue(),
+                cell.formulaText(),
+                false,
+                false);
+    }
+
+    /** Attach the persisted aggregation id once the graph write has assigned one. */
+    private static NomenclatureBinding withAggregation(
+            NomenclatureBinding binding,
+            DeterministicBinder.Result deterministic,
+            Map<Long, Long> aggregationIds) {
+        Long headCellId = deterministic.headCellByCell().get(binding.cellId());
+        if (headCellId == null) {
+            return binding;
+        }
+        return binding.withSource(
+                binding.source(), binding.labelKey(), aggregationIds.get(headCellId));
     }
 
     /**

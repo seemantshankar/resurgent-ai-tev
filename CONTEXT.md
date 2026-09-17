@@ -57,8 +57,24 @@ LLM judgment on what kind of island a Packet is: schedule family, Scratch/Orphan
 _Avoid_: classification (alone), region type, cost head
 
 **Layer B (nomenclature binding)**:
-LLM binding of a money line to a controlled vocabulary path. Verbatim client text stays evidence; the leaf is the join key; synonyms are aliases of one leaf. Prompt numerics are tagged `money|quantity|rate|percent|unknown`; cost roles require money.
-_Avoid_: tagging, cost-head guess, dictionary entry (for the binding itself)
+Binding of a money line to a controlled vocabulary path. Verbatim client text stays evidence; the leaf is the join key; synonyms are aliases of one leaf. Structure comes from the Cell graph, not from presentation: the hardcoded inputs are typed from their own row labels and the formulas carry that forward, so composition, sign and role are read from the formula. Cost roles require money. The LLM is asked once per group, never once per cell, and only where the graph proves the role but the catalog does not hold the name. Nothing incorrect is written: anything unproven stays unbound with an Unbound reason (ADR 0019).
+_Avoid_: tagging, cost-head guess, dictionary entry (for the binding itself), bold/borders/blank rows as structure
+
+**Cell type**:
+What one numeric cell turned out to be for a parse run: a kind (`money`, `quantity`, `rate`, `percent`, `count`, `ratio`), a scale (`unit`, `thousand`, `lakh`, `million`, `crore`, `billion`), and whether that came from the cell's own label or from propagation through its formula. Derived by dimensional arithmetic to a fixpoint — quantity times rate is money, money over money is a ratio, money divided by 100,000 is money in lakhs. A conflict is refused, never averaged.
+_Avoid_: value type (that is the spreadsheet's own), amount, unit (alone)
+
+**Aggregation**:
+A head cell whose formula sums or nets its members, with membership read from the formula rather than guessed from layout. Sign comes from the operator, so a subtracted term is a `deduct` without any string matching. A head is what makes a cell a rollup, replacing the old formula role gate. Unit and scale are resolved once per aggregation from its members; a group whose members disagree resolves to nothing, and a non-money group can never carry a cost role. The R1C1-relative signature is what collapses a repeated row-series into one group.
+_Avoid_: total row, section, cost-head rollup, trusted total
+
+**Unbound reason**:
+Why a numeric cell carries no binding: `untypable`, `external_dependency`, `broken_dependency`, `no_label`, `ambiguous_label`, `kind_conflict`, `scale_conflict`, `non_money_group`, `driver_only`, `cycle`, `llm_declined`, `llm_unavailable`. Enumerated in code and pinned by a unit test, not by a database CHECK. A principled boundary, not an accumulating pile of exceptions.
+_Avoid_: error, failure, skipped
+
+**Binding source**:
+How a binding was produced: `input` and `derived` from the graph's typing, `aggregation_head` for a group's own total, `llm_label` for one group-level answer reused across every cell sharing a label, and `llm_line` for the per-cell answer. A role the graph proved beats a per-cell answer; where the graph only defaulted a role, the per-cell answer stands.
+_Avoid_: confidence, provenance (alone)
 
 **Amount role**:
 How a bound money amount participates economically: `add`, `deduct`, `total`, or `helper`. Lives on the Layer B line binding, not on Layer A. Default leaf rollups include `add` only; `deduct`, `total`, and `helper` are excluded so totals and anti-double-count tear-outs do not distort `SUM(path)`.
@@ -115,6 +131,7 @@ _Avoid_: cost-head table, per-FM dictionary, Unmapped parking lot
 - **Cell meaning query**: read path for one sheet-qualified cell → graph facts, Candidates, Layer A/B, peers, ProjectFacts, and optional Cell interpretation. [#110](https://github.com/seemantshankar/resurgent-ai-tev/issues/110), [#116](https://github.com/seemantshankar/resurgent-ai-tev/issues/116).
 - **Cell interpretation (coverage + evidence + formula annotation + gloss)**: after classify, one interpretation per persisted cell with value/result facts, nomenclature status, Candidate-scoped header/comparison-context evidence, formula dependency annotations, and optional number-redacted LLM formula gloss readable via cell-meaning; reclassify replaces; rediscover invalidates. [#116](https://github.com/seemantshankar/resurgent-ai-tev/issues/116)–[#119](https://github.com/seemantshankar/resurgent-ai-tev/issues/119).
 - **Layer B leaf preference**: when evidence uniquely supports an existing hard catalog leaf, prefer it over inventing/keeping a soft generic; soft-kept and ambiguous outcomes stay explicit in binding stats. [#120](https://github.com/seemantshankar/resurgent-ai-tev/issues/120).
+- **Layer B from the cell graph**: classify builds a per-run dependency graph from formulas and reference edges, types the hardcoded inputs from their labels, propagates by dimensional arithmetic to a fixpoint, and binds where the graph proves the role and the label names one hard catalog leaf. Names the graph cannot supply are asked once per qualified label, number-redacted, one Candidate per packet. Cell types, aggregations and unbound reasons persist as the evidence behind every binding; the mandate soft overlay is purged of orphans at classify start so a bad run's invented leaves are not offered back (ADR 0019).
 
 ## Planned (not in repo yet)
 
@@ -122,4 +139,4 @@ _Avoid_: cost-head table, per-FM dictionary, Unmapped parking lot
 
 ## Out of scope — do not reintroduce without ADR
 
-LLM-proposed region geometry, the old heuristic stack (cost-head rollup, worksheet-role scoring, trusted totals, golden snapshots), quantity parsing or header labels at ingest, review CLI, anything that interprets sheet meaning during FM Loader ingest, running region discovery inside ingest, matching similar schedule families across worksheets by resemblance (formula-reference edges may still record a cross-sheet relationship), dropping Candidates by a confidence cutoff, or rewriting Candidates of an earlier parse run.
+Inferring Layer B structure from presentation (bold as section header, double border as total, blank row as section end, column position as period band, header wording as column kind) — prototyped across all 46 tabs and abandoned; see ADR 0019. LLM-proposed region geometry, the old heuristic stack (cost-head rollup, worksheet-role scoring, trusted totals, golden snapshots), quantity parsing or header labels at ingest, review CLI, anything that interprets sheet meaning during FM Loader ingest, running region discovery inside ingest, matching similar schedule families across worksheets by resemblance (formula-reference edges may still record a cross-sheet relationship), dropping Candidates by a confidence cutoff, or rewriting Candidates of an earlier parse run.

@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 class LayerBAmountSupportTest {
 
     @Test
-    void formulaNumericsArePromptEligibleButOnlyBindableAsHelperOrTotal() {
+    void aFormulaNumericCanTakeAnyRoleItsKindAllows() {
         PacketCell formula = new PacketCell(
                 1L, 1L, "B10", 10, 2, PacketCell.ROLE_CORE, "number",
                 null, "100", "100", "SUM(B2:B9)", false, false);
@@ -25,7 +25,9 @@ class LayerBAmountSupportTest {
         assertThat(LayerBAmountSupport.isLiteralNumeric(formula)).isFalse();
         assertThat(LayerBAmountSupport.isBindableForRole(formula, AmountRole.HELPER)).isTrue();
         assertThat(LayerBAmountSupport.isBindableForRole(formula, AmountRole.TOTAL)).isTrue();
-        assertThat(LayerBAmountSupport.isBindableForRole(formula, AmountRole.ADD)).isFalse();
+        assertThat(LayerBAmountSupport.isBindableForRole(formula, AmountRole.ADD))
+                .as("71% of numeric cells are formulas; gating on that blocked every expense")
+                .isTrue();
         assertThat(LayerBAmountSupport.isBindableForRole(literal, AmountRole.ADD)).isTrue();
         assertThat(LayerBAmountSupport.isPromptNumeric(label)).isFalse();
 

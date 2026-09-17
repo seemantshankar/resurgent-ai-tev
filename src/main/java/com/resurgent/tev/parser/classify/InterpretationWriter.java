@@ -144,7 +144,19 @@ public class InterpretationWriter {
                 softLeaf,
                 viaAlias,
                 status,
-                NomenclatureStatus.UNBOUND.equals(status) ? unboundReason : null);
+                reasonFor(status, unboundReason));
+    }
+
+    /**
+     * Every unbound cell carries a reason. The binder supplies the specific ones; a
+     * cell it never considered — an error cell, or a formula that yields text — is
+     * untypable, which is exactly why nothing could bind it.
+     */
+    private static UnboundReason reasonFor(String status, UnboundReason unboundReason) {
+        if (!NomenclatureStatus.UNBOUND.equals(status)) {
+            return null;
+        }
+        return unboundReason == null ? UnboundReason.UNTYPABLE : unboundReason;
     }
 
     private static boolean isFormula(InterpretationCellView cell) {

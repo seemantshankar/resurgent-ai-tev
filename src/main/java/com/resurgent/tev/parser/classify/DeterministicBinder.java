@@ -4,6 +4,7 @@ import com.resurgent.tev.parser.nomenclature.NomenclatureNode;
 import com.resurgent.tev.parser.nomenclature.OntologySlice;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -27,12 +28,26 @@ final class DeterministicBinder {
     record Result(
             List<NomenclatureBinding> bindings,
             Map<Long, UnboundReason> unboundReasons,
-            List<QueuedGroup> queued) {
+            List<QueuedGroup> queued,
+            Map<Long, Long> headCellByCell,
+            Set<Long> provenRoleCells) {
 
         Result {
             bindings = List.copyOf(bindings);
             unboundReasons = Map.copyOf(unboundReasons);
             queued = List.copyOf(queued);
+            headCellByCell = Map.copyOf(headCellByCell);
+            provenRoleCells = Set.copyOf(provenRoleCells);
+        }
+
+        /**
+         * True when an aggregation gave this cell its role. Where no aggregation reads
+         * a cell, the graph has no evidence of how it participates, so a per-cell
+         * answer that says otherwise — a contra line a formula never subtracts, say —
+         * is not contradicted by anything and still stands.
+         */
+        boolean roleProven(long cellId) {
+            return provenRoleCells.contains(cellId);
         }
     }
 
@@ -45,7 +60,8 @@ final class DeterministicBinder {
             long cellId,
             long candidateId,
             String amountRole,
-            Long aggregationId) {}
+            String source,
+            Long headCellId) {}
 
     Result bind(
             long parseRunId,
@@ -53,7 +69,6 @@ final class DeterministicBinder {
             CellTypes types,
             OntologySlice slice,
             Map<Long, Long> candidateByCell,
-            Map<Long, Long> aggregationIdsByHead,
             Set<Long> alreadyBound) {
         Objects.requireNonNull(graph, "graph");
         Objects.requireNonNull(types, "types");
@@ -62,6 +77,8 @@ final class DeterministicBinder {
         List<NomenclatureBinding> bindings = new ArrayList<>();
         Map<Long, UnboundReason> reasons = new LinkedHashMap<>();
         List<QueuedGroup> queued = new ArrayList<>();
+        Map<Long, Long> headCellByCell = new LinkedHashMap<>();
+        Set<Long> provenRoleCells = new LinkedHashSet<>();
 
         for (GraphCell cell : graph.cells().values()) {
             if (!cell.numeric() || alreadyBound.contains(cell.cellId())) {
@@ -75,6 +92,12 @@ final class DeterministicBinder {
             if (placement.reason() != null) {
                 reasons.put(cell.cellId(), placement.reason());
                 continue;
+            }
+            if (placement.headCellId() != null) {
+                headCellByCell.put(cell.cellId(), placement.headCellId());
+            }
+            if (placement.roleProven()) {
+                provenRoleCells.add(cell.cellId());
             }
 
             String label = placement.label();
@@ -95,7 +118,8 @@ final class DeterministicBinder {
                         cell.cellId(),
                         candidateId,
                         placement.role(),
-                        placement.aggregationId(graph, aggregationIdsByHead)));
+                        placement.source(),
+                        placement.headCellId()));
                 reasons.put(cell.cellId(), UnboundReason.LLM_UNAVAILABLE);
                 continue;
             }
@@ -112,9 +136,9 @@ final class DeterministicBinder {
                     null,
                     placement.source(),
                     new QualifiedLabel(placement.groupLabel(), label).key(),
-                    placement.aggregationId(graph, aggregationIdsByHead)));
+                    null));
         }
-        return new Result(bindings, reasons, queued);
+        return new Result(bindings, reasons, queued, headCellByCell, provenRoleCells);
     }
 
     /** Where one cell sits: the role the graph gives it, or the reason it has none. */
@@ -130,8 +154,9 @@ final class DeterministicBinder {
             return new Placement(null, null, null, null, null, reason);
         }
 
-        Long aggregationId(CellGraph graph, Map<Long, Long> aggregationIdsByHead) {
-            return headCellId == null ? null : aggregationIdsByHead.get(headCellId);
+        /** An aggregation gave the role; a standalone line's role is only a default. */
+        boolean roleProven() {
+            return headCellId != null;
         }
     }
 

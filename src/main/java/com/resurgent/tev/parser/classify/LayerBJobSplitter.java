@@ -11,6 +11,12 @@ import java.util.Set;
 /**
  * Splits large Layer B binding jobs into bounded amount chunks so truncation and
  * retries stay local to each chunk (#122 Phase 2).
+ *
+ * <p>Retained one release as the fallback for sheets the cell graph cannot type —
+ * the per-cell Layer B prompt still runs, and only fills cells the graph left
+ * unbound (ADR 0019). Chunking is exactly the axis along which two cells sharing a
+ * label used to get different answers, which is why naming moved to one question per
+ * qualified label. Delete this once the graph path has held for a release.
  */
 final class LayerBJobSplitter {
 
