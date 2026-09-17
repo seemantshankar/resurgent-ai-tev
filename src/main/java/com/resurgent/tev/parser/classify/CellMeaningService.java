@@ -63,6 +63,9 @@ public final class CellMeaningService {
             List<ProjectFactBinding> facts = repo.selectProjectFactBindingsForCell(parseRunId, cellId.get());
             CellInterpretation interpretation = repo.selectCellInterpretation(parseRunId, cellId.get())
                     .orElse(null);
+            List<InterpretationEvidence> evidence = interpretation == null
+                    ? List.of()
+                    : repo.selectInterpretationEvidence(parseRunId, cellId.get());
             return new CellMeaning(
                     address.displayQualifiedCoord(cell.coord()),
                     cell,
@@ -71,7 +74,8 @@ public final class CellMeaningService {
                     binding,
                     peers,
                     facts,
-                    interpretation);
+                    interpretation,
+                    evidence);
         } catch (ClassifyException e) {
             throw e;
         } catch (SQLException e) {

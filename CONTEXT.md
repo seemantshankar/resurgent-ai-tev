@@ -81,8 +81,12 @@ An optional link from one Layer B binding to other amount cells that represent t
 _Avoid_: related Candidate, formula edge (alone), cross-reference note, Packet-level contra flag
 
 **Cell interpretation**:
-A replaceable machine snapshot, keyed by `(parse_run_id, cell_id)`, of what one persisted cell means after classify: value origin vs result/cache/error facts, Layer B coverage status, and a lean path/role snapshot when bound. Built from real cell-graph facts (not redacted Packets). Coverage is every persisted cell. Classification replaces the snapshot atomically; successful rediscovery invalidates it. Not an amount store, not analyst approval, and not version history of approved edits.
+A replaceable machine snapshot, keyed by `(parse_run_id, cell_id)`, of what one persisted cell means after classify: value origin vs result/cache/error facts, Layer B coverage status, a lean path/role snapshot when bound, and ordered header/comparison-context evidence with resolution states. Built from real cell-graph facts (not redacted Packets). Coverage is every persisted cell. Classification replaces the snapshot atomically; successful rediscovery invalidates it. Not an amount store, not analyst approval, and not version history of approved edits.
 _Avoid_: second cell graph, approved input, discrepancy finding
+
+**Interpretation evidence**:
+Ordered source-backed cues on a Cell interpretation — row/column headers plus period, basis, currency, scale, and unit — each with `resolved` / `missing` / `ambiguous` state and optional source-cell lineage. Headers resolve deterministically inside Candidate/merge scope; relative periods and scale are preserved without inventing calendar years, INR, or multiplying `resulting_value`.
+_Avoid_: denormalized authoritative header columns, coordinate strings as labels, LLM header fallback (slice 1)
 
 **Nomenclature status**:
 Layer B coverage marker on a Cell interpretation: `bound`, `unbound`, or `not_applicable`. Independent of header evidence quality and of ProjectFact bindings. Not proof of correctness or approval.
@@ -101,11 +105,11 @@ _Avoid_: cost-head table, per-FM dictionary, Unmapped parking lot
 - **Packet classification (Layer A)**: `tev-parse classify --db --parse-run` consumes derived Packets, sends number-redacted payloads plus the ontology slice through a narrow LLM port, and persists schedule family / triage / relevance / axes per Candidate. Coverage parents get a cheap pass first; children see that parent disposition. Re-classify replaces that parse run’s Layer A rows only. [#106](https://github.com/seemantshankar/resurgent-ai-tev/issues/106).
 - **Packet classification (Layer B)**: the same classify pass binds money lines to nomenclature paths with verbatim evidence, soft/alias metadata, and `amount_role` (`add` | `deduct` | `total` | `helper`). Soft leaves attach under known mid-levels; coverage parents still get no line lists; default `SUM(path)` includes `add` only. Line peers and ProjectFacts persist alongside bindings. [#107](https://github.com/seemantshankar/resurgent-ai-tev/issues/107)–[#109](https://github.com/seemantshankar/resurgent-ai-tev/issues/109).
 - **Cell meaning query**: read path for one sheet-qualified cell → graph facts, Candidates, Layer A/B, peers, ProjectFacts, and optional Cell interpretation. [#110](https://github.com/seemantshankar/resurgent-ai-tev/issues/110), [#116](https://github.com/seemantshankar/resurgent-ai-tev/issues/116).
-- **Cell interpretation (coverage spine)**: after classify, one interpretation per persisted cell with value/result facts and nomenclature status; reclassify replaces; rediscover invalidates. Header/context evidence is follow-up. [#116](https://github.com/seemantshankar/resurgent-ai-tev/issues/116).
+- **Cell interpretation (coverage + evidence)**: after classify, one interpretation per persisted cell with value/result facts, nomenclature status, and Candidate-scoped header/comparison-context evidence readable via cell-meaning; reclassify replaces; rediscover invalidates. [#116](https://github.com/seemantshankar/resurgent-ai-tev/issues/116), [#117](https://github.com/seemantshankar/resurgent-ai-tev/issues/117).
 
 ## Planned (not in repo yet)
 
-- Header and comparison-context evidence on interpretations, formula dependency annotation, formula gloss, leaf-selection improvements, discrepancy engine, and analyst review (triage soft; no per-finding review queue for dictionary growth)
+- Formula dependency annotation, formula gloss, leaf-selection improvements, discrepancy engine, and analyst review (triage soft; no per-finding review queue for dictionary growth)
 
 ## Out of scope — do not reintroduce without ADR
 

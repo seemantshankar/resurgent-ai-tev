@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.classify;
 
+import com.resurgent.tev.parser.db.CandidateRow;
 import com.resurgent.tev.parser.db.InterpretationCellView;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import java.sql.SQLException;
@@ -8,6 +9,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Builds and persists Cell interpretation snapshots inside the caller's
@@ -30,8 +32,22 @@ public class InterpretationWriter {
         }
         repo.deleteInterpretationsForParseRun(parseRunId);
         List<InterpretationCellView> cells = repo.selectInterpretationCellsForParseRun(parseRunId);
+        List<CandidateRow> candidates = repo.selectCandidatesForParseRun(parseRunId);
+        Map<Long, Set<Long>> membersByCandidate =
+                InterpretationEvidenceResolver.indexMembers(
+                        repo.selectCandidateMembersForParseRun(parseRunId));
+        Map<Long, List<CandidateRow>> ownersByCell =
+                InterpretationEvidenceResolver.indexOwners(candidates, membersByCandidate);
+        Map<Long, InterpretationCellView> byId =
+                InterpretationEvidenceResolver.indexCells(cells);
+
         for (InterpretationCellView cell : cells) {
             repo.insertCellInterpretation(build(parseRunId, cell, byCell.get(cell.cellId())));
+            List<InterpretationEvidence> evidence = InterpretationEvidenceResolver.resolve(
+                    parseRunId, cell, byId, ownersByCell, membersByCandidate);
+            for (InterpretationEvidence item : evidence) {
+                repo.insertInterpretationEvidence(item);
+            }
         }
         return cells.size();
     }

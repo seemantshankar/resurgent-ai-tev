@@ -1,6 +1,6 @@
 # Cell interpretation persistence
 
-Status: revised; decisions accepted 2026-09-15; #116 coverage spine implemented; evidence/annotation/gloss/leaf follow-ups remain.
+Status: revised; decisions accepted 2026-09-15; #116 coverage spine and #117 evidence implemented; annotation/gloss/leaf follow-ups remain.
 
 ## Purpose and success criterion
 

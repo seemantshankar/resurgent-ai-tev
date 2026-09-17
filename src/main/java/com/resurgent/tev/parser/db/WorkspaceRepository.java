@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.resurgent.tev.parser.classify.BindingPeer;
 import com.resurgent.tev.parser.classify.CellInterpretation;
+import com.resurgent.tev.parser.classify.InterpretationEvidence;
 import com.resurgent.tev.parser.classify.NomenclatureBinding;
 import com.resurgent.tev.parser.classify.PacketDisposition;
 import com.resurgent.tev.parser.classify.ProjectFactBinding;
@@ -1605,10 +1606,11 @@ public final class WorkspaceRepository {
     public List<InterpretationCellView> selectInterpretationCellsForParseRun(long parseRunId)
             throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT c.cell_id, c.worksheet_id, c.coord, c.value_type, c.text_value,"
-                        + " c.display_value, c.numeric_value, c.bool_value, c.date_value,"
-                        + " c.formula_text, c.formula_state, c.cached_value, c.cache_state,"
-                        + " c.is_error, c.error_type, c.is_merged_participant, c.value_source"
+                "SELECT c.cell_id, c.worksheet_id, c.coord, c.row_num, c.col_num, c.value_type,"
+                        + " c.text_value, c.display_value, c.numeric_value, c.bool_value,"
+                        + " c.date_value, c.formula_text, c.formula_state, c.cached_value,"
+                        + " c.cache_state, c.is_error, c.error_type, c.is_merged_anchor,"
+                        + " c.is_merged_participant, c.merged_range, c.value_source"
                         + " FROM cell c"
                         + " JOIN worksheet w ON w.worksheet_id = c.worksheet_id"
                         + " WHERE w.parse_run_id = ?"
@@ -1618,6 +1620,66 @@ public final class WorkspaceRepository {
                 List<InterpretationCellView> rows = new ArrayList<>();
                 while (rs.next()) {
                     rows.add(mapInterpretationCellView(rs));
+                }
+                return rows;
+            }
+        }
+    }
+
+    /** All candidate_member rows for a parse run: [candidate_id, cell_id]. */
+    public List<long[]> selectCandidateMembersForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT m.candidate_id, m.cell_id FROM candidate_member m"
+                        + " JOIN candidate c ON c.candidate_id = m.candidate_id"
+                        + " WHERE c.parse_run_id = ?"
+                        + " ORDER BY m.candidate_id, m.cell_id")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<long[]> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new long[] {rs.getLong(1), rs.getLong(2)});
+                }
+                return rows;
+            }
+        }
+    }
+
+    public void insertInterpretationEvidence(InterpretationEvidence row) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cell_interpretation_evidence (parse_run_id, cell_id, role,"
+                        + " source_cell_id, source_text, ordinal, resolution, normalized_value,"
+                        + " rule_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setLong(1, row.parseRunId());
+            ps.setLong(2, row.cellId());
+            ps.setString(3, row.role());
+            if (row.sourceCellId() == null) {
+                ps.setNull(4, Types.INTEGER);
+            } else {
+                ps.setLong(4, row.sourceCellId());
+            }
+            ps.setString(5, row.sourceText());
+            ps.setInt(6, row.ordinal());
+            ps.setString(7, row.resolution());
+            ps.setString(8, row.normalizedValue());
+            ps.setString(9, row.ruleId());
+            ps.executeUpdate();
+        }
+    }
+
+    public List<InterpretationEvidence> selectInterpretationEvidence(long parseRunId, long cellId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT parse_run_id, cell_id, role, source_cell_id, source_text, ordinal,"
+                        + " resolution, normalized_value, rule_id"
+                        + " FROM cell_interpretation_evidence"
+                        + " WHERE parse_run_id = ? AND cell_id = ?"
+                        + " ORDER BY ordinal, evidence_id")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, cellId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<InterpretationEvidence> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(mapInterpretationEvidence(rs));
                 }
                 return rows;
             }
@@ -1784,6 +1846,8 @@ public final class WorkspaceRepository {
                 rs.getLong("cell_id"),
                 rs.getLong("worksheet_id"),
                 rs.getString("coord"),
+                rs.getInt("row_num"),
+                rs.getInt("col_num"),
                 rs.getString("value_type"),
                 rs.getString("text_value"),
                 rs.getString("display_value"),
@@ -1796,8 +1860,26 @@ public final class WorkspaceRepository {
                 rs.getString("cache_state"),
                 rs.getInt("is_error") == 1,
                 rs.getString("error_type"),
+                rs.getInt("is_merged_anchor") == 1,
                 rs.getInt("is_merged_participant") == 1,
+                rs.getString("merged_range"),
                 rs.getString("value_source"));
+    }
+
+    private static InterpretationEvidence mapInterpretationEvidence(ResultSet rs)
+            throws SQLException {
+        long sourceRaw = rs.getLong("source_cell_id");
+        Long sourceCellId = rs.wasNull() ? null : sourceRaw;
+        return new InterpretationEvidence(
+                rs.getLong("parse_run_id"),
+                rs.getLong("cell_id"),
+                rs.getString("role"),
+                sourceCellId,
+                rs.getString("source_text"),
+                rs.getInt("ordinal"),
+                rs.getString("resolution"),
+                rs.getString("normalized_value"),
+                rs.getString("rule_id"));
     }
 
     private static CellInterpretation mapCellInterpretation(ResultSet rs) throws SQLException {

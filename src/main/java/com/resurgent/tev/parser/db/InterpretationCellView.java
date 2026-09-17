@@ -8,6 +8,8 @@ public record InterpretationCellView(
         long cellId,
         long worksheetId,
         String coord,
+        int rowNum,
+        int colNum,
         String valueType,
         String textValue,
         String displayValue,
@@ -20,5 +22,7 @@ public record InterpretationCellView(
         String cacheState,
         boolean isError,
         String errorType,
+        boolean isMergedAnchor,
         boolean isMergedParticipant,
+        String mergedRange,
         String valueSource) {}

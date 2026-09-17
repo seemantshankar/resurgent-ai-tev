@@ -13,7 +13,33 @@ public record CellMeaning(
         NomenclatureBinding nomenclatureBinding,
         List<BindingPeer> peers,
         List<ProjectFactBinding> projectFacts,
-        CellInterpretation interpretation) {
+        CellInterpretation interpretation,
+        List<InterpretationEvidence> evidence) {
+
+    public CellMeaning {
+        evidence = evidence == null ? List.of() : List.copyOf(evidence);
+    }
+
+    public CellMeaning(
+            String qualifiedCoord,
+            CellPacketView cell,
+            List<CandidateRow> candidates,
+            List<PacketDisposition> dispositions,
+            NomenclatureBinding nomenclatureBinding,
+            List<BindingPeer> peers,
+            List<ProjectFactBinding> projectFacts,
+            CellInterpretation interpretation) {
+        this(
+                qualifiedCoord,
+                cell,
+                candidates,
+                dispositions,
+                nomenclatureBinding,
+                peers,
+                projectFacts,
+                interpretation,
+                List.of());
+    }
 
     public CellMeaning(
             String qualifiedCoord,
@@ -31,6 +57,7 @@ public record CellMeaning(
                 nomenclatureBinding,
                 peers,
                 projectFacts,
-                null);
+                null,
+                List.of());
     }
 }
