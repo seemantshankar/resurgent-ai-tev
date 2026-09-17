@@ -54,16 +54,16 @@ public final class ClassifyService {
 
     public ClassifyService(ClassifierLlm llm) {
         this(llm, new DiscoverService(), new InterpretationWriter(),
-                new NoOpFormulaGlossLlm(), ClassifyLimits.defaults());
+                glossPortFor(llm), ClassifyLimits.defaults());
     }
 
     public ClassifyService(ClassifierLlm llm, DiscoverService discover) {
         this(llm, discover, new InterpretationWriter(),
-                new NoOpFormulaGlossLlm(), ClassifyLimits.defaults());
+                glossPortFor(llm), ClassifyLimits.defaults());
     }
 
     public ClassifyService(ClassifierLlm llm, DiscoverService discover, ClassifyLimits limits) {
-        this(llm, discover, new InterpretationWriter(), new NoOpFormulaGlossLlm(), limits);
+        this(llm, discover, new InterpretationWriter(), glossPortFor(llm), limits);
     }
 
     public ClassifyService(
@@ -73,7 +73,7 @@ public final class ClassifyService {
 
     public ClassifyService(
             ClassifierLlm llm, DiscoverService discover, InterpretationWriter interpretationWriter) {
-        this(llm, discover, interpretationWriter, new NoOpFormulaGlossLlm(),
+        this(llm, discover, interpretationWriter, glossPortFor(llm),
                 ClassifyLimits.defaults());
     }
 
@@ -82,7 +82,7 @@ public final class ClassifyService {
             DiscoverService discover,
             InterpretationWriter interpretationWriter,
             ClassifyLimits limits) {
-        this(llm, discover, interpretationWriter, new NoOpFormulaGlossLlm(), limits);
+        this(llm, discover, interpretationWriter, glossPortFor(llm), limits);
     }
 
     public ClassifyService(
@@ -97,6 +97,14 @@ public final class ClassifyService {
                 Objects.requireNonNull(interpretationWriter, "interpretationWriter");
         this.formulaGlossLlm = Objects.requireNonNull(formulaGlossLlm, "formulaGlossLlm");
         this.limits = Objects.requireNonNull(limits, "limits");
+    }
+
+    /** Live OpenRouter (and other dual-port adapters) carry gloss; fakes stay no-op. */
+    private static FormulaGlossLlm glossPortFor(ClassifierLlm llm) {
+        if (llm instanceof FormulaGlossLlm gloss) {
+            return gloss;
+        }
+        return new NoOpFormulaGlossLlm();
     }
 
     public ClassifySummary classify(Path dbPath, long parseRunId) throws ClassifyException {
