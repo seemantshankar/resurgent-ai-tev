@@ -234,7 +234,7 @@ class CellInterpretationEvidenceTest {
                         && "million".equals(e.normalizedValue())
                         && "formula_divisor_1e6".equals(e.ruleId()));
 
-        Path billionXlsx = formulaDivisorWorkbook(null, "B2/1e9");
+        Path billionXlsx = formulaDivisorWorkbook(null, "B2/10^9");
         Path billionDb = tempDir.resolve("billion.db");
         IngestSummary billionIngest = new IngestService().ingest(billionXlsx, 1L, billionDb);
         new DiscoverService().discover(billionDb, billionIngest.parseRunId());
