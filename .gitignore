@@ -7,6 +7,7 @@ fixtures/private/*
 .vscode/
 .env
 config.json
+.worktrees/
 # Client financial models are never committed (parser-strategy-v2 §13 fixture policy)
 Project Docs/*.xls
 Project Docs/*.xlsx

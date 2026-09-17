@@ -20,7 +20,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * OpenRouter chat-completions adapter for Layer A/B. Config-gated; tests inject
  * a {@link CompletionsClient} so the suite stays fake/offline.
  */
-public final class OpenRouterClassifierLlm implements ClassifierLlm {
+public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlossLlm {
 
     static final String DEFAULT_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -143,6 +143,37 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                         "OpenRouter Layer B invalid after retry: " + second.getMessage(), second);
             }
         }
+    }
+
+    @Override
+    public String gloss(FormulaGlossPrompt prompt) {
+        String system = FormulaGlossPromptAssembler.SYSTEM
+                + "\nReturn a JSON object {\"gloss\":\"...\"} only.";
+        String user = FormulaGlossPromptAssembler.userMessage(prompt);
+        long started = System.nanoTime();
+        CompletionResult result = client.completePlainTextDetailed(system, user, 400);
+        recordMetric("G", user, result, started, 1);
+        return extractGloss(result.content());
+    }
+
+    static String extractGloss(String content) {
+        if (content == null || content.isBlank()) {
+            return null;
+        }
+        String trimmed = content.trim();
+        try {
+            JsonNode root = new ObjectMapper().readTree(trimmed);
+            if (root != null && root.hasNonNull("gloss")) {
+                String gloss = root.get("gloss").asText();
+                return gloss == null || gloss.isBlank() ? null : gloss.trim();
+            }
+        } catch (Exception ignored) {
+            // Fall through to plain prose.
+        }
+        if (trimmed.startsWith("{")) {
+            return null;
+        }
+        return trimmed;
     }
 
     private static List<LayerBLineJudgment> acceptLayerB(
@@ -292,6 +323,15 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                 String system, String user, int candidateLines) {
             return CompletionResult.of(completeLayerB(system, user));
         }
+
+        default String completePlainText(String system, String user, int maxCompletionTokens) {
+            return completePlainTextDetailed(system, user, maxCompletionTokens).content();
+        }
+
+        default CompletionResult completePlainTextDetailed(
+                String system, String user, int maxCompletionTokens) {
+            return CompletionResult.of(complete(system, user));
+        }
     }
 
     @FunctionalInterface
@@ -405,6 +445,34 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                     layerBResponseFormat(),
                     layerBMaxCompletionTokens(candidateLines),
                     0);
+        }
+
+        @Override
+        public CompletionResult completePlainTextDetailed(
+                String system, String user, int maxCompletionTokens) {
+            return completeWithFormat(
+                    system,
+                    user,
+                    formulaGlossResponseFormat(),
+                    Math.max(64, maxCompletionTokens),
+                    0);
+        }
+
+        private static ObjectNode formulaGlossResponseFormat() {
+            ObjectNode format = MAPPER.createObjectNode();
+            format.put("type", "json_schema");
+            ObjectNode jsonSchema = format.putObject("json_schema");
+            jsonSchema.put("name", "formula_gloss");
+            jsonSchema.put("strict", true);
+            ObjectNode schema = jsonSchema.putObject("schema");
+            schema.put("type", "object");
+            schema.put("additionalProperties", false);
+            ObjectNode properties = schema.putObject("properties");
+            objectProperty(properties, "gloss",
+                    "1-3 short sentences explaining the formula; no amounts invented");
+            ArrayNode required = schema.putArray("required");
+            required.add("gloss");
+            return format;
         }
 
         private CompletionResult completeWithFormat(

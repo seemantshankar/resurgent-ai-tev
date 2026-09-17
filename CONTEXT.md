@@ -90,7 +90,11 @@ _Avoid_: denormalized authoritative header columns, coordinate strings as labels
 
 **Formula dependency annotation**:
 Ordered annotated references on a formula Cell interpretation: original expression stays authoritative for operators/functions/constants; each reference carries coordinates plus interpretation context when the target is interpreted; bounded range expansion reports `complete` / `incomplete` / `truncated` / `unresolved` / `external` without inventing blank cells. Shared leaf/ancestor across members is descriptive only — never a valid economic rollup or an instruction to sum. Lifecycle follows interpretation invalidation/replacement.
-_Avoid_: second reference graph, economic `SUM(path)` from shared head, formula gloss (#119)
+_Avoid_: second reference graph, economic `SUM(path)` from shared head
+
+**Formula gloss**:
+Optional LLM explanatory prose for a formula Cell interpretation, stored separately from formula facts and deterministic dependency annotations. Built from number-redacted formula text, annotations, header evidence, schedule family, and binding context (ADR 0008 — no cached amounts). Explanation only — not computation, validation, or a modelling rule. Lifecycle follows annotation presence.
+_Avoid_: second amount store, modelling rule, validation verdict
 
 **Nomenclature status**:
 Layer B coverage marker on a Cell interpretation: `bound`, `unbound`, or `not_applicable`. Independent of header evidence quality and of ProjectFact bindings. Not proof of correctness or approval.

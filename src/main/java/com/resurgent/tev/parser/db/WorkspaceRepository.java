@@ -1835,7 +1835,7 @@ public final class WorkspaceRepository {
                 "SELECT parse_run_id, cell_id, value_origin, resulting_value, result_source,"
                         + " formula_text, formula_state, cache_state, is_error, error_type,"
                         + " nomenclature_path, amount_role, soft_leaf, via_alias,"
-                        + " nomenclature_status"
+                        + " nomenclature_status, formula_gloss"
                         + " FROM cell_interpretation"
                         + " WHERE parse_run_id = ? AND cell_id = ?")) {
             ps.setLong(1, parseRunId);
@@ -1866,7 +1866,7 @@ public final class WorkspaceRepository {
                 "SELECT parse_run_id, cell_id, value_origin, resulting_value, result_source,"
                         + " formula_text, formula_state, cache_state, is_error, error_type,"
                         + " nomenclature_path, amount_role, soft_leaf, via_alias,"
-                        + " nomenclature_status"
+                        + " nomenclature_status, formula_gloss"
                         + " FROM cell_interpretation WHERE parse_run_id = ?"
                         + " ORDER BY interpretation_id")) {
             ps.setLong(1, parseRunId);
@@ -1877,6 +1877,17 @@ public final class WorkspaceRepository {
                 }
                 return rows;
             }
+        }
+    }
+
+    public void updateFormulaGloss(long parseRunId, long cellId, String gloss) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cell_interpretation SET formula_gloss = ?"
+                        + " WHERE parse_run_id = ? AND cell_id = ?")) {
+            ps.setString(1, gloss);
+            ps.setLong(2, parseRunId);
+            ps.setLong(3, cellId);
+            ps.executeUpdate();
         }
     }
 
@@ -2002,7 +2013,8 @@ public final class WorkspaceRepository {
                 rs.getString("amount_role"),
                 softLeaf,
                 viaAlias,
-                rs.getString("nomenclature_status"));
+                rs.getString("nomenclature_status"),
+                rs.getString("formula_gloss"));
     }
 
     private static void setInteger(PreparedStatement ps, int index, Integer value)

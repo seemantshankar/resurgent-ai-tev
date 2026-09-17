@@ -15,12 +15,38 @@ public record CellMeaning(
         List<ProjectFactBinding> projectFacts,
         CellInterpretation interpretation,
         List<InterpretationEvidence> evidence,
-        List<FormulaAnnotation> formulaAnnotations) {
+        List<FormulaAnnotation> formulaAnnotations,
+        String formulaGloss) {
 
     public CellMeaning {
         evidence = evidence == null ? List.of() : List.copyOf(evidence);
         formulaAnnotations =
                 formulaAnnotations == null ? List.of() : List.copyOf(formulaAnnotations);
+    }
+
+    public CellMeaning(
+            String qualifiedCoord,
+            CellPacketView cell,
+            List<CandidateRow> candidates,
+            List<PacketDisposition> dispositions,
+            NomenclatureBinding nomenclatureBinding,
+            List<BindingPeer> peers,
+            List<ProjectFactBinding> projectFacts,
+            CellInterpretation interpretation,
+            List<InterpretationEvidence> evidence,
+            List<FormulaAnnotation> formulaAnnotations) {
+        this(
+                qualifiedCoord,
+                cell,
+                candidates,
+                dispositions,
+                nomenclatureBinding,
+                peers,
+                projectFacts,
+                interpretation,
+                evidence,
+                formulaAnnotations,
+                interpretation == null ? null : interpretation.formulaGloss());
     }
 
     public CellMeaning(
@@ -43,7 +69,8 @@ public record CellMeaning(
                 projectFacts,
                 interpretation,
                 evidence,
-                List.of());
+                List.of(),
+                interpretation == null ? null : interpretation.formulaGloss());
     }
 
     public CellMeaning(
@@ -65,7 +92,8 @@ public record CellMeaning(
                 projectFacts,
                 interpretation,
                 List.of(),
-                List.of());
+                List.of(),
+                interpretation == null ? null : interpretation.formulaGloss());
     }
 
     public CellMeaning(
@@ -86,6 +114,7 @@ public record CellMeaning(
                 projectFacts,
                 null,
                 List.of(),
-                List.of());
+                List.of(),
+                null);
     }
 }

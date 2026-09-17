@@ -170,7 +170,8 @@ class RealWorkbookLiveEvidenceSmokeIT {
         };
 
         long started = System.nanoTime();
-        ClassifySummary summary = new ClassifyService(gated, new DiscoverService())
+        FormulaGlossLlm glossLlm = LlmEnvironment.formulaGlossOrNoOp();
+        ClassifySummary summary = new ClassifyService(gated, new DiscoverService(), glossLlm)
                 .classify(db, ingest.parseRunId());
         long classifyMs = (System.nanoTime() - started) / 1_000_000L;
 
@@ -263,13 +264,23 @@ class RealWorkbookLiveEvidenceSmokeIT {
                             .as("ASSETS!I9 /10^5 should yield lakh scale evidence")
                             .anyMatch(e -> "lakh".equals(e.normalizedValue())
                                     && EvidenceResolution.RESOLVED.equals(e.resolution()));
+                    assertThat(i9.formulaAnnotations())
+                            .as("ASSETS!I9 should carry formula dependency annotations")
+                            .isNotEmpty();
+                    if (!(glossLlm instanceof NoOpFormulaGlossLlm)) {
+                        assertThat(i9.formulaGloss())
+                                .as("live gloss for annotated ASSETS!I9")
+                                .isNotBlank();
+                    }
                     System.err.printf(Locale.ROOT,
-                            "ASSETS!I9 formula=%s scale=%s%n",
+                            "ASSETS!I9 formula=%s scale=%s annotations=%d gloss=%s%n",
                             i9.interpretation().formulaText(),
                             i9.evidence().stream()
                                     .filter(e -> EvidenceRole.SCALE.equals(e.role()))
                                     .map(e -> e.ruleId() + ":" + e.normalizedValue())
-                                    .toList());
+                                    .toList(),
+                            i9.formulaAnnotations().size(),
+                            i9.formulaGloss());
                 }
             } catch (ClassifyException ignored) {
                 // Sheet/coord may be absent on unexpected workbook variants.

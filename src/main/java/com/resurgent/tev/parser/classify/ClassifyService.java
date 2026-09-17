@@ -49,23 +49,32 @@ public final class ClassifyService {
     private final ClassifierLlm llm;
     private final DiscoverService discover;
     private final InterpretationWriter interpretationWriter;
+    private final FormulaGlossLlm formulaGlossLlm;
     private final ClassifyLimits limits;
 
     public ClassifyService(ClassifierLlm llm) {
-        this(llm, new DiscoverService(), new InterpretationWriter(), ClassifyLimits.defaults());
+        this(llm, new DiscoverService(), new InterpretationWriter(),
+                new NoOpFormulaGlossLlm(), ClassifyLimits.defaults());
     }
 
     public ClassifyService(ClassifierLlm llm, DiscoverService discover) {
-        this(llm, discover, new InterpretationWriter(), ClassifyLimits.defaults());
+        this(llm, discover, new InterpretationWriter(),
+                new NoOpFormulaGlossLlm(), ClassifyLimits.defaults());
     }
 
     public ClassifyService(ClassifierLlm llm, DiscoverService discover, ClassifyLimits limits) {
-        this(llm, discover, new InterpretationWriter(), limits);
+        this(llm, discover, new InterpretationWriter(), new NoOpFormulaGlossLlm(), limits);
+    }
+
+    public ClassifyService(
+            ClassifierLlm llm, DiscoverService discover, FormulaGlossLlm formulaGlossLlm) {
+        this(llm, discover, new InterpretationWriter(), formulaGlossLlm, ClassifyLimits.defaults());
     }
 
     public ClassifyService(
             ClassifierLlm llm, DiscoverService discover, InterpretationWriter interpretationWriter) {
-        this(llm, discover, interpretationWriter, ClassifyLimits.defaults());
+        this(llm, discover, interpretationWriter, new NoOpFormulaGlossLlm(),
+                ClassifyLimits.defaults());
     }
 
     public ClassifyService(
@@ -73,10 +82,20 @@ public final class ClassifyService {
             DiscoverService discover,
             InterpretationWriter interpretationWriter,
             ClassifyLimits limits) {
+        this(llm, discover, interpretationWriter, new NoOpFormulaGlossLlm(), limits);
+    }
+
+    public ClassifyService(
+            ClassifierLlm llm,
+            DiscoverService discover,
+            InterpretationWriter interpretationWriter,
+            FormulaGlossLlm formulaGlossLlm,
+            ClassifyLimits limits) {
         this.llm = Objects.requireNonNull(llm, "llm");
         this.discover = Objects.requireNonNull(discover, "discover");
         this.interpretationWriter =
                 Objects.requireNonNull(interpretationWriter, "interpretationWriter");
+        this.formulaGlossLlm = Objects.requireNonNull(formulaGlossLlm, "formulaGlossLlm");
         this.limits = Objects.requireNonNull(limits, "limits");
     }
 
@@ -141,6 +160,7 @@ public final class ClassifyService {
             }
 
             db.connection().setAutoCommit(false);
+            int interpretationCount;
             try {
                 List<CandidateRow> current = repo.selectCandidatesForParseRun(parseRunId);
                 if (!sameCandidateIds(candidates, current)) {
@@ -164,16 +184,8 @@ public final class ClassifyService {
                 for (BindingPeer peer : bindingPeers) {
                     repo.insertBindingPeer(peer);
                 }
-                int interpretationCount =
-                        interpretationWriter.write(repo, parseRunId, bindings);
+                interpretationCount = interpretationWriter.write(repo, parseRunId, bindings);
                 repo.commit();
-                return new ClassifySummary(
-                        parseRunId,
-                        dispositions.size(),
-                        coverageParents,
-                        bindings.size(),
-                        interpretationCount,
-                        layerBStats);
             } catch (ClassifyException e) {
                 repo.rollback();
                 throw e;
@@ -183,6 +195,28 @@ public final class ClassifyService {
             } finally {
                 db.connection().setAutoCommit(true);
             }
+
+            // Gloss LLM stays after the interpretation/annotation commit so a
+            // provider failure cannot roll back bindings. Lifecycle still follows
+            // annotation presence: only formula cells with annotations are glossed.
+            try {
+                db.connection().setAutoCommit(false);
+                new FormulaGlossWriter(formulaGlossLlm).write(repo, parseRunId);
+                repo.commit();
+            } catch (Exception e) {
+                repo.rollback();
+                // Gloss is optional explanation; do not fail classify after A/B succeeded.
+            } finally {
+                db.connection().setAutoCommit(true);
+            }
+
+            return new ClassifySummary(
+                    parseRunId,
+                    dispositions.size(),
+                    coverageParents,
+                    bindings.size(),
+                    interpretationCount,
+                    layerBStats);
         } catch (ClassifyException e) {
             throw e;
         } catch (Exception e) {

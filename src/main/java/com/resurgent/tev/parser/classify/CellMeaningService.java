@@ -79,7 +79,8 @@ public final class CellMeaningService {
                     facts,
                     interpretation,
                     evidence,
-                    formulaAnnotations);
+                    formulaAnnotations,
+                    interpretation == null ? null : interpretation.formulaGloss());
         } catch (ClassifyException e) {
             throw e;
         } catch (SQLException e) {

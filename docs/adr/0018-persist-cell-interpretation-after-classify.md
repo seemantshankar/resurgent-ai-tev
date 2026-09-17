@@ -28,4 +28,4 @@ After interpretations exist in the classify transaction, ordered `cell_interpret
 
 ## Application seam
 
-`InterpretationWriter` accepts the caller's repository/transaction and does not commit. Classify writes interpretations and Candidate-scoped evidence after Layer A/B/peer/fact rows and before commit; formula annotations are regenerated immediately after interpretations exist in that same write. Cell-meaning returns the optional interpretation plus ordered evidence and formula annotations when present.
+`InterpretationWriter` accepts the caller's repository/transaction and does not commit. Classify writes interpretations and Candidate-scoped evidence after Layer A/B/peer/fact rows and before commit; formula annotations are regenerated immediately after interpretations exist in that same write. After that commit, an optional formula-gloss LLM pass (#119) updates `formula_gloss` for annotated formula cells only — number-redacted prompts, explanation prose separate from formula facts/annotations; gloss failures must not roll back classify. Cell-meaning returns the optional interpretation plus ordered evidence, formula annotations, and gloss when present.
