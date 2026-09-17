@@ -27,13 +27,20 @@ final class InterpretationEvidenceResolver {
     private static final Pattern YEAR_CALENDAR =
             Pattern.compile("(?i)\\b((?:19|20)\\d{2})\\b");
     private static final Pattern SCALE =
-            Pattern.compile("(?i)\\b(lakh|lac|crore|million|billion|thousand|000s?)\\b");
+            Pattern.compile("(?i)\\b(lakhs?|lacs?|crore|million|billion|thousands?|000s?)\\b");
     private static final Pattern CURRENCY =
             Pattern.compile("(?i)(₹|\\binr\\b|\\brs\\.?\\b|\\busd\\b|\\beur\\b|\\$|€|£)");
     private static final Pattern BASIS =
             Pattern.compile("(?i)\\b(projected|projection|actual|budget|forecast|historical)\\b");
     private static final Pattern UNIT =
             Pattern.compile("(?i)\\b(sq\\.?\\s*ft|sqft|sqm|nos?\\.?|keys?|rooms?|%|percent)\\b");
+    /** Division by INR display-unit magnitudes (e.g. Om Arham {@code /10^5} → lakh). */
+    private static final Pattern FORMULA_DIVISOR_LAKH =
+            Pattern.compile("(?i)/\\s*(?:10\\s*\\^\\s*5|10\\s*\\*\\*\\s*5|1e5|100000)\\b");
+    private static final Pattern FORMULA_DIVISOR_CRORE =
+            Pattern.compile("(?i)/\\s*(?:10\\s*\\^\\s*7|10\\s*\\*\\*\\s*7|1e7|10000000)\\b");
+    private static final Pattern FORMULA_DIVISOR_THOUSAND =
+            Pattern.compile("(?i)/\\s*(?:10\\s*\\^\\s*3|10\\s*\\*\\*\\s*3|1e3|1000)\\b");
 
     private InterpretationEvidenceResolver() {}
 
@@ -100,7 +107,7 @@ final class InterpretationEvidenceResolver {
                 parseRunId, target.cellId(), EvidenceRole.ROW_HEADER, rowChains));
         out.addAll(mergeHeaderRole(
                 parseRunId, target.cellId(), EvidenceRole.COLUMN_HEADER, colChains));
-        out.addAll(contextEvidence(parseRunId, target.cellId(), out));
+        out.addAll(contextEvidence(parseRunId, target.cellId(), out, target));
         return out;
     }
 
@@ -361,7 +368,10 @@ final class InterpretationEvidenceResolver {
     }
 
     private static List<InterpretationEvidence> contextEvidence(
-            long parseRunId, long cellId, List<InterpretationEvidence> headers) {
+            long parseRunId,
+            long cellId,
+            List<InterpretationEvidence> headers,
+            InterpretationCellView target) {
         Map<String, List<Cue>> cues = new LinkedHashMap<>();
         cues.put(EvidenceRole.PERIOD, new ArrayList<>());
         cues.put(EvidenceRole.BASIS, new ArrayList<>());
@@ -377,6 +387,7 @@ final class InterpretationEvidenceResolver {
             String text = header.sourceText() == null ? "" : header.sourceText();
             collectCues(cues, header.sourceCellId(), text);
         }
+        collectFormulaScaleCues(cues, target);
 
         List<InterpretationEvidence> out = new ArrayList<>();
         for (Map.Entry<String, List<Cue>> entry : cues.entrySet()) {
@@ -386,10 +397,10 @@ final class InterpretationEvidenceResolver {
             }
             Set<String> distinct = new LinkedHashSet<>();
             for (Cue cue : found) {
-                distinct.add(cue.sourceText().toLowerCase(Locale.ROOT));
+                distinct.add(cueIdentity(cue));
             }
             if (distinct.size() == 1) {
-                Cue cue = found.get(0);
+                Cue cue = preferredCue(found);
                 out.add(new InterpretationEvidence(
                         parseRunId,
                         cellId,
@@ -417,6 +428,60 @@ final class InterpretationEvidenceResolver {
             }
         }
         return out;
+    }
+
+    /** Prefer normalized value when present so header "Lacs" and {@code /10^5} can agree. */
+    private static String cueIdentity(Cue cue) {
+        if (cue.normalizedValue() != null && !cue.normalizedValue().isBlank()) {
+            return cue.normalizedValue().toLowerCase(Locale.ROOT);
+        }
+        return cue.sourceText() == null ? "" : cue.sourceText().toLowerCase(Locale.ROOT);
+    }
+
+    private static Cue preferredCue(List<Cue> found) {
+        for (Cue cue : found) {
+            if (cue.ruleId() != null && cue.ruleId().startsWith("formula_divisor_")) {
+                return cue;
+            }
+        }
+        return found.get(0);
+    }
+
+    private static void collectFormulaScaleCues(
+            Map<String, List<Cue>> cues, InterpretationCellView target) {
+        if (target == null || target.formulaText() == null || target.formulaText().isBlank()) {
+            return;
+        }
+        String formula = target.formulaText();
+        Matcher lakh = FORMULA_DIVISOR_LAKH.matcher(formula);
+        if (lakh.find()) {
+            cues.get(EvidenceRole.SCALE)
+                    .add(new Cue(
+                            target.cellId(),
+                            lakh.group().replaceAll("\\s+", ""),
+                            "lakh",
+                            "formula_divisor_1e5"));
+            return;
+        }
+        Matcher crore = FORMULA_DIVISOR_CRORE.matcher(formula);
+        if (crore.find()) {
+            cues.get(EvidenceRole.SCALE)
+                    .add(new Cue(
+                            target.cellId(),
+                            crore.group().replaceAll("\\s+", ""),
+                            "crore",
+                            "formula_divisor_1e7"));
+            return;
+        }
+        Matcher thousand = FORMULA_DIVISOR_THOUSAND.matcher(formula);
+        if (thousand.find()) {
+            cues.get(EvidenceRole.SCALE)
+                    .add(new Cue(
+                            target.cellId(),
+                            thousand.group().replaceAll("\\s+", ""),
+                            "thousand",
+                            "formula_divisor_1e3"));
+        }
     }
 
     private static void collectCues(Map<String, List<Cue>> cues, Long sourceCellId, String text) {
@@ -455,7 +520,7 @@ final class InterpretationEvidenceResolver {
         if (scale.find()) {
             String token = scale.group().trim();
             cues.get(EvidenceRole.SCALE)
-                    .add(new Cue(sourceCellId, token, token.toLowerCase(Locale.ROOT), "scale_token"));
+                    .add(new Cue(sourceCellId, token, normalizeScale(token), "scale_token"));
         }
         Matcher unit = UNIT.matcher(text);
         if (unit.find()) {
@@ -463,6 +528,26 @@ final class InterpretationEvidenceResolver {
             cues.get(EvidenceRole.UNIT)
                     .add(new Cue(sourceCellId, token, null, "unit_token"));
         }
+    }
+
+    private static String normalizeScale(String token) {
+        String t = token.toLowerCase(Locale.ROOT);
+        if (t.startsWith("lac")) {
+            return "lakh";
+        }
+        if (t.startsWith("crore")) {
+            return "crore";
+        }
+        if (t.startsWith("thousand") || t.equals("000s") || t.equals("000")) {
+            return "thousand";
+        }
+        if (t.startsWith("million")) {
+            return "million";
+        }
+        if (t.startsWith("billion")) {
+            return "billion";
+        }
+        return t;
     }
 
     private static String normalizeCurrency(String token) {

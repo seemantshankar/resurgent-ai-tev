@@ -145,10 +145,79 @@ class CellInterpretationEvidenceTest {
                 .anyMatch(e -> EvidenceResolution.RESOLVED.equals(e.resolution())
                         && "INR".equals(e.normalizedValue()));
         assertThat(evidence(amount, EvidenceRole.SCALE))
-                .anyMatch(e -> e.sourceText().toLowerCase().contains("lakh")
+                .anyMatch(e -> "lakh".equals(e.normalizedValue())
                         && EvidenceResolution.RESOLVED.equals(e.resolution()));
         // Scale is evidence only — resulting_value stays the workbook magnitude.
         assertThat(amount.interpretation().resultingValue()).doesNotContain("12000");
+    }
+
+    @Test
+    void formulaDivisorYieldsLakhScaleWithoutRewritingResult() throws Exception {
+        Path xlsx = formulaDivisorWorkbook(null, "B2/10^5");
+        Path db = tempDir.resolve("divisor.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+        new ClassifyService(bindingLlm("B3")).classify(db, ingest.parseRunId());
+
+        CellMeaning amount = new CellMeaningService().lookup(db, ingest.parseRunId(), "Costs!B3");
+        assertThat(amount.interpretation().valueOrigin()).isEqualTo("formula");
+        assertThat(amount.interpretation().formulaText()).contains("10^5");
+        assertThat(evidence(amount, EvidenceRole.SCALE))
+                .anyMatch(e -> EvidenceResolution.RESOLVED.equals(e.resolution())
+                        && "lakh".equals(e.normalizedValue())
+                        && "formula_divisor_1e5".equals(e.ruleId())
+                        && e.sourceText() != null
+                        && e.sourceText().contains("10^5"));
+        // Scale is evidence only — never rewrite the cached workbook magnitude.
+        if (amount.interpretation().resultingValue() != null) {
+            assertThat(amount.interpretation().resultingValue())
+                    .as("divisor must not rescale resulting_value")
+                    .doesNotContain("00000");
+        }
+    }
+
+    @Test
+    void headerLacsAndFormulaDivisorAgreeOnLakhScale() throws Exception {
+        Path xlsx = formulaDivisorWorkbook("(Rs. in Lacs)", "B2/10^5");
+        Path db = tempDir.resolve("agree.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+        new ClassifyService(bindingLlm("B3")).classify(db, ingest.parseRunId());
+
+        CellMeaning amount = new CellMeaningService().lookup(db, ingest.parseRunId(), "Costs!B3");
+        List<InterpretationEvidence> scales = evidence(amount, EvidenceRole.SCALE);
+        assertThat(scales).hasSize(1);
+        assertThat(scales.get(0).resolution()).isEqualTo(EvidenceResolution.RESOLVED);
+        assertThat(scales.get(0).normalizedValue()).isEqualTo("lakh");
+        assertThat(evidence(amount, EvidenceRole.CURRENCY))
+                .anyMatch(e -> "INR".equals(e.normalizedValue()));
+    }
+
+    @Test
+    void conflictingHeaderAndFormulaScaleStayAmbiguous() throws Exception {
+        Path xlsx = formulaDivisorWorkbook("crore", "B2/10^5");
+        Path db = tempDir.resolve("conflict-scale.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+        new ClassifyService(bindingLlm("B3")).classify(db, ingest.parseRunId());
+
+        CellMeaning amount = new CellMeaningService().lookup(db, ingest.parseRunId(), "Costs!B3");
+        assertThat(evidence(amount, EvidenceRole.SCALE))
+                .isNotEmpty()
+                .allMatch(e -> EvidenceResolution.AMBIGUOUS.equals(e.resolution()));
+    }
+
+    @Test
+    void nonDivisorFormulaDoesNotInventScale() throws Exception {
+        Path xlsx = formulaDivisorWorkbook(null, "B2+1");
+        Path db = tempDir.resolve("no-scale.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+        new ClassifyService(bindingLlm("B3")).classify(db, ingest.parseRunId());
+
+        CellMeaning amount = new CellMeaningService().lookup(db, ingest.parseRunId(), "Costs!B3");
+        assertThat(evidence(amount, EvidenceRole.SCALE))
+                .noneMatch(e -> e.ruleId() != null && e.ruleId().startsWith("formula_divisor_"));
     }
 
     @Test
@@ -368,6 +437,23 @@ class CellInterpretationEvidenceTest {
             body.createCell(0).setCellValue("Civil Works");
             body.createCell(1).setCellValue(0.12);
             return writeWorkbook(workbook, "context.xlsx");
+        }
+    }
+
+    /** B2 literal total; B3 formula like Om Arham I9 ({@code =F21/10^5}). */
+    private Path formulaDivisorWorkbook(String columnHeader, String formula) throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Costs");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Item");
+            header.createCell(1).setCellValue(columnHeader == null ? "Amount" : columnHeader);
+            Row total = sheet.createRow(1);
+            total.createCell(0).setCellValue("Civil Works");
+            total.createCell(1).setCellValue(1_000_000.0);
+            Row scaled = sheet.createRow(2);
+            scaled.createCell(0).setCellValue("Civil Works");
+            scaled.createCell(1).setCellFormula(formula);
+            return writeWorkbook(workbook, "formula-divisor.xlsx");
         }
     }
 

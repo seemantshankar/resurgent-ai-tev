@@ -20,7 +20,7 @@ Coverage is every persisted cell in the parse run — including hidden cells, st
 
 ## Evidence (#117)
 
-Ordered `cell_interpretation_evidence` rows attach to each interpretation: `row_header` / `column_header` / `period` / `basis` / `currency` / `scale` / `unit`, with `resolved` / `missing` / `ambiguous` states and source-cell lineage. Headers resolve inside the narrowest non-coverage Candidate scope (merge anchors when needed); equal-area conflicting peers stay ambiguous. Relative periods and scale are preserved without inventing calendar years or multiplying `resulting_value`.
+Ordered `cell_interpretation_evidence` rows attach to each interpretation: `row_header` / `column_header` / `period` / `basis` / `currency` / `scale` / `unit`, with `resolved` / `missing` / `ambiguous` states and source-cell lineage. Headers resolve inside the narrowest non-coverage Candidate scope (merge anchors when needed); equal-area conflicting peers stay ambiguous. Relative periods and scale are preserved without inventing calendar years or multiplying `resulting_value`. Scale may also come from explicit formula divisors (`/10^5` → lakh via `formula_divisor_1e5`, and crore/thousand analogues) merged with header scale cues.
 
 ## Application seam
 
