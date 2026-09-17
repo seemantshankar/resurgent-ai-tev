@@ -185,19 +185,72 @@ final class InterpretationEvidenceResolver {
             if (view == null || scope.contains(id)) {
                 continue;
             }
-            boolean headerRow = view.rowNum() < minRow
-                    && view.colNum() >= minCol
-                    && view.colNum() <= maxCol;
             // Immediate left column only — prevents parallel-schedule label leak.
             boolean labelCol = maxRow != null
                     && view.colNum() == minCol - 1
                     && view.rowNum() >= minRow
                     && view.rowNum() <= maxRow;
-            if (headerRow || labelCol) {
+            if (labelCol) {
                 scope.add(id);
             }
         }
+        // Column headers: nearest contiguous header band above the Candidate, not every
+        // earlier coverage-parent cell (stacked schedules must not leak upper headers).
+        for (InterpretationCellView view :
+                nearestHeaderBand(byId, poolIds, candidate.worksheetId(), minRow, minCol, maxCol)) {
+            scope.add(view.cellId());
+        }
         return scope;
+    }
+
+    /**
+     * Walk upward from {@code minRow - 1}: keep header-candidate rows in the column band;
+     * stop at a body/numeric row or at a blank gap after the band has started.
+     */
+    private static List<InterpretationCellView> nearestHeaderBand(
+            Map<Long, InterpretationCellView> byId,
+            Set<Long> poolIds,
+            long worksheetId,
+            int minRow,
+            int minCol,
+            int maxCol) {
+        Map<Integer, List<InterpretationCellView>> byRow = new HashMap<>();
+        for (Long id : poolIds) {
+            InterpretationCellView view = byId.get(id);
+            if (view == null || view.worksheetId() != worksheetId) {
+                continue;
+            }
+            if (view.rowNum() >= minRow || view.colNum() < minCol || view.colNum() > maxCol) {
+                continue;
+            }
+            byRow.computeIfAbsent(view.rowNum(), r -> new ArrayList<>()).add(view);
+        }
+        List<InterpretationCellView> band = new ArrayList<>();
+        boolean started = false;
+        for (int row = minRow - 1; row >= 1; row--) {
+            List<InterpretationCellView> cells = byRow.getOrDefault(row, List.of());
+            boolean headerish = false;
+            for (InterpretationCellView cell : cells) {
+                if (isColumnHeaderCandidate(cell)) {
+                    headerish = true;
+                    break;
+                }
+            }
+            if (headerish) {
+                for (InterpretationCellView cell : cells) {
+                    if (isColumnHeaderCandidate(cell)) {
+                        band.add(cell);
+                    }
+                }
+                started = true;
+                continue;
+            }
+            if (started) {
+                break;
+            }
+            // Not started: skip body/blank rows above the Candidate until local headers.
+        }
+        return band;
     }
 
     private static CandidateRow pickNarrowest(List<CandidateRow> owners) {
@@ -286,7 +339,27 @@ final class InterpretationEvidenceResolver {
             above.add(cell);
         }
         above.sort(Comparator.comparingInt(InterpretationCellView::rowNum));
-        return HeaderChain.from(above);
+        // Nearest header band above focus: skip body/numeric rows until the first header,
+        // then stop at the first gap (stacked upper schedules stay out).
+        Map<Integer, List<InterpretationCellView>> byRow = new HashMap<>();
+        for (InterpretationCellView cell : above) {
+            byRow.computeIfAbsent(cell.rowNum(), r -> new ArrayList<>()).add(cell);
+        }
+        List<InterpretationCellView> band = new ArrayList<>();
+        boolean started = false;
+        for (int row = focus.rowNum() - 1; row >= 1; row--) {
+            List<InterpretationCellView> atRow = byRow.get(row);
+            if (atRow != null && !atRow.isEmpty()) {
+                band.addAll(0, atRow);
+                started = true;
+                continue;
+            }
+            if (started) {
+                break;
+            }
+            // Not started: keep scanning through body rows toward the local header.
+        }
+        return HeaderChain.from(band);
     }
 
     /**
@@ -564,8 +637,12 @@ final class InterpretationEvidenceResolver {
         if (t.contains("₹") || t.equals("inr") || t.equals("rs")) {
             return "INR";
         }
-        if (t.contains("$") || t.equals("usd")) {
+        if (t.equals("usd")) {
             return "USD";
+        }
+        if (t.contains("$")) {
+            // Bare $ is USD/CAD/AUD/… — keep source cue without inventing a currency.
+            return null;
         }
         if (t.contains("€") || t.equals("eur")) {
             return "EUR";

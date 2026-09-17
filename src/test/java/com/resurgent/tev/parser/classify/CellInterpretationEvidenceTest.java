@@ -248,6 +248,41 @@ class CellInterpretationEvidenceTest {
     }
 
     @Test
+    void stackedSchedulesDoNotInheritUpperColumnHeaders() throws Exception {
+        Path xlsx = stackedSchedulesWorkbook();
+        Path db = tempDir.resolve("stacked.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+        new ClassifyService(bindingLlm("B6")).classify(db, ingest.parseRunId());
+
+        CellMeaning lower = new CellMeaningService().lookup(db, ingest.parseRunId(), "Costs!B6");
+        assertThat(evidence(lower, EvidenceRole.COLUMN_HEADER))
+                .anyMatch(e -> "Lower Amount".equals(e.sourceText())
+                        && EvidenceResolution.RESOLVED.equals(e.resolution()));
+        assertThat(evidence(lower, EvidenceRole.COLUMN_HEADER))
+                .noneMatch(e -> "Upper Amount".equals(e.sourceText()));
+        assertThat(evidence(lower, EvidenceRole.ROW_HEADER))
+                .anyMatch(e -> "Glass".equals(e.sourceText())
+                        && EvidenceResolution.RESOLVED.equals(e.resolution()));
+    }
+
+    @Test
+    void bareDollarDoesNotNormalizeToUsd() throws Exception {
+        Path xlsx = formulaDivisorWorkbook("Amount ($)", "B2+0");
+        Path db = tempDir.resolve("bare-dollar.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+        new ClassifyService(bindingLlm("B3")).classify(db, ingest.parseRunId());
+
+        CellMeaning amount = new CellMeaningService().lookup(db, ingest.parseRunId(), "Costs!B3");
+        assertThat(evidence(amount, EvidenceRole.CURRENCY))
+                .anyMatch(e -> e.sourceText() != null
+                        && e.sourceText().contains("$")
+                        && e.normalizedValue() == null
+                        && EvidenceResolution.RESOLVED.equals(e.resolution()));
+    }
+
+    @Test
     void mergedColumnHeaderResolvesFromAnchorScope() throws Exception {
         Path xlsx = mergedHeaderWorkbook();
         Path db = tempDir.resolve("merged-header.db");
@@ -448,6 +483,29 @@ class CellInterpretationEvidenceTest {
             body.createCell(4).setCellValue("Glass");
             body.createCell(5).setCellValue(20.0);
             return writeWorkbook(workbook, "adjacent.xlsx");
+        }
+    }
+
+    private Path stackedSchedulesWorkbook() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Costs");
+            Row upperHeader = sheet.createRow(0);
+            upperHeader.createCell(0).setCellValue("Item");
+            upperHeader.createCell(1).setCellValue("Upper Amount");
+            Row upperBody = sheet.createRow(1);
+            upperBody.createCell(0).setCellValue("Civil Works");
+            upperBody.createCell(1).setCellValue(100.0);
+            Row upperExtra = sheet.createRow(2);
+            upperExtra.createCell(0).setCellValue("Plumbing");
+            upperExtra.createCell(1).setCellValue(50.0);
+            // Gap then lower schedule — upper headers must not leak onto B6.
+            Row lowerHeader = sheet.createRow(4);
+            lowerHeader.createCell(0).setCellValue("Item");
+            lowerHeader.createCell(1).setCellValue("Lower Amount");
+            Row lowerBody = sheet.createRow(5);
+            lowerBody.createCell(0).setCellValue("Glass");
+            lowerBody.createCell(1).setCellValue(20.0);
+            return writeWorkbook(workbook, "stacked.xlsx");
         }
     }
 

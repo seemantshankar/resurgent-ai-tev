@@ -250,6 +250,30 @@ class RealWorkbookLiveEvidenceSmokeIT {
                         .as("bound Om Arham sample should resolve at least one header with source")
                         .isGreaterThan(0);
             }
+            // Prefer ASSETS!I9 when present: Civil Works ÷10^5 → lakh scale (formula divisor).
+            try {
+                CellMeaning i9 = new CellMeaningService()
+                        .lookup(db, ingest.parseRunId(), "ASSETS!I9");
+                if (i9.interpretation() != null
+                        && i9.interpretation().formulaText() != null
+                        && i9.interpretation().formulaText().contains("10^5")) {
+                    assertThat(i9.evidence().stream()
+                                    .filter(e -> EvidenceRole.SCALE.equals(e.role()))
+                                    .toList())
+                            .as("ASSETS!I9 /10^5 should yield lakh scale evidence")
+                            .anyMatch(e -> "lakh".equals(e.normalizedValue())
+                                    && EvidenceResolution.RESOLVED.equals(e.resolution()));
+                    System.err.printf(Locale.ROOT,
+                            "ASSETS!I9 formula=%s scale=%s%n",
+                            i9.interpretation().formulaText(),
+                            i9.evidence().stream()
+                                    .filter(e -> EvidenceRole.SCALE.equals(e.role()))
+                                    .map(e -> e.ruleId() + ":" + e.normalizedValue())
+                                    .toList());
+                }
+            } catch (ClassifyException ignored) {
+                // Sheet/coord may be absent on unexpected workbook variants.
+            }
 
             // Spot-check a few more ASSETS cells for evidence coverage.
             int checked = 0;
