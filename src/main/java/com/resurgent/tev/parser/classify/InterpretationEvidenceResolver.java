@@ -42,43 +42,151 @@ final class InterpretationEvidenceResolver {
             InterpretationCellView target,
             Map<Long, InterpretationCellView> byId,
             Map<Long, List<CandidateRow>> ownersByCell,
-            Map<Long, Set<Long>> membersByCandidate) {
+            Map<Long, Set<Long>> membersByCandidate,
+            Map<Long, CandidateRow> candidatesById,
+            NomenclatureBinding binding) {
         Objects.requireNonNull(target, "target");
         Objects.requireNonNull(byId, "byId");
+        Objects.requireNonNull(candidatesById, "candidatesById");
 
-        List<CandidateRow> owners = ownersByCell.getOrDefault(target.cellId(), List.of());
-        List<CandidateRow> narrow = owners.stream()
-                .filter(c -> !"coverage_parent".equals(c.candidateKind()))
-                .toList();
-        List<CandidateRow> primaryPool = narrow.isEmpty() ? owners : narrow;
-        if (primaryPool.isEmpty()) {
+        List<CandidateRow> peers = ownershipPeers(target, ownersByCell);
+        if (peers.isEmpty() && binding != null) {
+            CandidateRow bound = candidatesById.get(binding.candidateId());
+            if (bound != null) {
+                peers = List.of(bound);
+            }
+        }
+        if (peers.isEmpty()) {
             return missingHeaders(parseRunId, target.cellId());
         }
 
-        // Prefer the narrowest owning Candidate (same spirit as RelatedCandidateLinker).
-        // Compare only same-area peers for conflict; supersets must not leak adjacent labels.
-        CandidateRow primary = pickNarrowest(primaryPool);
-        int primaryArea = bboxArea(primary);
-        List<CandidateRow> peers = primaryPool.stream()
-                .filter(c -> bboxArea(c) <= primaryArea)
-                .toList();
+        List<InterpretationEvidence> out = resolveWithPeers(
+                parseRunId, target, byId, membersByCandidate, candidatesById, peers);
+        // Formula-/context-bound amounts may sit outside every narrow owner's members;
+        // if ownership scope yields no headers, try the binding Candidate's Packet scope.
+        if (binding != null && headersAllMissing(out)) {
+            CandidateRow bound = candidatesById.get(binding.candidateId());
+            if (bound != null
+                    && peers.stream().noneMatch(p -> p.candidateId() == bound.candidateId())) {
+                out = resolveWithPeers(
+                        parseRunId,
+                        target,
+                        byId,
+                        membersByCandidate,
+                        candidatesById,
+                        List.of(bound));
+            }
+        }
+        return List.copyOf(out);
+    }
 
+    private static List<InterpretationEvidence> resolveWithPeers(
+            long parseRunId,
+            InterpretationCellView target,
+            Map<Long, InterpretationCellView> byId,
+            Map<Long, Set<Long>> membersByCandidate,
+            Map<Long, CandidateRow> candidatesById,
+            List<CandidateRow> peers) {
         List<HeaderChain> rowChains = new ArrayList<>();
         List<HeaderChain> colChains = new ArrayList<>();
         for (CandidateRow scope : peers) {
-            Set<Long> memberIds = membersByCandidate.getOrDefault(scope.candidateId(), Set.of());
-            InterpretationCellView focus = focusCell(target, byId, memberIds);
-            rowChains.add(rowHeaderChain(focus, byId, memberIds));
-            colChains.add(columnHeaderChain(focus, byId, memberIds));
+            Set<Long> scopeIds = expandedScope(scope, membersByCandidate, byId, candidatesById);
+            InterpretationCellView focus = focusCell(target, byId, scopeIds);
+            rowChains.add(rowHeaderChain(focus, byId, scopeIds));
+            colChains.add(columnHeaderChain(focus, byId, scopeIds));
         }
-
         List<InterpretationEvidence> out = new ArrayList<>();
         out.addAll(mergeHeaderRole(
                 parseRunId, target.cellId(), EvidenceRole.ROW_HEADER, rowChains));
         out.addAll(mergeHeaderRole(
                 parseRunId, target.cellId(), EvidenceRole.COLUMN_HEADER, colChains));
         out.addAll(contextEvidence(parseRunId, target.cellId(), out));
-        return List.copyOf(out);
+        return out;
+    }
+
+    private static boolean headersAllMissing(List<InterpretationEvidence> evidence) {
+        boolean sawHeader = false;
+        for (InterpretationEvidence item : evidence) {
+            if (EvidenceRole.ROW_HEADER.equals(item.role())
+                    || EvidenceRole.COLUMN_HEADER.equals(item.role())) {
+                sawHeader = true;
+                if (!EvidenceResolution.MISSING.equals(item.resolution())) {
+                    return false;
+                }
+            }
+        }
+        return sawHeader;
+    }
+
+    private static List<CandidateRow> ownershipPeers(
+            InterpretationCellView target, Map<Long, List<CandidateRow>> ownersByCell) {
+        List<CandidateRow> owners = ownersByCell.getOrDefault(target.cellId(), List.of());
+        List<CandidateRow> narrow = owners.stream()
+                .filter(c -> !"coverage_parent".equals(c.candidateKind()))
+                .toList();
+        List<CandidateRow> primaryPool = narrow.isEmpty() ? owners : narrow;
+        if (primaryPool.isEmpty()) {
+            return List.of();
+        }
+        CandidateRow primary = pickNarrowest(primaryPool);
+        int primaryArea = bboxArea(primary);
+        return primaryPool.stream()
+                .filter(c -> bboxArea(c) <= primaryArea)
+                .toList();
+    }
+
+    /**
+     * Candidate members plus Packet-style inherited header/label context from the parent
+     * (or worksheet). Label context is limited to the immediate left column so adjacent
+     * parallel schedules do not leak.
+     */
+    private static Set<Long> expandedScope(
+            CandidateRow candidate,
+            Map<Long, Set<Long>> membersByCandidate,
+            Map<Long, InterpretationCellView> byId,
+            Map<Long, CandidateRow> candidatesById) {
+        Set<Long> scope = new HashSet<>(
+                membersByCandidate.getOrDefault(candidate.candidateId(), Set.of()));
+        if ("coverage_parent".equals(candidate.candidateKind())) {
+            return scope;
+        }
+        Integer minRow = candidate.bboxMinRow();
+        Integer minCol = candidate.bboxMinCol();
+        Integer maxCol = candidate.bboxMaxCol();
+        Integer maxRow = candidate.bboxMaxRow();
+        if (minRow == null || minCol == null || maxCol == null) {
+            return scope;
+        }
+        Set<Long> poolIds;
+        if (candidate.parentCandidateId() != null
+                && membersByCandidate.containsKey(candidate.parentCandidateId())) {
+            poolIds = membersByCandidate.get(candidate.parentCandidateId());
+        } else {
+            poolIds = new HashSet<>();
+            for (InterpretationCellView cell : byId.values()) {
+                if (cell.worksheetId() == candidate.worksheetId()) {
+                    poolIds.add(cell.cellId());
+                }
+            }
+        }
+        for (Long id : poolIds) {
+            InterpretationCellView view = byId.get(id);
+            if (view == null || scope.contains(id)) {
+                continue;
+            }
+            boolean headerRow = view.rowNum() < minRow
+                    && view.colNum() >= minCol
+                    && view.colNum() <= maxCol;
+            // Immediate left column only — prevents parallel-schedule label leak.
+            boolean labelCol = maxRow != null
+                    && view.colNum() == minCol - 1
+                    && view.rowNum() >= minRow
+                    && view.rowNum() <= maxRow;
+            if (headerRow || labelCol) {
+                scope.add(id);
+            }
+        }
+        return scope;
     }
 
     private static CandidateRow pickNarrowest(List<CandidateRow> owners) {

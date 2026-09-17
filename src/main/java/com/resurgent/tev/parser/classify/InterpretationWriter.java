@@ -40,11 +40,22 @@ public class InterpretationWriter {
                 InterpretationEvidenceResolver.indexOwners(candidates, membersByCandidate);
         Map<Long, InterpretationCellView> byId =
                 InterpretationEvidenceResolver.indexCells(cells);
+        Map<Long, CandidateRow> candidatesById = new HashMap<>();
+        for (CandidateRow candidate : candidates) {
+            candidatesById.put(candidate.candidateId(), candidate);
+        }
 
         for (InterpretationCellView cell : cells) {
-            repo.insertCellInterpretation(build(parseRunId, cell, byCell.get(cell.cellId())));
+            NomenclatureBinding binding = byCell.get(cell.cellId());
+            repo.insertCellInterpretation(build(parseRunId, cell, binding));
             List<InterpretationEvidence> evidence = InterpretationEvidenceResolver.resolve(
-                    parseRunId, cell, byId, ownersByCell, membersByCandidate);
+                    parseRunId,
+                    cell,
+                    byId,
+                    ownersByCell,
+                    membersByCandidate,
+                    candidatesById,
+                    binding);
             for (InterpretationEvidence item : evidence) {
                 repo.insertInterpretationEvidence(item);
             }
