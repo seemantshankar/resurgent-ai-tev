@@ -61,6 +61,7 @@ public final class FormulaGlossWriter {
         formulas.sort(Comparator
                 .comparing((CellInterpretation row) ->
                         !NomenclatureStatus.BOUND.equals(row.nomenclatureStatus()))
+                // Prefer scale-divisor formulas (e.g. /10^5 → lakh) when capping the gloss budget.
                 .thenComparing((CellInterpretation row) ->
                         row.formulaText() == null || !row.formulaText().contains("10^"))
                 .thenComparingLong(CellInterpretation::cellId));
