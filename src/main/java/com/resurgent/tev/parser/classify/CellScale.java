@@ -3,9 +3,11 @@ package com.resurgent.tev.parser.classify;
 import java.util.Locale;
 
 /**
- * The multiplier a numeric cell is expressed in. Rupees and lakhs sit in one block
- * in a real FM, so propagation carries scale and two members of one aggregation
- * with conflicting scale are refused rather than silently added.
+ * The unit a numeric cell's figure is expressed in. {@code multiplier()} is how many
+ * base units one displayed unit stands for, so a figure in lakhs has multiplier
+ * 100,000. Rupees and lakhs sit in one block in a real FM, so propagation carries
+ * scale and two members of one aggregation with conflicting scale are refused
+ * rather than silently added.
  */
 public enum CellScale {
     UNIT(1d),
@@ -36,11 +38,18 @@ public enum CellScale {
         return valueOf(value.trim().toUpperCase(Locale.ROOT));
     }
 
-    /** The scale reached by dividing this scale's figures by {@code divisor}. */
+    /**
+     * The scale reached by dividing this scale's figures by {@code divisor}: rupees
+     * divided by 100,000 are lakhs, so the displayed unit grows by the divisor.
+     * Null when the result is not a scale this enum names.
+     */
     public static CellScale dividedBy(CellScale scale, double divisor) {
-        double target = scale.multiplier() / divisor;
+        if (divisor == 0d) {
+            return null;
+        }
+        double target = scale.multiplier() * divisor;
         for (CellScale candidate : values()) {
-            if (Math.abs(candidate.multiplier() - target) < 1e-9) {
+            if (Math.abs(candidate.multiplier() - target) < 1e-6) {
                 return candidate;
             }
         }
@@ -49,6 +58,9 @@ public enum CellScale {
 
     /** The scale reached by multiplying this scale's figures by {@code factor}. */
     public static CellScale multipliedBy(CellScale scale, double factor) {
+        if (factor == 0d) {
+            return null;
+        }
         return dividedBy(scale, 1d / factor);
     }
 }

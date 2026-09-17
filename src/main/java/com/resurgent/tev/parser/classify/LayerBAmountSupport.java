@@ -301,15 +301,11 @@ final class LayerBAmountSupport {
         if (cell == null) {
             return null;
         }
-        if (cell.textValue() != null && !cell.textValue().isBlank()
-                && (cell.numericValue() == null || cell.numericValue().isBlank())) {
-            return cell.textValue().trim();
-        }
-        if (cell.displayValue() != null && !cell.displayValue().isBlank()
-                && !"number".equals(cell.valueType())
-                && (cell.formulaText() == null || cell.formulaText().isBlank())) {
-            return cell.displayValue().trim();
-        }
-        return null;
+        return LabelText.of(
+                cell.textValue(),
+                cell.displayValue(),
+                cell.numericValue(),
+                cell.valueType(),
+                cell.formulaText());
     }
 }
