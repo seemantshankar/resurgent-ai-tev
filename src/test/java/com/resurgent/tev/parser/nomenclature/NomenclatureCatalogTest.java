@@ -82,8 +82,11 @@ class NomenclatureCatalogTest {
                     .isPresent();
             assertThat(slice.node("Project Cost > Plant & Machinery > Wastewater / ETP"))
                     .isPresent();
+            assertThat(slice.node("Profit & Loss > F & B Sales")).isPresent();
             assertThat(slice.leafPathForAlias("Lift").orElseThrow())
                     .isEqualTo("Project Cost > Plant & Machinery > Elevator / Lift");
+            assertThat(slice.leafPathForAlias("F&B Sales").orElseThrow())
+                    .isEqualTo("Profit & Loss > F & B Sales");
 
             OntologySlice bare = catalog.sliceForMandate(7L);
             assertThat(bare.node("Project Cost > Plant & Machinery > Air Conditioning"))

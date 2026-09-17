@@ -8,7 +8,7 @@ import java.util.Objects;
 
 /**
  * Counters for Layer B materialization: proposed vs accepted vs rejected vs
- * duplicate, with sample rejection reasons for live reports.
+ * duplicate, leaf-selection outcomes, and sample rejection reasons for live reports.
  */
 public final class LayerBBindingStats {
 
@@ -17,6 +17,9 @@ public final class LayerBBindingStats {
     private int rejected;
     private int duplicate;
     private int failedCalls;
+    private int catalogPreferred;
+    private int softGenericKept;
+    private int leafAmbiguous;
     private final Map<String, Integer> rejectReasons = new LinkedHashMap<>();
     private final List<String> rejectSamples = new ArrayList<>();
     private final List<String> failedCallSamples = new ArrayList<>();
@@ -31,6 +34,21 @@ public final class LayerBBindingStats {
 
     public void addDuplicate() {
         duplicate++;
+    }
+
+    /** Soft/generic proposal replaced by an unambiguous hard catalog leaf from evidence. */
+    public void addCatalogPreferred() {
+        catalogPreferred++;
+    }
+
+    /** Soft leaf kept because evidence did not uniquely name a hard catalog leaf. */
+    public void addSoftGenericKept() {
+        softGenericKept++;
+    }
+
+    /** Soft leaf kept because evidence named more than one hard catalog leaf. */
+    public void addLeafAmbiguous() {
+        leafAmbiguous++;
     }
 
     /** A Layer B call or chunk the model never answered usably; its lines are lost. */
@@ -66,6 +84,18 @@ public final class LayerBBindingStats {
         return duplicate;
     }
 
+    public int catalogPreferred() {
+        return catalogPreferred;
+    }
+
+    public int softGenericKept() {
+        return softGenericKept;
+    }
+
+    public int leafAmbiguous() {
+        return leafAmbiguous;
+    }
+
     public Map<String, Integer> rejectReasons() {
         return Map.copyOf(rejectReasons);
     }
@@ -88,6 +118,9 @@ public final class LayerBBindingStats {
                 + " rejected=" + rejected
                 + " duplicate=" + duplicate
                 + " failedCalls=" + failedCalls
+                + " catalogPreferred=" + catalogPreferred
+                + " softGenericKept=" + softGenericKept
+                + " leafAmbiguous=" + leafAmbiguous
                 + " reasons=" + formatRejectReasons();
     }
 

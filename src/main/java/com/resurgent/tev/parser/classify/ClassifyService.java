@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -246,6 +247,7 @@ public final class ClassifyService {
                             line.peers()));
                 }
                 stats.addAccepted();
+                recordLeafSelection(stats, result.leafSelection());
                 currentSlice = catalog.sliceForMandate(mandateId);
             }
         }
@@ -546,14 +548,24 @@ public final class ClassifyService {
                 orderedDispositions, orderedFacts, orderedJobs, orderedJudgments, layerBFailures);
     }
 
-    private record MaterializeResult(NomenclatureBinding binding, String rejectReason) {
-        static MaterializeResult ok(NomenclatureBinding binding) {
-            return new MaterializeResult(binding, null);
+    private record MaterializeResult(
+            NomenclatureBinding binding,
+            String rejectReason,
+            LeafSelectionOutcome leafSelection) {
+        static MaterializeResult ok(NomenclatureBinding binding, LeafSelectionOutcome leafSelection) {
+            return new MaterializeResult(binding, null, leafSelection);
         }
 
         static MaterializeResult reject(String reason) {
-            return new MaterializeResult(null, reason);
+            return new MaterializeResult(null, reason, LeafSelectionOutcome.NONE);
         }
+    }
+
+    enum LeafSelectionOutcome {
+        NONE,
+        CATALOG_PREFERRED,
+        SOFT_GENERIC_KEPT,
+        LEAF_AMBIGUOUS
     }
 
     private static MaterializeResult tryMaterializeBinding(
@@ -565,14 +577,14 @@ public final class ClassifyService {
             long parseRunId,
             LayerBLineJudgment line) {
         try {
-            return MaterializeResult.ok(materializeBinding(
-                    catalog, mandateId, slice, packet, candidate, parseRunId, line));
+            return materializeBinding(
+                    catalog, mandateId, slice, packet, candidate, parseRunId, line);
         } catch (ClassifyException e) {
             return MaterializeResult.reject(e.getMessage());
         }
     }
 
-    private static NomenclatureBinding materializeBinding(
+    private static MaterializeResult materializeBinding(
             NomenclatureCatalog catalog,
             long mandateId,
             OntologySlice slice,
@@ -612,24 +624,48 @@ public final class ClassifyService {
         }
         String path = line.path().trim();
         boolean derivedLeaf = false;
+        LeafSelectionOutcome leafSelection = LeafSelectionOutcome.NONE;
+        HardLeafChoice evidenceLeaf = hardCatalogLeafFromEvidence(slice, packet, cell, line);
         Optional<NomenclatureNode> midLevel = slice.node(path);
         if (midLevel.isPresent() && !midLevel.get().leaf()) {
-            // The model placed the amount under a mid-level because no leaf fits it.
-            // Name a leaf from the row's own label so the amount still rolls up under
-            // the mid-level it was assigned, instead of discarding the line.
-            String derived = softLeafNameFrom(line.verbatim());
-            if (derived == null) {
-                throw new ClassifyException(
-                        "Layer B path must be a leaf join key, not mid-level: '" + path + "'");
+            if (evidenceLeaf.kind() == HardLeafChoice.Kind.UNIQUE) {
+                path = evidenceLeaf.path();
+                leafSelection = LeafSelectionOutcome.CATALOG_PREFERRED;
+            } else {
+                // The model placed the amount under a mid-level because no leaf fits it.
+                // Name a leaf from the row's own label so the amount still rolls up under
+                // the mid-level it was assigned, instead of discarding the line.
+                String derived = softLeafNameFrom(line.verbatim());
+                if (derived == null) {
+                    throw new ClassifyException(
+                            "Layer B path must be a leaf join key, not mid-level: '" + path + "'");
+                }
+                path = path + " > " + derived;
+                derivedLeaf = true;
+                leafSelection = evidenceLeaf.kind() == HardLeafChoice.Kind.AMBIGUOUS
+                        ? LeafSelectionOutcome.LEAF_AMBIGUOUS
+                        : LeafSelectionOutcome.SOFT_GENERIC_KEPT;
             }
-            path = path + " > " + derived;
-            derivedLeaf = true;
+        } else if (wouldBindAsSoft(slice, path)) {
+            if (evidenceLeaf.kind() == HardLeafChoice.Kind.UNIQUE) {
+                path = evidenceLeaf.path();
+                derivedLeaf = false;
+                leafSelection = LeafSelectionOutcome.CATALOG_PREFERRED;
+            } else if (evidenceLeaf.kind() == HardLeafChoice.Kind.AMBIGUOUS) {
+                leafSelection = LeafSelectionOutcome.LEAF_AMBIGUOUS;
+            } else {
+                leafSelection = LeafSelectionOutcome.SOFT_GENERIC_KEPT;
+            }
         }
         String resolvedPath = path;
         boolean viaAlias = slice.aliases().stream()
                 .anyMatch(alias -> OntologySlice.normalize(alias.aliasText())
                         .equals(OntologySlice.normalize(line.verbatim()))
                         && alias.leafPath().equals(resolvedPath));
+        if (!viaAlias && evidenceLeaf.kind() == HardLeafChoice.Kind.UNIQUE
+                && path.equals(evidenceLeaf.path())) {
+            viaAlias = evidenceMatchedViaAlias(slice, packet, cell, line, path);
+        }
         boolean softLeaf = false;
         Optional<NomenclatureNode> existing = slice.node(path);
         if (existing.isPresent()) {
@@ -669,16 +705,122 @@ public final class ClassifyService {
                 }
             }
         }
-        return new NomenclatureBinding(
-                cell.cellId(),
-                parseRunId,
-                candidate.candidateId(),
-                line.verbatim(),
-                path,
-                role,
-                softLeaf,
-                viaAlias,
-                line.confidence());
+        return MaterializeResult.ok(
+                new NomenclatureBinding(
+                        cell.cellId(),
+                        parseRunId,
+                        candidate.candidateId(),
+                        line.verbatim(),
+                        path,
+                        role,
+                        softLeaf,
+                        viaAlias,
+                        line.confidence()),
+                leafSelection);
+    }
+
+    private static void recordLeafSelection(
+            LayerBBindingStats stats, LeafSelectionOutcome outcome) {
+        if (outcome == null) {
+            return;
+        }
+        switch (outcome) {
+            case CATALOG_PREFERRED -> stats.addCatalogPreferred();
+            case SOFT_GENERIC_KEPT -> stats.addSoftGenericKept();
+            case LEAF_AMBIGUOUS -> stats.addLeafAmbiguous();
+            case NONE -> {
+            }
+        }
+    }
+
+    /**
+     * Soft/generic proposals (invented soft leaves, existing mandate soft leaves, or
+     * mid-level recovery that would invent one) yield to an unambiguous hard catalog
+     * leaf when row/header evidence supports it.
+     */
+    private static boolean wouldBindAsSoft(OntologySlice slice, String path) {
+        Optional<NomenclatureNode> existing = slice.node(path);
+        if (existing.isPresent()) {
+            return existing.get().leaf()
+                    && NomenclatureNode.LAYER_MANDATE_SOFT.equals(existing.get().layer());
+        }
+        return true;
+    }
+
+    private static HardLeafChoice hardCatalogLeafFromEvidence(
+            OntologySlice slice,
+            Packet packet,
+            PacketCell cell,
+            LayerBLineJudgment line) {
+        LinkedHashSet<String> hardLeaves = new LinkedHashSet<>();
+        for (String evidence : evidenceTexts(packet, cell, line)) {
+            Optional<String> resolved = slice.resolve(evidence);
+            if (resolved.isEmpty()) {
+                continue;
+            }
+            Optional<NomenclatureNode> node = slice.node(resolved.get());
+            if (node.isEmpty() || !node.get().leaf()) {
+                continue;
+            }
+            if (NomenclatureNode.LAYER_MANDATE_SOFT.equals(node.get().layer())) {
+                continue;
+            }
+            hardLeaves.add(resolved.get());
+        }
+        if (hardLeaves.isEmpty()) {
+            return HardLeafChoice.none();
+        }
+        if (hardLeaves.size() > 1) {
+            return HardLeafChoice.ambiguous();
+        }
+        return HardLeafChoice.unique(hardLeaves.iterator().next());
+    }
+
+    private static List<String> evidenceTexts(
+            Packet packet, PacketCell cell, LayerBLineJudgment line) {
+        LinkedHashSet<String> texts = new LinkedHashSet<>();
+        String rowLabel = LayerBAmountSupport.resolveRowLabel(packet, cell);
+        if (rowLabel != null && !rowLabel.isBlank()) {
+            texts.add(rowLabel.trim());
+        }
+        if (line.verbatim() != null && !line.verbatim().isBlank()) {
+            texts.add(line.verbatim().trim());
+        }
+        return List.copyOf(texts);
+    }
+
+    private static boolean evidenceMatchedViaAlias(
+            OntologySlice slice,
+            Packet packet,
+            PacketCell cell,
+            LayerBLineJudgment line,
+            String path) {
+        for (String evidence : evidenceTexts(packet, cell, line)) {
+            String needle = OntologySlice.normalize(evidence);
+            boolean matched = slice.aliases().stream()
+                    .anyMatch(alias -> OntologySlice.normalize(alias.aliasText()).equals(needle)
+                            && alias.leafPath().equals(path));
+            if (matched) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private record HardLeafChoice(Kind kind, String path) {
+        enum Kind { NONE, UNIQUE, AMBIGUOUS }
+
+        static HardLeafChoice none() {
+            return new HardLeafChoice(Kind.NONE, null);
+        }
+
+        static HardLeafChoice unique(String path) {
+            return new HardLeafChoice(Kind.UNIQUE, path);
+        }
+
+        static HardLeafChoice ambiguous() {
+            return new HardLeafChoice(Kind.AMBIGUOUS, null);
+        }
     }
 
     /**

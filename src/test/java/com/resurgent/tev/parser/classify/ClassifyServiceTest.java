@@ -9,6 +9,7 @@ import com.resurgent.tev.parser.discover.DiscoverService;
 import com.resurgent.tev.parser.discover.PacketCell;
 import com.resurgent.tev.parser.ingest.IngestService;
 import com.resurgent.tev.parser.ingest.IngestSummary;
+import com.resurgent.tev.parser.nomenclature.NomenclatureCatalog;
 import java.io.FileOutputStream;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -484,6 +485,223 @@ class ClassifyServiceTest {
 
         assertThat(summary.bindingCount()).isZero();
         assertThat(summary.layerBStats().rejectReasons()).containsKey("path_not_leaf");
+    }
+
+    @Test
+    void softGenericPathPrefersUnambiguousHardCatalogLeafFromRowEvidence() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("PnL");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Item");
+            header.createCell(1).setCellValue("Amount");
+            header.createCell(4).setCellValue("Other");
+            header.createCell(5).setCellValue("Amt");
+            Row add = sheet.createRow(1);
+            add.createCell(0).setCellValue("F & B Sales");
+            add.createCell(1).setCellValue(150.0);
+            add.createCell(4).setCellValue("Glass");
+            add.createCell(5).setCellValue(20.0);
+            Row more = sheet.createRow(2);
+            more.createCell(0).setCellValue("Steel");
+            more.createCell(1).setCellValue(40.0);
+            more.createCell(4).setCellValue("Paint");
+            more.createCell(5).setCellValue(30.0);
+            xlsx = writeWorkbook(workbook, "prefer-catalog.xlsx");
+        }
+        Path db = tempDir.resolve("prefer-catalog.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            new NomenclatureCatalog(new WorkspaceRepository(workspace.connection()))
+                    .confirmIndustry(1L, "hotel");
+        }
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.layerBFactory = prompt -> LayerBAmountSupport.amountCells(prompt.packet()).stream()
+                .filter(cell -> "F & B Sales".equals(
+                        LayerBAmountSupport.resolveRowLabel(prompt.packet(), cell)))
+                .findFirst()
+                .map(cell -> List.of(new LayerBLineJudgment(
+                        cell.coord(), "Projected Profitability",
+                        "Profit & Loss > Projected Profitability",
+                        AmountRole.ADD, List.of(), 0.9)))
+                .orElse(List.of());
+
+        ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        assertThat(summary.layerBStats().catalogPreferred()).isEqualTo(1);
+        assertThat(summary.layerBStats().softGenericKept()).isZero();
+        assertThat(summary.layerBStats().leafAmbiguous()).isZero();
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
+                    .anyMatch(b -> "Profit & Loss > F & B Sales".equals(b.path())
+                            && AmountRole.ADD.equals(b.amountRole())
+                            && !b.softLeaf());
+            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
+                    .noneMatch(b -> b.path().contains("Projected Profitability"));
+        }
+    }
+
+    @Test
+    void midLevelSoftDerivationPrefersHardCatalogLeafWhenRowEvidenceMatches() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Costs");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Item");
+            header.createCell(1).setCellValue("Amount");
+            header.createCell(4).setCellValue("Other");
+            header.createCell(5).setCellValue("Amt");
+            Row add = sheet.createRow(1);
+            add.createCell(0).setCellValue("Air Conditioning");
+            add.createCell(1).setCellValue(100.0);
+            add.createCell(4).setCellValue("Glass");
+            add.createCell(5).setCellValue(20.0);
+            Row more = sheet.createRow(2);
+            more.createCell(0).setCellValue("Steel");
+            more.createCell(1).setCellValue(40.0);
+            more.createCell(4).setCellValue("Paint");
+            more.createCell(5).setCellValue(30.0);
+            xlsx = writeWorkbook(workbook, "prefer-mid.xlsx");
+        }
+        Path db = tempDir.resolve("prefer-mid.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            new NomenclatureCatalog(new WorkspaceRepository(workspace.connection()))
+                    .confirmIndustry(1L, "hotel");
+        }
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.layerBFactory = prompt -> LayerBAmountSupport.amountCells(prompt.packet()).stream()
+                .filter(cell -> "Air Conditioning".equals(
+                        LayerBAmountSupport.resolveRowLabel(prompt.packet(), cell)))
+                .findFirst()
+                .map(cell -> List.of(new LayerBLineJudgment(
+                        cell.coord(), "Projected Profitability",
+                        "Project Cost > Plant & Machinery",
+                        AmountRole.ADD, List.of(), 0.9)))
+                .orElse(List.of());
+
+        ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        assertThat(summary.layerBStats().catalogPreferred()).isEqualTo(1);
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
+                    .anyMatch(b -> "Project Cost > Plant & Machinery > Air Conditioning"
+                                    .equals(b.path())
+                            && !b.softLeaf());
+            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
+                    .noneMatch(b -> b.path().endsWith("Projected Profitability"));
+        }
+    }
+
+    @Test
+    void softGenericWithoutHardCatalogMatchIsKeptAndMeasured() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Costs");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Item");
+            header.createCell(1).setCellValue("Amount");
+            header.createCell(4).setCellValue("Other");
+            header.createCell(5).setCellValue("Amt");
+            Row add = sheet.createRow(1);
+            add.createCell(0).setCellValue("CCTV System");
+            add.createCell(1).setCellValue(100.0);
+            add.createCell(4).setCellValue("Glass");
+            add.createCell(5).setCellValue(20.0);
+            Row more = sheet.createRow(2);
+            more.createCell(0).setCellValue("Steel");
+            more.createCell(1).setCellValue(40.0);
+            more.createCell(4).setCellValue("Paint");
+            more.createCell(5).setCellValue(30.0);
+            xlsx = writeWorkbook(workbook, "soft-kept.xlsx");
+        }
+        Path db = tempDir.resolve("soft-kept.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.layerBFactory = prompt -> LayerBAmountSupport.amountCells(prompt.packet()).stream()
+                .filter(cell -> "CCTV System".equals(
+                        LayerBAmountSupport.resolveRowLabel(prompt.packet(), cell)))
+                .findFirst()
+                .map(cell -> List.of(new LayerBLineJudgment(
+                        cell.coord(), "CCTV System",
+                        "Project Cost > Plant & Machinery",
+                        AmountRole.ADD, List.of(), 0.9)))
+                .orElse(List.of());
+
+        ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        assertThat(summary.layerBStats().softGenericKept()).isEqualTo(1);
+        assertThat(summary.layerBStats().catalogPreferred()).isZero();
+        assertThat(summary.layerBStats().leafAmbiguous()).isZero();
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
+                    .anyMatch(b -> "Project Cost > Plant & Machinery > CCTV System"
+                                    .equals(b.path())
+                            && b.softLeaf());
+        }
+    }
+
+    @Test
+    void conflictingHardCatalogEvidenceKeepsSoftLeafAndMeasuresAmbiguity() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Costs");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Item");
+            header.createCell(1).setCellValue("Amount");
+            header.createCell(4).setCellValue("Other");
+            header.createCell(5).setCellValue("Amt");
+            Row add = sheet.createRow(1);
+            add.createCell(0).setCellValue("Elevator");
+            add.createCell(1).setCellValue(100.0);
+            add.createCell(4).setCellValue("Glass");
+            add.createCell(5).setCellValue(20.0);
+            Row more = sheet.createRow(2);
+            more.createCell(0).setCellValue("Steel");
+            more.createCell(1).setCellValue(40.0);
+            more.createCell(4).setCellValue("Paint");
+            more.createCell(5).setCellValue(30.0);
+            xlsx = writeWorkbook(workbook, "leaf-ambiguous.xlsx");
+        }
+        Path db = tempDir.resolve("leaf-ambiguous.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            new NomenclatureCatalog(new WorkspaceRepository(workspace.connection()))
+                    .confirmIndustry(1L, "hotel");
+        }
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.layerBFactory = prompt -> LayerBAmountSupport.amountCells(prompt.packet()).stream()
+                .filter(cell -> "Elevator".equals(
+                        LayerBAmountSupport.resolveRowLabel(prompt.packet(), cell)))
+                .findFirst()
+                .map(cell -> List.of(new LayerBLineJudgment(
+                        cell.coord(), "Air Conditioning",
+                        "Project Cost > Plant & Machinery > Projected Profitability",
+                        AmountRole.ADD, List.of(), 0.9)))
+                .orElse(List.of());
+
+        ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        assertThat(summary.layerBStats().leafAmbiguous()).isEqualTo(1);
+        assertThat(summary.layerBStats().catalogPreferred()).isZero();
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
+                    .anyMatch(b -> "Project Cost > Plant & Machinery > Projected Profitability"
+                                    .equals(b.path())
+                            && b.softLeaf());
+        }
     }
 
     @Test
