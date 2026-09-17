@@ -15,7 +15,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 /** Read path: one cell address → graph facts, Candidates, Layer A/B, peers, ProjectFacts,
- * optional Cell interpretation. */
+ * optional Cell interpretation with evidence and formula annotations. */
 public final class CellMeaningService {
 
     public CellMeaning lookup(Path dbPath, long parseRunId, String qualifiedCoord)
@@ -66,6 +66,9 @@ public final class CellMeaningService {
             List<InterpretationEvidence> evidence = interpretation == null
                     ? List.of()
                     : repo.selectInterpretationEvidence(parseRunId, cellId.get());
+            List<FormulaAnnotation> formulaAnnotations = interpretation == null
+                    ? List.of()
+                    : repo.selectFormulaAnnotations(parseRunId, cellId.get());
             return new CellMeaning(
                     address.displayQualifiedCoord(cell.coord()),
                     cell,
@@ -75,7 +78,8 @@ public final class CellMeaningService {
                     peers,
                     facts,
                     interpretation,
-                    evidence);
+                    evidence,
+                    formulaAnnotations);
         } catch (ClassifyException e) {
             throw e;
         } catch (SQLException e) {

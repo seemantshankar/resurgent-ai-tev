@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.resurgent.tev.parser.classify.BindingPeer;
 import com.resurgent.tev.parser.classify.CellInterpretation;
+import com.resurgent.tev.parser.classify.FormulaAnnotation;
+import com.resurgent.tev.parser.classify.FormulaAnnotationMember;
 import com.resurgent.tev.parser.classify.InterpretationEvidence;
 import com.resurgent.tev.parser.classify.NomenclatureBinding;
 import com.resurgent.tev.parser.classify.PacketDisposition;
@@ -1680,6 +1682,104 @@ public final class WorkspaceRepository {
                 List<InterpretationEvidence> rows = new ArrayList<>();
                 while (rs.next()) {
                     rows.add(mapInterpretationEvidence(rs));
+                }
+                return rows;
+            }
+        }
+    }
+
+    public long insertFormulaAnnotation(FormulaAnnotation row) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cell_interpretation_formula_annotation (parse_run_id, cell_id,"
+                        + " ordinal, raw_token, ref_kind, target_sheet_name, target_range,"
+                        + " completeness, enclosing_function, shared_dependency_path,"
+                        + " shared_dependency_kind)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, row.parseRunId());
+            ps.setLong(2, row.cellId());
+            ps.setInt(3, row.ordinal());
+            ps.setString(4, row.rawToken());
+            ps.setString(5, row.refKind());
+            ps.setString(6, row.targetSheetName());
+            ps.setString(7, row.targetRange());
+            ps.setString(8, row.completeness());
+            ps.setString(9, row.enclosingFunction());
+            ps.setString(10, row.sharedDependencyPath());
+            ps.setString(11, row.sharedDependencyKind());
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    public void insertFormulaAnnotationMember(long annotationId, FormulaAnnotationMember member)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cell_interpretation_formula_annotation_member (annotation_id,"
+                        + " ordinal, target_cell_id, target_coord, nomenclature_path,"
+                        + " nomenclature_status) VALUES (?, ?, ?, ?, ?, ?)")) {
+            ps.setLong(1, annotationId);
+            ps.setInt(2, member.ordinal());
+            ps.setLong(3, member.targetCellId());
+            ps.setString(4, member.coord());
+            ps.setString(5, member.nomenclaturePath());
+            ps.setString(6, member.nomenclatureStatus());
+            ps.executeUpdate();
+        }
+    }
+
+    public List<FormulaAnnotation> selectFormulaAnnotations(long parseRunId, long cellId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT annotation_id, parse_run_id, cell_id, ordinal, raw_token, ref_kind,"
+                        + " target_sheet_name, target_range, completeness, enclosing_function,"
+                        + " shared_dependency_path, shared_dependency_kind"
+                        + " FROM cell_interpretation_formula_annotation"
+                        + " WHERE parse_run_id = ? AND cell_id = ?"
+                        + " ORDER BY ordinal, annotation_id")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, cellId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<FormulaAnnotation> rows = new ArrayList<>();
+                while (rs.next()) {
+                    long annotationId = rs.getLong("annotation_id");
+                    rows.add(new FormulaAnnotation(
+                            rs.getLong("parse_run_id"),
+                            rs.getLong("cell_id"),
+                            rs.getInt("ordinal"),
+                            rs.getString("raw_token"),
+                            rs.getString("ref_kind"),
+                            rs.getString("target_sheet_name"),
+                            rs.getString("target_range"),
+                            rs.getString("completeness"),
+                            rs.getString("enclosing_function"),
+                            rs.getString("shared_dependency_path"),
+                            rs.getString("shared_dependency_kind"),
+                            selectFormulaAnnotationMembers(annotationId)));
+                }
+                return rows;
+            }
+        }
+    }
+
+    private List<FormulaAnnotationMember> selectFormulaAnnotationMembers(long annotationId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT ordinal, target_cell_id, target_coord, nomenclature_path,"
+                        + " nomenclature_status"
+                        + " FROM cell_interpretation_formula_annotation_member"
+                        + " WHERE annotation_id = ?"
+                        + " ORDER BY ordinal, member_id")) {
+            ps.setLong(1, annotationId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<FormulaAnnotationMember> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new FormulaAnnotationMember(
+                            rs.getInt("ordinal"),
+                            rs.getLong("target_cell_id"),
+                            rs.getString("target_coord"),
+                            rs.getString("nomenclature_path"),
+                            rs.getString("nomenclature_status")));
                 }
                 return rows;
             }

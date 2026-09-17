@@ -14,8 +14,21 @@ import java.util.Set;
 /**
  * Builds and persists Cell interpretation snapshots inside the caller's
  * classify transaction. Does not open or commit its own transaction.
+ * Formula dependency annotations are written after interpretations exist so
+ * expansion can use nomenclature context without a second competing graph.
  */
 public class InterpretationWriter {
+
+    private final FormulaAnnotationWriter formulaAnnotationWriter;
+
+    public InterpretationWriter() {
+        this(new FormulaAnnotationWriter());
+    }
+
+    public InterpretationWriter(FormulaAnnotationWriter formulaAnnotationWriter) {
+        this.formulaAnnotationWriter =
+                Objects.requireNonNull(formulaAnnotationWriter, "formulaAnnotationWriter");
+    }
 
     /**
      * Replace all interpretations for the parse run. Returns the number written
@@ -60,6 +73,7 @@ public class InterpretationWriter {
                 repo.insertInterpretationEvidence(item);
             }
         }
+        formulaAnnotationWriter.write(repo, parseRunId);
         return cells.size();
     }
 
