@@ -99,4 +99,42 @@ class LayerBAmountSupportTest {
         assertThat(LayerBAmountSupport.classifyKind(packet, packet.cells().get(3)))
                 .isEqualTo(NumericKind.MONEY);
     }
+
+    @Test
+    void periodHeadersDoNotMakeEveryColumnCellAQuantity() {
+        Packet packet = new Packet(1L, 1L, 1L, "child", List.of(
+                new PacketCell(1L, 1L, "J31", 31, 10, PacketCell.ROLE_CONTEXT, "string",
+                        "Year 7", "Year 7", null, null, false, false),
+                new PacketCell(2L, 1L, "A45", 45, 1, PacketCell.ROLE_CORE, "string",
+                        "Insurance Premium", "Insurance Premium", null, null, false, false),
+                new PacketCell(3L, 1L, "J45", 45, 10, PacketCell.ROLE_CORE, "number",
+                        null, "125000", "125000", null, false, false),
+                new PacketCell(4L, 1L, "A46", 46, 1, PacketCell.ROLE_CORE, "string",
+                        "No. of Rooms", "No. of Rooms", null, null, false, false),
+                new PacketCell(5L, 1L, "J46", 46, 10, PacketCell.ROLE_CORE, "number",
+                        null, "40", "40", null, false, false)),
+                List.of(), true);
+
+        PacketCell premium = packet.cells().get(2);
+        PacketCell rooms = packet.cells().get(4);
+
+        assertThat(LayerBAmountSupport.resolveColumnHeader(packet, premium)).isEqualTo("Year 7");
+        assertThat(LayerBAmountSupport.classifyKind(packet, premium)).isEqualTo(NumericKind.MONEY);
+        assertThat(LayerBAmountSupport.classifyKind(packet, rooms)).isEqualTo(NumericKind.QUANTITY);
+    }
+
+    @Test
+    void periodHeaderShapesAreRecognisedAndPlainDurationsAreNot() {
+        assertThat(LayerBAmountSupport.isPeriodHeader("Year 1")).isTrue();
+        assertThat(LayerBAmountSupport.isPeriodHeader("YR-3")).isTrue();
+        assertThat(LayerBAmountSupport.isPeriodHeader("FY 2026")).isTrue();
+        assertThat(LayerBAmountSupport.isPeriodHeader("FY 2025-26")).isTrue();
+        assertThat(LayerBAmountSupport.isPeriodHeader("Q3")).isTrue();
+        assertThat(LayerBAmountSupport.isPeriodHeader("Month 12")).isTrue();
+        assertThat(LayerBAmountSupport.isPeriodHeader("2027")).isTrue();
+        assertThat(LayerBAmountSupport.isPeriodHeader("Years")).isTrue();
+        assertThat(LayerBAmountSupport.isPeriodHeader("No. of Years of Operation")).isFalse();
+        assertThat(LayerBAmountSupport.isPeriodHeader("Rooms")).isFalse();
+        assertThat(LayerBAmountSupport.isPeriodHeader("")).isFalse();
+    }
 }

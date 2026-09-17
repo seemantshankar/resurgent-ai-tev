@@ -32,6 +32,15 @@ final class LayerBAmountSupport {
     private static final Pattern RATE_TOKEN = Pattern.compile(
             "(?i)(?:\\brate\\b|per\\s+unit|per\\s+sq|/\\s*sq|rs\\s*/|₹\\s*/|unit\\s+rate|"
                     + "price\\s+per)");
+    /**
+     * A column/row header that names a period band rather than a counted quantity:
+     * {@code Year 7}, {@code YR-3}, {@code FY 2025-26}, {@code Q3}, {@code Month 12},
+     * a bare year, or the bare band word. Matched whole so prose like
+     * {@code No. of Years of Operation} stays a quantity.
+     */
+    private static final Pattern PERIOD_HEADER = Pattern.compile(
+            "(?i)^(?:(?:fy|cy|ay)\\s*)?(?:years?|yrs?|months?|mths?|quarters?|qtrs?|periods?|q|m|p)?"
+                    + "\\s*[-–/]?\\s*(?:\\d{1,4}(?:\\s*[-–/]\\s*\\d{2,4})?)?$");
     private static final Pattern PERCENT_TOKEN = Pattern.compile(
             "(?i)(?:%|\\bpercent\\b|\\bgst\\b|\\bvat\\b|\\binterest\\b|\\buplift\\b|"
                     + "\\bmargin\\b\\s*%|\\b contingency\\b)");
@@ -92,7 +101,11 @@ final class LayerBAmountSupport {
         String label = packet == null ? "" : resolveRowLabel(packet, cell);
         String header = packet == null ? "" : resolveColumnHeader(packet, cell);
         String display = cell.displayValue() == null ? "" : cell.displayValue();
-        String haystack = (label + " " + header + " " + display).toLowerCase(Locale.ROOT);
+        // Period-header test runs ahead of the quantity test: "Year 7" over a column
+        // of money is a period band, not a count, and must contribute no cue at all.
+        String cueHeader = isPeriodHeader(header) ? "" : header;
+        String cueLabel = isPeriodHeader(label) ? "" : label;
+        String haystack = (cueLabel + " " + cueHeader + " " + display).toLowerCase(Locale.ROOT);
 
         if (display.contains("%") || PERCENT_TOKEN.matcher(haystack).find()) {
             return NumericKind.PERCENT;
@@ -107,17 +120,29 @@ final class LayerBAmountSupport {
                 || looksLikeCurrencyDisplay(display)) {
             return NumericKind.MONEY;
         }
-        if (MONEY_TOKEN.matcher(header.toLowerCase(Locale.ROOT)).find()) {
+        if (MONEY_TOKEN.matcher(cueHeader.toLowerCase(Locale.ROOT)).find()) {
             return NumericKind.MONEY;
         }
         if (packet == null) {
             // Bare cell without row/column context: assume money for cost grids.
             return NumericKind.MONEY;
         }
-        if (!label.isBlank() && !QUANTITY_TOKEN.matcher(label.toLowerCase(Locale.ROOT)).find()) {
+        if (!cueLabel.isBlank()
+                && !QUANTITY_TOKEN.matcher(cueLabel.toLowerCase(Locale.ROOT)).find()) {
             return NumericKind.MONEY;
         }
         return NumericKind.UNKNOWN;
+    }
+
+    /**
+     * True when the text names a period band rather than a counted quantity. Blank
+     * text is not a period header: it carries no cue either way.
+     */
+    static boolean isPeriodHeader(String text) {
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        return PERIOD_HEADER.matcher(text.trim()).matches();
     }
 
     /**
