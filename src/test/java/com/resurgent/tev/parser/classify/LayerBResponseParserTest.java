@@ -83,6 +83,29 @@ class LayerBResponseParserTest {
     }
 
     @Test
+    void bindsSoftLeafProposedUnderAnExistingLeafToThatLeaf() {
+        LayerBPromptIndex index = index();
+        List<LayerBLineJudgment> lines = LayerBResponseParser.parse("""
+                {"lines":[],"soft":[{"c":1,"pp":4,"n":"AC Ducting","a":["Ducting"],"r":0}]}
+                """, index);
+        assertThat(lines).hasSize(1);
+        assertThat(lines.get(0).path())
+                .isEqualTo("Project Cost > Plant & Machinery > Air Conditioning");
+        assertThat(lines.get(0).aliases()).isEmpty();
+        assertThat(lines.get(0).amountRole()).isEqualTo(AmountRole.ADD);
+    }
+
+    @Test
+    void keepsUsableLinesWhenOneItemIsUnusable() {
+        LayerBResponseParser.Parsed parsed = LayerBResponseParser.parseDetailed(
+                "{\"lines\":[[0,2,0],[9,0,0]],\"soft\":[]}", index());
+        assertThat(parsed.lines()).hasSize(1);
+        assertThat(parsed.lines().get(0).coord()).isEqualTo("B12");
+        assertThat(parsed.dropped()).hasSize(1);
+        assertThat(parsed.dropped().get(0)).contains("cellIndex");
+    }
+
+    @Test
     void rejectsOutOfRangeCellIndex() {
         assertThatThrownBy(() -> LayerBResponseParser.parse(
                 "{\"lines\":[[9,0,0]],\"soft\":[]}", index()))

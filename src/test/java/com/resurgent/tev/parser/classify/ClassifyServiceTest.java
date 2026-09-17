@@ -13,6 +13,7 @@ import java.io.FileOutputStream;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -400,6 +401,136 @@ class ClassifyServiceTest {
     }
 
     @Test
+    void midLevelLineBindingDerivesASoftLeafFromTheRowLabel() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Costs");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Item");
+            header.createCell(1).setCellValue("Amount");
+            header.createCell(4).setCellValue("Other");
+            header.createCell(5).setCellValue("Amt");
+            Row add = sheet.createRow(1);
+            add.createCell(0).setCellValue("CCTV System");
+            add.createCell(1).setCellValue(100.0);
+            add.createCell(4).setCellValue("Glass");
+            add.createCell(5).setCellValue(20.0);
+            Row more = sheet.createRow(2);
+            more.createCell(0).setCellValue("Steel");
+            more.createCell(1).setCellValue(40.0);
+            more.createCell(4).setCellValue("Paint");
+            more.createCell(5).setCellValue(30.0);
+            xlsx = writeWorkbook(workbook, "mid-level.xlsx");
+        }
+        Path db = tempDir.resolve("mid-level.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.layerBFactory = prompt -> LayerBAmountSupport.amountCells(prompt.packet()).stream()
+                .filter(cell -> "CCTV System".equals(
+                        LayerBAmountSupport.resolveRowLabel(prompt.packet(), cell)))
+                .findFirst()
+                .map(cell -> List.of(new LayerBLineJudgment(
+                        cell.coord(), "CCTV System",
+                        "Project Cost > Plant & Machinery",
+                        AmountRole.ADD, List.of(), 0.9)))
+                .orElse(List.of());
+
+        ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        assertThat(summary.layerBStats().rejectReasons()).doesNotContainKey("path_not_leaf");
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
+                    .anyMatch(b -> "Project Cost > Plant & Machinery > CCTV System"
+                                    .equals(b.path())
+                            && AmountRole.ADD.equals(b.amountRole())
+                            && b.softLeaf());
+            assertThat(repo.sumAddAmountsForPath(
+                    ingest.parseRunId(), "Project Cost > Plant & Machinery > CCTV System"))
+                    .isEqualTo(100.0);
+        }
+    }
+
+    @Test
+    void midLevelLineBindingIsRejectedWhenTheRowLabelCannotNameALeaf() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Costs");
+            for (int r = 0; r < 3; r++) {
+                Row row = sheet.createRow(r);
+                row.createCell(0).setCellValue("L" + r);
+                row.createCell(1).setCellValue(10.0 + r);
+                row.createCell(4).setCellValue("R" + r);
+                row.createCell(5).setCellValue(20.0 + r);
+            }
+            xlsx = writeWorkbook(workbook, "mid-level-coord.xlsx");
+        }
+        Path db = tempDir.resolve("mid-level-coord.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.layerBFactory = prompt -> LayerBAmountSupport.amountCells(prompt.packet()).stream()
+                .findFirst()
+                .map(cell -> List.of(new LayerBLineJudgment(
+                        cell.coord(), cell.coord(),
+                        "Project Cost > Plant & Machinery",
+                        AmountRole.ADD, List.of(), 0.9)))
+                .orElse(List.of());
+
+        ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        assertThat(summary.bindingCount()).isZero();
+        assertThat(summary.layerBStats().rejectReasons()).containsKey("path_not_leaf");
+    }
+
+    @Test
+    void layerBCallFailureCostsOnlyThatPacketsBindings() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Parallel");
+            for (int r = 0; r < 3; r++) {
+                Row row = sheet.createRow(r);
+                row.createCell(0).setCellValue("L" + r);
+                row.createCell(1).setCellValue(10.0 + r);
+                row.createCell(4).setCellValue("R" + r);
+                row.createCell(5).setCellValue(20.0 + r);
+            }
+            xlsx = writeWorkbook(workbook, "layer-b-failure.xlsx");
+        }
+        Path db = tempDir.resolve("layer-b-failure.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        AtomicInteger layerBCalls = new AtomicInteger();
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.layerBFactory = prompt -> {
+            if (layerBCalls.incrementAndGet() == 1) {
+                throw new IllegalStateException("OpenRouter Layer B invalid after retry");
+            }
+            return prompt.packet().cells().stream()
+                    .filter(cell -> "number".equals(cell.valueType()))
+                    .findFirst()
+                    .map(cell -> List.of(new LayerBLineJudgment(
+                            cell.coord(), "Civil Works",
+                            "Project Cost > Civil Works > Structure",
+                            AmountRole.ADD, List.of(), 0.9)))
+                    .orElse(List.of());
+        };
+
+        ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        assertThat(summary.layerBStats().failedCalls()).isEqualTo(1);
+        assertThat(summary.layerBStats().failedCallSamples().get(0))
+                .contains("Layer B invalid after retry");
+        assertThat(summary.dispositionCount()).isEqualTo(llm.prompts.size());
+        assertThat(summary.bindingCount()).isEqualTo(summary.layerBStats().accepted());
+        assertThat(summary.bindingCount()).isEqualTo(llm.layerBPrompts.size() - 1);
+    }
+
+    @Test
     void skipsLayerBWhenPacketHasNoAmountCells() throws Exception {
         Path xlsx;
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
@@ -663,7 +794,7 @@ class ClassifyServiceTest {
     }
 
     /** Scripted LLM for tests: records prompts and returns fixed Layer A / Layer B judgments. */
-    static final class FakeClassifierLlm implements ClassifierLlm {
+    static class FakeClassifierLlm implements ClassifierLlm {
         final List<LayerAPrompt> prompts = new java.util.concurrent.CopyOnWriteArrayList<>();
         final List<LayerBPrompt> layerBPrompts = new java.util.concurrent.CopyOnWriteArrayList<>();
         LayerAJudgment judgment = new LayerAJudgment(

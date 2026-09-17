@@ -45,15 +45,25 @@ final class LayerAPromptAssembler {
             packetNode.put("candidateKind", packet.candidateKind());
             packetNode.put("contextClosureSucceeded", packet.contextClosureSucceeded());
             ArrayNode cells = packetNode.putArray("cells");
+            boolean cheapPass = prompt.cheapPass();
             for (PacketCell cell : packet.cells()) {
+                if (cheapPass && !keepOnCheapPass(cell)) {
+                    continue;
+                }
                 ObjectNode node = cells.addObject();
                 node.put("coord", cell.coord());
                 node.put("role", cell.role());
                 putIfPresent(node, "valueType", cell.valueType());
                 putIfPresent(node, "text", cell.textValue());
                 putIfPresent(node, "display", cell.displayValue());
-                putIfPresent(node, "numeric", cell.numericValue());
-                putIfPresent(node, "formula", cell.formulaText());
+                if (cheapPass) {
+                    if (cell.formulaText() != null && !cell.formulaText().isBlank()) {
+                        node.put("hasFormula", true);
+                    }
+                } else {
+                    putIfPresent(node, "numeric", cell.numericValue());
+                    putFormula(node, cell.formulaText());
+                }
                 if (cell.rowHidden()) {
                     node.put("rowHidden", true);
                 }
@@ -100,6 +110,47 @@ final class LayerAPromptAssembler {
         } catch (Exception e) {
             throw new IllegalStateException("failed to assemble Layer A prompt: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Cheap-pass packets are coverage-parent overviews: keep labels and structure,
+     * drop pure numeric cores and formula bodies (#122 Phase 2).
+     */
+    private static boolean keepOnCheapPass(PacketCell cell) {
+        if (PacketCell.ROLE_CONTEXT.equals(cell.role())) {
+            return true;
+        }
+        return hasText(cell.textValue()) || hasLabelDisplay(cell);
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    /** Display that looks like a label, not a bare numeric stand-in. */
+    private static boolean hasLabelDisplay(PacketCell cell) {
+        String display = cell.displayValue();
+        if (!hasText(display)) {
+            return false;
+        }
+        if (cell.numericValue() != null && display.equals(cell.numericValue())) {
+            return false;
+        }
+        return !display.chars().allMatch(c -> Character.isDigit(c) || c == '.' || c == '-' || c == ',');
+    }
+
+    private static final int INLINE_FORMULA_CHAR_CAP = 80;
+
+    private static void putFormula(ObjectNode node, String formulaText) {
+        if (formulaText == null || formulaText.isBlank()) {
+            return;
+        }
+        if (formulaText.length() <= INLINE_FORMULA_CHAR_CAP) {
+            node.put("formula", formulaText);
+            return;
+        }
+        node.put("hasFormula", true);
+        node.put("formulaChars", formulaText.length());
     }
 
     private static void putIfPresent(ObjectNode node, String field, String value) {

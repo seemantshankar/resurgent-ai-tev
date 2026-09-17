@@ -15,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.ResultSet;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -194,13 +195,15 @@ class RealWorkbookClassifyIT {
     /** Records Layer A prompts without retaining Packet cells (Om Arham coverage parents are large). */
     static final class RecordingLlm implements ClassifierLlm {
         private final Set<String> sentinelAmounts;
-        final List<Boolean> cheapPassFlags = new ArrayList<>();
-        final Set<String> leakedAmounts = new LinkedHashSet<>();
-        boolean cheapPassHadBareAmountLine;
-        boolean childMissingParent;
-        boolean sawAcTearoutLabel;
-        boolean sawProjectCostNode;
-        boolean sawHotelAcLeaf;
+        // classify calls Layer A from a pool, so every recorder here is shared state.
+        final List<Boolean> cheapPassFlags = Collections.synchronizedList(new ArrayList<>());
+        final Set<String> leakedAmounts =
+                Collections.synchronizedSet(new LinkedHashSet<>());
+        volatile boolean cheapPassHadBareAmountLine;
+        volatile boolean childMissingParent;
+        volatile boolean sawAcTearoutLabel;
+        volatile boolean sawProjectCostNode;
+        volatile boolean sawHotelAcLeaf;
 
         RecordingLlm(Set<String> sentinelAmounts) {
             this.sentinelAmounts = sentinelAmounts;

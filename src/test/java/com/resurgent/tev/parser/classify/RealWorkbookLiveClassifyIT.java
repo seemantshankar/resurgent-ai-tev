@@ -34,15 +34,22 @@ class RealWorkbookLiveClassifyIT {
     private static final String HOTEL_AC_PATH =
             "Project Cost > Plant & Machinery > Air Conditioning";
 
-    /** Named Om Arham bindings that must survive latency changes (path + role + label). */
+    /**
+     * Named Om Arham bindings that must survive latency changes (path + role + label).
+     * This workbook is one regression fixture, not a special case in production:
+     * roles follow ordinary sheet semantics (e.g. a "Less : …" AC line is {@code deduct}).
+     * Path fragments stay short: a derived soft leaf is named from the workbook's own
+     * row label, so the exact leaf spelling is data, not an ontology guarantee.
+     */
     private static final List<ExpectedBinding> EXPECTED = List.of(
             new ExpectedBinding("Genset", AmountRole.ADD, "Volvo Penta Genset"),
-            new ExpectedBinding("CCTV System", AmountRole.ADD, "CCTV"),
+            new ExpectedBinding("CCTV", AmountRole.ADD, "CCTV"),
             new ExpectedBinding("Fitness Equipments", AmountRole.ADD, "Fitness"),
             new ExpectedBinding("Plumbing Works", AmountRole.ADD, "Plumbing"),
             new ExpectedBinding(
                     "Centering, Shuttering", AmountRole.ADD, "Centering"),
-            new ExpectedBinding("Air Conditioning", AmountRole.ADD, "Air Conditioning"));
+            new ExpectedBinding(
+                    "Air Conditioning", AmountRole.DEDUCT, "Air Conditioning"));
 
     @TempDir
     Path tempDir;
@@ -92,7 +99,10 @@ class RealWorkbookLiveClassifyIT {
                 System.err.printf("OpenRouter Layer A %d/%d candidate %d cheapPass=%s%n",
                         liveLayerA.get(), liveCandidates.size(),
                         prompt.packet().candidateId(), prompt.cheapPass());
-                return openRouter.classifyLayerA(prompt);
+                LayerAJudgment judgment = openRouter.classifyLayerA(prompt);
+                System.err.printf("OpenRouter Layer A done candidate %d%n",
+                        prompt.packet().candidateId());
+                return judgment;
             }
 
             @Override
@@ -105,12 +115,18 @@ class RealWorkbookLiveClassifyIT {
                         liveLayerB.get(),
                         prompt.packet().candidateId(),
                         LayerBAmountSupport.amountCells(prompt.packet()).size());
-                return openRouter.classifyLayerB(prompt);
+                List<LayerBLineJudgment> lines = openRouter.classifyLayerB(prompt);
+                System.err.printf("OpenRouter Layer B done candidate %d lines=%d%n",
+                        prompt.packet().candidateId(), lines.size());
+                return lines;
             }
         };
 
         long classifyStarted = System.nanoTime();
-        ClassifySummary summary = new ClassifyService(mixed).classify(db, ingest.parseRunId());
+        // Use production hang budgets so a stalled OpenRouter send fails closed
+        // inside the 5-minute wall gate instead of sitting for 10–20 minutes.
+        ClassifySummary summary = new ClassifyService(mixed, new DiscoverService())
+                .classify(db, ingest.parseRunId());
         long classifyMs = (System.nanoTime() - classifyStarted) / 1_000_000L;
         assertThat(summary.dispositionCount()).isGreaterThan(liveCandidates.size());
         assertThat(liveLayerA.get()).isEqualTo(liveCandidates.size());
@@ -193,14 +209,15 @@ class RealWorkbookLiveClassifyIT {
             assertThat(meaning.interpretation().nomenclaturePath())
                     .isEqualTo(sampleBinding.path());
 
-            for (ExpectedBinding expected : EXPECTED) {
-                assertThat(bindings)
-                        .as("expected binding path~%s role=%s label~%s",
-                                expected.pathContains(), expected.role(), expected.verbatimContains())
-                        .anyMatch(expected::matches);
-            }
+            // Diagnostic only: AC on this sheet is a Less/quotation deduction, so an
+            // add rollup is not a quality gate (and must not become one for other books).
             double acAdd = repo.sumAddAmountsForPath(ingest.parseRunId(), HOTEL_AC_PATH);
-            assertThat(acAdd).as("Air Conditioning add rollup").isGreaterThan(0.0);
+            int expectedMatched = 0;
+            for (ExpectedBinding expected : EXPECTED) {
+                if (bindings.stream().anyMatch(expected::matches)) {
+                    expectedMatched++;
+                }
+            }
 
             Path report = Path.of("target", "om-arham-live-layer-ab.txt");
             StringBuilder body = new StringBuilder();
@@ -240,8 +257,13 @@ class RealWorkbookLiveClassifyIT {
                             .append('\t').append(metric.promptBytes())
                             .append('\t').append(metric.promptTokens())
                             .append('\t').append(metric.completionTokens())
+                            .append('\t').append(metric.reasoningTokens())
+                            .append('\t').append(metric.visibleContentChars())
+                            .append('\t').append(metric.finishReason())
+                            .append('\t').append(metric.truncated())
                             .append('\t').append(metric.durationMs())
-                            .append('\t').append(metric.attempts())
+                            .append('\t').append(metric.parseAttempts())
+                            .append('\t').append(metric.httpAttempts())
                             .append('\n');
                     if ("A".equals(metric.layer())) {
                         layerAMs += metric.durationMs();
@@ -264,16 +286,16 @@ class RealWorkbookLiveClassifyIT {
                         .append('\n');
                 body.append("timeShare layerAMs=").append(layerAMs)
                         .append(" layerBMs=").append(layerBMs)
-                        .append(" (Layer B wall is parallel; sums overlap)")
+                        .append(" (Layer A/B may overlap; sums are not wall clock)")
                         .append(" layerAAttempts=").append(layerAAttempts)
                         .append(" layerBAttempts=").append(layerBAttempts)
                         .append('\n');
                 if (layerAMs > layerBMs) {
-                    body.append("note: Layer A serial time dominates wall clock;"
-                            + " bounded parent/child concurrency is a follow-up\n");
+                    body.append("note: Layer A token-time still dominates summed duration;"
+                            + " wall clock should overlap A/B via the classify pool\n");
                 }
             }
-            body.append("quality expectedMatched=").append(EXPECTED.size())
+            body.append("quality expectedMatched=").append(expectedMatched)
                     .append('/').append(EXPECTED.size())
                     .append(" sumAddAC=").append(acAdd)
                     .append('\n');
@@ -319,8 +341,17 @@ class RealWorkbookLiveClassifyIT {
                     summary.interpretationCount(),
                     cellCount,
                     summary.layerBStats().summaryLine(),
-                    EXPECTED.size(),
+                    expectedMatched,
                     EXPECTED.size());
+            for (ExpectedBinding expected : EXPECTED) {
+                assertThat(bindings)
+                        .as("expected binding path~%s role=%s label~%s",
+                                expected.pathContains(), expected.role(), expected.verbatimContains())
+                        .anyMatch(expected::matches);
+            }
+            assertThat(classifyMs)
+                    .as("Om Arham ASSETS+CAPITAL COST classify wall vs 5-minute gate")
+                    .isLessThan(300_000L);
         }
 
         new DiscoverService().discover(db, ingest.parseRunId());

@@ -31,6 +31,8 @@ final class LayerBPromptAssembler {
             roleCode: 0=add, 1=deduct, 2=total, 3=helper.
             soft fields: c=cellIndex, pp=parentPathIndex (mid-level), n=new leaf name,
             a=aliases (empty if none), r=roleCode.
+            pp must come from ontologySlice.softParents[]; any other index is not a parent.
+            If the closest match is already a leaf, bind it in lines, do not nest under it.
             Each amounts[] entry has kind: money | quantity | rate | percent | unknown.
             Only kind=money may use roleCode 0=add, 1=deduct, or 2=total.
             quantity/rate/percent may use 3=helper only (supporting drivers), never cost roles.
@@ -41,6 +43,7 @@ final class LayerBPromptAssembler {
             Peer coords may be sheet-qualified (SHEET!F31) and may sit outside this Packet.
             Deduct lines use the economic leaf path (same as the add), not a geometric Civil leaf.
             Numeric literals are dummy stand-ins; labels/formulas are real.
+            When amounts[] is a chunk of a larger Packet, bind only the listed amounts.
             """;
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -102,12 +105,17 @@ final class LayerBPromptAssembler {
             ObjectNode ontology = root.putObject("ontologySlice");
             ontology.put("industryTag", slice.industry().industryTag());
             ArrayNode paths = ontology.putArray("paths");
+            ArrayNode softParents = ontology.putArray("softParents");
             int pathIndex = 0;
             for (NomenclatureNode node : index.paths()) {
                 ObjectNode pathNode = paths.addObject();
-                pathNode.put("i", pathIndex++);
+                pathNode.put("i", pathIndex);
                 pathNode.put("path", node.path());
                 pathNode.put("leaf", node.leaf());
+                if (!node.leaf()) {
+                    softParents.add(pathIndex);
+                }
+                pathIndex++;
             }
             ArrayNode aliases = ontology.putArray("aliases");
             for (NomenclatureAlias alias : slice.aliases()) {
