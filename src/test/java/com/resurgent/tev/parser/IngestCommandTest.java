@@ -351,7 +351,7 @@ class IngestCommandTest {
 
         assertThat(result.exitCode()).isZero();
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
-            assertThat(count(c, "schema_migration")).isEqualTo(23);
+            assertThat(count(c, "schema_migration")).isEqualTo(24);
             try (ResultSet rs = c.createStatement().executeQuery(
                     "SELECT coord FROM cell WHERE coord = 'Z9'")) {
                 assertThat(rs.next()).isFalse();

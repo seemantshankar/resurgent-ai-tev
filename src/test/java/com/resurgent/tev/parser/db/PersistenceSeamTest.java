@@ -109,10 +109,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(23);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(24);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(23);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(24);
         }
     }
 
@@ -456,7 +456,7 @@ class PersistenceSeamTest {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(23);
+            assertThat(count(c, "schema_migration")).isEqualTo(24);
             assertThat(tableNames(c)).contains("cell_reference");
             assertThat(tableNames(c)).doesNotContain("cell_error_root");
 
@@ -504,7 +504,7 @@ class PersistenceSeamTest {
     void v15MigrationRestoresAdr0013IngestSignalsWithoutHeuristicStack() throws Exception {
         try (WorkspaceDatabase db = openDb("v15.db")) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(23);
+            assertThat(count(c, "schema_migration")).isEqualTo(24);
             assertThat(tableNames(c)).contains("cell_style", "cell_reference", "candidate");
             assertThat(tableNames(c)).doesNotContain(
                     "region",
@@ -676,7 +676,7 @@ class PersistenceSeamTest {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(
                 dbPath, WorkspaceDatabase.OpenOptions.allowDestructiveReset())) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(23);
+            assertThat(count(c, "schema_migration")).isEqualTo(24);
             assertThat(count(c, "cell")).isZero();
             assertThat(count(c, "source_file")).isZero();
             assertThat(tableNames(c)).doesNotContain("cost_head", "region");
@@ -710,5 +710,84 @@ class PersistenceSeamTest {
             }
         }
         return columns;
+    }
+
+    @Test
+    void v24AddsBindingProvenanceUnboundReasonsAndTheCellGraphEvidenceTables()
+            throws Exception {
+        try (WorkspaceDatabase db = openDb("v24.db")) {
+            java.sql.Connection c = db.connection();
+            WorkspaceRepository repo = new WorkspaceRepository(c);
+
+            assertThat(count(c, "schema_migration")).isEqualTo(24);
+            assertThat(tableNames(c)).contains("cell_type", "aggregation", "aggregation_member");
+            assertThat(columnNames(c, "nomenclature_binding"))
+                    .contains("source", "label_key", "aggregation_id");
+            assertThat(columnNames(c, "cell_interpretation")).contains("unbound_reason");
+
+            long sourceFileId = repo.insertSourceFile(1L, "v24.xlsx", "hash24", "fm_xlsx",
+                    Timestamps.now(), "0.1.0", null);
+            long parseRunId = repo.insertParseRun(sourceFileId, 1L, "0.1.0", "cfg",
+                    Timestamps.now(), null, "success", "{}");
+            long worksheetId = repo.insertWorksheet(parseRunId, "Sheet1", 0);
+            long headCellId = repo.insertCell(worksheetId, numericCell("B10", 10, 2, "300"));
+            long memberCellId = repo.insertCell(worksheetId, numericCell("B2", 2, 2, "100"));
+
+            repo.insertCellType(new com.resurgent.tev.parser.classify.CellType(
+                    parseRunId, memberCellId,
+                    com.resurgent.tev.parser.classify.CellKind.MONEY,
+                    com.resurgent.tev.parser.classify.CellScale.LAKH,
+                    com.resurgent.tev.parser.classify.TypeSource.INPUT_LABEL,
+                    0));
+            long aggregationId = repo.insertAggregation(
+                    new com.resurgent.tev.parser.classify.AggregationRow(
+                            null, parseRunId, headCellId, worksheetId, "SUM(R[-8]C:R[-1]C)",
+                            "Operating Costs",
+                            com.resurgent.tev.parser.classify.CellKind.MONEY,
+                            com.resurgent.tev.parser.classify.CellScale.LAKH));
+            repo.insertAggregationMember(aggregationId,
+                    new com.resurgent.tev.parser.classify.AggregationMemberRow(
+                            0, memberCellId,
+                            com.resurgent.tev.parser.classify.AggregationMemberRow.SIGN_PLUS,
+                            "add", "Insurance Premium"));
+
+            assertThat(repo.selectCellTypesForParseRun(parseRunId))
+                    .singleElement()
+                    .satisfies(row -> {
+                        assertThat(row.cellId()).isEqualTo(memberCellId);
+                        assertThat(row.kind())
+                                .isEqualTo(com.resurgent.tev.parser.classify.CellKind.MONEY);
+                        assertThat(row.scale())
+                                .isEqualTo(com.resurgent.tev.parser.classify.CellScale.LAKH);
+                    });
+            var aggregations = repo.selectAggregationsForParseRun(parseRunId);
+            assertThat(aggregations).singleElement().satisfies(row -> {
+                assertThat(row.headCellId()).isEqualTo(headCellId);
+                assertThat(row.relativeSignature()).isEqualTo("SUM(R[-8]C:R[-1]C)");
+                assertThat(row.headLabel()).isEqualTo("Operating Costs");
+            });
+            assertThat(repo.selectAggregationMembers(aggregationId))
+                    .singleElement()
+                    .satisfies(member -> {
+                        assertThat(member.memberCellId()).isEqualTo(memberCellId);
+                        assertThat(member.sign()).isEqualTo("plus");
+                        assertThat(member.amountRole()).isEqualTo("add");
+                    });
+
+            repo.deleteAggregationsForParseRun(parseRunId);
+            repo.deleteCellTypesForParseRun(parseRunId);
+            assertThat(repo.selectAggregationsForParseRun(parseRunId)).isEmpty();
+            assertThat(repo.selectCellTypesForParseRun(parseRunId)).isEmpty();
+            assertThat(count(c, "aggregation_member")).isEqualTo(0);
+        }
+    }
+
+    private static NormalizedCell numericCell(String coord, int row, int col, String value) {
+        return new NormalizedCell(
+                coord, row, col, value, "number", "number", value, value,
+                new java.math.BigDecimal(value), null, null,
+                null, null, null, null, false,
+                false, null,
+                false, false, null, "cell", false, false, false);
     }
 }

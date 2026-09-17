@@ -183,6 +183,8 @@ public final class ClassifyService {
                 repo.deleteProjectFactBindingsForParseRun(parseRunId);
                 repo.deleteNomenclatureBindingsForParseRun(parseRunId);
                 repo.deletePacketDispositionsForParseRun(parseRunId);
+                repo.deleteAggregationsForParseRun(parseRunId);
+                repo.deleteCellTypesForParseRun(parseRunId);
                 for (PacketDisposition disposition : dispositions) {
                     repo.insertPacketDisposition(disposition);
                 }
