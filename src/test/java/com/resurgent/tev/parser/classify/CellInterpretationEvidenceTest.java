@@ -221,6 +221,33 @@ class CellInterpretationEvidenceTest {
     }
 
     @Test
+    void formulaDivisorYieldsMillionAndBillionScale() throws Exception {
+        Path millionXlsx = formulaDivisorWorkbook(null, "B2/10^6");
+        Path millionDb = tempDir.resolve("million.db");
+        IngestSummary millionIngest = new IngestService().ingest(millionXlsx, 1L, millionDb);
+        new DiscoverService().discover(millionDb, millionIngest.parseRunId());
+        new ClassifyService(bindingLlm("B3")).classify(millionDb, millionIngest.parseRunId());
+        CellMeaning million = new CellMeaningService()
+                .lookup(millionDb, millionIngest.parseRunId(), "Costs!B3");
+        assertThat(evidence(million, EvidenceRole.SCALE))
+                .anyMatch(e -> EvidenceResolution.RESOLVED.equals(e.resolution())
+                        && "million".equals(e.normalizedValue())
+                        && "formula_divisor_1e6".equals(e.ruleId()));
+
+        Path billionXlsx = formulaDivisorWorkbook(null, "B2/1e9");
+        Path billionDb = tempDir.resolve("billion.db");
+        IngestSummary billionIngest = new IngestService().ingest(billionXlsx, 1L, billionDb);
+        new DiscoverService().discover(billionDb, billionIngest.parseRunId());
+        new ClassifyService(bindingLlm("B3")).classify(billionDb, billionIngest.parseRunId());
+        CellMeaning billion = new CellMeaningService()
+                .lookup(billionDb, billionIngest.parseRunId(), "Costs!B3");
+        assertThat(evidence(billion, EvidenceRole.SCALE))
+                .anyMatch(e -> EvidenceResolution.RESOLVED.equals(e.resolution())
+                        && "billion".equals(e.normalizedValue())
+                        && "formula_divisor_1e9".equals(e.ruleId()));
+    }
+
+    @Test
     void mergedColumnHeaderResolvesFromAnchorScope() throws Exception {
         Path xlsx = mergedHeaderWorkbook();
         Path db = tempDir.resolve("merged-header.db");

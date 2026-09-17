@@ -34,11 +34,15 @@ final class InterpretationEvidenceResolver {
             Pattern.compile("(?i)\\b(projected|projection|actual|budget|forecast|historical)\\b");
     private static final Pattern UNIT =
             Pattern.compile("(?i)\\b(sq\\.?\\s*ft|sqft|sqm|nos?\\.?|keys?|rooms?|%|percent)\\b");
-    /** Division by INR display-unit magnitudes (e.g. Om Arham {@code /10^5} → lakh). */
-    private static final Pattern FORMULA_DIVISOR_LAKH =
-            Pattern.compile("(?i)/\\s*(?:10\\s*\\^\\s*5|10\\s*\\*\\*\\s*5|1e5|100000)\\b");
+    /** Division by INR/display-unit magnitudes (e.g. Om Arham {@code /10^5} → lakh). */
+    private static final Pattern FORMULA_DIVISOR_BILLION =
+            Pattern.compile("(?i)/\\s*(?:10\\s*\\^\\s*9|10\\s*\\*\\*\\s*9|1e9|1000000000)\\b");
     private static final Pattern FORMULA_DIVISOR_CRORE =
             Pattern.compile("(?i)/\\s*(?:10\\s*\\^\\s*7|10\\s*\\*\\*\\s*7|1e7|10000000)\\b");
+    private static final Pattern FORMULA_DIVISOR_MILLION =
+            Pattern.compile("(?i)/\\s*(?:10\\s*\\^\\s*6|10\\s*\\*\\*\\s*6|1e6|1000000)\\b");
+    private static final Pattern FORMULA_DIVISOR_LAKH =
+            Pattern.compile("(?i)/\\s*(?:10\\s*\\^\\s*5|10\\s*\\*\\*\\s*5|1e5|100000)\\b");
     private static final Pattern FORMULA_DIVISOR_THOUSAND =
             Pattern.compile("(?i)/\\s*(?:10\\s*\\^\\s*3|10\\s*\\*\\*\\s*3|1e3|1000)\\b");
 
@@ -453,35 +457,40 @@ final class InterpretationEvidenceResolver {
             return;
         }
         String formula = target.formulaText();
-        Matcher lakh = FORMULA_DIVISOR_LAKH.matcher(formula);
-        if (lakh.find()) {
-            cues.get(EvidenceRole.SCALE)
-                    .add(new Cue(
-                            target.cellId(),
-                            lakh.group().replaceAll("\\s+", ""),
-                            "lakh",
-                            "formula_divisor_1e5"));
+        // Longest / largest magnitude first so /1000000000 is not misread as /1000.
+        if (matchDivisor(cues, target, formula, FORMULA_DIVISOR_BILLION, "billion", "formula_divisor_1e9")) {
             return;
         }
-        Matcher crore = FORMULA_DIVISOR_CRORE.matcher(formula);
-        if (crore.find()) {
-            cues.get(EvidenceRole.SCALE)
-                    .add(new Cue(
-                            target.cellId(),
-                            crore.group().replaceAll("\\s+", ""),
-                            "crore",
-                            "formula_divisor_1e7"));
+        if (matchDivisor(cues, target, formula, FORMULA_DIVISOR_CRORE, "crore", "formula_divisor_1e7")) {
             return;
         }
-        Matcher thousand = FORMULA_DIVISOR_THOUSAND.matcher(formula);
-        if (thousand.find()) {
-            cues.get(EvidenceRole.SCALE)
-                    .add(new Cue(
-                            target.cellId(),
-                            thousand.group().replaceAll("\\s+", ""),
-                            "thousand",
-                            "formula_divisor_1e3"));
+        if (matchDivisor(cues, target, formula, FORMULA_DIVISOR_MILLION, "million", "formula_divisor_1e6")) {
+            return;
         }
+        if (matchDivisor(cues, target, formula, FORMULA_DIVISOR_LAKH, "lakh", "formula_divisor_1e5")) {
+            return;
+        }
+        matchDivisor(cues, target, formula, FORMULA_DIVISOR_THOUSAND, "thousand", "formula_divisor_1e3");
+    }
+
+    private static boolean matchDivisor(
+            Map<String, List<Cue>> cues,
+            InterpretationCellView target,
+            String formula,
+            Pattern pattern,
+            String normalized,
+            String ruleId) {
+        Matcher matcher = pattern.matcher(formula);
+        if (!matcher.find()) {
+            return false;
+        }
+        cues.get(EvidenceRole.SCALE)
+                .add(new Cue(
+                        target.cellId(),
+                        matcher.group().replaceAll("\\s+", ""),
+                        normalized,
+                        ruleId));
+        return true;
     }
 
     private static void collectCues(Map<String, List<Cue>> cues, Long sourceCellId, String text) {
