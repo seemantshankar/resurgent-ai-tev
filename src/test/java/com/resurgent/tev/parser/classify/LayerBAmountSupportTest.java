@@ -126,6 +126,17 @@ class LayerBAmountSupportTest {
     }
 
     @Test
+    void resolveRowLabelDoesNotFallBackToTheCoord() {
+        Packet packet = new Packet(1L, 1L, 1L, "child", List.of(
+                new PacketCell(1L, 1L, "J45", 45, 10, PacketCell.ROLE_CORE, "number",
+                        null, "125000", "125000", null, false, false)),
+                List.of(), true);
+
+        assertThat(LayerBAmountSupport.resolveRowLabel(packet, packet.cells().get(0)))
+                .isEmpty();
+    }
+
+    @Test
     void periodHeaderShapesAreRecognisedAndPlainDurationsAreNot() {
         assertThat(LayerBAmountSupport.isPeriodHeader("Year 1")).isTrue();
         assertThat(LayerBAmountSupport.isPeriodHeader("YR-3")).isTrue();

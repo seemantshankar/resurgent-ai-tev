@@ -53,7 +53,8 @@ excludes candidate, chunk, column and coordinate, which are exactly the axes alo
 which the same line used to get different answers. Answers are cached for the
 request only; the graph is what gets persisted, and that is what makes a run
 reproducible. Every synthesised packet is number-redacted at send time and carries
-one Candidate, per ADR 0008.
+one Candidate, per ADR 0008. Per-cell packet chunking is gone; there is no
+`LayerBJobSplitter`.
 
 **The formula role gate is replaced by the aggregation-head test.** 71% of numeric
 cells are formulas, and the gate forced every one of them to `helper` or `total`, so

@@ -276,6 +276,38 @@ class TypePropagationTest {
     }
 
     @Test
+    void aRepeatedRowSeriesIsOneTypingDecision() {
+        label("A2", 2, 1, "Room Rate");
+        long yearOne = literal("B2", 2, 2, "5000");
+        long yearTwo = literal("C2", 2, 3, "5500");
+        long yearThree = literal("D2", 2, 4, "6000");
+
+        CellGraph graph = new CellGraphBuilder().build(1L, cells, edges);
+        assertThat(graph.inputs().stream().map(InputCell::seriesKey).distinct()).hasSize(1);
+
+        CellTypes types = new TypePropagation().resolve(graph);
+
+        assertThat(types.unitOf(yearOne).orElseThrow().kind()).isEqualTo(CellKind.RATE);
+        assertThat(types.unitOf(yearTwo).orElseThrow()).isEqualTo(types.unitOf(yearOne).orElseThrow());
+        assertThat(types.unitOf(yearThree).orElseThrow()).isEqualTo(types.unitOf(yearOne).orElseThrow());
+    }
+
+    @Test
+    void aCellTypesFromAtLeastOneUsableInputWhenASiblingHasNoLabel() {
+        label("A1", 1, 1, "Construction cost");
+        long cost = literal("B1", 1, 2, "100");
+        long orphan = literal("Z50", 50, 26, "7");
+        long sum = formula("B2", 2, 2, "=B1+Z50", "107");
+        edge(sum, 0, "B1");
+        edge(sum, 1, "Z50");
+
+        CellTypes types = resolve();
+
+        assertThat(types.refusalOf(orphan)).contains(UnboundReason.NO_LABEL);
+        assertThat(types.unitOf(sum).orElseThrow().kind()).isEqualTo(CellKind.MONEY);
+    }
+
+    @Test
     void twoRunsOverTheSameGraphProduceTheSameTypes() {
         label("A1", 1, 1, "Construction cost");
         literal("B1", 1, 2, "100");

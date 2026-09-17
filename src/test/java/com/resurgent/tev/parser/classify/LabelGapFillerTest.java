@@ -35,7 +35,8 @@ class LabelGapFillerTest {
                 new QualifiedLabel("Project Cost", label),
                 cell,
                 LabelGapFiller.labelCellFor(cell, label),
-                candidateId);
+                candidateId,
+                1L);
     }
 
     @Test
@@ -48,11 +49,13 @@ class LabelGapFillerTest {
                         new QualifiedLabel("Project Cost", "Civil Works"),
                         live,
                         LabelGapFiller.labelCellFor(live, "Civil Works"),
-                        40L)),
+                        40L,
+                        7L)),
                 SLICE,
                 LAYER_A);
 
         assertThat(llm.layerBPrompts).hasSize(1);
+        assertThat(llm.layerBPrompts.get(0).packet().parseRunId()).isEqualTo(7L);
         assertThat(llm.layerBPrompts.get(0).packet().cells())
                 .as("gap fill builds its own payload, so it must redact it itself")
                 .allSatisfy(cell -> {
@@ -94,7 +97,8 @@ class LabelGapFillerTest {
                     new QualifiedLabel("Project Cost", "Civil Works"),
                     cell,
                     LabelGapFiller.labelCellFor(cell, "Civil Works"),
-                    40L));
+                        40L,
+                        1L));
         }
 
         var answers = new LabelGapFiller(llm).fill(queued, SLICE, LAYER_A);

@@ -162,9 +162,6 @@ public final class LayerBBindingStats {
         if (trimmed.startsWith("non_money_numeric")) {
             return "non_money_cost_role";
         }
-        if (trimmed.startsWith("formula amount at")) {
-            return "formula_role_mismatch";
-        }
         if (trimmed.startsWith("Layer B binding requires an amount cell")) {
             return "non_amount_or_formula_role";
         }

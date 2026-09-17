@@ -28,6 +28,7 @@ import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -1649,6 +1650,24 @@ public final class WorkspaceRepository {
                     rows.add(mapInterpretationCellView(rs));
                 }
                 return rows;
+            }
+        }
+    }
+
+    /** Number formats for numeric typing, keyed by cell. Missing styles are absent. */
+    public Map<Long, String> selectNumberFormatsForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT c.cell_id, s.number_format FROM cell c"
+                        + " JOIN worksheet w ON w.worksheet_id = c.worksheet_id"
+                        + " LEFT JOIN cell_style s ON s.style_id = c.style_id"
+                        + " WHERE w.parse_run_id = ? AND s.number_format IS NOT NULL")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                Map<Long, String> formats = new java.util.LinkedHashMap<>();
+                while (rs.next()) {
+                    formats.put(rs.getLong(1), rs.getString(2));
+                }
+                return Map.copyOf(formats);
             }
         }
     }

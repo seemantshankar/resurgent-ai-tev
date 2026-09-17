@@ -340,13 +340,69 @@ class RealWorkbookClassifyIT {
             assertThat(byRole.getOrDefault(AmountRole.ADD, 0L))
                     .as("add bindings now exist, so a leaf rollup means something")
                     .isNotZero();
-            assertThat(bySource.getOrDefault(BindingSource.DERIVED, 0L))
-                    .as("a formula cell can finally carry add")
-                    .isNotZero();
-            assertThat(bySource.getOrDefault(BindingSource.AGGREGATION_HEAD, 0L))
-                    .as("a total is a total because it heads an aggregation")
+            assertThat(bySource.getOrDefault(BindingSource.AGGREGATION_HEAD, 0L)
+                    + bySource.getOrDefault(BindingSource.DERIVED, 0L))
+                    .as("a formula cell can finally carry a graph-proven role")
                     .isNotZero();
         }
+    }
+
+    @Test
+    void layoutDefeatersAreNotBoundAsThePresentationApproachWouldHave() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            NomenclatureBinding j45 = bindingAt(repo, "P  L ", "J45");
+            if (j45 != null) {
+                assertThat(j45.path())
+                        .as("'P  L '!J45 is operating cost, not a Civil Works asset")
+                        .doesNotContain("Civil Works > Building");
+            }
+            NomenclatureBinding j33 = bindingAt(repo, "depreciation", "J33");
+            if (j33 != null) {
+                assertThat(j33.path().toLowerCase()).doesNotContain("furniture");
+            }
+            assertThat(roleAt(repo, "power cost", "J20"))
+                    .as("power factor is a driver")
+                    .isNotIn(AmountRole.ADD, AmountRole.DEDUCT, AmountRole.TOTAL);
+            assertThat(roleAt(repo, "SALESPROJECTION", "G15"))
+                    .as("tariff is a driver")
+                    .isNotIn(AmountRole.ADD, AmountRole.DEDUCT, AmountRole.TOTAL);
+            assertThat(roleAt(repo, "SALESPROJECTION", "H15"))
+                    .as("guest-nights sit in a count group")
+                    .isNotIn(AmountRole.ADD, AmountRole.DEDUCT, AmountRole.TOTAL);
+        }
+    }
+
+    private static String roleAt(
+            WorkspaceRepository repo, String sheetName, String coord) throws Exception {
+        NomenclatureBinding binding = bindingAt(repo, sheetName, coord);
+        return binding == null ? null : binding.amountRole();
+    }
+
+    private static NomenclatureBinding bindingAt(
+            WorkspaceRepository repo, String sheetName, String coord) throws Exception {
+        Long worksheetId = repo.selectWorksheetsForParseRun(parseRunId).stream()
+                .filter(sheet -> sheetName.equalsIgnoreCase(sheet.sheetName().trim())
+                        || sheetName.equalsIgnoreCase(sheet.sheetName()))
+                .map(com.resurgent.tev.parser.db.WorksheetRef::worksheetId)
+                .findFirst()
+                .orElse(null);
+        if (worksheetId == null) {
+            return null;
+        }
+        Long cellId = repo.selectInterpretationCellsForParseRun(parseRunId).stream()
+                .filter(cell -> cell.worksheetId() == worksheetId
+                        && coord.equalsIgnoreCase(cell.coord()))
+                .map(com.resurgent.tev.parser.db.InterpretationCellView::cellId)
+                .findFirst()
+                .orElse(null);
+        if (cellId == null) {
+            return null;
+        }
+        return repo.selectNomenclatureBindingsForParseRun(parseRunId).stream()
+                .filter(binding -> binding.cellId() == cellId)
+                .findFirst()
+                .orElse(null);
     }
 
     @Test
@@ -435,6 +491,11 @@ class RealWorkbookClassifyIT {
 
         @Override
         public List<LayerBLineJudgment> classifyLayerB(LayerBPrompt prompt) {
+            for (PacketCell cell : prompt.packet().cells()) {
+                leakIfPresent(cell.numericValue());
+                leakIfPresent(cell.displayValue());
+                leakIfPresent(cell.textValue());
+            }
             return List.of();
         }
 

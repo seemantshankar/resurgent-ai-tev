@@ -40,11 +40,23 @@ final class LabelGapFiller {
     }
 
     /** One representative cell per label, and the label it stands for. */
-    record Queued(QualifiedLabel label, PacketCell cell, PacketCell labelCell, long candidateId) {}
+    record Queued(
+            QualifiedLabel label,
+            PacketCell cell,
+            PacketCell labelCell,
+            long candidateId,
+            long parseRunId) {}
 
     /** Ask for every label not already answered. Returns the answers by label key. */
     Map<String, LayerBLineJudgment> fill(
             List<Queued> queued, OntologySlice slice, LayerAJudgment layerA) {
+        return fill(queued, slice, candidateId -> layerA);
+    }
+
+    Map<String, LayerBLineJudgment> fill(
+            List<Queued> queued,
+            OntologySlice slice,
+            java.util.function.LongFunction<LayerAJudgment> layerAOf) {
         Map<String, Queued> representatives = new LinkedHashMap<>();
         for (Queued item : queued) {
             representatives.putIfAbsent(item.label().key(), item);
@@ -59,7 +71,7 @@ final class LabelGapFiller {
                 byCandidate.computeIfAbsent(item.candidateId(), id -> new ArrayList<>()).add(item);
             }
             for (List<Queued> group : byCandidate.values()) {
-                ask(group, slice, layerA);
+                ask(group, slice, layerAOf.apply(group.get(0).candidateId()));
             }
         }
         return Map.copyOf(answers);
@@ -108,7 +120,7 @@ final class LabelGapFiller {
         Queued first = group.get(0);
         return new Packet(
                 first.candidateId(),
-                first.cell().cellId(),
+                first.parseRunId(),
                 first.cell().worksheetId(),
                 "child",
                 List.copyOf(cells),

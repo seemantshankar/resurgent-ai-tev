@@ -50,14 +50,23 @@ final class CellGraphBuilder {
         return build(
                 parseRunId,
                 repo.selectInterpretationCellsForParseRun(parseRunId),
-                repo.selectCellReferencesForParseRun(parseRunId));
+                repo.selectCellReferencesForParseRun(parseRunId),
+                repo.selectNumberFormatsForParseRun(parseRunId));
     }
 
     CellGraph build(
             long parseRunId,
             List<InterpretationCellView> cells,
             List<CellReferenceEdge> edges) {
-        Index index = Index.of(cells);
+        return build(parseRunId, cells, edges, Map.of());
+    }
+
+    CellGraph build(
+            long parseRunId,
+            List<InterpretationCellView> cells,
+            List<CellReferenceEdge> edges,
+            Map<Long, String> numberFormats) {
+        Index index = Index.of(cells, numberFormats == null ? Map.of() : numberFormats);
         Map<Long, List<CellReferenceEdge>> edgesByFrom = new HashMap<>();
         for (CellReferenceEdge edge : edges) {
             edgesByFrom.computeIfAbsent(edge.fromCellId(), id -> new ArrayList<>()).add(edge);
@@ -632,6 +641,10 @@ final class CellGraphBuilder {
             List<GraphCell> ordered) {
 
         static Index of(List<InterpretationCellView> cells) {
+            return of(cells, Map.of());
+        }
+
+        static Index of(List<InterpretationCellView> cells, Map<Long, String> numberFormats) {
             Map<Long, GraphCell> byId = new LinkedHashMap<>();
             Map<Long, Map<String, Long>> byCoord = new HashMap<>();
             Map<Long, Map<Long, Long>> byRowCol = new HashMap<>();
@@ -655,7 +668,8 @@ final class CellGraphBuilder {
                         nearestRowLabel(cell, rowIndex),
                         cell.displayValue(),
                         cell.numericValue(),
-                        cell.valueType());
+                        cell.valueType(),
+                        numberFormats.get(cell.cellId()));
                 byId.put(cell.cellId(), graphCell);
                 ordered.add(graphCell);
                 byCoord

@@ -17,7 +17,8 @@ record GraphCell(
         String rowLabel,
         String displayValue,
         String numericValue,
-        String valueType) {
+        String valueType,
+        String numberFormat) {
 
     boolean isFormula() {
         return formulaText != null && !formulaText.isBlank();

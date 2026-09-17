@@ -34,17 +34,37 @@ final class TypePropagation {
         Map<Long, UnboundReason> refusals = new LinkedHashMap<>();
         Set<Long> inCycle = cycles(graph);
 
+        Map<String, List<InputCell>> bySeries = new LinkedHashMap<>();
         for (InputCell input : graph.inputs()) {
-            GraphCell cell = graph.cells().get(input.cellId());
-            if (cell == null) {
-                continue;
+            String key = input.seriesKey() == null || input.seriesKey().isBlank()
+                    ? "cell:" + input.cellId()
+                    : input.seriesKey();
+            bySeries.computeIfAbsent(key, ignored -> new ArrayList<>()).add(input);
+        }
+        for (List<InputCell> series : bySeries.values()) {
+            ResolvedUnit unit = ResolvedUnit.unresolved();
+            for (InputCell input : series) {
+                GraphCell cell = graph.cells().get(input.cellId());
+                if (cell == null) {
+                    continue;
+                }
+                ResolvedUnit candidate = InputTyping.of(cell);
+                if (candidate.isResolved()) {
+                    unit = candidate;
+                    break;
+                }
             }
-            ResolvedUnit unit = InputTyping.of(cell);
-            if (unit.isResolved()) {
-                typed.put(cell.cellId(),
-                        new CellTypes.Typed(unit, TypeSource.INPUT_LABEL, 0));
-            } else {
-                refusals.put(cell.cellId(), UnboundReason.NO_LABEL);
+            for (InputCell input : series) {
+                GraphCell cell = graph.cells().get(input.cellId());
+                if (cell == null) {
+                    continue;
+                }
+                if (unit.isResolved()) {
+                    typed.put(cell.cellId(),
+                            new CellTypes.Typed(unit, TypeSource.INPUT_LABEL, 0));
+                } else {
+                    refusals.put(cell.cellId(), UnboundReason.NO_LABEL);
+                }
             }
         }
         for (long cellId : inCycle) {
@@ -143,7 +163,10 @@ final class TypePropagation {
             }
             UnboundReason refused = refusals.get(operandId);
             if (refused != null) {
-                return Outcome.refused(refused);
+                if (isBarrier(refused)) {
+                    return Outcome.refused(refused);
+                }
+                continue;
             }
             CellTypes.Typed operand = typed.get(operandId);
             if (operand == null) {
@@ -182,6 +205,15 @@ final class TypePropagation {
             }
         }
         return pending ? Outcome.pending() : Outcome.refused(UnboundReason.UNTYPABLE);
+    }
+
+    /** A refused operand that poisons the chain, as opposed to one we can skip. */
+    private static boolean isBarrier(UnboundReason reason) {
+        return reason == UnboundReason.EXTERNAL_DEPENDENCY
+                || reason == UnboundReason.BROKEN_DEPENDENCY
+                || reason == UnboundReason.CYCLE
+                || reason == UnboundReason.KIND_CONFLICT
+                || reason == UnboundReason.SCALE_CONFLICT;
     }
 
     private static List<Operand> bucket(

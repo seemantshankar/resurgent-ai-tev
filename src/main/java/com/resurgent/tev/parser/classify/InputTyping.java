@@ -19,12 +19,16 @@ final class InputTyping {
 
     static ResolvedUnit of(GraphCell cell) {
         if (cell.rowLabel() == null || cell.rowLabel().isBlank()) {
-            // Nothing names this number. Assuming money for a bare cell is exactly
-            // how a power factor of 0.8 came to be read as a cost.
-            return ResolvedUnit.unresolved();
+            NumericKind fromFormat = applyFormat(NumericKind.UNKNOWN, cell.numberFormat());
+            CellKind formatted = CellKind.from(fromFormat);
+            if (formatted == null) {
+                return ResolvedUnit.unresolved();
+            }
+            return ResolvedUnit.of(formatted, scaleOf(cell));
         }
         NumericKind kind = LayerBAmountSupport.classifyKind(
                 cell.rowLabel(), null, cell.displayValue(), true);
+        kind = applyFormat(kind, cell.numberFormat());
         CellKind cellKind = CellKind.from(kind);
         if (cellKind == null) {
             return ResolvedUnit.unresolved();
@@ -64,5 +68,29 @@ final class InputTyping {
             return CellScale.BILLION;
         }
         return CellScale.THOUSAND;
+    }
+
+    /**
+     * Number format is unambiguous for percent and for an explicit currency mask.
+     * A labelled kind still wins over a generic {@code General} / {@code 0.00} mask.
+     */
+    static NumericKind applyFormat(NumericKind kind, String numberFormat) {
+        if (numberFormat == null || numberFormat.isBlank()) {
+            return kind;
+        }
+        String format = numberFormat.toLowerCase(Locale.ROOT);
+        if (format.contains("%")) {
+            return NumericKind.PERCENT;
+        }
+        if (kind != NumericKind.UNKNOWN && kind != null) {
+            return kind;
+        }
+        if (format.contains("₹")
+                || format.contains("$")
+                || format.contains("rs")
+                || format.contains("inr")) {
+            return NumericKind.MONEY;
+        }
+        return kind;
     }
 }
