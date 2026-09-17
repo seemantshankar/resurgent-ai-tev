@@ -1209,6 +1209,38 @@ public final class WorkspaceRepository {
         }
     }
 
+    /**
+     * Delete this mandate's soft leaves that no surviving binding references, then the
+     * soft aliases left pointing at nothing. Bindings of {@code excludedParseRunId}
+     * do not count as surviving: that run is being reclassified, so keeping its
+     * leaves alive would let a bad run's invented paths be offered back to the next
+     * one. Returns the number of nodes and aliases deleted.
+     */
+    public long[] deleteOrphanMandateSoftLeaves(long mandateId, Long excludedParseRunId)
+            throws SQLException {
+        String nodeSql = "DELETE FROM nomenclature_node"
+                + " WHERE layer = 'mandate_soft' AND mandate_id = ?"
+                + " AND path NOT IN (SELECT path FROM nomenclature_binding"
+                + (excludedParseRunId == null ? "" : " WHERE parse_run_id <> ?") + ")";
+        long nodes;
+        try (PreparedStatement ps = connection.prepareStatement(nodeSql)) {
+            ps.setLong(1, mandateId);
+            if (excludedParseRunId != null) {
+                ps.setLong(2, excludedParseRunId);
+            }
+            nodes = ps.executeUpdate();
+        }
+        long aliases;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM nomenclature_alias"
+                        + " WHERE layer = 'mandate_soft' AND mandate_id = ?"
+                        + " AND leaf_path NOT IN (SELECT path FROM nomenclature_node)")) {
+            ps.setLong(1, mandateId);
+            aliases = ps.executeUpdate();
+        }
+        return new long[] {nodes, aliases};
+    }
+
     public void upsertMandateIndustry(long mandateId, String industryTag, boolean confirmed,
             boolean inferred) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(

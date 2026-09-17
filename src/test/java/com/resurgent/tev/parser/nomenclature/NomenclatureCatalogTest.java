@@ -281,4 +281,66 @@ class NomenclatureCatalogTest {
                     .isEqualTo("Project Cost > Civil Works > Interior Fit-out");
         }
     }
+
+    @Test
+    void orphanSoftLeavesArePurgedAndLeavesARunStillUsesSurvive() throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(tempDir.resolve("purge.db"))) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            long sourceFileId = repo.insertSourceFile(9L, "c.xlsx", "hash", "fm_xlsx",
+                    Timestamps.now(), "0.1.0", null);
+            long keptRunId = repo.insertParseRun(sourceFileId, 9L, "0.1.0", "cfg",
+                    Timestamps.now(), Timestamps.now(), "success", null);
+            long redoneRunId = repo.insertParseRun(sourceFileId, 9L, "0.1.0", "cfg2",
+                    Timestamps.now(), Timestamps.now(), "success", null);
+            long worksheetId = repo.insertWorksheet(keptRunId, "Sheet1", 0, "visible");
+            long cellId = repo.insertCell(worksheetId, new NormalizedCell(
+                    "A1", 1, 1,
+                    "x", "string", "string", "x", "x",
+                    null, null, null,
+                    null, null, null, null, false,
+                    false, null,
+                    false, false, null, "cell", false, false, false));
+            CandidateWrite write = new CandidateWrite(
+                    keptRunId, worksheetId, "coverage_parent", null,
+                    1, 1, 1, 1,
+                    null, null, null,
+                    false, 1.0, "sole coverage parent",
+                    "Coverage parent for Sheet1");
+            long candidateId = repo.insertCandidate(write, List.of(cellId));
+
+            NomenclatureCatalog catalog = new NomenclatureCatalog(repo);
+            catalog.confirmIndustry(9L, "hotel");
+            catalog.putSoftLeaf(9L, "Project Cost > Plant & Machinery", "Kone Elevator",
+                    List.of("Kone Elevator India"));
+            catalog.putSoftLeaf(9L, "Project Cost > Civil Works", "Building",
+                    List.of("Building Block"));
+            catalog.putSoftLeaf(9L, "Project Cost > Contingency", "Stale Leaf", List.of());
+            repo.insertNomenclatureBinding(new com.resurgent.tev.parser.classify
+                    .NomenclatureBinding(
+                    cellId, keptRunId, candidateId, "Kone Elevator",
+                    "Project Cost > Plant & Machinery > Kone Elevator",
+                    "add", true, false, null));
+            repo.insertNomenclatureBinding(new com.resurgent.tev.parser.classify
+                    .NomenclatureBinding(
+                    cellId, redoneRunId, candidateId, "Building",
+                    "Project Cost > Civil Works > Building",
+                    "add", true, false, null));
+
+            NomenclatureCatalog.SoftLeafPurge purge =
+                    catalog.purgeOrphanSoftLeaves(9L, redoneRunId);
+
+            assertThat(purge.nodesDeleted()).isEqualTo(2);
+            assertThat(purge.aliasesDeleted()).isEqualTo(1);
+            OntologySlice slice = catalog.sliceForMandate(9L);
+            assertThat(slice.node("Project Cost > Plant & Machinery > Kone Elevator"))
+                    .as("a leaf another parse run still binds survives")
+                    .isPresent();
+            assertThat(slice.node("Project Cost > Civil Works > Building"))
+                    .as("a leaf only the run being reclassified minted is dropped")
+                    .isEmpty();
+            assertThat(slice.node("Project Cost > Contingency > Stale Leaf")).isEmpty();
+            assertThat(slice.leafPathForAlias("Building Block")).isEmpty();
+            assertThat(slice.leafPathForAlias("Kone Elevator India")).isPresent();
+        }
+    }
 }

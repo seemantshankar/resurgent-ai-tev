@@ -120,6 +120,9 @@ public final class ClassifyService {
             }
             long mandateId = repo.selectParseRunMandateId(parseRunId);
             NomenclatureCatalog catalog = new NomenclatureCatalog(repo);
+            // Cut the overlay feedback loop before the slice is read: a soft leaf this
+            // run invented last time must not be offered back as a selectable path.
+            catalog.purgeOrphanSoftLeaves(mandateId, parseRunId);
             OntologySlice slice = catalog.sliceForMandate(mandateId);
             List<CandidateRow> candidates = repo.selectCandidatesForParseRun(parseRunId);
             if (candidates.isEmpty()) {
@@ -518,6 +521,9 @@ public final class ClassifyService {
             throw new ClassifyException("incomplete: classify deadline exceeded");
         }
         long attemptNanos = Math.min(limits.attemptDeadline().toNanos(), remainingClassify);
+        // When the run-level budget is what clipped this attempt, the failure is the
+        // classify deadline, not the attempt deadline: a per-chunk retry cannot help.
+        boolean clippedByClassifyDeadline = remainingClassify <= limits.attemptDeadline().toNanos();
         Thread worker = Thread.currentThread();
         ScheduledFuture<?> abort = watchdog.schedule(
                 worker::interrupt, attemptNanos, TimeUnit.NANOSECONDS);
@@ -528,6 +534,9 @@ public final class ClassifyService {
         } catch (Exception e) {
             if (interrupted(e)) {
                 Thread.currentThread().interrupt();
+                if (clippedByClassifyDeadline) {
+                    throw new ClassifyException("incomplete: classify deadline exceeded", e);
+                }
                 throw new AttemptDeadlineException(
                         "incomplete: " + label + " exceeded attempt deadline", e);
             }

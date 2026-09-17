@@ -63,6 +63,33 @@ public final class NomenclatureCatalog {
         }
     }
 
+    /**
+     * Drop this mandate's orphan soft leaves before a classify run reads the slice.
+     * The overlay is self-reinforcing otherwise: a leaf invented by a bad run is
+     * offered back in the next run's prompt as a selectable path, so a wrong answer
+     * becomes permanent vocabulary. Only a leaf some surviving binding still uses is
+     * kept; the run named by {@code reclassifiedParseRunId} does not count, since its
+     * own bindings are about to be replaced.
+     */
+    public SoftLeafPurge purgeOrphanSoftLeaves(long mandateId, Long reclassifiedParseRunId) {
+        long[] deleted = new long[2];
+        try {
+            inTransaction(() -> {
+                long[] counts =
+                        repo.deleteOrphanMandateSoftLeaves(mandateId, reclassifiedParseRunId);
+                deleted[0] = counts[0];
+                deleted[1] = counts[1];
+            });
+            return new SoftLeafPurge(deleted[0], deleted[1]);
+        } catch (SQLException e) {
+            throw new NomenclatureException(
+                    "failed to purge orphan soft leaves for mandate " + mandateId, e);
+        }
+    }
+
+    /** Counts from one overlay purge. */
+    public record SoftLeafPurge(long nodesDeleted, long aliasesDeleted) {}
+
     public void putSoftLeaf(long mandateId, String parentPath, String leafName,
             List<String> aliases) {
         Objects.requireNonNull(parentPath, "parentPath");
