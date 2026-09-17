@@ -47,6 +47,14 @@ public final class LlmEnvironment {
         return new OpenRouterClassifierLlm(key, model);
     }
 
+    public static FormulaGlossLlm formulaGlossOrNoOp() {
+        ClassifierLlm classifier = classifierOrUnconfigured();
+        if (classifier instanceof FormulaGlossLlm gloss) {
+            return gloss;
+        }
+        return new NoOpFormulaGlossLlm();
+    }
+
     public static boolean liveConfigured() {
         Map<String, String> env = load();
         String key = env.get(API_KEY);

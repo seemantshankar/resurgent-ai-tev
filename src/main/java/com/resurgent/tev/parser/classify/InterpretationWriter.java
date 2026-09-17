@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.classify;
 
+import com.resurgent.tev.parser.db.CandidateRow;
 import com.resurgent.tev.parser.db.InterpretationCellView;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import java.sql.SQLException;
@@ -8,12 +9,26 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Builds and persists Cell interpretation snapshots inside the caller's
  * classify transaction. Does not open or commit its own transaction.
+ * Formula dependency annotations are written after interpretations exist so
+ * expansion can use nomenclature context without a second competing graph.
  */
 public class InterpretationWriter {
+
+    private final FormulaAnnotationWriter formulaAnnotationWriter;
+
+    public InterpretationWriter() {
+        this(new FormulaAnnotationWriter());
+    }
+
+    public InterpretationWriter(FormulaAnnotationWriter formulaAnnotationWriter) {
+        this.formulaAnnotationWriter =
+                Objects.requireNonNull(formulaAnnotationWriter, "formulaAnnotationWriter");
+    }
 
     /**
      * Replace all interpretations for the parse run. Returns the number written
@@ -30,9 +45,35 @@ public class InterpretationWriter {
         }
         repo.deleteInterpretationsForParseRun(parseRunId);
         List<InterpretationCellView> cells = repo.selectInterpretationCellsForParseRun(parseRunId);
-        for (InterpretationCellView cell : cells) {
-            repo.insertCellInterpretation(build(parseRunId, cell, byCell.get(cell.cellId())));
+        List<CandidateRow> candidates = repo.selectCandidatesForParseRun(parseRunId);
+        Map<Long, Set<Long>> membersByCandidate =
+                InterpretationEvidenceResolver.indexMembers(
+                        repo.selectCandidateMembersForParseRun(parseRunId));
+        Map<Long, List<CandidateRow>> ownersByCell =
+                InterpretationEvidenceResolver.indexOwners(candidates, membersByCandidate);
+        Map<Long, InterpretationCellView> byId =
+                InterpretationEvidenceResolver.indexCells(cells);
+        Map<Long, CandidateRow> candidatesById = new HashMap<>();
+        for (CandidateRow candidate : candidates) {
+            candidatesById.put(candidate.candidateId(), candidate);
         }
+
+        for (InterpretationCellView cell : cells) {
+            NomenclatureBinding binding = byCell.get(cell.cellId());
+            repo.insertCellInterpretation(build(parseRunId, cell, binding));
+            List<InterpretationEvidence> evidence = InterpretationEvidenceResolver.resolve(
+                    parseRunId,
+                    cell,
+                    byId,
+                    ownersByCell,
+                    membersByCandidate,
+                    candidatesById,
+                    binding);
+            for (InterpretationEvidence item : evidence) {
+                repo.insertInterpretationEvidence(item);
+            }
+        }
+        formulaAnnotationWriter.write(repo, parseRunId);
         return cells.size();
     }
 

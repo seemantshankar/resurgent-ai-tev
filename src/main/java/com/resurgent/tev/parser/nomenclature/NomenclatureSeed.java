@@ -64,7 +64,8 @@ final class NomenclatureSeed {
             "Project Cost > Plant & Machinery > Elevator / Lift",
             "Project Cost > Plant & Machinery > Kitchen Equipments",
             "Project Cost > Plant & Machinery > Wastewater / ETP",
-            "Project Cost > Plant & Machinery > Air Conditioning");
+            "Project Cost > Plant & Machinery > Air Conditioning",
+            "Profit & Loss > F & B Sales");
 
     static final List<NomenclatureAlias> HOTEL_ALIASES = List.of(
             new NomenclatureAlias("Elevator",
@@ -78,7 +79,11 @@ final class NomenclatureSeed {
             new NomenclatureAlias("Less : AC as per Quotation included Below",
                     "Project Cost > Plant & Machinery > Air Conditioning"),
             new NomenclatureAlias("AC",
-                    "Project Cost > Plant & Machinery > Air Conditioning"));
+                    "Project Cost > Plant & Machinery > Air Conditioning"),
+            new NomenclatureAlias("F&B Sales",
+                    "Profit & Loss > F & B Sales"),
+            new NomenclatureAlias("Food & Beverage Sales",
+                    "Profit & Loss > F & B Sales"));
 
     private NomenclatureSeed() {}
 

@@ -4,6 +4,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.resurgent.tev.parser.classify.BindingPeer;
 import com.resurgent.tev.parser.classify.CellInterpretation;
+import com.resurgent.tev.parser.classify.FormulaAnnotation;
+import com.resurgent.tev.parser.classify.FormulaAnnotationMember;
+import com.resurgent.tev.parser.classify.InterpretationEvidence;
 import com.resurgent.tev.parser.classify.NomenclatureBinding;
 import com.resurgent.tev.parser.classify.PacketDisposition;
 import com.resurgent.tev.parser.classify.ProjectFactBinding;
@@ -1605,10 +1608,11 @@ public final class WorkspaceRepository {
     public List<InterpretationCellView> selectInterpretationCellsForParseRun(long parseRunId)
             throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT c.cell_id, c.worksheet_id, c.coord, c.value_type, c.text_value,"
-                        + " c.display_value, c.numeric_value, c.bool_value, c.date_value,"
-                        + " c.formula_text, c.formula_state, c.cached_value, c.cache_state,"
-                        + " c.is_error, c.error_type, c.is_merged_participant, c.value_source"
+                "SELECT c.cell_id, c.worksheet_id, c.coord, c.row_num, c.col_num, c.value_type,"
+                        + " c.text_value, c.display_value, c.numeric_value, c.bool_value,"
+                        + " c.date_value, c.formula_text, c.formula_state, c.cached_value,"
+                        + " c.cache_state, c.is_error, c.error_type, c.is_merged_anchor,"
+                        + " c.is_merged_participant, c.merged_range, c.value_source"
                         + " FROM cell c"
                         + " JOIN worksheet w ON w.worksheet_id = c.worksheet_id"
                         + " WHERE w.parse_run_id = ?"
@@ -1618,6 +1622,164 @@ public final class WorkspaceRepository {
                 List<InterpretationCellView> rows = new ArrayList<>();
                 while (rs.next()) {
                     rows.add(mapInterpretationCellView(rs));
+                }
+                return rows;
+            }
+        }
+    }
+
+    /** All candidate_member rows for a parse run: [candidate_id, cell_id]. */
+    public List<long[]> selectCandidateMembersForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT m.candidate_id, m.cell_id FROM candidate_member m"
+                        + " JOIN candidate c ON c.candidate_id = m.candidate_id"
+                        + " WHERE c.parse_run_id = ?"
+                        + " ORDER BY m.candidate_id, m.cell_id")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<long[]> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new long[] {rs.getLong(1), rs.getLong(2)});
+                }
+                return rows;
+            }
+        }
+    }
+
+    public void insertInterpretationEvidence(InterpretationEvidence row) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cell_interpretation_evidence (parse_run_id, cell_id, role,"
+                        + " source_cell_id, source_text, ordinal, resolution, normalized_value,"
+                        + " rule_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setLong(1, row.parseRunId());
+            ps.setLong(2, row.cellId());
+            ps.setString(3, row.role());
+            if (row.sourceCellId() == null) {
+                ps.setNull(4, Types.INTEGER);
+            } else {
+                ps.setLong(4, row.sourceCellId());
+            }
+            ps.setString(5, row.sourceText());
+            ps.setInt(6, row.ordinal());
+            ps.setString(7, row.resolution());
+            ps.setString(8, row.normalizedValue());
+            ps.setString(9, row.ruleId());
+            ps.executeUpdate();
+        }
+    }
+
+    public List<InterpretationEvidence> selectInterpretationEvidence(long parseRunId, long cellId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT parse_run_id, cell_id, role, source_cell_id, source_text, ordinal,"
+                        + " resolution, normalized_value, rule_id"
+                        + " FROM cell_interpretation_evidence"
+                        + " WHERE parse_run_id = ? AND cell_id = ?"
+                        + " ORDER BY ordinal, evidence_id")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, cellId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<InterpretationEvidence> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(mapInterpretationEvidence(rs));
+                }
+                return rows;
+            }
+        }
+    }
+
+    public long insertFormulaAnnotation(FormulaAnnotation row) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cell_interpretation_formula_annotation (parse_run_id, cell_id,"
+                        + " ordinal, raw_token, ref_kind, target_sheet_name, target_range,"
+                        + " completeness, enclosing_function, shared_dependency_path,"
+                        + " shared_dependency_kind)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, row.parseRunId());
+            ps.setLong(2, row.cellId());
+            ps.setInt(3, row.ordinal());
+            ps.setString(4, row.rawToken());
+            ps.setString(5, row.refKind());
+            ps.setString(6, row.targetSheetName());
+            ps.setString(7, row.targetRange());
+            ps.setString(8, row.completeness());
+            ps.setString(9, row.enclosingFunction());
+            ps.setString(10, row.sharedDependencyPath());
+            ps.setString(11, row.sharedDependencyKind());
+            ps.executeUpdate();
+            return generatedId(ps);
+        }
+    }
+
+    public void insertFormulaAnnotationMember(long annotationId, FormulaAnnotationMember member)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cell_interpretation_formula_annotation_member (annotation_id,"
+                        + " ordinal, target_cell_id, target_coord, nomenclature_path,"
+                        + " nomenclature_status) VALUES (?, ?, ?, ?, ?, ?)")) {
+            ps.setLong(1, annotationId);
+            ps.setInt(2, member.ordinal());
+            ps.setLong(3, member.targetCellId());
+            ps.setString(4, member.coord());
+            ps.setString(5, member.nomenclaturePath());
+            ps.setString(6, member.nomenclatureStatus());
+            ps.executeUpdate();
+        }
+    }
+
+    public List<FormulaAnnotation> selectFormulaAnnotations(long parseRunId, long cellId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT annotation_id, parse_run_id, cell_id, ordinal, raw_token, ref_kind,"
+                        + " target_sheet_name, target_range, completeness, enclosing_function,"
+                        + " shared_dependency_path, shared_dependency_kind"
+                        + " FROM cell_interpretation_formula_annotation"
+                        + " WHERE parse_run_id = ? AND cell_id = ?"
+                        + " ORDER BY ordinal, annotation_id")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, cellId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<FormulaAnnotation> rows = new ArrayList<>();
+                while (rs.next()) {
+                    long annotationId = rs.getLong("annotation_id");
+                    rows.add(new FormulaAnnotation(
+                            rs.getLong("parse_run_id"),
+                            rs.getLong("cell_id"),
+                            rs.getInt("ordinal"),
+                            rs.getString("raw_token"),
+                            rs.getString("ref_kind"),
+                            rs.getString("target_sheet_name"),
+                            rs.getString("target_range"),
+                            rs.getString("completeness"),
+                            rs.getString("enclosing_function"),
+                            rs.getString("shared_dependency_path"),
+                            rs.getString("shared_dependency_kind"),
+                            selectFormulaAnnotationMembers(annotationId)));
+                }
+                return rows;
+            }
+        }
+    }
+
+    private List<FormulaAnnotationMember> selectFormulaAnnotationMembers(long annotationId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT ordinal, target_cell_id, target_coord, nomenclature_path,"
+                        + " nomenclature_status"
+                        + " FROM cell_interpretation_formula_annotation_member"
+                        + " WHERE annotation_id = ?"
+                        + " ORDER BY ordinal, member_id")) {
+            ps.setLong(1, annotationId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<FormulaAnnotationMember> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new FormulaAnnotationMember(
+                            rs.getInt("ordinal"),
+                            rs.getLong("target_cell_id"),
+                            rs.getString("target_coord"),
+                            rs.getString("nomenclature_path"),
+                            rs.getString("nomenclature_status")));
                 }
                 return rows;
             }
@@ -1673,7 +1835,7 @@ public final class WorkspaceRepository {
                 "SELECT parse_run_id, cell_id, value_origin, resulting_value, result_source,"
                         + " formula_text, formula_state, cache_state, is_error, error_type,"
                         + " nomenclature_path, amount_role, soft_leaf, via_alias,"
-                        + " nomenclature_status"
+                        + " nomenclature_status, formula_gloss"
                         + " FROM cell_interpretation"
                         + " WHERE parse_run_id = ? AND cell_id = ?")) {
             ps.setLong(1, parseRunId);
@@ -1704,7 +1866,7 @@ public final class WorkspaceRepository {
                 "SELECT parse_run_id, cell_id, value_origin, resulting_value, result_source,"
                         + " formula_text, formula_state, cache_state, is_error, error_type,"
                         + " nomenclature_path, amount_role, soft_leaf, via_alias,"
-                        + " nomenclature_status"
+                        + " nomenclature_status, formula_gloss"
                         + " FROM cell_interpretation WHERE parse_run_id = ?"
                         + " ORDER BY interpretation_id")) {
             ps.setLong(1, parseRunId);
@@ -1715,6 +1877,17 @@ public final class WorkspaceRepository {
                 }
                 return rows;
             }
+        }
+    }
+
+    public void updateFormulaGloss(long parseRunId, long cellId, String gloss) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cell_interpretation SET formula_gloss = ?"
+                        + " WHERE parse_run_id = ? AND cell_id = ?")) {
+            ps.setString(1, gloss);
+            ps.setLong(2, parseRunId);
+            ps.setLong(3, cellId);
+            ps.executeUpdate();
         }
     }
 
@@ -1784,6 +1957,8 @@ public final class WorkspaceRepository {
                 rs.getLong("cell_id"),
                 rs.getLong("worksheet_id"),
                 rs.getString("coord"),
+                rs.getInt("row_num"),
+                rs.getInt("col_num"),
                 rs.getString("value_type"),
                 rs.getString("text_value"),
                 rs.getString("display_value"),
@@ -1796,8 +1971,26 @@ public final class WorkspaceRepository {
                 rs.getString("cache_state"),
                 rs.getInt("is_error") == 1,
                 rs.getString("error_type"),
+                rs.getInt("is_merged_anchor") == 1,
                 rs.getInt("is_merged_participant") == 1,
+                rs.getString("merged_range"),
                 rs.getString("value_source"));
+    }
+
+    private static InterpretationEvidence mapInterpretationEvidence(ResultSet rs)
+            throws SQLException {
+        long sourceRaw = rs.getLong("source_cell_id");
+        Long sourceCellId = rs.wasNull() ? null : sourceRaw;
+        return new InterpretationEvidence(
+                rs.getLong("parse_run_id"),
+                rs.getLong("cell_id"),
+                rs.getString("role"),
+                sourceCellId,
+                rs.getString("source_text"),
+                rs.getInt("ordinal"),
+                rs.getString("resolution"),
+                rs.getString("normalized_value"),
+                rs.getString("rule_id"));
     }
 
     private static CellInterpretation mapCellInterpretation(ResultSet rs) throws SQLException {
@@ -1820,7 +2013,8 @@ public final class WorkspaceRepository {
                 rs.getString("amount_role"),
                 softLeaf,
                 viaAlias,
-                rs.getString("nomenclature_status"));
+                rs.getString("nomenclature_status"),
+                rs.getString("formula_gloss"));
     }
 
     private static void setInteger(PreparedStatement ps, int index, Integer value)
