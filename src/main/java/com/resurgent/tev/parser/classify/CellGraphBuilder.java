@@ -40,6 +40,8 @@ final class CellGraphBuilder {
             "^\\$?([A-Za-z]+)\\$?(\\d+):\\$?([A-Za-z]+)\\$?(\\d+)$");
     private static final Pattern SINGLE_CELL = Pattern.compile("^\\$?[A-Za-z]{1,3}\\$?\\d{1,7}$");
     private static final Pattern SUM_CALL = Pattern.compile("(?i)^sum\\s*\\((.*)\\)$");
+    private static final Pattern NUMBER_LITERAL = Pattern.compile(
+            "(?<![A-Za-z$\\d.])\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?(?![\\d.])");
     private static final Pattern A1_TOKEN = Pattern.compile(
             "\\$?[A-Za-z]{1,3}\\$?\\d{1,7}(?::\\$?[A-Za-z]{1,3}\\$?\\d{1,7})?");
 
@@ -92,8 +94,9 @@ final class CellGraphBuilder {
                 }
             }
             // A constant-only formula is an input: it hardcodes a number just as a
-            // literal does, and nothing upstream can ever type it.
-            if (parsed.dependencies().isEmpty() && cell.numeric()) {
+            // literal does, and nothing upstream can ever type it. Its own constants
+            // are operands, not dependencies on other cells.
+            if (cell.numeric() && readsNoCell(parsed.dependencies())) {
                 inputs.add(inputOf(cell, index));
             }
             parsed.aggregation().ifPresent(aggregations::add);
@@ -119,6 +122,16 @@ final class CellGraphBuilder {
                 dependencies,
                 driverOnly,
                 memberships);
+    }
+
+    /** True when a formula reads no other cell and hits no barrier: it hardcodes its number. */
+    private static boolean readsNoCell(List<CellDependency> dependencies) {
+        for (CellDependency dependency : dependencies) {
+            if (dependency.cellId() != null || dependency.isBarrier()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -157,6 +170,10 @@ final class CellGraphBuilder {
                 }
             }
             TermShape shape = shapeOf(term.text());
+            for (double constant : topLevelConstants(term, shape)) {
+                dependencies.add(CellDependency.constant(
+                        constantRole(shape, term, constant), constant));
+            }
             for (EdgePlacement placement : inTerm) {
                 CellReferenceEdge edge = placement.edge();
                 DependencyRole role = roleFor(shape, term, placement, expr);
@@ -249,6 +266,60 @@ final class CellGraphBuilder {
             }
         }
         return false;
+    }
+
+    /**
+     * The hardcoded numbers in a multiplicative term. Only these matter to scale: a
+     * literal added to a sum changes the amount, a literal dividing it changes the
+     * unit the amount is expressed in.
+     */
+    private static List<Double> topLevelConstants(Term term, TermShape shape) {
+        if (shape != TermShape.MULTIPLICATIVE) {
+            return List.of();
+        }
+        List<Double> constants = new ArrayList<>();
+        Matcher matcher = NUMBER_LITERAL.matcher(term.text());
+        while (matcher.find()) {
+            try {
+                constants.add(Double.parseDouble(matcher.group()));
+            } catch (NumberFormatException e) {
+                // Not a number after all; the operand contributes nothing.
+            }
+        }
+        return List.copyOf(constants);
+    }
+
+    /** A constant to the right of a top-level {@code /} divides; anything else scales. */
+    private static DependencyRole constantRole(TermShape shape, Term term, double constant) {
+        if (shape != TermShape.MULTIPLICATIVE) {
+            return DependencyRole.OTHER;
+        }
+        String text = term.text();
+        Matcher matcher = NUMBER_LITERAL.matcher(text);
+        while (matcher.find()) {
+            double value;
+            try {
+                value = Double.parseDouble(matcher.group());
+            } catch (NumberFormatException e) {
+                continue;
+            }
+            if (value != constant) {
+                continue;
+            }
+            int depth = 0;
+            for (int i = 0; i < matcher.start(); i++) {
+                char c = text.charAt(i);
+                if (c == '(') {
+                    depth++;
+                } else if (c == ')') {
+                    depth--;
+                } else if (c == '/' && depth == 0) {
+                    return DependencyRole.DIVISOR;
+                }
+            }
+            return DependencyRole.FACTOR;
+        }
+        return DependencyRole.FACTOR;
     }
 
     private enum TermShape { BARE_REFERENCE, SUM_CALL, MULTIPLICATIVE, OTHER }

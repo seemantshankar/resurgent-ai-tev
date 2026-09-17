@@ -2,6 +2,7 @@ package com.resurgent.tev.parser.classify;
 
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import java.sql.SQLException;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,13 +19,17 @@ import java.util.Objects;
 final class CellGraphWriter {
 
     /** Replace the run's graph evidence. Returns each head cell's aggregation id. */
-    Map<Long, Long> write(WorkspaceRepository repo, CellGraph graph) throws SQLException {
+    Map<Long, Long> write(WorkspaceRepository repo, CellGraph graph, CellTypes types)
+            throws SQLException {
         Objects.requireNonNull(repo, "repo");
         Objects.requireNonNull(graph, "graph");
+        Objects.requireNonNull(types, "types");
         repo.deleteAggregationsForParseRun(graph.parseRunId());
+        repo.deleteCellTypesForParseRun(graph.parseRunId());
 
         Map<Long, Long> aggregationIds = new LinkedHashMap<>();
         for (Aggregation aggregation : graph.aggregations()) {
+            ResolvedUnit unit = types.unitOf(aggregation);
             long aggregationId = repo.insertAggregation(new AggregationRow(
                     null,
                     graph.parseRunId(),
@@ -32,8 +37,8 @@ final class CellGraphWriter {
                     aggregation.worksheetId(),
                     aggregation.relativeSignature(),
                     aggregation.headLabel(),
-                    null,
-                    null));
+                    unit.kind(),
+                    unit.scale()));
             aggregationIds.put(aggregation.headCellId(), aggregationId);
             List<Aggregation.Member> members = aggregation.members();
             for (int i = 0; i < members.size(); i++) {
@@ -46,6 +51,10 @@ final class CellGraphWriter {
                         member.label()));
             }
         }
-        return Map.copyOf(aggregationIds);
+
+        for (CellType type : types.rows(graph.parseRunId())) {
+            repo.insertCellType(type);
+        }
+        return Collections.unmodifiableMap(aggregationIds);
     }
 }

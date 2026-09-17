@@ -183,7 +183,6 @@ public final class ClassifyService {
                 repo.deleteProjectFactBindingsForParseRun(parseRunId);
                 repo.deleteNomenclatureBindingsForParseRun(parseRunId);
                 repo.deletePacketDispositionsForParseRun(parseRunId);
-                repo.deleteCellTypesForParseRun(parseRunId);
                 for (PacketDisposition disposition : dispositions) {
                     repo.insertPacketDisposition(disposition);
                 }
@@ -197,9 +196,11 @@ public final class ClassifyService {
                     repo.insertBindingPeer(peer);
                 }
                 interpretationCount = interpretationWriter.write(repo, parseRunId, bindings);
-                // The graph is persisted as the evidence behind Layer B: what each
-                // formula composes, with what sign. Nothing binds from it yet.
-                new CellGraphWriter().write(repo, new CellGraphBuilder().read(repo, parseRunId));
+                // The graph and its typing are persisted as the evidence behind
+                // Layer B: what each formula composes, with what sign, and what unit
+                // every numeric cell turned out to be. Nothing binds from it yet.
+                CellGraph graph = new CellGraphBuilder().read(repo, parseRunId);
+                new CellGraphWriter().write(repo, graph, new TypePropagation().resolve(graph));
                 repo.commit();
             } catch (ClassifyException e) {
                 repo.rollback();

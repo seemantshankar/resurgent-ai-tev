@@ -62,6 +62,34 @@ class CellGraphMeasurementIT {
                         + (aggregation.headLabel() == null ? "" : aggregation.headLabel()));
             }
 
+            CellTypes types = new TypePropagation().resolve(graph);
+            long typedNumeric = graph.cells().values().stream()
+                    .filter(GraphCell::numeric)
+                    .filter(cell -> types.unitOf(cell.cellId()).isPresent())
+                    .count();
+            long settled = graph.cells().values().stream()
+                    .filter(GraphCell::numeric)
+                    .filter(cell -> types.unitOf(cell.cellId()).isPresent()
+                            || types.refusalOf(cell.cellId()).isPresent())
+                    .count();
+            long moneyAggregations = graph.aggregations().stream()
+                    .filter(aggregation -> types.unitOf(aggregation).isMoney())
+                    .count();
+
+            java.util.Map<UnboundReason, Long> reasons = new java.util.LinkedHashMap<>();
+            for (GraphCell cell : graph.cells().values()) {
+                if (!cell.numeric()) {
+                    continue;
+                }
+                types.refusalOf(cell.cellId())
+                        .ifPresent(reason -> reasons.merge(reason, 1L, Long::sum));
+            }
+            System.out.println("cell-graph refusals: " + reasons);
+            System.out.println("cell-graph typing:"
+                    + " typed=" + typedNumeric
+                    + " ofNumeric=" + numeric
+                    + " settled=" + settled
+                    + " moneyAggregations=" + moneyAggregations);
             System.out.println("cell-graph measurement:"
                     + " numericCells=" + numeric
                     + " inputs=" + graph.inputs().size()
@@ -84,6 +112,13 @@ class CellGraphMeasurementIT {
             assertThat(labelledInputs)
                     .as("most inputs carry a row label")
                     .isGreaterThan(graph.inputs().size() / 2);
+            assertThat(settled)
+                    .as("every numeric cell ends with either a unit or a reason")
+                    .isEqualTo(numeric);
+            assertThat(typedNumeric)
+                    .as("propagation reaches well beyond the inputs it started from")
+                    .isGreaterThan(graph.inputs().size());
+            assertThat(moneyAggregations).isNotZero();
         }
     }
 }

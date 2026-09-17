@@ -101,6 +101,20 @@ final class LayerBAmountSupport {
         String label = packet == null ? "" : resolveRowLabel(packet, cell);
         String header = packet == null ? "" : resolveColumnHeader(packet, cell);
         String display = cell.displayValue() == null ? "" : cell.displayValue();
+        return classifyKind(label, header, display, packet != null);
+    }
+
+    /**
+     * Classify a numeric cell from its text cues alone. {@code hasContext} says
+     * whether row/column context was available: a bare cell without it falls back to
+     * money, which is right for a cost grid and wrong to assume when a label exists
+     * and says otherwise.
+     */
+    static NumericKind classifyKind(
+            String rowLabel, String columnHeader, String displayValue, boolean hasContext) {
+        String label = rowLabel == null ? "" : rowLabel;
+        String header = columnHeader == null ? "" : columnHeader;
+        String display = displayValue == null ? "" : displayValue;
         // Period-header test runs ahead of the quantity test: "Year 7" over a column
         // of money is a period band, not a count, and must contribute no cue at all.
         String cueHeader = isPeriodHeader(header) ? "" : header;
@@ -123,7 +137,7 @@ final class LayerBAmountSupport {
         if (MONEY_TOKEN.matcher(cueHeader.toLowerCase(Locale.ROOT)).find()) {
             return NumericKind.MONEY;
         }
-        if (packet == null) {
+        if (!hasContext) {
             // Bare cell without row/column context: assume money for cost grids.
             return NumericKind.MONEY;
         }

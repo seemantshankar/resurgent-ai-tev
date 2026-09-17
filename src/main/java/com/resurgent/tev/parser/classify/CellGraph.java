@@ -1,5 +1,8 @@
 package com.resurgent.tev.parser.classify;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -23,12 +26,15 @@ record CellGraph(
         Map<Long, List<Aggregation>> membershipsByCell) {
 
     CellGraph {
-        cells = Map.copyOf(cells);
+        // Insertion order is kept deliberately: Map.copyOf randomises iteration, and
+        // a graph that iterates differently from run to run makes classify
+        // irreproducible.
+        cells = Collections.unmodifiableMap(new LinkedHashMap<>(cells));
         inputs = List.copyOf(inputs);
         aggregations = List.copyOf(aggregations);
-        dependencies = Map.copyOf(dependencies);
-        driverOnly = Set.copyOf(driverOnly);
-        membershipsByCell = Map.copyOf(membershipsByCell);
+        dependencies = Collections.unmodifiableMap(new LinkedHashMap<>(dependencies));
+        driverOnly = Collections.unmodifiableSet(new LinkedHashSet<>(driverOnly));
+        membershipsByCell = Collections.unmodifiableMap(new LinkedHashMap<>(membershipsByCell));
     }
 
     Optional<GraphCell> cell(long cellId) {
