@@ -36,6 +36,22 @@ class DeterministicBinderTest {
         return id;
     }
 
+    private long literal(long sheet, String coord, int row, int col, String value) {
+        long id = nextCellId++;
+        cells.add(new InterpretationCellView(
+                id, sheet, coord, row, col, "number", null, value, value, null, null,
+                null, null, value, "cached", false, null, false, false, null, "cell"));
+        return id;
+    }
+
+    private long label(long sheet, String coord, int row, int col, String text) {
+        long id = nextCellId++;
+        cells.add(new InterpretationCellView(
+                id, sheet, coord, row, col, "string", text, text, null, null, null,
+                null, null, null, null, false, null, false, false, null, "cell"));
+        return id;
+    }
+
     private long label(String coord, int row, int col, String text) {
         long id = nextCellId++;
         cells.add(view(id, coord, row, col, "string", text, null, text, null, null));
@@ -113,7 +129,7 @@ class DeterministicBinderTest {
                     assertThat(binding.source()).isEqualTo(BindingSource.AGGREGATION_HEAD);
                     assertThat(result.headCellByCell()).containsEntry(head, head);
                     assertThat(binding.labelKey())
-                            .isEqualTo("total operating cost > total operating cost");
+                            .isEqualTo("9|total operating cost > total operating cost");
                 });
     }
 
@@ -155,6 +171,28 @@ class DeterministicBinderTest {
                 .extracting(DeterministicBinder.QueuedGroup::cellId)
                 .contains(soft);
         assertThat(result.unboundReasons()).containsEntry(soft, UnboundReason.LLM_UNAVAILABLE);
+    }
+
+    @Test
+    void theSameLabelOnTwoWorksheetsQueuesTwoWorksheetScopedQuestions() {
+        label("A2", 2, 1, "Soft Line");
+        long caseOne = literal(9L, "B2", 2, 2, "100");
+        label(10L, "A2", 2, 1, "Soft Line");
+        long caseTwo = literal(10L, "B2", 2, 2, "100");
+
+        DeterministicBinder.Result result = bind();
+
+        assertThat(result.queued())
+                .extracting(DeterministicBinder.QueuedGroup::label)
+                .satisfies(labels -> {
+                    assertThat(labels).hasSize(2);
+                    assertThat(labels.stream().map(QualifiedLabel::key).distinct().count())
+                            .as("one question per label per worksheet")
+                            .isEqualTo(2);
+                });
+        assertThat(result.queued())
+                .extracting(DeterministicBinder.QueuedGroup::cellId)
+                .containsExactlyInAnyOrder(caseOne, caseTwo);
     }
 
     @Test

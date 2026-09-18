@@ -42,7 +42,11 @@ final class TypePropagation {
             bySeries.computeIfAbsent(key, ignored -> new ArrayList<>()).add(input);
         }
         for (List<InputCell> series : bySeries.values()) {
-            ResolvedUnit unit = ResolvedUnit.unresolved();
+            // Type each member on its own evidence first: a row can mix a rate driver
+            // (its own percent display and format) with money amounts that share only
+            // the row label. The series then fills members that could not type alone,
+            // so one period row is still one judgment where they agree.
+            Map<Long, ResolvedUnit> own = new LinkedHashMap<>();
             for (InputCell input : series) {
                 GraphCell cell = graph.cells().get(input.cellId());
                 if (cell == null) {
@@ -50,15 +54,18 @@ final class TypePropagation {
                 }
                 ResolvedUnit candidate = InputTyping.of(cell);
                 if (candidate.isResolved()) {
-                    unit = candidate;
-                    break;
+                    own.put(cell.cellId(), candidate);
                 }
             }
+            ResolvedUnit fallback = own.isEmpty()
+                    ? ResolvedUnit.unresolved()
+                    : own.values().iterator().next();
             for (InputCell input : series) {
                 GraphCell cell = graph.cells().get(input.cellId());
                 if (cell == null) {
                     continue;
                 }
+                ResolvedUnit unit = own.getOrDefault(cell.cellId(), fallback);
                 if (unit.isResolved()) {
                     typed.put(cell.cellId(),
                             new CellTypes.Typed(unit, TypeSource.INPUT_LABEL, 0));

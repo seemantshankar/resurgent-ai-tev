@@ -145,6 +145,58 @@ class TypePropagationTest {
     }
 
     @Test
+    void aSeriesTypesEachCellByItsOwnDisplayBeforeFallingBackToTheSeries() {
+        // Row 45 of the P&L: the driver column holds a premium rate (percent display),
+        // the amount columns hold money, all under one row label.
+        label("A45", 45, 1, "Building");
+        long rate = literalWithDisplay("B45", 45, 2, "0.05", "5.00%");
+        long yearSix = literalWithDisplay("I45", 45, 9, "9.50", "9.50");
+        long yearSeven = literalWithDisplay("J45", 45, 10, "9.50", "9.50");
+
+        CellTypes types = resolve();
+
+        assertThat(types.unitOf(rate).orElseThrow().kind()).isEqualTo(CellKind.PERCENT);
+        assertThat(types.unitOf(yearSix).orElseThrow().kind())
+                .as("the amount columns type from their own display, not the rate column")
+                .isEqualTo(CellKind.MONEY);
+        assertThat(types.unitOf(yearSeven).orElseThrow().kind()).isEqualTo(CellKind.MONEY);
+    }
+
+    @Test
+    void aSeriesOfIdenticalCellsKeepsOneTypingDecision() {
+        label("A2", 2, 1, "Insurance Premium");
+        long yearOne = literal("B2", 2, 2, "100");
+        long yearTwo = literal("C2", 2, 3, "110");
+
+        CellTypes types = resolve();
+
+        assertThat(types.unitOf(yearOne).orElseThrow().kind()).isEqualTo(CellKind.MONEY);
+        assertThat(types.unitOf(yearTwo).orElseThrow().kind()).isEqualTo(CellKind.MONEY);
+    }
+
+    @Test
+    void rateTimesMoneyTypesAsMoney() {
+        label("A31", 31, 1, "Opening Balance (WDV)");
+        long opening = literal("B31", 31, 2, "3178.28");
+        label("A33", 33, 1, "Less: Depreciation @ 10 %");
+        long depreciation = formula("J33", 33, 10, "=0.1*B31", "317.83");
+        edge(depreciation, 0, "B31");
+
+        CellTypes types = resolve();
+
+        assertThat(types.unitOf(depreciation).orElseThrow().kind())
+                .as("rate * money must type as money")
+                .isEqualTo(CellKind.MONEY);
+    }
+
+    private long literalWithDisplay(
+            String coord, int row, int col, String numeric, String display) {
+        long id = nextCellId++;
+        cells.add(view(id, coord, row, col, "number", null, numeric, display, null, numeric));
+        return id;
+    }
+
+    @Test
     void dividingMoneyByLakhMovesTheScaleRatherThanTheKind() {
         label("A1", 1, 1, "Power cost");
         long rupees = literal("B1", 1, 2, "500000");

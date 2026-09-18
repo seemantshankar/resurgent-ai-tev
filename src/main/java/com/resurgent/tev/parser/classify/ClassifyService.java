@@ -132,7 +132,7 @@ public final class ClassifyService {
             // LLM calls stay outside the write transaction so long classify runs do not
             // hold a SQLite write lock. Packets are built serially; Layer A runs
             // concurrently with parent-before-child. Naming questions run after the
-            // graph, once per label.
+            // graph, once per label per worksheet.
             List<PreparedPacket> prepared = new ArrayList<>();
             int coverageParents = 0;
             for (CandidateRow candidate : candidates) {
@@ -159,7 +159,7 @@ public final class ClassifyService {
             Map<Long, Long> candidateByCell = candidateByCell(repo, parseRunId, candidates);
 
             // Roles the graph proves bind without asking. Names it cannot supply are
-            // asked once per distinct label, never once per cell.
+            // asked once per distinct label per worksheet, never once per cell.
             DeterministicBinder.Result deterministic = new DeterministicBinder().bind(
                     parseRunId, graph, cellTypes, slice, candidateByCell, Set.of());
             GapFillResult gapFill = fillLabelGaps(
@@ -829,10 +829,11 @@ public final class ClassifyService {
             List<BindingPeerWriter.PendingPeerLine> pendingPeers) {}
 
     /**
-     * Ask once per distinct qualified label for the cells whose role the graph proved
-     * but whose name the catalog does not hold, then apply each answer to every cell
-     * sharing that label. Membership re-projects by construction: the answer is keyed
-     * on the label, so two cells with one label cannot diverge.
+     * Ask once per distinct worksheet-scoped qualified label for the cells whose role
+     * the graph proved but whose name the catalog does not hold, then apply each
+     * answer to every cell sharing that label on that worksheet. Membership
+     * re-projects by construction: the answer is keyed on the label, so two cells
+     * with one label cannot diverge.
      */
     private GapFillResult fillLabelGaps(
             NomenclatureCatalog catalog,

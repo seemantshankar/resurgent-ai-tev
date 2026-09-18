@@ -112,9 +112,10 @@ final class DeterministicBinder {
             }
             Optional<String> hardLeaf = resolution.unique().filter(path -> isHardLeaf(slice, path));
             if (hardLeaf.isEmpty()) {
-                // The role is proven; only the name is open. Ask once per label.
+                // The role is proven; only the name is open. Ask once per label per
+                // worksheet, so the question carries the cell's own sheet context.
                 queued.add(new QueuedGroup(
-                        new QualifiedLabel(placement.groupLabel(), label),
+                        new QualifiedLabel(cell.worksheetId(), placement.groupLabel(), label),
                         cell.cellId(),
                         candidateId,
                         placement.role(),
@@ -135,7 +136,7 @@ final class DeterministicBinder {
                     false,
                     null,
                     placement.source(),
-                    new QualifiedLabel(placement.groupLabel(), label).key(),
+                    new QualifiedLabel(cell.worksheetId(), placement.groupLabel(), label).key(),
                     null));
         }
         return new Result(bindings, reasons, queued, headCellByCell, provenRoleCells);

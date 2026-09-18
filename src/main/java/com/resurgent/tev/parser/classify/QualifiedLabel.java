@@ -1,15 +1,16 @@
 package com.resurgent.tev.parser.classify;
 
 import com.resurgent.tev.parser.nomenclature.OntologySlice;
-import java.util.Objects;
 
 /**
- * The cache key for one naming question: the group's own label plus the member's.
- * Deliberately excludes candidate, chunk, column and coordinate — those are exactly
- * the axes along which the same line got different answers from one prompt to the
- * next, so two cells sharing a label can no longer diverge.
+ * The label behind a naming question: the group's label plus the member's, scoped
+ * to the worksheet the cell sits on. Candidate, chunk, column and coordinate stay
+ * excluded (ADR 0019) — they are the axes along which one line used to get
+ * different answers. Worksheet stays included: Case I / Case II sheets repeat the
+ * same labels for different lines, and a question about a cell must be asked in
+ * that cell's own sheet context (ADR 0021).
  */
-record QualifiedLabel(String groupLabel, String memberLabel) {
+record QualifiedLabel(long worksheetId, String groupLabel, String memberLabel) {
 
     QualifiedLabel {
         groupLabel = groupLabel == null ? "" : groupLabel;
@@ -19,19 +20,22 @@ record QualifiedLabel(String groupLabel, String memberLabel) {
     String key() {
         String group = OntologySlice.normalize(groupLabel);
         String member = OntologySlice.normalize(memberLabel);
-        return group.isEmpty() ? member : group + OntologySlice.SEPARATOR + member;
+        String line = group.isEmpty() ? member : group + OntologySlice.SEPARATOR + member;
+        return worksheetId + "|" + line;
     }
 
     @Override
     public boolean equals(Object other) {
-        if (this == other) {
-            return true;
-        }
-        return other instanceof QualifiedLabel that && key().equals(that.key());
+        return other instanceof QualifiedLabel label && key().equals(label.key());
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(key());
+        return key().hashCode();
+    }
+
+    @Override
+    public String toString() {
+        return key();
     }
 }

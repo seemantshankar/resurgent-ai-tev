@@ -150,4 +150,34 @@ class LayerBAmountSupportTest {
         assertThat(LayerBAmountSupport.isPeriodHeader("Rooms")).isFalse();
         assertThat(LayerBAmountSupport.isPeriodHeader("")).isFalse();
     }
+
+    @Test
+    void aRateQuotedInARowLabelDoesNotCuePercent() {
+        assertThat(LayerBAmountSupport.classifyKind(
+                "Less: Depreciation @ 10 %", null, "317.83", true))
+                .isEqualTo(NumericKind.MONEY);
+        assertThat(LayerBAmountSupport.classifyKind(
+                "Building @ 10 %", null, "9.50", true))
+                .isEqualTo(NumericKind.MONEY);
+        assertThat(LayerBAmountSupport.classifyKind(
+                "Other Sales 2.5% of Total", null, "58.61", true))
+                .isEqualTo(NumericKind.MONEY);
+    }
+
+    @Test
+    void aRowLabelThatNamesARateStillCuesPercent() {
+        assertThat(LayerBAmountSupport.classifyKind("BEP%", null, "37.85", true))
+                .isEqualTo(NumericKind.PERCENT);
+        assertThat(LayerBAmountSupport.classifyKind("% of PAT", null, "12.50", true))
+                .isEqualTo(NumericKind.PERCENT);
+        assertThat(LayerBAmountSupport.classifyKind("GST %", null, "18.00", true))
+                .isEqualTo(NumericKind.PERCENT);
+    }
+
+    @Test
+    void aTotalDepreciationOfYearRowIsMoneyNotQuantity() {
+        assertThat(LayerBAmountSupport.classifyKind(
+                "TOTAL DEP. OF THE YEAR", null, "452.19", true))
+                .isEqualTo(NumericKind.MONEY);
+    }
 }

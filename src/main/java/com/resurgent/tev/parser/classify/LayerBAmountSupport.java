@@ -23,7 +23,8 @@ final class LayerBAmountSupport {
     private static final Pattern MONEY_TOKEN = Pattern.compile(
             "(?i)(?:\\brs\\.?\\b|\\binr\\b|₹|\\$|€|£|amount|cost|price|value|fee|payment|"
                     + "capex|opex|expense|outlay|investment|lac|lakh|crore|less\\s*:|"
-                    + "total\\s+cost|project\\s+cost|means\\s+of\\s+finance)");
+                    + "total\\s+cost|project\\s+cost|means\\s+of\\s+finance|"
+                    + "depreciation|\\bdep\\.?\\b)");
     private static final Pattern QUANTITY_TOKEN = Pattern.compile(
             "(?i)(?:\\bno\\.?\\s*of\\b|\\bnumber\\s+of\\b|\\bqty\\b|\\bquantity\\b|\\bnos\\.?\\b|"
                     + "\\bunits?\\b|\\brooms?\\b|\\bkeys\\b|\\bbeds?\\b|\\bdays?\\b|"
@@ -44,6 +45,12 @@ final class LayerBAmountSupport {
     private static final Pattern PERCENT_TOKEN = Pattern.compile(
             "(?i)(?:%|\\bpercent\\b|\\bgst\\b|\\bvat\\b|\\binterest\\b|\\buplift\\b|"
                     + "\\bmargin\\b\\s*%|\\b contingency\\b)");
+    /**
+     * A numeric rate quoted inside a row label ("Less: Depreciation @ 10 %",
+     * "Other Sales 2.5% of Total"). It says how the row was computed, not what the
+     * row's own numbers are, so it never cues percent.
+     */
+    private static final Pattern RATE_IN_LABEL = Pattern.compile("\\d+(?:\\.\\d+)?\\s*%");
 
     private LayerBAmountSupport() {}
 
@@ -120,7 +127,13 @@ final class LayerBAmountSupport {
         String cueLabel = isPeriodHeader(label) ? "" : label;
         String haystack = (cueLabel + " " + cueHeader + " " + display).toLowerCase(Locale.ROOT);
 
-        if (display.contains("%") || PERCENT_TOKEN.matcher(haystack).find()) {
+        // A percent cue may come only from the cell's own display, its number format
+        // (applied by the caller), the column header, or a row label that names a
+        // rate rather than carrying one. "Less: Depreciation @ 10 %" is a money line
+        // that quotes its rate; stripping the quoted rate leaves the row's own cues.
+        String percentCue = (stripRateInLabel(cueLabel) + " " + cueHeader + " " + display)
+                .toLowerCase(Locale.ROOT);
+        if (display.contains("%") || PERCENT_TOKEN.matcher(percentCue).find()) {
             return NumericKind.PERCENT;
         }
         if (RATE_TOKEN.matcher(haystack).find()) {
@@ -156,6 +169,11 @@ final class LayerBAmountSupport {
             return false;
         }
         return PERIOD_HEADER.matcher(text.trim()).matches();
+    }
+
+    /** A row label with any quoted numeric rate removed, so it cannot cue percent. */
+    private static String stripRateInLabel(String label) {
+        return RATE_IN_LABEL.matcher(label).replaceAll(" ");
     }
 
     /**

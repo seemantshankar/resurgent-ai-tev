@@ -25,6 +25,30 @@ class CellMeaningServiceTest {
     Path tempDir;
 
     @Test
+    void lookupFindsOmArhamStyleSheetWhenTabNameHasTrailingSpace() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("P  L ");
+            Row row = sheet.createRow(0);
+            row.createCell(0).setCellValue("Insurance");
+            row.createCell(9).setCellValue(12.0);
+            xlsx = tempDir.resolve("pl-trailing-space.xlsx");
+            try (FileOutputStream out = new FileOutputStream(xlsx.toFile())) {
+                workbook.write(out);
+            }
+        }
+        Path db = tempDir.resolve("pl-trailing-space.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        CellMeaningService meanings = new CellMeaningService();
+        CellMeaning fromConcat = meanings.lookup(db, ingest.parseRunId(), "P  L !J1");
+        assertThat(fromConcat.cell().coord()).isEqualTo("J1");
+        CellMeaning fromQuoted = meanings.lookup(db, ingest.parseRunId(), "'P  L '!J1");
+        assertThat(fromQuoted.cell().coord()).isEqualTo("J1");
+    }
+
+    @Test
     void lookupReturnsStructureLayerABindingPeersAndFacts() throws Exception {
         Path xlsx = writeRolesWorkbook(tempDir);
         Path db = tempDir.resolve("meaning.db");

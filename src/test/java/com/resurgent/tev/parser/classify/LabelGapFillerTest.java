@@ -24,15 +24,19 @@ class LabelGapFillerTest {
             List.of(), List.of(), null);
 
     private static PacketCell amount(long cellId, String coord, String value) {
+        return amount(cellId, 9L, coord, value);
+    }
+
+    private static PacketCell amount(long cellId, long worksheetId, String coord, String value) {
         return new PacketCell(
-                cellId, 9L, coord, 2, 2, PacketCell.ROLE_CORE, "number",
+                cellId, worksheetId, coord, 2, 2, PacketCell.ROLE_CORE, "number",
                 null, value, value, null, false, false);
     }
 
     private static LabelGapFiller.Queued queued(String label, long candidateId, String coord) {
         PacketCell cell = amount(candidateId * 100, coord, "10");
         return new LabelGapFiller.Queued(
-                new QualifiedLabel("Project Cost", label),
+                new QualifiedLabel(9L, "Project Cost", label),
                 cell,
                 LabelGapFiller.labelCellFor(cell, label),
                 candidateId,
@@ -46,7 +50,7 @@ class LabelGapFillerTest {
 
         new LabelGapFiller(llm).fill(
                 List.of(new LabelGapFiller.Queued(
-                        new QualifiedLabel("Project Cost", "Civil Works"),
+                        new QualifiedLabel(9L, "Project Cost", "Civil Works"),
                         live,
                         LabelGapFiller.labelCellFor(live, "Civil Works"),
                         40L,
@@ -94,7 +98,7 @@ class LabelGapFillerTest {
         for (int i = 0; i < 5; i++) {
             PacketCell cell = amount(i + 1, "B" + (i + 2), "10");
             queued.add(new LabelGapFiller.Queued(
-                    new QualifiedLabel("Project Cost", "Civil Works"),
+                    new QualifiedLabel(9L, "Project Cost", "Civil Works"),
                     cell,
                     LabelGapFiller.labelCellFor(cell, "Civil Works"),
                         40L,
@@ -107,7 +111,38 @@ class LabelGapFillerTest {
                 .as("five cells, one label, one question")
                 .hasSize(1);
         assertThat(answers).hasSize(1);
-        assertThat(answers).containsKey("project cost > civil works");
+        assertThat(answers).containsKey("9|project cost > civil works");
+    }
+
+    @Test
+    void theSameLabelOnTwoWorksheetsIsAskedOncePerWorksheet() {
+        ClassifyServiceTest.FakeClassifierLlm llm = new ClassifyServiceTest.FakeClassifierLlm();
+
+        PacketCell caseOne = amount(1L, 9L, "B2", "10");
+        PacketCell caseTwo = amount(2L, 10L, "B2", "10");
+        new LabelGapFiller(llm).fill(
+                List.of(
+                        new LabelGapFiller.Queued(
+                                new QualifiedLabel(9L, "Project Cost", "Civil Works"),
+                                caseOne,
+                                LabelGapFiller.labelCellFor(caseOne, "Civil Works"),
+                                40L,
+                                1L),
+                        new LabelGapFiller.Queued(
+                                new QualifiedLabel(10L, "Project Cost", "Civil Works"),
+                                caseTwo,
+                                LabelGapFiller.labelCellFor(caseTwo, "Civil Works"),
+                                41L,
+                                1L)),
+                SLICE,
+                LAYER_A);
+
+        assertThat(llm.layerBPrompts)
+                .as("Case I and Case II sheets repeat a label for different lines")
+                .hasSize(2);
+        assertThat(llm.layerBPrompts)
+                .extracting(prompt -> prompt.packet().worksheetId())
+                .containsExactlyInAnyOrder(9L, 10L);
     }
 
     @Test

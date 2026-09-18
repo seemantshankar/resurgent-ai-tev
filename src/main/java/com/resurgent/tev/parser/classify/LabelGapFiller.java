@@ -12,13 +12,16 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Asks the model once per distinct qualified label, not once per cell.
+ * Asks the model once per distinct worksheet-scoped qualified label, not once per
+ * cell.
  *
- * <p>The answer cache is request-scoped and keyed on the label alone, so two cells
- * carrying the same label can no longer be given different paths — divergence today
- * runs exactly along candidate, chunk, column and coordinate, which the key
- * excludes. The graph is what gets persisted; this cache is not, and a run is
- * reproducible because the graph is.
+ * <p>The answer cache is request-scoped and keyed on the label, so two cells
+ * carrying the same label on the same worksheet can no longer be given different
+ * paths — divergence today runs exactly along candidate, chunk, column and
+ * coordinate, which the key excludes (ADR 0019). The worksheet stays in the key
+ * (ADR 0021): Case I / Case II sheets repeat labels for different lines, and the
+ * synthesised Packet is built from a representative cell, so its worksheetId must
+ * be the sheet the question is actually about.
  *
  * <p>Labels are sorted and partitioned by index, so a label lands in exactly one
  * batch however the batches fall. Each batch is then grouped by Candidate and sent
@@ -151,12 +154,5 @@ final class LabelGapFiller {
 
     private static String labelCoord(PacketCell amount) {
         return "LBL" + amount.rowNum() + "_" + amount.colNum();
-    }
-
-    /** Normalised label key, so callers and the cache agree on identity. */
-    static String keyOf(String groupLabel, String memberLabel) {
-        return new QualifiedLabel(
-                groupLabel == null ? "" : OntologySlice.normalize(groupLabel),
-                memberLabel == null ? "" : OntologySlice.normalize(memberLabel)).key();
     }
 }
