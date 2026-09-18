@@ -126,6 +126,24 @@ class LayerBAmountSupportTest {
     }
 
     @Test
+    void aMonetaryColumnHeaderTypesMoneyWhenTheRowLabelGivesNoCue() {
+        Packet packet = new Packet(1L, 1L, 1L, "child", List.of(
+                new PacketCell(1L, 1L, "B1", 1, 2, PacketCell.ROLE_CONTEXT, "string",
+                        "Amount", "Amount", null, null, false, false),
+                new PacketCell(2L, 1L, "B2", 2, 2, PacketCell.ROLE_CORE, "number",
+                        null, "500", "500", null, false, false)),
+                List.of(), true);
+
+        PacketCell amount = packet.cells().get(1);
+
+        assertThat(LayerBAmountSupport.resolveRowLabel(packet, amount)).isEmpty();
+        assertThat(LayerBAmountSupport.classifyKind(packet, amount))
+                .as("no money row label, but the monetary column header must still cue money")
+                .isEqualTo(NumericKind.MONEY);
+        assertThat(LayerBAmountSupport.isBindableForRole(packet, amount, AmountRole.ADD)).isTrue();
+    }
+
+    @Test
     void resolveRowLabelDoesNotFallBackToTheCoord() {
         Packet packet = new Packet(1L, 1L, 1L, "child", List.of(
                 new PacketCell(1L, 1L, "J45", 45, 10, PacketCell.ROLE_CORE, "number",

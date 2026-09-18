@@ -157,6 +157,25 @@ class CellGraphBuilderTest {
     }
 
     @Test
+    void aRangeLargerThanTheScanCapIsRecordedAsABarrierNotPartialEvidence() {
+        literal("A1", 1, 1, "10");
+        literal("A300", 300, 1, "30");
+        long head = formula("B1", 1, 2, "=SUM(A1:A300)", "9999");
+        edge(head, 0, "A1:A300");
+
+        CellGraph graph = build();
+
+        assertThat(graph.dependenciesOf(head))
+                .as("a range too large to scan in full must not pass as complete evidence")
+                .singleElement()
+                .satisfies(dependency -> {
+                    assertThat(dependency.isBarrier()).isTrue();
+                    assertThat(dependency.barrier()).isEqualTo(UnboundReason.RANGE_TRUNCATED);
+                });
+        assertThat(graph.aggregationHeadedBy(head)).isEmpty();
+    }
+
+    @Test
     void aPlusMinusChainYieldsAddForSummandsAndDeductForSubtractedTerms() {
         long revenue = literal("B2", 2, 2, "100");
         long cost = literal("B3", 3, 2, "40");
@@ -172,6 +191,20 @@ class CellGraphBuilderTest {
                 .containsExactly(
                         org.assertj.core.api.Assertions.tuple(revenue, AmountRole.ADD),
                         org.assertj.core.api.Assertions.tuple(cost, AmountRole.DEDUCT));
+    }
+
+    @Test
+    void aFormulaSummingTheSameCellTwiceIsAPassThroughNotAnAggregation() {
+        long revenue = literal("B2", 2, 2, "100");
+        long head = formula("B3", 3, 2, "=B2+B2", "200");
+        edge(head, 0, "B2");
+        edge(head, 1, "B2");
+
+        CellGraph graph = build();
+
+        assertThat(graph.aggregationHeadedBy(head))
+                .as("one distinct cell counted twice is a pass-through, not a group")
+                .isEmpty();
     }
 
     @Test

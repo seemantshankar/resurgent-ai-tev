@@ -454,6 +454,75 @@ class OpenRouterClassifierLlmTest {
     }
 
     @Test
+    void retriesConnectionResetThenSucceeds() {
+        AtomicInteger calls = new AtomicInteger();
+        List<Duration> sleeps = new ArrayList<>();
+        OpenRouterClassifierLlm.HttpCompletionsClient client =
+                new OpenRouterClassifierLlm.HttpCompletionsClient(
+                        "key",
+                        "model",
+                        OpenRouterClassifierLlm.DEFAULT_URL,
+                        body -> {
+                            if (calls.incrementAndGet() == 1) {
+                                throw new java.io.IOException("Connection reset");
+                            }
+                            return new OpenRouterClassifierLlm.ExchangeResponse(
+                                    200,
+                                    "{\"choices\":[{\"message\":{\"content\":"
+                                            + "\"{\\\"scheduleFamily\\\":\\\"assumptions\\\","
+                                            + "\\\"triage\\\":\\\"main\\\","
+                                            + "\\\"relevance\\\":\\\"supporting\\\","
+                                            + "\\\"rowLabels\\\":[],\\\"columnHeaders\\\":[],"
+                                            + "\\\"packetDefaultHead\\\":null}\"}}]}",
+                                    Optional.empty());
+                        },
+                        sleeps::add);
+
+        String content = client.complete("system", "user");
+        assertThat(calls.get()).isEqualTo(2);
+        assertThat(sleeps).isNotEmpty();
+        assertThat(content).contains("assumptions");
+    }
+
+    @Test
+    void retriesNullMessageContentThenSucceeds() {
+        AtomicInteger calls = new AtomicInteger();
+        List<Duration> sleeps = new ArrayList<>();
+        OpenRouterClassifierLlm.HttpCompletionsClient client =
+                new OpenRouterClassifierLlm.HttpCompletionsClient(
+                        "key",
+                        "model",
+                        OpenRouterClassifierLlm.DEFAULT_URL,
+                        body -> {
+                            if (calls.incrementAndGet() == 1) {
+                                return new OpenRouterClassifierLlm.ExchangeResponse(
+                                        200,
+                                        "{\"choices\":[{\"finish_reason\":\"stop\","
+                                                + "\"message\":{\"role\":\"assistant\","
+                                                + "\"content\":null,\"refusal\":null}}],"
+                                                + "\"usage\":{\"prompt_tokens\":10,"
+                                                + "\"completion_tokens\":5}}",
+                                        Optional.empty());
+                            }
+                            return new OpenRouterClassifierLlm.ExchangeResponse(
+                                    200,
+                                    "{\"choices\":[{\"message\":{\"content\":"
+                                            + "\"{\\\"scheduleFamily\\\":\\\"assumptions\\\","
+                                            + "\\\"triage\\\":\\\"main\\\","
+                                            + "\\\"relevance\\\":\\\"supporting\\\","
+                                            + "\\\"rowLabels\\\":[],\\\"columnHeaders\\\":[],"
+                                            + "\\\"packetDefaultHead\\\":null}\"}}]}",
+                                    Optional.empty());
+                        },
+                        sleeps::add);
+
+        String content = client.complete("system", "user");
+        assertThat(calls.get()).isEqualTo(2);
+        assertThat(sleeps).isNotEmpty();
+        assertThat(content).contains("assumptions");
+    }
+
+    @Test
     void doesNotRetryInterruptedHttpSend() {
         AtomicInteger calls = new AtomicInteger();
         OpenRouterClassifierLlm.HttpCompletionsClient client =

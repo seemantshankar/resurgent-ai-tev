@@ -14,6 +14,8 @@ import java.io.FileOutputStream;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -792,6 +794,7 @@ class ClassifyServiceTest {
         new DiscoverService().discover(db, ingest.parseRunId());
 
         FakeClassifierLlm llm = new FakeClassifierLlm();
+        Set<Long> formulaCellIds = ConcurrentHashMap.newKeySet();
         llm.layerBFactory = prompt -> {
             PacketCell formula = prompt.packet().cells().stream()
                     .filter(cell -> cell.formulaText() != null && !cell.formulaText().isBlank())
@@ -800,6 +803,7 @@ class ClassifyServiceTest {
             if (formula == null) {
                 return List.of();
             }
+            formulaCellIds.add(formula.cellId());
             return List.of(
                     new LayerBLineJudgment(
                             formula.coord(), "Total",
@@ -814,12 +818,21 @@ class ClassifyServiceTest {
         ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
         assertThat(llm.layerBPrompts).isNotEmpty();
         assertThat(summary.layerBStats().proposed()).isGreaterThanOrEqualTo(1);
+        assertThat(formulaCellIds).isNotEmpty();
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
             var bindings = repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId());
             assertThat(bindings)
                     .as("being a formula is no longer a reason to refuse a role")
                     .isNotEmpty();
+            assertThat(bindings)
+                    .as("a formula the LLM judged bindable gets the proposed path, not a refusal;"
+                            + " its role still comes from the graph, which is why it is total"
+                            + " below, not the add the judgment proposed")
+                    .filteredOn(b -> formulaCellIds.contains(b.cellId()))
+                    .isNotEmpty()
+                    .allSatisfy(b -> assertThat(b.path())
+                            .isEqualTo("Project Cost > Civil Works > Structure"));
             var totals = repo.selectAggregationsForParseRun(ingest.parseRunId());
             assertThat(totals)
                     .as("B1+B2+B3 and F1+F2+F3 are the rollups, and the graph knows it")

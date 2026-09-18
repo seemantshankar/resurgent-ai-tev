@@ -106,8 +106,9 @@ final class LayerBAmountSupport {
             return NumericKind.UNKNOWN;
         }
         String label = packet == null ? "" : resolveRowLabel(packet, cell);
+        String header = packet == null ? "" : resolveColumnHeader(packet, cell);
         String display = cell.displayValue() == null ? "" : cell.displayValue();
-        return classifyKind(label, null, display, packet != null);
+        return classifyKind(label, header, display, packet != null);
     }
 
     /**

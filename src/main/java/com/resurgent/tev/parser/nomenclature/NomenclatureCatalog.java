@@ -90,12 +90,115 @@ public final class NomenclatureCatalog {
     /** Counts from one overlay purge. */
     public record SoftLeafPurge(long nodesDeleted, long aliasesDeleted) {}
 
+    /**
+     * The soft-leaf paths {@link #purgeOrphanSoftLeaves} would delete for this
+     * mandate, without deleting them yet. A classify run excludes these from the
+     * slice it reads so an orphan is never offered back as a selectable path, but
+     * defers the actual delete to its own write transaction: deleting ahead of that
+     * transaction, then rolling it back, would leave bindings that used to justify
+     * a still-live leaf pointing at a path already gone.
+     */
+    public Set<String> orphanSoftLeafPaths(long mandateId, Long reclassifiedParseRunId) {
+        try {
+            return repo.selectOrphanMandateSoftLeafPaths(mandateId, reclassifiedParseRunId);
+        } catch (SQLException e) {
+            throw new NomenclatureException(
+                    "failed to find orphan soft leaves for mandate " + mandateId, e);
+        }
+    }
+
+    /** A slice with every node and alias under {@code excludedPaths} removed. */
+    public OntologySlice withoutPaths(OntologySlice slice, Set<String> excludedPaths) {
+        if (excludedPaths.isEmpty()) {
+            return slice;
+        }
+        List<NomenclatureNode> nodes = new ArrayList<>();
+        for (NomenclatureNode node : slice.nodes()) {
+            if (!excludedPaths.contains(node.path())) {
+                nodes.add(node);
+            }
+        }
+        List<NomenclatureAlias> aliases = new ArrayList<>();
+        for (NomenclatureAlias alias : slice.aliases()) {
+            if (!excludedPaths.contains(alias.leafPath())) {
+                aliases.add(alias);
+            }
+        }
+        return new OntologySlice(
+                slice.industry(), List.copyOf(nodes), List.copyOf(aliases), slice.projectFactFields());
+    }
+
     public void putSoftLeaf(long mandateId, String parentPath, String leafName,
             List<String> aliases) {
+        OntologySlice current = sliceForMandate(mandateId);
+        ValidatedLeaf validated = validateNewLeaf(current, mandateId, parentPath, leafName, aliases);
+        try {
+            inTransaction(() -> {
+                String now = Timestamps.now();
+                repo.insertNomenclatureNode(validated.node(), now);
+                for (NomenclatureAlias alias : validated.aliasRows()) {
+                    repo.insertNomenclatureAlias(
+                            alias, NomenclatureNode.LAYER_MANDATE_SOFT, null, mandateId, now);
+                }
+            });
+        } catch (SQLException e) {
+            throw new NomenclatureException(
+                    "failed to store soft leaf '" + validated.path() + "' for mandate " + mandateId, e);
+        }
+    }
+
+    /** A soft leaf minted during classify but not yet persisted. */
+    public record PendingSoftLeaf(NomenclatureNode node, List<NomenclatureAlias> aliases) {}
+
+    /** The slice extended with a newly staged soft leaf, and the leaf itself. */
+    public record StagedSoftLeaf(OntologySlice slice, PendingSoftLeaf pending) {}
+
+    /**
+     * Validates a new soft leaf and returns the slice extended with it in memory,
+     * without writing to the database. A soft leaf minted mid-classify must not
+     * commit ahead of the bindings that justify it: if the run's write transaction
+     * later rolls back, an already-committed leaf would sit in the mandate's
+     * overlay with no binding behind it, then be offered right back as a
+     * selectable path next run. {@link #persistPendingSoftLeaves} writes it for
+     * real once the caller knows the run will commit.
+     */
+    public StagedSoftLeaf stagePendingSoftLeaf(OntologySlice current, long mandateId,
+            String parentPath, String leafName, List<String> aliases) {
+        ValidatedLeaf validated = validateNewLeaf(current, mandateId, parentPath, leafName, aliases);
+        List<NomenclatureNode> nodes = new ArrayList<>(current.nodes());
+        nodes.add(validated.node());
+        List<NomenclatureAlias> allAliases = new ArrayList<>(current.aliases());
+        allAliases.addAll(validated.aliasRows());
+        OntologySlice extended = new OntologySlice(
+                current.industry(), List.copyOf(nodes), List.copyOf(allAliases),
+                current.projectFactFields());
+        return new StagedSoftLeaf(
+                extended, new PendingSoftLeaf(validated.node(), validated.aliasRows()));
+    }
+
+    /**
+     * Writes soft leaves staged with {@link #stagePendingSoftLeaf} using the
+     * caller's own connection and transaction, so they land atomically with the
+     * bindings that name them.
+     */
+    public void persistPendingSoftLeaves(List<PendingSoftLeaf> pending) throws SQLException {
+        String now = Timestamps.now();
+        for (PendingSoftLeaf leaf : pending) {
+            repo.insertNomenclatureNode(leaf.node(), now);
+            for (NomenclatureAlias alias : leaf.aliases()) {
+                repo.insertNomenclatureAlias(
+                        alias, NomenclatureNode.LAYER_MANDATE_SOFT, null, leaf.node().mandateId(), now);
+            }
+        }
+    }
+
+    private record ValidatedLeaf(String path, NomenclatureNode node, List<NomenclatureAlias> aliasRows) {}
+
+    private static ValidatedLeaf validateNewLeaf(OntologySlice current, long mandateId,
+            String parentPath, String leafName, List<String> aliases) {
         Objects.requireNonNull(parentPath, "parentPath");
         Objects.requireNonNull(leafName, "leafName");
         List<String> aliasTexts = aliases == null ? List.of() : aliases;
-        OntologySlice current = sliceForMandate(mandateId);
         NomenclatureNode parent = current.node(parentPath).orElse(null);
         if (parent == null || parent.leaf()) {
             throw new NomenclatureException(
@@ -107,6 +210,7 @@ public final class NomenclatureCatalog {
             throw new NomenclatureException(
                     "soft leaf path already exists in the ontology slice: '" + path + "'");
         }
+        List<NomenclatureAlias> aliasRows = new ArrayList<>();
         for (String aliasText : aliasTexts) {
             if (aliasText == null || aliasText.isBlank()) {
                 continue;
@@ -116,35 +220,12 @@ public final class NomenclatureCatalog {
                 throw new NomenclatureException(
                         "alias '" + aliasText + "' already maps to '" + bound.get() + "'");
             }
+            aliasRows.add(new NomenclatureAlias(aliasText, path));
         }
-        try {
-            inTransaction(() -> {
-                String now = Timestamps.now();
-                repo.insertNomenclatureNode(new NomenclatureNode(
-                        path,
-                        leafName,
-                        parentPath,
-                        NomenclatureNode.LAYER_MANDATE_SOFT,
-                        false,
-                        true,
-                        null,
-                        mandateId), now);
-                for (String aliasText : aliasTexts) {
-                    if (aliasText == null || aliasText.isBlank()) {
-                        continue;
-                    }
-                    repo.insertNomenclatureAlias(
-                            new NomenclatureAlias(aliasText, path),
-                            NomenclatureNode.LAYER_MANDATE_SOFT,
-                            null,
-                            mandateId,
-                            now);
-                }
-            });
-        } catch (SQLException e) {
-            throw new NomenclatureException(
-                    "failed to store soft leaf '" + path + "' for mandate " + mandateId, e);
-        }
+        NomenclatureNode node = new NomenclatureNode(
+                path, leafName, parentPath, NomenclatureNode.LAYER_MANDATE_SOFT,
+                false, true, null, mandateId);
+        return new ValidatedLeaf(path, node, aliasRows);
     }
 
     private IndustryResolution resolveIndustry(long mandateId, String industryHint)

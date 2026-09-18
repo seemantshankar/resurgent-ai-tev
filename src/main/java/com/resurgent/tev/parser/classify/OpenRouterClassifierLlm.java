@@ -64,11 +64,15 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
                 LayerAJudgment judgment = LayerAResponseParser.parse(retry.content());
                 recordMetric("A", user, retry, started, 2);
                 return judgment;
-            } catch (RuntimeException second) {
+            } catch (TruncatedCompletionException second) {
                 recordMetric("A", user, retry, started, 2);
                 throw new TruncatedCompletionException(
                         "OpenRouter Layer A truncated/invalid after retry: " + second.getMessage(),
                         second);
+            } catch (RuntimeException second) {
+                recordMetric("A", user, retry, started, 2);
+                throw new IllegalStateException(
+                        "OpenRouter Layer A invalid after retry: " + second.getMessage(), second);
             }
         } catch (RuntimeException firstError) {
             CompletionResult retry = client.completeDetailed(
@@ -364,6 +368,13 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
         private static final ObjectMapper MAPPER = new ObjectMapper();
         static final int MAX_ATTEMPTS = 4;
         static final Duration MAX_BACKOFF = Duration.ofSeconds(30);
+
+        /** Provider returned a 2xx body whose message content is empty or null. */
+        static final class NoMessageContentException extends RuntimeException {
+            NoMessageContentException(String message) {
+                super(message);
+            }
+        }
         /**
          * Per-send HTTP budget. Must stay shorter than
          * {@link ClassifyLimits#DEFAULT_ATTEMPT_DEADLINE} so a stalled TCP read
@@ -545,6 +556,9 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
                 if (cursor instanceof InterruptedException) {
                     return false;
                 }
+                if (cursor instanceof NoMessageContentException) {
+                    return true;
+                }
                 if (cursor instanceof HttpTimeoutException
                         || cursor instanceof java.net.SocketTimeoutException) {
                     return true;
@@ -553,7 +567,12 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
                     String message = cursor.getMessage();
                     if (message != null) {
                         String lower = message.toLowerCase(Locale.ROOT);
-                        if (lower.contains("timed out") || lower.contains("timeout")) {
+                        if (lower.contains("timed out")
+                                || lower.contains("timeout")
+                                || lower.contains("reset")
+                                || lower.contains("broken pipe")
+                                || lower.contains("eof")
+                                || lower.contains("refused")) {
                             return true;
                         }
                     }
@@ -808,7 +827,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
                 if (truncated) {
                     text = "{}";
                 } else {
-                    throw new IllegalStateException(
+                    throw new NoMessageContentException(
                             "OpenRouter response had no message content "
                                     + snippet(responseJson));
                 }

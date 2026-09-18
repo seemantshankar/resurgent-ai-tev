@@ -27,9 +27,11 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * JDBC repository for FM Loader ingest, region discovery, the nomenclature
@@ -1216,6 +1218,33 @@ public final class WorkspaceRepository {
     }
 
     /**
+     * The soft-leaf paths {@link #deleteOrphanMandateSoftLeaves} would delete, without
+     * deleting them. A classify run reads this before it writes anything, so the
+     * prompt slice can exclude an orphan leaf without the delete itself racing ahead
+     * of the run's own write transaction.
+     */
+    public Set<String> selectOrphanMandateSoftLeafPaths(long mandateId, Long excludedParseRunId)
+            throws SQLException {
+        String sql = "SELECT path FROM nomenclature_node"
+                + " WHERE layer = 'mandate_soft' AND mandate_id = ?"
+                + " AND path NOT IN (SELECT path FROM nomenclature_binding"
+                + (excludedParseRunId == null ? "" : " WHERE parse_run_id <> ?") + ")";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setLong(1, mandateId);
+            if (excludedParseRunId != null) {
+                ps.setLong(2, excludedParseRunId);
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                Set<String> paths = new HashSet<>();
+                while (rs.next()) {
+                    paths.add(rs.getString("path"));
+                }
+                return paths;
+            }
+        }
+    }
+
+    /**
      * Delete this mandate's soft leaves that no surviving binding references, then the
      * soft aliases left pointing at nothing. Bindings of {@code excludedParseRunId}
      * do not count as surviving: that run is being reclassified, so keeping its
@@ -1938,13 +1967,28 @@ public final class WorkspaceRepository {
     }
 
     public double sumAddAmountsForPath(long parseRunId, String path) throws SQLException {
+        // cell.numeric_value is the raw worksheet magnitude; cell_type.scale is the
+        // base-unit multiplier a bound cell was typed at (ADR: money and its scale
+        // sit in one block). A leaf can bind figures at different scales (rupees
+        // next to lakhs), so the rollup must normalize before summing rather than
+        // add raw magnitudes together.
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT COALESCE(SUM(c.numeric_value), 0) AS total"
+                "SELECT COALESCE(SUM(c.numeric_value * CASE COALESCE(t.scale, 'unit')"
+                        + "     WHEN 'unit' THEN 1"
+                        + "     WHEN 'thousand' THEN 1000"
+                        + "     WHEN 'lakh' THEN 100000"
+                        + "     WHEN 'million' THEN 1000000"
+                        + "     WHEN 'crore' THEN 10000000"
+                        + "     WHEN 'billion' THEN 1000000000"
+                        + "     ELSE 1 END), 0) AS total"
                         + " FROM nomenclature_binding b"
                         + " JOIN cell c ON c.cell_id = b.cell_id"
                         + " JOIN packet_disposition d"
                         + "   ON d.parse_run_id = b.parse_run_id"
                         + "  AND d.candidate_id = b.candidate_id"
+                        + " LEFT JOIN cell_type t"
+                        + "   ON t.parse_run_id = b.parse_run_id"
+                        + "  AND t.cell_id = b.cell_id"
                         + " WHERE b.parse_run_id = ? AND b.path = ? AND b.amount_role = 'add'"
                         + "   AND d.relevance != 'noise'")) {
             ps.setLong(1, parseRunId);

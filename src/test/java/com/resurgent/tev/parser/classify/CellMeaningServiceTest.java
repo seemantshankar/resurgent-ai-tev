@@ -93,7 +93,7 @@ class CellMeaningServiceTest {
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
             deductBinding = repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()).stream()
-                    .filter(b -> b.verbatim() != null && b.verbatim().toLowerCase().contains("ac"))
+                    .filter(b -> AmountRole.DEDUCT.equals(b.amountRole()))
                     .findFirst()
                     .orElseThrow();
         }

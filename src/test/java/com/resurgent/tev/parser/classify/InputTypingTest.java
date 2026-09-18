@@ -76,6 +76,15 @@ class InputTypingTest {
     }
 
     @Test
+    void aCommaFormattedDisplayValueDoesNotImplyThousandScale() {
+        GraphCell cell = new GraphCell(
+                1L, 9L, "B2", 2, 2, null, true, false,
+                "Building", "1,000", "1,000", "number", "General");
+
+        assertThat(InputTyping.scaleOf(cell)).isEqualTo(CellScale.UNIT);
+    }
+
+    @Test
     void aTotalDepreciationOfYearLabelTypesMoneyNotQuantity() {
         GraphCell cell = new GraphCell(
                 1L, 9L, "J57", 57, 10, null, true, false,

@@ -69,7 +69,7 @@ A head cell whose formula sums or nets its members, with membership read from th
 _Avoid_: total row, section, cost-head rollup, trusted total
 
 **Unbound reason**:
-Why a numeric cell carries no binding: `untypable`, `external_dependency`, `broken_dependency`, `no_label`, `ambiguous_label`, `kind_conflict`, `scale_conflict`, `non_money_group`, `driver_only`, `cycle`, `llm_declined`, `llm_unavailable`. Enumerated in code and pinned by a unit test, not by a database CHECK. A principled boundary, not an accumulating pile of exceptions.
+Why a numeric cell carries no binding: `untypable`, `external_dependency`, `broken_dependency`, `range_truncated`, `no_label`, `ambiguous_label`, `kind_conflict`, `scale_conflict`, `non_money_group`, `driver_only`, `cycle`, `llm_declined`, `llm_unavailable`. Enumerated in code and pinned by a unit test, not by a database CHECK. A principled boundary, not an accumulating pile of exceptions.
 _Avoid_: error, failure, skipped
 
 **Binding source**:

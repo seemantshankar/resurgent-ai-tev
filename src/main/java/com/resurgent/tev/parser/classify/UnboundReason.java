@@ -18,6 +18,8 @@ public enum UnboundReason {
     EXTERNAL_DEPENDENCY,
     /** The chain runs through a #REF! or an otherwise unresolvable reference. */
     BROKEN_DEPENDENCY,
+    /** A SUM range exceeds the cell-scan cap, so its evidence is incomplete. */
+    RANGE_TRUNCATED,
     /** Nothing to the left on the row names this cell. */
     NO_LABEL,
     /** The label names more than one catalog path. */

@@ -120,9 +120,13 @@ public final class ClassifyService {
             long mandateId = repo.selectParseRunMandateId(parseRunId);
             NomenclatureCatalog catalog = new NomenclatureCatalog(repo);
             // Cut the overlay feedback loop before the slice is read: a soft leaf this
-            // run invented last time must not be offered back as a selectable path.
-            catalog.purgeOrphanSoftLeaves(mandateId, parseRunId);
-            OntologySlice slice = catalog.sliceForMandate(mandateId);
+            // run invented last time must not be offered back as a selectable path. The
+            // paths are only excluded from the slice here; the delete itself waits for
+            // the write transaction below, so a run that never commits cannot orphan the
+            // bindings that still justify a leaf.
+            Set<String> orphanSoftLeafPaths = catalog.orphanSoftLeafPaths(mandateId, parseRunId);
+            OntologySlice slice = catalog.withoutPaths(
+                    catalog.sliceForMandate(mandateId), orphanSoftLeafPaths);
             List<CandidateRow> candidates = repo.selectCandidatesForParseRun(parseRunId);
             if (candidates.isEmpty()) {
                 throw new ClassifyException("no Candidates for parse run " + parseRunId
@@ -145,7 +149,8 @@ public final class ClassifyService {
                 prepared.add(new PreparedPacket(candidate, packet, redacted, cheapPass));
             }
 
-            LlmPhaseResult llmPhase = runLlmPhase(slice, parseRunId, prepared);
+            long classifyDeadlineNanos = System.nanoTime() + limits.classifyDeadline().toNanos();
+            LlmPhaseResult llmPhase = runLlmPhase(slice, parseRunId, prepared, classifyDeadlineNanos);
             LayerBBindingStats layerBStats = new LayerBBindingStats();
 
             List<PacketDisposition> dispositions = llmPhase.dispositions();
@@ -164,7 +169,7 @@ public final class ClassifyService {
                     parseRunId, graph, cellTypes, slice, candidateByCell, Set.of());
             GapFillResult gapFill = fillLabelGaps(
                     catalog, mandateId, slice, parseRunId, graph, deterministic,
-                    llmPhase.layerA(), layerBStats);
+                    llmPhase.layerA(), layerBStats, classifyDeadlineNanos);
             for (String failure : gapFill.failures()) {
                 layerBStats.addFailedCall(failure);
             }
@@ -179,6 +184,11 @@ public final class ClassifyService {
                             "Candidates changed during classify for parse run " + parseRunId
                                     + "; re-run discover then classify");
                 }
+                // Soft leaves gap fill staged in memory land now, atomically with the
+                // bindings that name them; the earlier orphan purge only excluded paths
+                // from the slice, so the delete itself happens here too.
+                catalog.persistPendingSoftLeaves(gapFill.pendingSoftLeaves());
+                repo.deleteOrphanMandateSoftLeaves(mandateId, parseRunId);
                 repo.deleteBindingPeersForParseRun(parseRunId);
                 repo.deleteProjectFactBindingsForParseRun(parseRunId);
                 repo.deleteNomenclatureBindingsForParseRun(parseRunId);
@@ -336,9 +346,8 @@ public final class ClassifyService {
     }
 
     private LlmPhaseResult runLlmPhase(
-            OntologySlice slice, long parseRunId, List<PreparedPacket> prepared)
+            OntologySlice slice, long parseRunId, List<PreparedPacket> prepared, long deadlineNanos)
             throws ClassifyException {
-        long deadlineNanos = System.nanoTime() + limits.classifyDeadline().toNanos();
         Map<Long, LayerAJudgment> judged = new ConcurrentHashMap<>();
         Map<Long, LayerAJudgment> coverageByWorksheet = new ConcurrentHashMap<>();
         Map<Long, PacketDisposition> dispositions = new ConcurrentHashMap<>();
@@ -530,13 +539,19 @@ public final class ClassifyService {
     private record MaterializeResult(
             NomenclatureBinding binding,
             String rejectReason,
-            LeafSelectionOutcome leafSelection) {
-        static MaterializeResult ok(NomenclatureBinding binding, LeafSelectionOutcome leafSelection) {
-            return new MaterializeResult(binding, null, leafSelection);
+            LeafSelectionOutcome leafSelection,
+            OntologySlice slice,
+            NomenclatureCatalog.PendingSoftLeaf mintedLeaf) {
+        static MaterializeResult ok(
+                NomenclatureBinding binding,
+                LeafSelectionOutcome leafSelection,
+                OntologySlice slice,
+                NomenclatureCatalog.PendingSoftLeaf mintedLeaf) {
+            return new MaterializeResult(binding, null, leafSelection, slice, mintedLeaf);
         }
 
-        static MaterializeResult reject(String reason) {
-            return new MaterializeResult(null, reason, LeafSelectionOutcome.NONE);
+        static MaterializeResult reject(String reason, OntologySlice slice) {
+            return new MaterializeResult(null, reason, LeafSelectionOutcome.NONE, slice, null);
         }
     }
 
@@ -559,7 +574,7 @@ public final class ClassifyService {
             return materializeBinding(
                     catalog, mandateId, slice, packet, candidate, parseRunId, line);
         } catch (ClassifyException e) {
-            return MaterializeResult.reject(e.getMessage());
+            return MaterializeResult.reject(e.getMessage(), slice);
         }
     }
 
@@ -641,6 +656,7 @@ public final class ClassifyService {
             viaAlias = evidenceMatchedViaAlias(slice, packet, cell, line, path);
         }
         boolean softLeaf = false;
+        NomenclatureCatalog.PendingSoftLeaf mintedLeaf = null;
         Optional<NomenclatureNode> existing = slice.node(path);
         if (existing.isPresent()) {
             if (!existing.get().leaf()) {
@@ -664,19 +680,18 @@ public final class ClassifyService {
             }
             try {
                 // A derived leaf takes no aliases: the model's aliases described the
-                // mid-level it asked for, not this row.
-                catalog.putSoftLeaf(mandateId, parentPath, leafName,
+                // mid-level it asked for, not this row. Staged rather than written: the
+                // classify write transaction persists it, so a run that later rolls back
+                // never leaves an unbound soft leaf behind (ADR: the overlay must not
+                // outlive the binding it exists for).
+                NomenclatureCatalog.StagedSoftLeaf staged = catalog.stagePendingSoftLeaf(
+                        slice, mandateId, parentPath, leafName,
                         derivedLeaf ? List.of() : line.aliases());
+                slice = staged.slice();
+                mintedLeaf = staged.pending();
                 softLeaf = true;
             } catch (NomenclatureException e) {
-                // Parallel Layer B may have already created this soft leaf serially earlier.
-                OntologySlice refreshed = catalog.sliceForMandate(mandateId);
-                Optional<NomenclatureNode> raced = refreshed.node(path);
-                if (raced.isPresent() && raced.get().leaf()) {
-                    softLeaf = NomenclatureNode.LAYER_MANDATE_SOFT.equals(raced.get().layer());
-                } else {
-                    throw new ClassifyException(e.getMessage(), e);
-                }
+                throw new ClassifyException(e.getMessage(), e);
             }
         }
         return MaterializeResult.ok(
@@ -690,7 +705,9 @@ public final class ClassifyService {
                         softLeaf,
                         viaAlias,
                         line.confidence()),
-                leafSelection);
+                leafSelection,
+                slice,
+                mintedLeaf);
     }
 
     private static void recordLeafSelection(
@@ -840,7 +857,8 @@ public final class ClassifyService {
             List<NomenclatureBinding> bindings,
             Map<Long, UnboundReason> reasons,
             List<String> failures,
-            List<BindingPeerWriter.PendingPeerLine> pendingPeers) {}
+            List<BindingPeerWriter.PendingPeerLine> pendingPeers,
+            List<NomenclatureCatalog.PendingSoftLeaf> pendingSoftLeaves) {}
 
     /**
      * Ask once per distinct worksheet-scoped qualified label for the cells whose role
@@ -857,9 +875,10 @@ public final class ClassifyService {
             CellGraph graph,
             DeterministicBinder.Result deterministic,
             Map<Long, LayerAJudgment> layerA,
-            LayerBBindingStats stats) throws ClassifyException {
+            LayerBBindingStats stats,
+            long deadlineNanos) throws ClassifyException {
         if (deterministic.queued().isEmpty()) {
-            return new GapFillResult(List.of(), Map.of(), List.of(), List.of());
+            return new GapFillResult(List.of(), Map.of(), List.of(), List.of(), List.of());
         }
         List<LabelGapFiller.Queued> queued = new ArrayList<>();
         Map<String, List<DeterministicBinder.QueuedGroup>> byLabel = new LinkedHashMap<>();
@@ -882,7 +901,6 @@ public final class ClassifyService {
         }
 
         AtomicReference<ClassifyException> fatal = new AtomicReference<>();
-        long deadlineNanos = System.nanoTime() + limits.classifyDeadline().toNanos();
         ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread thread = new Thread(r, "classify-gap-fill-watchdog");
             thread.setDaemon(true);
@@ -926,6 +944,7 @@ public final class ClassifyService {
         List<NomenclatureBinding> bindings = new ArrayList<>();
         Map<Long, UnboundReason> reasons = new LinkedHashMap<>();
         List<BindingPeerWriter.PendingPeerLine> pendingPeers = new ArrayList<>();
+        List<NomenclatureCatalog.PendingSoftLeaf> pendingSoftLeaves = new ArrayList<>();
         OntologySlice currentSlice = slice;
         Map<String, MaterializeResult> minted = new LinkedHashMap<>();
         for (Map.Entry<String, List<DeterministicBinder.QueuedGroup>> entry : byLabel.entrySet()) {
@@ -978,7 +997,10 @@ public final class ClassifyService {
                 minted.put(entry.getKey(), mintedPath);
                 if (mintedPath.binding() != null) {
                     recordLeafSelection(stats, mintedPath.leafSelection());
-                    currentSlice = catalog.sliceForMandate(mandateId);
+                    currentSlice = mintedPath.slice();
+                    if (mintedPath.mintedLeaf() != null) {
+                        pendingSoftLeaves.add(mintedPath.mintedLeaf());
+                    }
                 }
             }
             if (mintedPath.binding() == null) {
@@ -992,13 +1014,20 @@ public final class ClassifyService {
             boolean softLeaf = mintedPath.binding().softLeaf();
             for (DeterministicBinder.QueuedGroup group : entry.getValue()) {
                 GraphCell cell = graph.cells().get(group.cellId());
+                // The graph's role wins only where it is proven (an aggregation gave it).
+                // A standalone cell's role there is only a default (ADD), so a line the
+                // model judged otherwise — "Less: AC" as deduct — must still take that
+                // judgment rather than being silently forced to add.
+                String cellRole = deterministic.roleProven(group.cellId())
+                        ? group.amountRole()
+                        : mintedPath.binding().amountRole();
                 bindings.add(new NomenclatureBinding(
                         group.cellId(),
                         parseRunId,
                         group.candidateId(),
                         group.label().memberLabel(),
                         path,
-                        group.amountRole(),
+                        cellRole,
                         softLeaf,
                         mintedPath.binding().viaAlias(),
                         answer.confidence(),
@@ -1015,7 +1044,8 @@ public final class ClassifyService {
             }
         }
         stats.addLabelBindings(bindings.size());
-        return new GapFillResult(bindings, reasons, filler.failures(), pendingPeers);
+        return new GapFillResult(
+                bindings, reasons, filler.failures(), pendingPeers, pendingSoftLeaves);
     }
 
     private static String mintSoftLeaf(

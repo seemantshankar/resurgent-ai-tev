@@ -16,6 +16,7 @@ class UnboundReasonTest {
                 "untypable",
                 "external_dependency",
                 "broken_dependency",
+                "range_truncated",
                 "no_label",
                 "ambiguous_label",
                 "kind_conflict",

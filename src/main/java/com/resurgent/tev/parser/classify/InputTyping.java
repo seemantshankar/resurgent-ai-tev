@@ -39,11 +39,7 @@ final class InputTyping {
     /** Scale named in the row label; the cell's own figure never implies one. */
     static CellScale scaleOf(GraphCell cell) {
         CellScale fromLabel = scaleIn(cell.rowLabel());
-        if (fromLabel != null) {
-            return fromLabel;
-        }
-        CellScale fromDisplay = scaleIn(cell.displayValue());
-        return fromDisplay == null ? CellScale.UNIT : fromDisplay;
+        return fromLabel == null ? CellScale.UNIT : fromLabel;
     }
 
     static CellScale scaleIn(String text) {

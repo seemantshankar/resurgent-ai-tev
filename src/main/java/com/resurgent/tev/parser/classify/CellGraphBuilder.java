@@ -191,7 +191,14 @@ final class CellGraphBuilder {
                     dependencies.add(CellDependency.barrier(role, barrier));
                     continue;
                 }
-                List<Long> targets = resolve(edge, cell, index);
+                RangeExpansion expansion = resolve(edge, cell, index);
+                if (expansion.truncated()) {
+                    // A range too large to scan in full is not complete evidence: it
+                    // poisons the formula instead of typing from a partial member list.
+                    dependencies.add(CellDependency.barrier(role, UnboundReason.RANGE_TRUNCATED));
+                    continue;
+                }
+                List<Long> targets = expansion.cellIds();
                 if (targets.isEmpty()) {
                     // A reference that resolves to no persisted cell is a blank
                     // coordinate, not a broken link: it contributes nothing.
@@ -215,13 +222,14 @@ final class CellGraphBuilder {
         // one SUM whose range covers more than one persisted cell. One member is a
         // pass-through, not a group.
         Optional<Aggregation> aggregation = Optional.empty();
-        if (members.size() > 1) {
+        List<Aggregation.Member> uniqueMembers = dedupeMembers(members);
+        if (uniqueMembers.size() > 1) {
             aggregation = Optional.of(new Aggregation(
                     cell.cellId(),
                     cell.worksheetId(),
                     relativeSignature(cell.formulaText(), cell),
                     cell.rowLabel(),
-                    dedupeMembers(members)));
+                    uniqueMembers));
         }
         return new Parsed(List.copyOf(dependencies), aggregation);
     }
@@ -552,31 +560,38 @@ final class CellGraphBuilder {
      * resolves a local range against the formula's own worksheet when the edge
      * carries no target worksheet.
      */
-    private static List<Long> resolve(CellReferenceEdge edge, GraphCell from, Index index) {
+    /** A range expansion, and whether the cell-scan cap cut it short. */
+    private record RangeExpansion(List<Long> cellIds, boolean truncated) {
+        static RangeExpansion of(List<Long> cellIds) {
+            return new RangeExpansion(cellIds, false);
+        }
+    }
+
+    private static RangeExpansion resolve(CellReferenceEdge edge, GraphCell from, Index index) {
         long worksheetId = edge.targetWorksheetId() == null
                 ? from.worksheetId()
                 : edge.targetWorksheetId();
         String range = edge.targetRange();
         if (range != null && range.contains(":")) {
             if (edge.isWholeColumn() || edge.isWholeRow()) {
-                return List.of();
+                return RangeExpansion.of(List.of());
             }
             return expandRange(range, worksheetId, index);
         }
         if (edge.resolvedCellId() != null && index.byId().containsKey(edge.resolvedCellId())) {
-            return List.of(edge.resolvedCellId());
+            return RangeExpansion.of(List.of(edge.resolvedCellId()));
         }
         if (range == null) {
-            return List.of();
+            return RangeExpansion.of(List.of());
         }
         Long cellId = index.at(worksheetId, range);
-        return cellId == null ? List.of() : List.of(cellId);
+        return RangeExpansion.of(cellId == null ? List.of() : List.of(cellId));
     }
 
-    private static List<Long> expandRange(String range, long worksheetId, Index index) {
+    private static RangeExpansion expandRange(String range, long worksheetId, Index index) {
         Matcher matcher = RANGE_PATTERN.matcher(stripSheetPrefix(range.trim()));
         if (!matcher.matches()) {
-            return List.of();
+            return RangeExpansion.of(List.of());
         }
         int firstCol = columnNumber(matcher.group(1));
         int firstRow = Integer.parseInt(matcher.group(2));
@@ -592,7 +607,9 @@ final class CellGraphBuilder {
         for (int row = minRow; row <= maxRow; row++) {
             for (int col = minCol; col <= maxCol; col++) {
                 if (++examined > MAX_RANGE_CELLS) {
-                    return List.copyOf(members);
+                    // The rectangle outgrew the scan cap: the members found so far are
+                    // not the whole range, so they must never pass as complete evidence.
+                    return new RangeExpansion(List.copyOf(members), true);
                 }
                 Long cellId = index.at(worksheetId, row, col);
                 if (cellId != null) {
@@ -600,7 +617,7 @@ final class CellGraphBuilder {
                 }
             }
         }
-        return List.copyOf(members);
+        return RangeExpansion.of(List.copyOf(members));
     }
 
     private static int columnNumber(String letters) {

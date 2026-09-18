@@ -57,9 +57,17 @@ final class TypePropagation {
                     own.put(cell.cellId(), candidate);
                 }
             }
-            ResolvedUnit fallback = own.isEmpty()
-                    ? ResolvedUnit.unresolved()
-                    : own.values().iterator().next();
+            ResolvedUnit fallback = ResolvedUnit.unresolved();
+            for (ResolvedUnit candidate : own.values()) {
+                if (!fallback.isResolved()) {
+                    fallback = candidate;
+                    continue;
+                }
+                if (fallback.kind() != candidate.kind() || fallback.scale() != candidate.scale()) {
+                    fallback = ResolvedUnit.unresolved();
+                    break;
+                }
+            }
             for (InputCell input : series) {
                 GraphCell cell = graph.cells().get(input.cellId());
                 if (cell == null) {
@@ -218,6 +226,7 @@ final class TypePropagation {
     private static boolean isBarrier(UnboundReason reason) {
         return reason == UnboundReason.EXTERNAL_DEPENDENCY
                 || reason == UnboundReason.BROKEN_DEPENDENCY
+                || reason == UnboundReason.RANGE_TRUNCATED
                 || reason == UnboundReason.CYCLE
                 || reason == UnboundReason.KIND_CONFLICT
                 || reason == UnboundReason.SCALE_CONFLICT;
@@ -287,26 +296,32 @@ final class TypePropagation {
      */
     private static ResolvedUnit combineProduct(List<Operand> factors, List<Operand> divisors) {
         CellKind kind = null;
-        CellScale scale = CellScale.UNIT;
-        boolean sawTyped = false;
+        CellScale typedScale = null;
+        double factorConstantMove = 1d;
 
         for (Operand factor : factors) {
             if (factor.isConstant()) {
-                CellScale moved = CellScale.multipliedBy(scale, factor.constant());
-                scale = moved == null ? scale : moved;
+                factorConstantMove *= factor.constant();
                 continue;
             }
             if (!factor.unit().isResolved()) {
                 continue;
             }
-            sawTyped = true;
             CellKind next = factor.unit().kind();
-            scale = sawTyped && kind == null ? factor.unit().scale() : scale;
+            typedScale = typedScale == null ? factor.unit().scale() : typedScale;
             kind = kind == null ? next : multiply(kind, next);
             if (kind == null) {
                 return ResolvedUnit.unresolved();
             }
         }
+        // Every constant factor moves the scale together, applied once against the
+        // typed base: a leading and a trailing constant must move it the same way.
+        // One that lands on none of the named scales (2, 0.5, ...) is an ordinary
+        // quantity multiplier, not a unit conversion, so it leaves the scale alone.
+        CellScale scale = typedScale == null ? CellScale.UNIT : typedScale;
+        CellScale movedByFactors = CellScale.multipliedBy(scale, factorConstantMove);
+        scale = movedByFactors == null ? scale : movedByFactors;
+
         for (Operand divisor : divisors) {
             if (divisor.isConstant()) {
                 CellScale moved = CellScale.dividedBy(scale, divisor.constant());
@@ -319,7 +334,6 @@ final class TypePropagation {
             if (!divisor.unit().isResolved()) {
                 continue;
             }
-            sawTyped = true;
             kind = kind == null ? null : divide(kind, divisor.unit().kind());
             if (kind == null) {
                 return ResolvedUnit.unresolved();

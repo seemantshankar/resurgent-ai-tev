@@ -6,6 +6,7 @@ import com.resurgent.tev.parser.db.CellReferenceEdge;
 import com.resurgent.tev.parser.db.InterpretationCellView;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -212,6 +213,24 @@ class TypePropagationTest {
     }
 
     @Test
+    void aConstantFactorMovesTheScaleRegardlessOfOperandOrder() {
+        label("A1", 1, 1, "Power cost");
+        long rupees = literal("B1", 1, 2, "500000");
+        long constantFirst = formula("C1", 1, 3, "=0.00001*B1", "5");
+        edge(constantFirst, 0, "B1");
+        long constantLast = formula("D1", 1, 4, "=B1*0.00001", "5");
+        edge(constantLast, 0, "B1");
+
+        CellTypes types = resolve();
+
+        assertThat(types.unitOf(rupees).orElseThrow().scale()).isEqualTo(CellScale.UNIT);
+        assertThat(types.unitOf(constantFirst).orElseThrow())
+                .as("a leading constant factor must move the scale the same as a trailing one")
+                .isEqualTo(types.unitOf(constantLast).orElseThrow());
+        assertThat(types.unitOf(constantFirst).orElseThrow().scale()).isEqualTo(CellScale.LAKH);
+    }
+
+    @Test
     void aChainThroughAnExternalLinkRefusesWithExternalDependency() {
         long external = formula("B1", 1, 2, "=[1]Other!A1", "10");
         externalEdge(external, 0, "[1]Other!A1");
@@ -342,6 +361,30 @@ class TypePropagationTest {
         assertThat(types.unitOf(yearOne).orElseThrow().kind()).isEqualTo(CellKind.RATE);
         assertThat(types.unitOf(yearTwo).orElseThrow()).isEqualTo(types.unitOf(yearOne).orElseThrow());
         assertThat(types.unitOf(yearThree).orElseThrow()).isEqualTo(types.unitOf(yearOne).orElseThrow());
+    }
+
+    @Test
+    void aSeriesFallbackNeverAppliesWhenItsOwnMembersDisagree() {
+        long percentCell = literal("B2", 2, 2, "0.1");
+        long moneyCell = literal("B3", 3, 2, "500");
+        long unlabelled = literal("B4", 4, 2, "9");
+        Map<Long, String> numberFormats = Map.of(
+                percentCell, "0%",
+                moneyCell, "₹0.00");
+
+        CellGraph graph = new CellGraphBuilder().build(1L, cells, edges, numberFormats);
+        assertThat(graph.inputs().stream().map(InputCell::seriesKey).distinct())
+                .as("blank-labelled literals on one sheet collapse to one series")
+                .hasSize(1);
+
+        CellTypes types = new TypePropagation().resolve(graph);
+
+        assertThat(types.unitOf(percentCell).orElseThrow().kind()).isEqualTo(CellKind.PERCENT);
+        assertThat(types.unitOf(moneyCell).orElseThrow().kind()).isEqualTo(CellKind.MONEY);
+        assertThat(types.unitOf(unlabelled))
+                .as("percent and money disagree, so the series has no safe fallback")
+                .isEmpty();
+        assertThat(types.refusalOf(unlabelled)).contains(UnboundReason.NO_LABEL);
     }
 
     @Test

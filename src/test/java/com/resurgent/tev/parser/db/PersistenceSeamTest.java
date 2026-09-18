@@ -12,6 +12,9 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import java.util.List;
 import java.util.Map;
 
+import com.resurgent.tev.parser.classify.CellKind;
+import com.resurgent.tev.parser.classify.CellScale;
+import com.resurgent.tev.parser.classify.CellType;
 import com.resurgent.tev.parser.classify.NomenclatureBinding;
 import com.resurgent.tev.parser.classify.PacketDisposition;
 import com.resurgent.tev.parser.ingest.NormalizedCell;
@@ -199,6 +202,61 @@ class PersistenceSeamTest {
                     .containsExactly(cellA1);
             assertThat(repo.selectPacketDispositionsForParseRun(parseRunId)).isEmpty();
             assertThat(repo.selectNomenclatureBindingsForParseRun(parseRunId)).isEmpty();
+        }
+    }
+
+    @Test
+    void sumAddAmountsForPathNormalizesByCellScaleBeforeSumming() throws Exception {
+        try (WorkspaceDatabase db = openDb("scale-rollup.db")) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            long sourceFileId = repo.insertSourceFile(1L, "c.xlsx", "hash", "fm_xlsx",
+                    Timestamps.now(), "0.1.0", null);
+            long parseRunId = repo.insertParseRun(sourceFileId, 1L, "0.1.0", "cfg",
+                    Timestamps.now(), Timestamps.now(), "success", null);
+            long worksheetId = repo.insertWorksheet(parseRunId, "Sheet1", 0, "visible");
+            long cellRupees = repo.insertCell(worksheetId, new NormalizedCell(
+                    "B2", 2, 2,
+                    "1000", "number", "number", "1,000", "1,000",
+                    java.math.BigDecimal.valueOf(1000), null, null,
+                    null, null, null, null, false,
+                    false, null,
+                    false, false, null, "cell", false, false, false));
+            long cellLakhs = repo.insertCell(worksheetId, new NormalizedCell(
+                    "B3", 3, 2,
+                    "2", "number", "number", "2", "2",
+                    java.math.BigDecimal.valueOf(2), null, null,
+                    null, null, null, null, false,
+                    false, null,
+                    false, false, null, "cell", false, false, false));
+
+            CandidateWrite write = new CandidateWrite(
+                    parseRunId, worksheetId, "coverage_parent", null,
+                    2, 2, 3, 2,
+                    null, null, null,
+                    false, 1.0, "sole coverage parent",
+                    "Coverage parent for Sheet1");
+            long candidateId = repo.insertCandidate(write, List.of(cellRupees, cellLakhs));
+
+            repo.insertPacketDisposition(new PacketDisposition(
+                    candidateId, parseRunId, "capex_detail", "main", "primary",
+                    List.of("Item"), List.of("Amount"), "Project Cost", null, true));
+
+            String path = "Project Cost > Civil Works > Structure";
+            repo.insertNomenclatureBinding(new NomenclatureBinding(
+                    cellRupees, parseRunId, candidateId, "Civil Works", path,
+                    "add", true, false, 0.9));
+            repo.insertNomenclatureBinding(new NomenclatureBinding(
+                    cellLakhs, parseRunId, candidateId, "Civil Works", path,
+                    "add", true, false, 0.9));
+
+            repo.insertCellType(new CellType(
+                    parseRunId, cellRupees, CellKind.MONEY, CellScale.UNIT, "input_label", 0));
+            repo.insertCellType(new CellType(
+                    parseRunId, cellLakhs, CellKind.MONEY, CellScale.LAKH, "input_label", 0));
+
+            assertThat(repo.sumAddAmountsForPath(parseRunId, path))
+                    .as("1,000 at UNIT plus 2 at LAKH must normalize to base units before summing")
+                    .isEqualTo(1000.0 + 2.0 * 100_000.0);
         }
     }
 

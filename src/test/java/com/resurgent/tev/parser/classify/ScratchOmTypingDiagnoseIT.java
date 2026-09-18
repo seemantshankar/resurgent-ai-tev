@@ -35,6 +35,9 @@ class ScratchOmTypingDiagnoseIT {
 
     @Test
     void diagnose() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                "true".equalsIgnoreCase(System.getProperty("tev.diagnoseTyping")),
+                "set -Dtev.diagnoseTyping=true to run the typing chain diagnostic");
         org.junit.jupiter.api.Assumptions.assumeTrue(Files.exists(WORKBOOK));
         Path db = Path.of("target", "scratch-om-typing.db");
         Files.deleteIfExists(db);
