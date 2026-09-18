@@ -40,8 +40,8 @@ final class CellGraphBuilder {
             "^\\$?([A-Za-z]+)\\$?(\\d+):\\$?([A-Za-z]+)\\$?(\\d+)$");
     private static final Pattern SINGLE_CELL = Pattern.compile("^\\$?[A-Za-z]{1,3}\\$?\\d{1,7}$");
     private static final Pattern SUM_CALL = Pattern.compile("(?i)^sum\\s*\\((.*)\\)$");
-    private static final Pattern NUMBER_LITERAL = Pattern.compile(
-            "(?<![A-Za-z$\\d.])\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?(?![\\d.])");
+    private static final Pattern NUMERIC_ATOM = Pattern.compile(
+            "(?<![A-Za-z$\\d.])\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+|\\^\\s*-?\\d+)?(?![\\d.])");
     private static final Pattern A1_TOKEN = Pattern.compile(
             "\\$?[A-Za-z]{1,3}\\$?\\d{1,7}(?::\\$?[A-Za-z]{1,3}\\$?\\d{1,7})?");
 
@@ -179,9 +179,9 @@ final class CellGraphBuilder {
                 }
             }
             TermShape shape = shapeOf(term.text());
-            for (double constant : topLevelConstants(term, shape)) {
+            for (NumericAtom atom : topLevelConstants(term, shape)) {
                 dependencies.add(CellDependency.constant(
-                        constantRole(shape, term, constant), constant));
+                        constantRole(shape, term, atom), atom.value()));
             }
             for (EdgePlacement placement : inTerm) {
                 CellReferenceEdge edge = placement.edge();
@@ -264,71 +264,98 @@ final class CellGraphBuilder {
     /** True when the operand sits to the right of a top-level {@code /} in its term. */
     private static boolean afterTopLevelDivide(Term term, EdgePlacement placement) {
         int depth = 0;
+        boolean inQuotes = false;
+        boolean divided = false;
         for (int i = term.start(); i < placement.start() && i < term.end(); i++) {
             char c = term.source().charAt(i);
-            if (c == '(') {
+            if (c == '"' || c == '\'') {
+                inQuotes = !inQuotes;
+            } else if (inQuotes) {
+                continue;
+            } else if (c == '(') {
                 depth++;
             } else if (c == ')') {
                 depth--;
             } else if (c == '/' && depth == 0) {
-                return true;
+                divided = true;
+            } else if (c == '*' && depth == 0) {
+                divided = false;
             }
         }
-        return false;
+        return divided;
     }
 
     /**
      * The hardcoded numbers in a multiplicative term. Only these matter to scale: a
      * literal added to a sum changes the amount, a literal dividing it changes the
-     * unit the amount is expressed in.
+     * unit the amount is expressed in. A power such as {@code 10^5} or {@code 1E-5}
+     * is one atom, not its separate digits, so {@code /10^5} moves one divisor, not
+     * two stray ones. Roles stay positional downstream via {@link NumericAtom#start}.
      */
-    private static List<Double> topLevelConstants(Term term, TermShape shape) {
+    private static List<NumericAtom> topLevelConstants(Term term, TermShape shape) {
         if (shape != TermShape.MULTIPLICATIVE) {
             return List.of();
         }
-        List<Double> constants = new ArrayList<>();
-        Matcher matcher = NUMBER_LITERAL.matcher(term.text());
+        List<NumericAtom> constants = new ArrayList<>();
+        Matcher matcher = NUMERIC_ATOM.matcher(term.text());
         while (matcher.find()) {
+            double value;
             try {
-                constants.add(Double.parseDouble(matcher.group()));
+                value = evaluateAtom(matcher.group());
             } catch (NumberFormatException e) {
                 // Not a number after all; the operand contributes nothing.
+                continue;
             }
+            if (!Double.isFinite(value)) {
+                continue;
+            }
+            constants.add(new NumericAtom(value, matcher.start()));
         }
         return List.copyOf(constants);
     }
 
+    private record NumericAtom(double value, int start) {}
+
+    /**
+     * One atom's value: {@code 10^5} evaluates to 100000, plain and
+     * scientific-notation numerals parse directly.
+     */
+    private static double evaluateAtom(String atom) {
+        int caret = atom.indexOf('^');
+        if (caret < 0) {
+            return Double.parseDouble(atom);
+        }
+        double base = Double.parseDouble(atom.substring(0, caret).trim());
+        double exponent = Double.parseDouble(atom.substring(caret + 1).trim());
+        return Math.pow(base, exponent);
+    }
+
     /** A constant to the right of a top-level {@code /} divides; anything else scales. */
-    private static DependencyRole constantRole(TermShape shape, Term term, double constant) {
+    private static DependencyRole constantRole(TermShape shape, Term term, NumericAtom atom) {
         if (shape != TermShape.MULTIPLICATIVE) {
             return DependencyRole.OTHER;
         }
+        int depth = 0;
+        boolean inQuotes = false;
+        boolean divided = false;
         String text = term.text();
-        Matcher matcher = NUMBER_LITERAL.matcher(text);
-        while (matcher.find()) {
-            double value;
-            try {
-                value = Double.parseDouble(matcher.group());
-            } catch (NumberFormatException e) {
+        for (int i = 0; i < atom.start() && i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '"' || c == '\'') {
+                inQuotes = !inQuotes;
+            } else if (inQuotes) {
                 continue;
+            } else if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+            } else if (c == '/' && depth == 0) {
+                divided = true;
+            } else if (c == '*' && depth == 0) {
+                divided = false;
             }
-            if (value != constant) {
-                continue;
-            }
-            int depth = 0;
-            for (int i = 0; i < matcher.start(); i++) {
-                char c = text.charAt(i);
-                if (c == '(') {
-                    depth++;
-                } else if (c == ')') {
-                    depth--;
-                } else if (c == '/' && depth == 0) {
-                    return DependencyRole.DIVISOR;
-                }
-            }
-            return DependencyRole.FACTOR;
         }
-        return DependencyRole.FACTOR;
+        return divided ? DependencyRole.DIVISOR : DependencyRole.FACTOR;
     }
 
     private enum TermShape { BARE_REFERENCE, SUM_CALL, MULTIPLICATIVE, OTHER }
@@ -339,15 +366,15 @@ final class CellGraphBuilder {
             return TermShape.OTHER;
         }
         String unwrapped = unwrapParens(trimmed);
+        if (hasTopLevelOperator(unwrapped, "*/")) {
+            return TermShape.MULTIPLICATIVE;
+        }
         if (SINGLE_CELL.matcher(stripSheetPrefix(unwrapped)).matches()) {
             return TermShape.BARE_REFERENCE;
         }
         Matcher sum = SUM_CALL.matcher(unwrapped);
         if (sum.matches() && balanced(sum.group(1))) {
             return TermShape.SUM_CALL;
-        }
-        if (hasTopLevelOperator(unwrapped, "*/")) {
-            return TermShape.MULTIPLICATIVE;
         }
         return TermShape.OTHER;
     }
@@ -383,7 +410,7 @@ final class CellGraphBuilder {
         boolean inQuotes = false;
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
-            if (c == '"') {
+            if (c == '"' || c == '\'') {
                 inQuotes = !inQuotes;
             } else if (inQuotes) {
                 continue;

@@ -1005,6 +1005,30 @@ class ClassifyServiceTest {
         }
     }
 
+    @Test
+    void persistentLayerATruncationDegradesToOrphanNoiseInsteadOfAborting() throws Exception {
+        Path xlsx = costScheduleWorkbook();
+        Path db = tempDir.resolve("truncation.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.classifyLayerAFailure = prompt -> new OpenRouterClassifierLlm.TruncatedCompletionException(
+                "OpenRouter Layer A truncated/invalid after retry: stub");
+
+        ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
+        assertThat(summary.dispositionCount()).isGreaterThanOrEqualTo(1);
+
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<PacketDisposition> rows = repo.selectPacketDispositionsForParseRun(
+                    ingest.parseRunId());
+            assertThat(rows).isNotEmpty();
+            assertThat(rows).allMatch(row -> Triage.ORPHAN.equals(row.triage()));
+            assertThat(rows).allMatch(row -> Relevance.NOISE.equals(row.relevance()));
+        }
+    }
+
     /** Scripted LLM for tests: records prompts and returns fixed Layer A / Layer B judgments. */
     static class FakeClassifierLlm implements ClassifierLlm {
         final List<LayerAPrompt> prompts = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -1014,11 +1038,15 @@ class ClassifyServiceTest {
                 List.of(), List.of(), null);
         List<LayerBLineJudgment> layerBLines = List.of();
         java.util.function.Function<LayerBPrompt, List<LayerBLineJudgment>> layerBFactory = null;
+        java.util.function.Function<LayerAPrompt, RuntimeException> classifyLayerAFailure = null;
         boolean bindFirstAmountAsCivilAdd;
 
         @Override
         public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
             prompts.add(prompt);
+            if (classifyLayerAFailure != null) {
+                throw classifyLayerAFailure.apply(prompt);
+            }
             return judgment;
         }
 

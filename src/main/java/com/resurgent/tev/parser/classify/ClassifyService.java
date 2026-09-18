@@ -284,14 +284,28 @@ public final class ClassifyService {
             ScheduledExecutorService watchdog,
             long deadlineNanos) throws ClassifyException {
         CandidateRow candidate = prepared.candidate();
-        LayerAJudgment judgment = requireJudgment(
-                callLlm(
-                        () -> llm.classifyLayerA(new LayerAPrompt(
-                                prepared.redacted(), slice, parent, prepared.cheapPass())),
-                        "Layer A candidate " + candidate.candidateId(),
-                        watchdog,
-                        deadlineNanos),
-                candidate.candidateId());
+        LayerAJudgment raw;
+        try {
+            raw = callLlm(
+                    () -> llm.classifyLayerA(new LayerAPrompt(
+                            prepared.redacted(), slice, parent, prepared.cheapPass())),
+                    "Layer A candidate " + candidate.candidateId(),
+                    watchdog,
+                    deadlineNanos);
+        } catch (OpenRouterClassifierLlm.TruncatedCompletionException truncated) {
+            String family = parent != null
+                    && parent.scheduleFamily() != null
+                    && !parent.scheduleFamily().isBlank()
+                    ? parent.scheduleFamily()
+                    : "unclassified";
+            System.err.println("OpenRouter Layer A persistent truncation for candidate "
+                    + candidate.candidateId() + ": " + truncated.getMessage()
+                    + "; degrading to orphan/noise");
+            raw = new LayerAJudgment(
+                    family, Triage.ORPHAN, Relevance.NOISE,
+                    List.of(), List.of(), null);
+        }
+        LayerAJudgment judgment = requireJudgment(raw, candidate.candidateId());
         PacketDisposition disposition = new PacketDisposition(
                 candidate.candidateId(),
                 parseRunId,

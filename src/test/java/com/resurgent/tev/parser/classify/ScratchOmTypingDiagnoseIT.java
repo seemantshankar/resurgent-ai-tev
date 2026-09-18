@@ -23,6 +23,10 @@ import org.junit.jupiter.api.Test;
 /**
  * Temporary offline diagnostic: walk each target cell's dependency chain up the
  * graph until the typing roots, so the fix is derived from the chain, not guessed.
+ *
+ * <p>Targets are the report's real cells: {@code P L} {@code J45}/{@code J53}/
+ * {@code J33}/{@code D46}, the SALESPROJECTION {@code *(1+...)} cells, and the
+ * {@code depreciation!J33} chain.
  */
 class ScratchOmTypingDiagnoseIT {
 
@@ -52,9 +56,18 @@ class ScratchOmTypingDiagnoseIT {
             Set<Long> targets = new LinkedHashSet<>();
             for (GraphCell cell : graph.cells().values()) {
                 String name = sheetById.get(cell.worksheetId());
-                boolean liveSheet = "P  L".equals(name) || "depreciation".equals(name);
-                if (liveSheet && cell.numeric()
-                        && List.of("J45", "J53", "J33").contains(cell.coord())) {
+                if (!cell.numeric()) {
+                    continue;
+                }
+                if ("P  L".equals(name)
+                        && List.of("J45", "J53", "J33", "D46").contains(cell.coord())) {
+                    targets.add(cell.cellId());
+                } else if ("SALESPROJECTION".equals(name)
+                        && List.of("J75", "F75").contains(cell.coord())) {
+                    targets.add(cell.cellId());
+                } else if ("depreciation".equals(name) && "J33".equals(cell.coord())) {
+                    targets.add(cell.cellId());
+                } else if ("ASSETS".equals(name) && "I9".equals(cell.coord())) {
                     targets.add(cell.cellId());
                 }
             }

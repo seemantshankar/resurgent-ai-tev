@@ -66,7 +66,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
                 return judgment;
             } catch (RuntimeException second) {
                 recordMetric("A", user, retry, started, 2);
-                throw new IllegalStateException(
+                throw new TruncatedCompletionException(
                         "OpenRouter Layer A truncated/invalid after retry: " + second.getMessage(),
                         second);
             }
@@ -268,16 +268,26 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
         TruncatedCompletionException(String message) {
             super(message);
         }
+
+        TruncatedCompletionException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 
-    /** Firm Layer A completion budget — disposition JSON is bounded (#122). */
-    public static final int LAYER_A_MAX_COMPLETION_TOKENS = 2_048;
+    /**
+     * Firm Layer A completion budget — the disposition JSON itself is small, so
+     * this stays a mitigation for model verbosity (hidden deliberation burning
+     * the budget before any JSON), not a ceiling driven by JSON size.
+     */
+    public static final int LAYER_A_MAX_COMPLETION_TOKENS = 4_096;
     /**
      * Layer A retry budget after truncation. The firm budget is ample for the
      * JSON, but a model that deliberates past it emits no visible content at
      * all; the retry buys room for the answer rather than re-losing the call.
+     * Like the first-call budget, this is a verbosity mitigation, not a
+     * JSON-size ceiling.
      */
-    public static final int LAYER_A_RETRY_MAX_COMPLETION_TOKENS = 6_144;
+    public static final int LAYER_A_RETRY_MAX_COMPLETION_TOKENS = 12_288;
     /**
      * OpenRouter rejects {@code reasoning.effort} and {@code reasoning.max_tokens}
      * on the same request. Layer A uses {@code effort=low} plus

@@ -24,8 +24,8 @@ import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
 /**
- * Comprehensive validation of cell typing across all tabs in Om Arham, using both
- * pre-determined critical cells and random sampling to ensure typing works end-to-end.
+ * Typing validation across all tabs in Om Arham, using both pre-determined
+ * critical cells and random sampling to ensure typing works end-to-end.
  *
  * <p>Disabled unless {@code -Dtev.validateTyping=true} to avoid long offline runs.
  * Tests all tabs (not just Visible/P&L/Depreciation) and validates:
@@ -35,6 +35,21 @@ import org.junit.jupiter.api.Test;
  *   <li>Known parser gaps are logged for fix validation
  *   <li>Random cell sampling catches regressions across tabs
  * </ul>
+ *
+ * <p>Correction (verified 2026-09-18, post Gap 1/Gap 2 fixes): Gap 1
+ * (sheet-prefixed multiplicative terms) and Gap 2 (power-of-10 divisors) are
+ * fixed and locked by {@code CellGraphBuilderTest}. Gap 3 as originally written
+ * — "the edge to {@code D75} is lost" — was refuted: {@code parse()} places every
+ * edge whose offset lies inside the term span, so {@code I75*(1+D75)} already
+ * yields {@code const(1.0) FACTOR}, {@code I75 FACTOR} and {@code D75 FACTOR}.
+ * The growth-factor pattern below is informational only, not a defect. The
+ * remaining refusals on the {@code J45}/{@code J53}/{@code J33} chains are real
+ * kind conflicts from upstream mixed-kind sums (e.g. a quantity {@code Details!E152}
+ * summed with money, a quantity {@code SALESPROJECTION!F15} summed with money,
+ * {@code RATE+MONEY} aggregates), plus a {@code PERCENT} rate driver
+ * ({@code P L!B45}/{@code B46}) money-multiplied downstream — not lost edges.
+ * Row 45 is "Building" and row 33 is "F & B sales"; the Gap 1 evidence sits on
+ * row 46 ({@code P L!D46}), not row 45.
  */
 class OmArhamRandomTypingValidationIT {
 
@@ -91,8 +106,9 @@ class OmArhamRandomTypingValidationIT {
             System.out.printf("Input type coverage: %.1f%% (%d/%d)%n",
                     inputCoveragePct, results.getInputsTyped(), results.getInputsTotal());
             assertThat(inputCoveragePct)
-                    .as("input coverage should be >75% after parser fixes")
-                    .isGreaterThan(70.0);
+                    .as("input coverage should hold at/above the measured 79.9%%"
+                            + " (remainder is external links and orphaned labels)")
+                    .isGreaterThanOrEqualTo(79.9);
         }
         Files.deleteIfExists(db);
     }
@@ -102,26 +118,29 @@ class OmArhamRandomTypingValidationIT {
             CellTypes types,
             Map<Long, String> sheetById,
             TypeValidationResults results) {
-        System.out.println("\n=== Critical Cells (Known Parser Gaps) ===");
-        // These cells are known to have parser gaps — log their actual state
-        // J45 (P&L) - Insurance premium summand — should be MONEY but types as PERCENT due to Gap 1
+        System.out.println("\n=== Critical Cells (Verified Outcomes) ===");
+        // P L!D46 is the real Gap 1 evidence: B46*'CAPITAL COST'!D20 must be
+        // MULTIPLICATIVE (factors), so the head types MONEY.
+        validateCellType(graph, types, sheetById, results, "P  L", "D46", true, CellKind.MONEY);
+        // ASSETS!I9 is the Gap 2 lock: F21/10^5 is one 100000 divisor, MONEY/LAKH.
+        validateCellType(graph, types, sheetById, results, "ASSETS", "I9", true, CellKind.MONEY);
+        validateCellType(graph, types, sheetById, results, "ASSETS", "F21", true, CellKind.MONEY);
+        // SALESPROJECTION growth-factor chain: the D75 edge is present (Gap 3
+        // refuted), but the chain refuses on a genuine upstream KIND_CONFLICT
+        // (quantity summed with money), so these stay diagnostic.
+        validateCellForDiagnostics(graph, types, sheetById, results, "SALESPROJECTION", "J75",
+                "Growth-factor pattern: D75 edge present; upstream KIND_CONFLICT is genuine");
+        // J45/J53/depreciation!J33 refuse on genuine upstream kind conflicts, not
+        // lost edges: J45 inherits PERCENT from the B45 rate driver, J53 and J33
+        // sit under mixed-kind sums. Diagnostic until the model handles them.
         validateCellForDiagnostics(graph, types, sheetById, results, "P  L", "J45",
-                "Bug: B45*'CAPITAL COST'!C14 mis-shaped as BARE_REFERENCE → PERCENT instead of MONEY");
-        // J53 (P&L) - Insurance sub-total
+                "PERCENT via B45 rate driver; upstream KIND_CONFLICT chain");
         validateCellForDiagnostics(graph, types, sheetById, results, "P  L", "J53",
-                "Related to J45 chain");
-        // J33 (depreciation) - depreciation component — should be MONEY but may refuse due to Gap 3
+                "Downstream of depreciation!J57 KIND_CONFLICT");
         validateCellForDiagnostics(graph, types, sheetById, results, "depreciation", "J33",
-                "Bug: J75*(1+D75) loses D75 edge, poisons upstream chain");
-
-        // Also check a few multiplicative/derived cells to catch the parser gaps
-        // These are marked as "diagnostic only" until parser fixes land
+                "Downstream of D132 KIND_CONFLICT (RATE+MONEY aggregate)");
         validateCellForDiagnostics(graph, types, sheetById, results, "P  L", "B45",
-                "Gap 1: sheet-prefixed reference in multiplicative term");
-        validateCellForDiagnostics(graph, types, sheetById, results, "P  L", "J75",
-                "Gap 3: const(1.0) factor in additive subterm but drops edge to D75");
-        validateCellForDiagnostics(graph, types, sheetById, results, "ASSETS", "F21",
-                "Gap 2: division by power of 10 (F21/10^5 splits into stray constants)");
+                "Input rate driver (percent format), not a defect");
     }
 
     private void validateCellForDiagnostics(
@@ -160,7 +179,7 @@ class OmArhamRandomTypingValidationIT {
             String sheetName,
             String coord,
             boolean shouldType,
-            String expectedKind) {
+            CellKind expectedKind) {
         Long cellId = findCell(graph, sheetById, sheetName, coord);
         if (cellId == null) {
             results.recordMissing(sheetName, coord);
@@ -283,7 +302,7 @@ class OmArhamRandomTypingValidationIT {
             String formula = cell.formulaText();
 
             // Check formula patterns that match known gaps:
-            // Gap 1: sheet-prefixed references in multiplication (e.g., B45*'CAPITAL COST'!C14)
+            // Gap 1: sheet-prefixed references in multiplication (e.g., B46*'CAPITAL COST'!D20)
             if (formula.contains("!") && formula.matches(".*[*/%].*'[^']*'!.*")) {
                 gaps.add(String.format("GAP1 %s: external ref in multiplicative term: %s",
                         cellRef, formula));
@@ -292,9 +311,11 @@ class OmArhamRandomTypingValidationIT {
             if (formula.matches(".*/(\\d+\\^\\d+|10\\^\\d+).*")) {
                 gaps.add(String.format("GAP2 %s: power-of-10 divisor: %s", cellRef, formula));
             }
-            // Gap 3: additive term with const scaling (e.g., J75*(1+D75))
+            // Growth-factor pattern (informational only, not a defect): I75*(1+D75)
+            // keeps const(1.0) and the D75 edge; refusals here are genuine
+            // upstream kind conflicts, verified via ScratchOmTypingDiagnoseIT.
             if (formula.matches(".*\\(1[+-].*\\).*") && formula.contains("*")) {
-                gaps.add(String.format("GAP3 %s: const factor in additive subterm: %s",
+                gaps.add(String.format("GROWTH %s: growth-factor pattern (informational): %s",
                         cellRef, formula));
             }
         }

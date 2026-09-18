@@ -78,6 +78,32 @@ class CellGraphBuilderTest {
                 false, false, null, null, false, false, "ref_error"));
     }
 
+    /** A sheet-qualified edge, as ingest records a 'SHEET'!ref reference. */
+    private void sheetEdge(
+            long fromCellId,
+            int tokenIndex,
+            String token,
+            String targetSheetName,
+            long targetWorksheetId,
+            String range,
+            long resolvedCellId) {
+        edges.add(new CellReferenceEdge(
+                fromCellId, tokenIndex, token, "cell", targetSheetName, targetWorksheetId, range,
+                resolvedCellId, null, false, false, null, null, false, false, null));
+    }
+
+    private long literalOn(long worksheetId, String coord, int row, int col, String value) {
+        long id = nextCellId++;
+        cells.add(cell(id, worksheetId, coord, row, col, "number", null, value, value, null, value));
+        return id;
+    }
+
+    private void edgeTo(long fromCellId, int tokenIndex, String token, long resolvedCellId) {
+        edges.add(new CellReferenceEdge(
+                fromCellId, tokenIndex, token, "cell", null, null, token, resolvedCellId, null,
+                false, false, null, null, false, false, null));
+    }
+
     private CellGraph build() {
         return new CellGraphBuilder().build(1L, cells, edges);
     }
@@ -300,5 +326,138 @@ class CellGraphBuilderTest {
         assertThat(aggregation.headLabel()).isEqualTo("Total Operating Cost");
         assertThat(aggregation.relativeSignature()).isEqualTo("SUM(R[-2]C:R[-1]C)");
         assertThat(aggregation.worksheetId()).isEqualTo(SHEET);
+    }
+
+    @Test
+    void aSheetPrefixedReferenceInAMultiplicativeTermIsAFactor() {
+        long otherSheet = 77L;
+        long remote = literalOn(otherSheet, "D20", 20, 4, "100");
+        long local = literal("B46", 46, 2, "0.005");
+        long head = formula("D46", 46, 4, "=B46*'CAPITAL COST'!D20", "0.5");
+        edgeTo(head, 0, "B46", local);
+        sheetEdge(head, 1, "'CAPITAL COST'!D20", "CAPITAL COST", otherSheet, "D20", remote);
+
+        CellGraph graph = build();
+
+        assertThat(graph.dependenciesOf(head))
+                .extracting(CellDependency::role)
+                .containsExactly(DependencyRole.FACTOR, DependencyRole.FACTOR);
+        assertThat(graph.aggregationHeadedBy(head)).isEmpty();
+    }
+
+    @Test
+    void aSheetPrefixedReferenceOnEitherSideOfTimesIsAFactor() {
+        long otherSheet = 77L;
+        long remote = literalOn(otherSheet, "D20", 20, 4, "100");
+        long local = literal("B46", 46, 2, "0.005");
+        long head = formula("D46", 46, 4, "='CAPITAL COST'!D20*B46", "0.5");
+        sheetEdge(head, 0, "'CAPITAL COST'!D20", "CAPITAL COST", otherSheet, "D20", remote);
+        edgeTo(head, 1, "B46", local);
+
+        CellGraph graph = build();
+
+        assertThat(graph.dependenciesOf(head))
+                .extracting(CellDependency::role)
+                .containsExactly(DependencyRole.FACTOR, DependencyRole.FACTOR);
+    }
+
+    @Test
+    void aSheetPrefixedReferenceAloneIsABareReference() {
+        long otherSheet = 77L;
+        long remote = literalOn(otherSheet, "D20", 20, 4, "100");
+        long head = formula("D46", 46, 4, "='CAPITAL COST'!D20", "100");
+        sheetEdge(head, 0, "'CAPITAL COST'!D20", "CAPITAL COST", otherSheet, "D20", remote);
+
+        CellGraph graph = build();
+
+        assertThat(graph.dependenciesOf(head))
+                .extracting(CellDependency::role)
+                .containsExactly(DependencyRole.SUMMAND_PLUS);
+        assertThat(graph.aggregationHeadedBy(head)).isEmpty();
+    }
+
+    @Test
+    void aSheetNameContainingASlashIsNotAnOperator() {
+        long otherSheet = 78L;
+        long remote = literalOn(otherSheet, "A1", 1, 1, "7");
+        long head = formula("B1", 1, 2, "='P/L'!A1", "7");
+        sheetEdge(head, 0, "'P/L'!A1", "P/L", otherSheet, "A1", remote);
+
+        CellGraph graph = build();
+
+        assertThat(graph.dependenciesOf(head))
+                .extracting(CellDependency::role)
+                .containsExactly(DependencyRole.SUMMAND_PLUS);
+    }
+
+    @Test
+    void aPowerOfTenDivisorIsOneConstant() {
+        long amount = literal("F21", 21, 6, "242353576.58");
+        long head = formula("I9", 9, 9, "=F21/10^5", "2423.54");
+        edgeTo(head, 0, "F21", amount);
+
+        CellGraph graph = build();
+
+        assertThat(graph.dependenciesOf(head))
+                .filteredOn(CellDependency::isConstant)
+                .extracting(CellDependency::constant, CellDependency::role)
+                .containsExactly(
+                        org.assertj.core.api.Assertions.tuple(
+                                100000.0, DependencyRole.DIVISOR));
+    }
+
+    @Test
+    void aPowerOfTenDivisorOverASumIsOneConstant() {
+        long first = literal("F38", 38, 6, "10");
+        long second = literal("F42", 42, 6, "20");
+        long head = formula("I34", 34, 9, "=(F38+F42)/10^5", "0.0003");
+        edgeTo(head, 0, "F38", first);
+        edgeTo(head, 1, "F42", second);
+
+        CellGraph graph = build();
+
+        assertThat(graph.dependenciesOf(head))
+                .filteredOn(CellDependency::isConstant)
+                .extracting(CellDependency::constant)
+                .containsExactly(100000.0);
+    }
+
+    @Test
+    void repeatedEqualConstantsTakeRolesByPosition() {
+        long amount = literal("A1", 1, 1, "100");
+        long head = formula("B1", 1, 2, "=A1/2*2", "100");
+        edgeTo(head, 0, "A1", amount);
+
+        CellGraph graph = build();
+
+        assertThat(graph.dependenciesOf(head))
+                .filteredOn(CellDependency::isConstant)
+                .extracting(CellDependency::constant, CellDependency::role)
+                .containsExactly(
+                        org.assertj.core.api.Assertions.tuple(2.0, DependencyRole.DIVISOR),
+                        org.assertj.core.api.Assertions.tuple(2.0, DependencyRole.FACTOR));
+    }
+
+    @Test
+    void aGrowthFactorKeepsBothTheConstantAndTheDependencyEdge() {
+        long prior = literal("I75", 75, 9, "100");
+        long growth = literal("D75", 75, 4, "0.05");
+        long head = formula("J75", 75, 10, "=I75*(1+D75)", "105");
+        edgeTo(head, 0, "I75", prior);
+        edgeTo(head, 1, "D75", growth);
+
+        CellGraph graph = build();
+
+        assertThat(graph.dependenciesOf(head))
+                .filteredOn(CellDependency::isConstant)
+                .extracting(CellDependency::constant, CellDependency::role)
+                .containsExactly(
+                        org.assertj.core.api.Assertions.tuple(1.0, DependencyRole.FACTOR));
+        assertThat(graph.dependenciesOf(head))
+                .filteredOn(dependency -> !dependency.isConstant())
+                .extracting(CellDependency::cellId, CellDependency::role)
+                .containsExactly(
+                        org.assertj.core.api.Assertions.tuple(prior, DependencyRole.FACTOR),
+                        org.assertj.core.api.Assertions.tuple(growth, DependencyRole.FACTOR));
     }
 }
