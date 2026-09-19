@@ -85,6 +85,10 @@ final class TypePropagation {
         for (long cellId : inCycle) {
             refusals.putIfAbsent(cellId, UnboundReason.CYCLE);
         }
+        Set<Long> inputIds = new HashSet<>();
+        for (InputCell input : graph.inputs()) {
+            inputIds.add(input.cellId());
+        }
 
         for (int pass = 0; pass < MAX_PASSES; pass++) {
             boolean changed = false;
@@ -93,15 +97,28 @@ final class TypePropagation {
                     continue;
                 }
                 long cellId = cell.cellId();
-                if (typed.containsKey(cellId) || refusals.containsKey(cellId)) {
+                if (inputIds.contains(cellId) || refusals.containsKey(cellId)) {
                     continue;
                 }
+                // A formula is re-derived every pass rather than frozen the first time it
+                // yields something. An operand that is still pending is skipped, so an
+                // early reading is a partial one; when the operand later types or refuses
+                // the formula must be revisited, or a subset guess (percent from the
+                // percent factor alone, money from the money factor alone) would be
+                // written and never corrected.
                 Outcome outcome = derive(graph, cellId, typed, refusals);
                 if (outcome.unit() != null) {
-                    typed.put(cellId, new CellTypes.Typed(
-                            outcome.unit(), TypeSource.PROPAGATED, outcome.depth()));
-                    changed = true;
+                    CellTypes.Typed next = new CellTypes.Typed(
+                            outcome.unit(), TypeSource.PROPAGATED, outcome.depth());
+                    CellTypes.Typed current = typed.get(cellId);
+                    if (current == null
+                            || !current.unit().equals(next.unit())
+                            || current.depth() != next.depth()) {
+                        typed.put(cellId, next);
+                        changed = true;
+                    }
                 } else if (outcome.refusal() != null) {
+                    typed.remove(cellId);
                     refusals.put(cellId, outcome.refusal());
                     changed = true;
                 }
@@ -161,6 +178,12 @@ final class TypePropagation {
         List<Operand> divisors = new ArrayList<>();
         List<Operand> others = new ArrayList<>();
         boolean pending = false;
+        // A product is not the product of a subset of its factors. A skipped or still
+        // unknown factor leaves the dimension unproven, so the product stays pending
+        // (it may yet resolve) or refuses (it never will) instead of returning whatever
+        // the remaining factors happen to multiply to.
+        boolean productPending = false;
+        boolean productBlocked = false;
         int depth = 0;
 
         for (CellDependency dependency : dependencies) {
@@ -181,11 +204,17 @@ final class TypePropagation {
                 if (isBarrier(refused)) {
                     return Outcome.refused(refused);
                 }
+                if (dependency.role().isDriver()) {
+                    productBlocked = true;
+                }
                 continue;
             }
             CellTypes.Typed operand = typed.get(operandId);
             if (operand == null) {
                 pending = true;
+                if (dependency.role().isDriver()) {
+                    productPending = true;
+                }
                 continue;
             }
             depth = Math.max(depth, operand.depth() + 1);
@@ -203,6 +232,12 @@ final class TypePropagation {
             }
         }
         if (!factors.isEmpty() || !divisors.isEmpty()) {
+            if (productPending) {
+                return Outcome.pending();
+            }
+            if (productBlocked) {
+                return Outcome.refused(UnboundReason.UNTYPABLE);
+            }
             ResolvedUnit product = combineProduct(factors, divisors);
             if (product.refusal() != null) {
                 return Outcome.refused(product.refusal());
@@ -308,7 +343,11 @@ final class TypePropagation {
                 continue;
             }
             CellKind next = factor.unit().kind();
-            typedScale = typedScale == null ? factor.unit().scale() : typedScale;
+            // A dimensionless factor carries no scale: percent/ratio must not erase the
+            // lakh scale of the money it multiplies.
+            if (next != CellKind.PERCENT && next != CellKind.RATIO && typedScale == null) {
+                typedScale = factor.unit().scale();
+            }
             kind = kind == null ? next : multiply(kind, next);
             if (kind == null) {
                 return ResolvedUnit.unresolved();

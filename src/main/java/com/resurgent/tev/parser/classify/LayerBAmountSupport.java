@@ -20,15 +20,15 @@ final class LayerBAmountSupport {
 
     static final int CONTEXT_CELL_CAP = 40;
 
-    private static final Pattern MONEY_TOKEN = Pattern.compile(
-            "(?i)(?:\\brs\\.?\\b|\\binr\\b|₹|\\$|€|£|amount|cost|price|value|fee|payment|"
-                    + "capex|opex|expense|outlay|investment|lac|lakh|crore|less\\s*:|"
-                    + "total\\s+cost|project\\s+cost|means\\s+of\\s+finance|"
-                    + "depreciation|\\bdep\\.?\\b)");
-    private static final Pattern QUANTITY_TOKEN = Pattern.compile(
+    /**
+     * The subset of {@link KindTokens#QUANTITY_TOKEN} a row label may claim. A bare noun
+     * ({@code Deluxe Rooms}) is an entity name, not a unit; only a counting marker
+     * ({@code No. of}, {@code Number of}, {@code Nos.}, {@code Qty}, a measured
+     * {@code Area}/{@code Capacity}) states the unit explicitly.
+     */
+    private static final Pattern ROW_QUANTITY_TOKEN = Pattern.compile(
             "(?i)(?:\\bno\\.?\\s*of\\b|\\bnumber\\s+of\\b|\\bqty\\b|\\bquantity\\b|\\bnos\\.?\\b|"
-                    + "\\bunits?\\b|\\brooms?\\b|\\bkeys\\b|\\bbeds?\\b|\\bdays?\\b|"
-                    + "\\bmonths?\\b|\\byears?\\b|\\bsq\\.?\\s*ft\\b|\\bsqft\\b|\\bsqm\\b|"
+                    + "\\bunits?\\b|\\bsq\\.?\\s*ft\\b|\\bsqft\\b|\\bsqm\\b|"
                     + "\\barea\\b|\\bcapacity\\b|\\bcount\\b)");
     private static final Pattern RATE_TOKEN = Pattern.compile(
             "(?i)(?:\\brate\\b|per\\s+unit|per\\s+sq|/\\s*sq|rs\\s*/|₹\\s*/|unit\\s+rate|"
@@ -42,13 +42,11 @@ final class LayerBAmountSupport {
     private static final Pattern PERIOD_HEADER = Pattern.compile(
             "(?i)^(?:(?:fy|cy|ay)\\s*)?(?:years?|yrs?|months?|mths?|quarters?|qtrs?|periods?|q|m|p)?"
                     + "\\s*[-–/]?\\s*(?:\\d{1,4}(?:\\s*[-–/]\\s*\\d{2,4})?)?$");
-    private static final Pattern PERCENT_TOKEN = Pattern.compile(
-            "(?i)(?:%|\\bpercent\\b|\\bgst\\b|\\bvat\\b|\\binterest\\b|\\buplift\\b|"
-                    + "\\bmargin\\b\\s*%|\\b contingency\\b)");
     /**
-     * A numeric rate quoted inside a row label ("Less: Depreciation @ 10 %",
-     * "Other Sales 2.5% of Total"). It says how the row was computed, not what the
-     * row's own numbers are, so it never cues percent.
+     * A percent is stated, never implied by a word. Bare {@code GST}/{@code interest}
+     * appear inside entity names ("BPL LED … (Including GST)") where they describe the
+     * item, not a percentage; a percent rate carries {@code %} or the word "percent".
+     * Shared with the reporting evidence via {@link KindTokens#PERCENT_TOKEN}.
      */
     private static final Pattern RATE_IN_LABEL = Pattern.compile("\\d+(?:\\.\\d+)?\\s*%");
 
@@ -112,10 +110,11 @@ final class LayerBAmountSupport {
     }
 
     /**
-     * Classify a numeric cell from its text cues alone. {@code hasContext} says
-     * whether row/column context was available: a bare cell without it falls back to
-     * money, which is right for a cost grid and wrong to assume when a label exists
-     * and says otherwise.
+     * Classify a numeric cell from its text cues alone. The row label is read first:
+     * when it states its own unit it wins, whether that unit is a percentage, a rate,
+     * money or a counted unit. Only when the row is a pure entity name
+     * ({@code Deluxe Rooms}) does the column header — resolved by the Candidate scope,
+     * never a naive scan — supply the missing dimension (ADR 0020).
      */
     static NumericKind classifyKind(
             String rowLabel, String columnHeader, String displayValue, boolean hasContext) {
@@ -126,39 +125,92 @@ final class LayerBAmountSupport {
         // of money is a period band, not a count, and must contribute no cue at all.
         String cueHeader = isPeriodHeader(header) ? "" : header;
         String cueLabel = isPeriodHeader(label) ? "" : label;
-        String haystack = (cueLabel + " " + cueHeader + " " + display).toLowerCase(Locale.ROOT);
 
-        // A percent cue may come only from the cell's own display, its number format
-        // (applied by the caller), the column header, or a row label that names a
-        // rate rather than carrying one. "Less: Depreciation @ 10 %" is a money line
-        // that quotes its rate; stripping the quoted rate leaves the row's own cues.
-        String percentCue = (stripRateInLabel(cueLabel) + " " + cueHeader + " " + display)
-                .toLowerCase(Locale.ROOT);
-        if (display.contains("%") || PERCENT_TOKEN.matcher(percentCue).find()) {
+        // A percent display is a fact about the cell itself and always wins.
+        if (display.contains("%")) {
+            return NumericKind.PERCENT;
+        }
+        NumericKind rowCue = explicitUnitCue(cueLabel, true);
+        if (rowCue != null) {
+            return rowCue;
+        }
+        NumericKind columnCue = explicitUnitCue(cueHeader, false);
+        if (columnCue != null) {
+            return columnCue;
+        }
+        return classifyFromLabel(cueLabel, display, hasContext);
+    }
+
+    /**
+     * True when a row label states no unit for its own numbers, so only the column
+     * can type the cell. The graph uses this to decide whether resolving the
+     * Candidate-scoped column header is worth doing at all.
+     */
+    static boolean rowLabelNeedsColumnUnit(String rowLabel) {
+        if (rowLabel == null || rowLabel.isBlank() || isPeriodHeader(rowLabel)) {
+            return true;
+        }
+        return explicitUnitCue(rowLabel, true) == null;
+    }
+
+    /** The original row-label-only reading, used when the column contributes no cue. */
+    private static NumericKind classifyFromLabel(String label, String display, boolean hasContext) {
+        String haystack = (label + " " + display).toLowerCase(Locale.ROOT);
+        // A quoted numeric rate in a row label says how the row was computed, not what
+        // the row's own numbers are, so it never cues percent.
+        String percentCue = (stripRateInLabel(label) + " " + display).toLowerCase(Locale.ROOT);
+        if (KindTokens.PERCENT_TOKEN.matcher(percentCue).find()) {
             return NumericKind.PERCENT;
         }
         if (RATE_TOKEN.matcher(haystack).find()) {
             return NumericKind.RATE;
         }
-        if (QUANTITY_TOKEN.matcher(haystack).find() && !MONEY_TOKEN.matcher(haystack).find()) {
+        if (KindTokens.QUANTITY_TOKEN.matcher(haystack).find()
+                && !KindTokens.MONEY_TOKEN.matcher(haystack).find()) {
             return NumericKind.QUANTITY;
         }
-        if (MONEY_TOKEN.matcher(haystack).find()
+        if (KindTokens.MONEY_TOKEN.matcher(haystack).find()
                 || looksLikeCurrencyDisplay(display)) {
-            return NumericKind.MONEY;
-        }
-        if (MONEY_TOKEN.matcher(cueHeader.toLowerCase(Locale.ROOT)).find()) {
             return NumericKind.MONEY;
         }
         if (!hasContext) {
             // Bare cell without row/column context: assume money for cost grids.
             return NumericKind.MONEY;
         }
-        if (!cueLabel.isBlank()
-                && !QUANTITY_TOKEN.matcher(cueLabel.toLowerCase(Locale.ROOT)).find()) {
+        if (!label.isBlank()
+                && !KindTokens.QUANTITY_TOKEN.matcher(label.toLowerCase(Locale.ROOT)).find()) {
             return NumericKind.MONEY;
         }
         return NumericKind.UNKNOWN;
+    }
+
+    /**
+     * The unit a single label states for itself, or {@code null} for a pure entity
+     * name ({@code Deluxe Rooms}) or a banner with no unit. A row label may only
+     * claim a counted unit through an explicit marker ({@code No. of}, {@code Nos.},
+     * {@code Qty}), because a bare noun names the entity, not the dimension; a column
+     * header may claim the measured noun directly ({@code ROOMS FOR SALE}).
+     */
+    private static NumericKind explicitUnitCue(String text, boolean rowContext) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        String lower = text.toLowerCase(Locale.ROOT);
+        String percentText = rowContext ? stripRateInLabel(text).toLowerCase(Locale.ROOT) : lower;
+        if (KindTokens.PERCENT_TOKEN.matcher(percentText).find()) {
+            return NumericKind.PERCENT;
+        }
+        if (RATE_TOKEN.matcher(lower).find()) {
+            return NumericKind.RATE;
+        }
+        if (KindTokens.MONEY_TOKEN.matcher(lower).find() || looksLikeCurrencyDisplay(text)) {
+            return NumericKind.MONEY;
+        }
+        Pattern quantity = rowContext ? ROW_QUANTITY_TOKEN : KindTokens.QUANTITY_TOKEN;
+        if (quantity.matcher(lower).find()) {
+            return NumericKind.QUANTITY;
+        }
+        return null;
     }
 
     /**
@@ -318,12 +370,7 @@ final class LayerBAmountSupport {
     }
 
     private static boolean looksLikeCurrencyDisplay(String display) {
-        if (display == null || display.isBlank()) {
-            return false;
-        }
-        String d = display.toLowerCase(Locale.ROOT);
-        return d.contains("₹") || d.contains("rs") || d.contains("inr")
-                || d.contains("$") || d.contains("€") || d.contains("£");
+        return KindTokens.displayNamesCurrency(display);
     }
 
     private static boolean hasNumericPayload(PacketCell cell) {

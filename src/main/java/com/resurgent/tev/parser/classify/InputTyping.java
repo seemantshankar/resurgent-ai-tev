@@ -1,8 +1,6 @@
 package com.resurgent.tev.parser.classify;
 
 import java.util.Locale;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Types one hardcoded cell from its own row label and displayed text. These are the
@@ -12,22 +10,14 @@ import java.util.regex.Pattern;
  */
 final class InputTyping {
 
-    private static final Pattern SCALE_TOKEN = Pattern.compile(
-            "(?i)\\b(lakhs?|lacs?|crores?|millions?|billions?|thousands?|000s?)\\b");
-
     private InputTyping() {}
 
     static ResolvedUnit of(GraphCell cell) {
-        if (cell.rowLabel() == null || cell.rowLabel().isBlank()) {
-            NumericKind fromFormat = applyFormat(NumericKind.UNKNOWN, cell.numberFormat());
-            CellKind formatted = CellKind.from(fromFormat);
-            if (formatted == null) {
-                return ResolvedUnit.unresolved();
-            }
-            return ResolvedUnit.of(formatted, scaleOf(cell));
-        }
         NumericKind kind = LayerBAmountSupport.classifyKind(
-                cell.rowLabel(), null, cell.displayValue(), true);
+                cell.rowLabel() == null ? "" : cell.rowLabel(),
+                cell.columnLabel(),
+                cell.displayValue(),
+                true);
         kind = applyFormat(kind, cell.numberFormat());
         CellKind cellKind = CellKind.from(kind);
         if (cellKind == null) {
@@ -36,34 +26,24 @@ final class InputTyping {
         return ResolvedUnit.of(cellKind, scaleOf(cell));
     }
 
-    /** Scale named in the row label; the cell's own figure never implies one. */
+    /**
+     * Scale named by the cell's own formula divisor ({@code /10^5} → lakh), else by
+     * the row label, else by the column header, else nothing. A constant-only formula
+     * such as {@code 8000*300/100000} states its scale in its own arithmetic; typing
+     * it from labels alone would lose it. The cell's resulting figure never implies a
+     * scale (ADR 0020).
+     */
     static CellScale scaleOf(GraphCell cell) {
-        CellScale fromLabel = scaleIn(cell.rowLabel());
-        return fromLabel == null ? CellScale.UNIT : fromLabel;
-    }
-
-    static CellScale scaleIn(String text) {
-        if (text == null || text.isBlank()) {
-            return null;
+        CellScale fromFormula = InterpretationEvidenceResolver.formulaDivisorScale(cell.formulaText());
+        if (fromFormula != null) {
+            return fromFormula;
         }
-        Matcher matcher = SCALE_TOKEN.matcher(text);
-        if (!matcher.find()) {
-            return null;
+        CellScale fromLabel = CellScale.fromText(cell.rowLabel());
+        if (fromLabel != null) {
+            return fromLabel;
         }
-        String token = matcher.group().toLowerCase(Locale.ROOT);
-        if (token.startsWith("lakh") || token.startsWith("lac")) {
-            return CellScale.LAKH;
-        }
-        if (token.startsWith("crore")) {
-            return CellScale.CRORE;
-        }
-        if (token.startsWith("million")) {
-            return CellScale.MILLION;
-        }
-        if (token.startsWith("billion")) {
-            return CellScale.BILLION;
-        }
-        return CellScale.THOUSAND;
+        CellScale fromColumn = CellScale.fromText(cell.columnLabel());
+        return fromColumn == null ? CellScale.UNIT : fromColumn;
     }
 
     /**
@@ -81,10 +61,7 @@ final class InputTyping {
         if (kind != NumericKind.UNKNOWN && kind != null) {
             return kind;
         }
-        if (format.contains("₹")
-                || format.contains("$")
-                || format.contains("rs")
-                || format.contains("inr")) {
+        if (KindTokens.displayNamesCurrency(numberFormat)) {
             return NumericKind.MONEY;
         }
         return kind;

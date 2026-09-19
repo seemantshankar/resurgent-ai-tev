@@ -26,14 +26,8 @@ final class InterpretationEvidenceResolver {
             Pattern.compile("(?i)\\b(?:year|yr|y)\\s*([0-9]{1,2})\\b");
     private static final Pattern YEAR_CALENDAR =
             Pattern.compile("(?i)\\b((?:19|20)\\d{2})\\b");
-    private static final Pattern SCALE =
-            Pattern.compile("(?i)\\b(lakhs?|lacs?|crore|million|billion|thousands?|000s?)\\b");
-    private static final Pattern CURRENCY =
-            Pattern.compile("(?i)(₹|\\binr\\b|\\brs\\.?\\b|\\busd\\b|\\beur\\b|\\$|€|£)");
     private static final Pattern BASIS =
             Pattern.compile("(?i)\\b(projected|projection|actual|budget|forecast|historical)\\b");
-    private static final Pattern UNIT =
-            Pattern.compile("(?i)\\b(sq\\.?\\s*ft|sqft|sqm|nos?\\.?|keys?|rooms?|%|percent)\\b");
     /** Division by INR/display-unit magnitudes (e.g. Om Arham {@code /10^5} → lakh). */
     private static final Pattern FORMULA_DIVISOR_BILLION =
             Pattern.compile("(?i)/\\s*(?:10\\s*\\^\\s*9|10\\s*\\*\\*\\s*9|1e9|1000000000)\\b");
@@ -45,6 +39,37 @@ final class InterpretationEvidenceResolver {
             Pattern.compile("(?i)/\\s*(?:10\\s*\\^\\s*5|10\\s*\\*\\*\\s*5|1e5|100000)\\b");
     private static final Pattern FORMULA_DIVISOR_THOUSAND =
             Pattern.compile("(?i)/\\s*(?:10\\s*\\^\\s*3|10\\s*\\*\\*\\s*3|1e3|1000)\\b");
+
+    /** One formula divisor rule: the pattern, the scale it implies, and its rule id. */
+    private record DivisorRule(Pattern pattern, CellScale scale, String normalized, String ruleId) {}
+
+    // Largest magnitude first so /1000000000 is not misread as /1000. The single
+    // source of truth for the scale a formula's own divisor implies, shared by the
+    // reporting evidence and by input typing.
+    private static final List<DivisorRule> FORMULA_DIVISORS = List.of(
+            new DivisorRule(FORMULA_DIVISOR_BILLION, CellScale.BILLION, "billion", "formula_divisor_1e9"),
+            new DivisorRule(FORMULA_DIVISOR_CRORE, CellScale.CRORE, "crore", "formula_divisor_1e7"),
+            new DivisorRule(FORMULA_DIVISOR_MILLION, CellScale.MILLION, "million", "formula_divisor_1e6"),
+            new DivisorRule(FORMULA_DIVISOR_LAKH, CellScale.LAKH, "lakh", "formula_divisor_1e5"),
+            new DivisorRule(FORMULA_DIVISOR_THOUSAND, CellScale.THOUSAND, "thousand", "formula_divisor_1e3"));
+
+    /**
+     * The scale a formula's own divisor implies ({@code /10^5} → lakh), or
+     * {@code null}. A constant-only formula such as {@code 8000*300/100000} hardcodes
+     * a lakh figure; typing it from labels alone loses that. Shared with the
+     * reporting evidence so the two never diverge.
+     */
+    static CellScale formulaDivisorScale(String formulaText) {
+        if (formulaText == null || formulaText.isBlank()) {
+            return null;
+        }
+        for (DivisorRule rule : FORMULA_DIVISORS) {
+            if (rule.pattern().matcher(formulaText).find()) {
+                return rule.scale();
+            }
+        }
+        return null;
+    }
 
     private InterpretationEvidenceResolver() {}
 
@@ -88,6 +113,25 @@ final class InterpretationEvidenceResolver {
                         List.of(bound));
             }
         }
+        // Discovery can segment a column-header band into its own child Candidate while
+        // the data rows form another, so no narrow owner spans the header row. The
+        // coverage parent does; retry with it as an additional scope before reporting
+        // missing column headers.
+        if (columnHeadersAllMissing(out)) {
+            CandidateRow parent = coverageParentOwner(target, ownersByCell);
+            if (parent != null
+                    && peers.stream().noneMatch(p -> p.candidateId() == parent.candidateId())) {
+                List<CandidateRow> withParent = new ArrayList<>(peers);
+                withParent.add(parent);
+                out = resolveWithPeers(
+                        parseRunId,
+                        target,
+                        byId,
+                        membersByCandidate,
+                        candidatesById,
+                        withParent);
+            }
+        }
         return List.copyOf(out);
     }
 
@@ -127,6 +171,29 @@ final class InterpretationEvidenceResolver {
             }
         }
         return sawHeader;
+    }
+
+    private static boolean columnHeadersAllMissing(List<InterpretationEvidence> evidence) {
+        boolean sawColumnHeader = false;
+        for (InterpretationEvidence item : evidence) {
+            if (EvidenceRole.COLUMN_HEADER.equals(item.role())) {
+                sawColumnHeader = true;
+                if (!EvidenceResolution.MISSING.equals(item.resolution())) {
+                    return false;
+                }
+            }
+        }
+        return sawColumnHeader;
+    }
+
+    private static CandidateRow coverageParentOwner(
+            InterpretationCellView target, Map<Long, List<CandidateRow>> ownersByCell) {
+        for (CandidateRow owner : ownersByCell.getOrDefault(target.cellId(), List.of())) {
+            if ("coverage_parent".equals(owner.candidateKind())) {
+                return owner;
+            }
+        }
+        return null;
     }
 
     private static List<CandidateRow> ownershipPeers(
@@ -530,30 +597,19 @@ final class InterpretationEvidenceResolver {
             return;
         }
         String formula = target.formulaText();
-        // Longest / largest magnitude first so /1000000000 is not misread as /1000.
-        if (matchDivisor(cues, target, formula, FORMULA_DIVISOR_BILLION, "billion", "formula_divisor_1e9")) {
-            return;
+        for (DivisorRule rule : FORMULA_DIVISORS) {
+            if (matchDivisor(cues, target, formula, rule)) {
+                return;
+            }
         }
-        if (matchDivisor(cues, target, formula, FORMULA_DIVISOR_CRORE, "crore", "formula_divisor_1e7")) {
-            return;
-        }
-        if (matchDivisor(cues, target, formula, FORMULA_DIVISOR_MILLION, "million", "formula_divisor_1e6")) {
-            return;
-        }
-        if (matchDivisor(cues, target, formula, FORMULA_DIVISOR_LAKH, "lakh", "formula_divisor_1e5")) {
-            return;
-        }
-        matchDivisor(cues, target, formula, FORMULA_DIVISOR_THOUSAND, "thousand", "formula_divisor_1e3");
     }
 
     private static boolean matchDivisor(
             Map<String, List<Cue>> cues,
             InterpretationCellView target,
             String formula,
-            Pattern pattern,
-            String normalized,
-            String ruleId) {
-        Matcher matcher = pattern.matcher(formula);
+            DivisorRule rule) {
+        Matcher matcher = rule.pattern().matcher(formula);
         if (!matcher.find()) {
             return false;
         }
@@ -561,8 +617,8 @@ final class InterpretationEvidenceResolver {
                 .add(new Cue(
                         target.cellId(),
                         matcher.group().replaceAll("\\s+", ""),
-                        normalized,
-                        ruleId));
+                        rule.normalized(),
+                        rule.ruleId()));
         return true;
     }
 
@@ -591,67 +647,38 @@ final class InterpretationEvidenceResolver {
             cues.get(EvidenceRole.BASIS)
                     .add(new Cue(sourceCellId, basis.group().trim(), null, "basis_token"));
         }
-        Matcher currency = CURRENCY.matcher(text);
+        Matcher currency = KindTokens.CURRENCY.matcher(text);
         if (currency.find()) {
             String token = currency.group().trim();
-            String normalized = normalizeCurrency(token);
+            String normalized = KindTokens.normalizeCurrency(token);
             cues.get(EvidenceRole.CURRENCY)
                     .add(new Cue(sourceCellId, token, normalized, "currency_token"));
         }
-        Matcher scale = SCALE.matcher(text);
+        Matcher scale = CellScale.SCALE_TOKEN.matcher(text);
         if (scale.find()) {
             String token = scale.group().trim();
             cues.get(EvidenceRole.SCALE)
                     .add(new Cue(sourceCellId, token, normalizeScale(token), "scale_token"));
         }
-        Matcher unit = UNIT.matcher(text);
+        Matcher unit = KindTokens.UNIT.matcher(text);
         if (unit.find()) {
             String token = unit.group().trim();
             cues.get(EvidenceRole.UNIT)
-                    .add(new Cue(sourceCellId, token, null, "unit_token"));
+                    .add(new Cue(sourceCellId, token, KindTokens.normalizeUnit(token), "unit_token"));
         }
     }
 
+    /** Canonical scale key so plural spelling variants agree on one conflict key. */
     private static String normalizeScale(String token) {
-        String t = token.toLowerCase(Locale.ROOT);
-        if (t.startsWith("lac")) {
-            return "lakh";
-        }
-        if (t.startsWith("crore")) {
-            return "crore";
-        }
-        if (t.startsWith("thousand") || t.equals("000s") || t.equals("000")) {
-            return "thousand";
-        }
-        if (t.startsWith("million")) {
-            return "million";
-        }
-        if (t.startsWith("billion")) {
-            return "billion";
-        }
-        return t;
-    }
-
-    private static String normalizeCurrency(String token) {
-        String t = token.toLowerCase(Locale.ROOT).replace(".", "");
-        if (t.contains("₹") || t.equals("inr") || t.equals("rs")) {
-            return "INR";
-        }
-        if (t.equals("usd")) {
-            return "USD";
-        }
-        if (t.contains("$")) {
-            // Bare $ is USD/CAD/AUD/… — keep source cue without inventing a currency.
-            return null;
-        }
-        if (t.contains("€") || t.equals("eur")) {
-            return "EUR";
-        }
-        if (t.contains("£")) {
-            return "GBP";
-        }
-        // Ambiguous bare symbol already handled by explicit tokens; leave null if unknown.
-        return null;
+        CellScale scale = CellScale.ofToken(token);
+        return switch (scale) {
+            case LAKH -> "lakh";
+            case CRORE -> "crore";
+            case THOUSAND -> "thousand";
+            case MILLION -> "million";
+            case BILLION -> "billion";
+            case UNIT -> token.toLowerCase(Locale.ROOT);
+        };
     }
 
     private static List<InterpretationEvidence> missingHeaders(long parseRunId, long cellId) {
@@ -752,5 +779,40 @@ final class InterpretationEvidenceResolver {
             byId.put(cell.cellId(), cell);
         }
         return byId;
+    }
+
+    /**
+     * The Candidate-scoped resolved column-header text for typing, or {@code null}
+     * when the header is missing or the scopes disagree. This reuses the exact
+     * scoping the reporting evidence uses, so a note banner cannot be mistaken for a
+     * distant block's header (ADR 0020).
+     */
+    static String resolvedColumnHeader(
+            long parseRunId,
+            InterpretationCellView target,
+            Map<Long, InterpretationCellView> byId,
+            Map<Long, List<CandidateRow>> ownersByCell,
+            Map<Long, Set<Long>> membersByCandidate,
+            Map<Long, CandidateRow> candidatesById) {
+        List<InterpretationEvidence> evidence = resolve(
+                parseRunId, target, byId, ownersByCell, membersByCandidate, candidatesById, null);
+        StringBuilder header = new StringBuilder();
+        for (InterpretationEvidence item : evidence) {
+            if (!EvidenceRole.COLUMN_HEADER.equals(item.role())) {
+                continue;
+            }
+            if (EvidenceResolution.AMBIGUOUS.equals(item.resolution())) {
+                return null;
+            }
+            if (EvidenceResolution.RESOLVED.equals(item.resolution())
+                    && item.sourceText() != null
+                    && !item.sourceText().isBlank()) {
+                if (header.length() > 0) {
+                    header.append(' ');
+                }
+                header.append(item.sourceText().trim());
+            }
+        }
+        return header.length() == 0 ? null : header.toString();
     }
 }

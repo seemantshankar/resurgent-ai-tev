@@ -119,9 +119,19 @@ class OmArhamRandomTypingValidationIT {
             Map<Long, String> sheetById,
             TypeValidationResults results) {
         System.out.println("\n=== Critical Cells (Verified Outcomes) ===");
-        // P L!D46 is the real Gap 1 evidence: B46*'CAPITAL COST'!D20 must be
-        // MULTIPLICATIVE (factors), so the head types MONEY.
-        validateCellType(graph, types, sheetById, results, "P  L", "D46", true, CellKind.MONEY);
+        // P L!D46's Gap 1 parse (B46*'CAPITAL COST'!D20 multiplicative) is locked by
+        // CellGraphBuilderTest. The head can no longer be asserted MONEY: the engine no
+        // longer freezes a subset reading, and 'CAPITAL COST'!D20 resolves through
+        // ASSETS!I62, a genuine mixed-kind sum (an item row whose label states "Nos."
+        // summed with money). The chain refuses rather than guess.
+        validateCellForDiagnostics(graph, types, sheetById, results, "P  L", "D46",
+                "Refuses KIND_CONFLICT upstream (CAPITAL COST!D20 -> ASSETS!I62 mixed-kind sum)");
+        // P L!D23/J23/J33/I25 are the poisoned cells this pass fixes: each was PERCENT
+        // (a product typed from its percent factor alone). They must now be MONEY.
+        validateCellType(graph, types, sheetById, results, "P  L", "D23", true, CellKind.MONEY);
+        validateCellType(graph, types, sheetById, results, "P  L", "J23", true, CellKind.MONEY);
+        validateCellType(graph, types, sheetById, results, "P  L", "J33", true, CellKind.MONEY);
+        validateCellType(graph, types, sheetById, results, "P  L", "I25", true, CellKind.MONEY);
         // ASSETS!I9 is the Gap 2 lock: F21/10^5 is one 100000 divisor, MONEY/LAKH.
         validateCellType(graph, types, sheetById, results, "ASSETS", "I9", true, CellKind.MONEY);
         validateCellType(graph, types, sheetById, results, "ASSETS", "F21", true, CellKind.MONEY);

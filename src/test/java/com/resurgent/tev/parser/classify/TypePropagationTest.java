@@ -424,4 +424,33 @@ class TypePropagationTest {
         assertThat(second.refusals()).isEqualTo(first.refusals());
         assertThat(second.rows(1L)).isEqualTo(first.rows(1L));
     }
+
+    @Test
+    void aProductIsNeverTypedFromASubsetWhileAnOperandIsStillPending() {
+        label("A1", 1, 1, "Occupancy %");
+        long occupancy = literalWithDisplay("B1", 1, 2, "0.4", "40.00%");
+        label("A2", 2, 1, "Construction cost");
+        long cost = literal("B2", 2, 2, "100");
+        label("A3", 3, 1, "No. of Rooms");
+        long rooms = literal("B3", 3, 2, "40");
+        // The product is ordered before the divisor that will refuse, so a subset
+        // guess in the first pass would freeze "percent" and never be revisited.
+        long product = formula("B5", 5, 2, "=B1*B4", "0");
+        edge(product, 0, "B1");
+        edge(product, 1, "B4");
+        long mixed = formula("B4", 4, 2, "=B2+B3", "140");
+        edge(mixed, 0, "B2");
+        edge(mixed, 1, "B3");
+
+        CellTypes types = resolve();
+
+        assertThat(types.refusalOf(cost)).isEmpty();
+        assertThat(types.refusalOf(rooms)).isEmpty();
+        assertThat(types.unitOf(occupancy).orElseThrow().kind()).isEqualTo(CellKind.PERCENT);
+        assertThat(types.refusalOf(mixed)).contains(UnboundReason.KIND_CONFLICT);
+        assertThat(types.unitOf(product))
+                .as("a product must not type from the percent factor alone")
+                .isEmpty();
+        assertThat(types.refusalOf(product)).contains(UnboundReason.KIND_CONFLICT);
+    }
 }

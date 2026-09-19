@@ -1,5 +1,9 @@
 # Layer B types the hardcoded inputs and propagates through formulas
 
+_Amended by [ADR 0020](0020-type-inputs-by-row-and-column-label-precedence.md): an
+input is typed from its row **and** column labels by an explicit precedence, and a
+formula is never typed from a subset of its operands._
+
 Layer B bound money lines by asking an LLM per cell, over packets chunked 40 amount
 cells at a time. On the working client FM (8,791 numeric cells) that produced 419
 bindings, 8 of 60 binding-bearing rows carrying more than one path, 8 of 64 labels

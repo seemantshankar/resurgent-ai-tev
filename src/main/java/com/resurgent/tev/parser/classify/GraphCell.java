@@ -1,9 +1,10 @@
 package com.resurgent.tev.parser.classify;
 
 /**
- * One cell as the graph sees it: where it is, what it says, and the nearest label
- * to its left on the same row. No presentation facts — bold, borders and blank
- * rows are deliberately absent, because they are author-specific and optional.
+ * One cell as the graph sees it: where it is, what it says, the nearest label to
+ * its left on the same row, and the nearest label above it in the same column. No
+ * presentation facts — bold, borders and blank rows are deliberately absent,
+ * because they are author-specific and optional.
  */
 record GraphCell(
         long cellId,
@@ -15,6 +16,7 @@ record GraphCell(
         boolean numeric,
         boolean error,
         String rowLabel,
+        String columnLabel,
         String displayValue,
         String numericValue,
         String valueType,

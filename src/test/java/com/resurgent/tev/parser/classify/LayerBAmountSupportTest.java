@@ -198,4 +198,47 @@ class LayerBAmountSupportTest {
                 "TOTAL DEP. OF THE YEAR", null, "452.19", true))
                 .isEqualTo(NumericKind.MONEY);
     }
+
+    @Test
+    void anEntityRowNeedsItsColumnUnitToDisambiguate() {
+        assertThat(LayerBAmountSupport.classifyKind(
+                "Deluxe Rooms", "AVERAGE TARIFF (in Rs.)", "5000", true))
+                .isEqualTo(NumericKind.MONEY);
+        assertThat(LayerBAmountSupport.classifyKind(
+                "Deluxe Rooms", "ROOMS FOR SALE", "190", true))
+                .isEqualTo(NumericKind.QUANTITY);
+    }
+
+    @Test
+    void aColumnUnitGovernsAnEntityRowButNotAnExplicitRowUnit() {
+        // "Year 7" is a period band: it contributes no unit, so the row label decides.
+        assertThat(LayerBAmountSupport.classifyKind(
+                "Deluxe Rooms", "Year 7", "190", true))
+                .isEqualTo(NumericKind.QUANTITY);
+        // A row that states its own unit outranks a bare column banner.
+        assertThat(LayerBAmountSupport.classifyKind(
+                "No. of Rooms", "Total", "40", true))
+                .isEqualTo(NumericKind.QUANTITY);
+    }
+
+    @Test
+    void aRowPercentOverrideBeatsAMonetaryColumnBanner() {
+        assertThat(LayerBAmountSupport.classifyKind(
+                "Occupancy %", "Amount (Rs)", "40", true))
+                .isEqualTo(NumericKind.PERCENT);
+    }
+
+    @Test
+    void aRowThatStatesItsOwnUnitOutranksTheColumnBanner() {
+        assertThat(LayerBAmountSupport.classifyKind(
+                "No. of Rooms", "AVERAGE TARIFF (in Rs.)", "5000", true))
+                .isEqualTo(NumericKind.QUANTITY);
+    }
+
+    @Test
+    void aRowLabelThatNeedsAColumn(){
+        assertThat(LayerBAmountSupport.rowLabelNeedsColumnUnit("Deluxe Rooms")).isTrue();
+        assertThat(LayerBAmountSupport.rowLabelNeedsColumnUnit("No. of Rooms")).isFalse();
+        assertThat(LayerBAmountSupport.rowLabelNeedsColumnUnit("Occupancy %")).isFalse();
+    }
 }

@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.classify;
 
+import com.resurgent.tev.parser.db.CandidateRow;
 import com.resurgent.tev.parser.db.CellReferenceEdge;
 import com.resurgent.tev.parser.db.InterpretationCellView;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
@@ -47,18 +48,60 @@ final class CellGraphBuilder {
 
     CellGraph read(WorkspaceRepository repo, long parseRunId) throws SQLException {
         Objects.requireNonNull(repo, "repo");
+        List<InterpretationCellView> cells = repo.selectInterpretationCellsForParseRun(parseRunId);
         return build(
                 parseRunId,
-                repo.selectInterpretationCellsForParseRun(parseRunId),
+                cells,
                 repo.selectCellReferencesForParseRun(parseRunId),
-                repo.selectNumberFormatsForParseRun(parseRunId));
+                repo.selectNumberFormatsForParseRun(parseRunId),
+                headerScope(repo, parseRunId, cells));
+    }
+
+    /**
+     * The Candidate-scoped header lookup the graph uses to type entity rows. It is
+     * read from the same discovery Candidates the reporting evidence uses, so the
+     * header is bounded to the data block and a note banner cannot pull in a
+     * distant schedule's unit (ADR 0020). A run with no Candidates yields no scope.
+     */
+    private static HeaderScope headerScope(
+            WorkspaceRepository repo, long parseRunId, List<InterpretationCellView> cells)
+            throws SQLException {
+        List<CandidateRow> candidates = repo.selectCandidatesForParseRun(parseRunId);
+        if (candidates.isEmpty()) {
+            return null;
+        }
+        Map<Long, Set<Long>> membersByCandidate = InterpretationEvidenceResolver.indexMembers(
+                repo.selectCandidateMembersForParseRun(parseRunId));
+        Map<Long, CandidateRow> candidatesById = new HashMap<>();
+        for (CandidateRow candidate : candidates) {
+            candidatesById.put(candidate.candidateId(), candidate);
+        }
+        return new HeaderScope(
+                parseRunId,
+                InterpretationEvidenceResolver.indexCells(cells),
+                InterpretationEvidenceResolver.indexOwners(candidates, membersByCandidate),
+                membersByCandidate,
+                candidatesById);
+    }
+
+    private record HeaderScope(
+            long parseRunId,
+            Map<Long, InterpretationCellView> byId,
+            Map<Long, List<CandidateRow>> ownersByCell,
+            Map<Long, Set<Long>> membersByCandidate,
+            Map<Long, CandidateRow> candidatesById) {
+
+        String columnHeader(InterpretationCellView cell) {
+            return InterpretationEvidenceResolver.resolvedColumnHeader(
+                    parseRunId, cell, byId, ownersByCell, membersByCandidate, candidatesById);
+        }
     }
 
     CellGraph build(
             long parseRunId,
             List<InterpretationCellView> cells,
             List<CellReferenceEdge> edges) {
-        return build(parseRunId, cells, edges, Map.of());
+        return build(parseRunId, cells, edges, Map.of(), null);
     }
 
     CellGraph build(
@@ -66,7 +109,16 @@ final class CellGraphBuilder {
             List<InterpretationCellView> cells,
             List<CellReferenceEdge> edges,
             Map<Long, String> numberFormats) {
-        Index index = Index.of(cells, numberFormats == null ? Map.of() : numberFormats);
+        return build(parseRunId, cells, edges, numberFormats, null);
+    }
+
+    CellGraph build(
+            long parseRunId,
+            List<InterpretationCellView> cells,
+            List<CellReferenceEdge> edges,
+            Map<Long, String> numberFormats,
+            HeaderScope headerScope) {
+        Index index = Index.of(cells, numberFormats == null ? Map.of() : numberFormats, headerScope);
         Map<Long, List<CellReferenceEdge>> edgesByFrom = new HashMap<>();
         for (CellReferenceEdge edge : edges) {
             edgesByFrom.computeIfAbsent(edge.fromCellId(), id -> new ArrayList<>()).add(edge);
@@ -685,10 +737,17 @@ final class CellGraphBuilder {
             List<GraphCell> ordered) {
 
         static Index of(List<InterpretationCellView> cells) {
-            return of(cells, Map.of());
+            return of(cells, Map.of(), null);
         }
 
         static Index of(List<InterpretationCellView> cells, Map<Long, String> numberFormats) {
+            return of(cells, numberFormats, null);
+        }
+
+        static Index of(
+                List<InterpretationCellView> cells,
+                Map<Long, String> numberFormats,
+                HeaderScope headerScope) {
             Map<Long, GraphCell> byId = new LinkedHashMap<>();
             Map<Long, Map<String, Long>> byCoord = new HashMap<>();
             Map<Long, Map<Long, Long>> byRowCol = new HashMap<>();
@@ -700,6 +759,14 @@ final class CellGraphBuilder {
             }
             List<GraphCell> ordered = new ArrayList<>();
             for (InterpretationCellView cell : cells) {
+                String rowLabel = nearestRowLabel(cell, rowIndex);
+                // The column header is only resolved where it decides anything: an
+                // entity row that states no unit of its own. Cost of a scoped lookup is
+                // paid for those cells, not for the whole workbook.
+                String columnLabel = null;
+                if (headerScope != null && LayerBAmountSupport.rowLabelNeedsColumnUnit(rowLabel)) {
+                    columnLabel = headerScope.columnHeader(cell);
+                }
                 GraphCell graphCell = new GraphCell(
                         cell.cellId(),
                         cell.worksheetId(),
@@ -709,7 +776,8 @@ final class CellGraphBuilder {
                         cell.formulaText(),
                         isNumeric(cell),
                         cell.isError(),
-                        nearestRowLabel(cell, rowIndex),
+                        rowLabel,
+                        columnLabel,
                         cell.displayValue(),
                         cell.numericValue(),
                         cell.valueType(),

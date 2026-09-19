@@ -1,6 +1,8 @@
 package com.resurgent.tev.parser.classify;
 
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * The unit a numeric cell's figure is expressed in. {@code multiplier()} is how many
@@ -62,5 +64,44 @@ public enum CellScale {
             return null;
         }
         return dividedBy(scale, 1d / factor);
+    }
+
+    /**
+     * The one scale-word matcher: a token such as {@code lakhs}, {@code Lacs},
+     * {@code crore}, {@code million} or {@code 000s} inside {@code text}, or
+     * {@code null}. The single source of truth shared by input typing and the
+     * reporting evidence, so adding a scale term happens in one place.
+     */
+    static final Pattern SCALE_TOKEN = Pattern.compile(
+            "(?i)\\b(lakhs?|lacs?|crores?|millions?|billions?|thousands?|000s?)\\b");
+
+    /** The scale named by the text, or {@code null} when none is stated. */
+    static CellScale fromText(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        Matcher matcher = SCALE_TOKEN.matcher(text);
+        if (!matcher.find()) {
+            return null;
+        }
+        return ofToken(matcher.group());
+    }
+
+    /** The scale one matched token names, shared by token- and word-side callers. */
+    static CellScale ofToken(String token) {
+        String t = token.toLowerCase(Locale.ROOT);
+        if (t.startsWith("lakh") || t.startsWith("lac")) {
+            return LAKH;
+        }
+        if (t.startsWith("crore")) {
+            return CRORE;
+        }
+        if (t.startsWith("million")) {
+            return MILLION;
+        }
+        if (t.startsWith("billion")) {
+            return BILLION;
+        }
+        return THOUSAND;
     }
 }
