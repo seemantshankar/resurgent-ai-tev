@@ -88,6 +88,61 @@ class ClassifyCommandTest {
     }
 
     @Test
+    void classifyAcceptsExplicitLimits() throws Exception {
+        Path xlsx = tempDir.resolve("limits.xlsx");
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Sheet1");
+            Row row = sheet.createRow(0);
+            row.createCell(0).setCellValue("Civil");
+            row.createCell(1).setCellValue(100.0);
+            try (FileOutputStream out = new FileOutputStream(xlsx.toFile())) {
+                workbook.write(out);
+            }
+        }
+        Path db = tempDir.resolve("limits.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        ClassifierLlm fake = new ClassifierLlm() {
+            @Override
+            public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
+                return new LayerAJudgment(
+                        ScheduleFamily.CAPEX_DETAIL, Triage.MAIN, Relevance.PRIMARY,
+                        List.of(), List.of(), null);
+            }
+
+            @Override
+            public List<LayerBLineJudgment> classifyLayerB(LayerBPrompt prompt) {
+                return List.of();
+            }
+        };
+        CommandLine commandLine = new CommandLine(new ClassifyCommand(fake));
+        RunResult result = run(commandLine,
+                "--db", db.toString(),
+                "--parse-run", Long.toString(ingest.parseRunId()),
+                "--parallelism", "2",
+                "--attempt-deadline-seconds", "30",
+                "--classify-deadline-minutes", "5");
+
+        assertThat(result.exitCode()).isZero();
+        assertThat(result.stdout()).contains("dispositions");
+    }
+
+    @Test
+    void invalidParallelismExitsTwo() throws Exception {
+        Path db = tempDir.resolve("limits-invalid.db");
+        try (var ignored = com.resurgent.tev.parser.db.WorkspaceDatabase.open(db)) {
+            // schema only
+        }
+        RunResult result = runMain("classify",
+                "--db", db.toString(),
+                "--parse-run", "1",
+                "--parallelism", "0");
+        assertThat(result.exitCode()).isEqualTo(2);
+        assertThat(result.stderr()).contains("parallelism");
+    }
+
+    @Test
     void missingParseRunExitsThree() throws Exception {
         Path db = tempDir.resolve("empty.db");
         try (var ignored = com.resurgent.tev.parser.db.WorkspaceDatabase.open(db)) {

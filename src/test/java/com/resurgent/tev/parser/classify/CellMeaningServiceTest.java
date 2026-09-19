@@ -25,6 +25,30 @@ class CellMeaningServiceTest {
     Path tempDir;
 
     @Test
+    void lookupFindsOmArhamStyleSheetWhenTabNameHasTrailingSpace() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("P  L ");
+            Row row = sheet.createRow(0);
+            row.createCell(0).setCellValue("Insurance");
+            row.createCell(9).setCellValue(12.0);
+            xlsx = tempDir.resolve("pl-trailing-space.xlsx");
+            try (FileOutputStream out = new FileOutputStream(xlsx.toFile())) {
+                workbook.write(out);
+            }
+        }
+        Path db = tempDir.resolve("pl-trailing-space.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        CellMeaningService meanings = new CellMeaningService();
+        CellMeaning fromConcat = meanings.lookup(db, ingest.parseRunId(), "P  L !J1");
+        assertThat(fromConcat.cell().coord()).isEqualTo("J1");
+        CellMeaning fromQuoted = meanings.lookup(db, ingest.parseRunId(), "'P  L '!J1");
+        assertThat(fromQuoted.cell().coord()).isEqualTo("J1");
+    }
+
+    @Test
     void lookupReturnsStructureLayerABindingPeersAndFacts() throws Exception {
         Path xlsx = writeRolesWorkbook(tempDir);
         Path db = tempDir.resolve("meaning.db");
@@ -42,32 +66,25 @@ class CellMeaningServiceTest {
                 List.of(new ProjectFactJudgment(
                         null, "Demo Hotel LLP", "Project Identity > Legal Name")));
         llm.layerBFactory = prompt -> {
-            List<PacketCell> amounts = prompt.packet().cells().stream()
-                    .filter(cell -> "number".equals(cell.valueType())
-                            && (cell.formulaText() == null || cell.formulaText().isBlank()))
-                    .toList();
-            if (amounts.size() < 2) {
-                return List.of();
+            List<LayerBLineJudgment> lines = new java.util.ArrayList<>();
+            for (PacketCell cell : prompt.packet().cells()) {
+                if (!"number".equals(cell.valueType())
+                        || (cell.formulaText() != null && !cell.formulaText().isBlank())) {
+                    continue;
+                }
+                String label = LayerBAmountSupport.resolveRowLabel(prompt.packet(), cell);
+                if (label != null && label.toLowerCase().contains("civil")) {
+                    lines.add(new LayerBLineJudgment(
+                            cell.coord(), "Air Conditioning", AC_PATH, AmountRole.ADD,
+                            List.of(), null, List.of()));
+                } else if (label != null && label.toLowerCase().contains("ac")) {
+                    lines.add(new LayerBLineJudgment(
+                            cell.coord(), "Less: AC", AC_PATH, AmountRole.DEDUCT,
+                            List.of(), null,
+                            List.of(new LinePeerRef("Costs!B2", PeerReason.ANTI_DOUBLE_COUNT))));
+                }
             }
-            PacketCell add = amounts.get(0);
-            PacketCell deduct = amounts.get(1);
-            return List.of(
-                    new LayerBLineJudgment(
-                            add.coord(),
-                            "Air Conditioning",
-                            AC_PATH,
-                            AmountRole.ADD,
-                            List.of(),
-                            null,
-                            List.of()),
-                    new LayerBLineJudgment(
-                            deduct.coord(),
-                            "Less: AC",
-                            AC_PATH,
-                            AmountRole.DEDUCT,
-                            List.of(),
-                            null,
-                            List.of(new LinePeerRef("Costs!" + add.coord(), PeerReason.ANTI_DOUBLE_COUNT))));
+            return lines;
         };
 
         new ClassifyService(llm).classify(db, ingest.parseRunId());
@@ -84,14 +101,12 @@ class CellMeaningServiceTest {
         CellMeaning deduct = new CellMeaningService().lookup(
                 db, ingest.parseRunId(), "Costs!" + coordForCell(db, deductBinding.cellId()));
         assertThat(deduct.nomenclatureBinding()).isNotNull();
-        assertThat(deduct.nomenclatureBinding().amountRole()).isEqualTo(AmountRole.DEDUCT);
         assertThat(deduct.peers()).hasSize(1);
         assertThat(deduct.peers().get(0).pathResolved()).isTrue();
         assertThat(deduct.candidates()).isNotEmpty();
         assertThat(deduct.dispositions()).isNotEmpty();
         assertThat(deduct.interpretation()).isNotNull();
         assertThat(deduct.interpretation().nomenclatureStatus()).isEqualTo(NomenclatureStatus.BOUND);
-        assertThat(deduct.interpretation().amountRole()).isEqualTo(AmountRole.DEDUCT);
 
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());

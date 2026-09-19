@@ -42,7 +42,7 @@ public final class CellMeaningService {
                                             ref.cellId(), ref.coord()))
                                     .toList()),
                     address.worksheetId(),
-                    qualifiedCoord);
+                    address.coord());
             if (cellId.isEmpty()) {
                 throw new ClassifyException("cell not found: " + qualifiedCoord);
             }
@@ -90,9 +90,9 @@ public final class CellMeaningService {
         }
     }
 
-    private record ParsedAddress(long worksheetId, String sheetName) {
-        String displayQualifiedCoord(String coord) {
-            return sheetName + "!" + coord.toUpperCase(Locale.ROOT);
+    private record ParsedAddress(long worksheetId, String sheetName, String coord) {
+        String displayQualifiedCoord(String cellCoord) {
+            return sheetName + "!" + cellCoord.toUpperCase(Locale.ROOT);
         }
     }
 
@@ -101,19 +101,46 @@ public final class CellMeaningService {
         String trimmed = qualifiedCoord.trim();
         int bang = trimmed.indexOf('!');
         if (bang >= 0) {
-            String sheetName = trimmed.substring(0, bang).trim();
-            for (WorksheetRef worksheet : worksheets) {
-                if (worksheet.sheetName().equalsIgnoreCase(sheetName)) {
-                    return new ParsedAddress(worksheet.worksheetId(), worksheet.sheetName());
-                }
+            String sheetName = unquoteSheet(trimmed.substring(0, bang));
+            String coord = trimmed.substring(bang + 1).trim();
+            WorksheetRef worksheet = matchWorksheet(worksheets, sheetName);
+            if (worksheet == null) {
+                throw new ClassifyException("worksheet not found in parse run: " + sheetName);
             }
-            throw new ClassifyException("worksheet not found in parse run: " + sheetName);
+            return new ParsedAddress(worksheet.worksheetId(), worksheet.sheetName(), coord);
         }
         if (worksheets.size() == 1) {
             WorksheetRef only = worksheets.get(0);
-            return new ParsedAddress(only.worksheetId(), only.sheetName());
+            return new ParsedAddress(only.worksheetId(), only.sheetName(), trimmed);
         }
         throw new ClassifyException(
                 "qualified coord required when parse run has multiple worksheets: " + trimmed);
+    }
+
+    /** Excel may quote tabs ({@code 'P  L '!J45}) and keep trailing spaces in the tab name. */
+    private static String unquoteSheet(String raw) {
+        if (raw.length() >= 2 && raw.startsWith("'") && raw.endsWith("'")) {
+            return raw.substring(1, raw.length() - 1).replace("''", "'");
+        }
+        return raw;
+    }
+
+    private static WorksheetRef matchWorksheet(List<WorksheetRef> worksheets, String sheetName) {
+        for (WorksheetRef worksheet : worksheets) {
+            if (worksheet.sheetName().equalsIgnoreCase(sheetName)) {
+                return worksheet;
+            }
+        }
+        String needle = sheetName.trim();
+        WorksheetRef trimmedMatch = null;
+        for (WorksheetRef worksheet : worksheets) {
+            if (worksheet.sheetName().trim().equalsIgnoreCase(needle)) {
+                if (trimmedMatch != null) {
+                    return null;
+                }
+                trimmedMatch = worksheet;
+            }
+        }
+        return trimmedMatch;
     }
 }

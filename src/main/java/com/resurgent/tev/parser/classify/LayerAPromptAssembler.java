@@ -29,6 +29,8 @@ final class LayerAPromptAssembler {
             When triage is scratch or orphan, relevance MUST be noise (soft-triage leftovers).
             If cheapPass is true this is a coverage-parent overview: broad sheet meaning only,
             no line lists. Numeric literals are dummy stand-ins; formulas and labels are real.
+            Respond with the JSON object only, no markdown fences, no explanation before
+            or after it, no internal deliberation in the visible output.
             """;
 
     private static final ObjectMapper MAPPER = new ObjectMapper();

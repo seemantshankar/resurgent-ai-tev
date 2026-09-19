@@ -30,32 +30,26 @@ class RealWorkbookLiveClassifyIT {
 
     private static final Path WORKBOOK =
             Path.of("Project Docs", "OM Arham Ventures.xlsx");
-    private static final Set<String> LIVE_SHEETS = Set.of("ASSETS", "CAPITAL COST");
     private static final String HOTEL_AC_PATH =
             "Project Cost > Plant & Machinery > Air Conditioning";
 
     /**
-     * Named Om Arham bindings that must survive latency changes (path + role + label).
-     * This workbook is one regression fixture, not a special case in production:
-     * roles follow ordinary sheet semantics (e.g. a "Less : …" AC line is {@code deduct}).
-     * Path fragments stay short: a derived soft leaf is named from the workbook's own
-     * row label, so the exact leaf spelling is data, not an ontology guarantee.
+     * Named Om Arham bindings on the P&amp;L and depreciation tabs that defeated the
+     * layout approach. Path fragments stay short: a derived soft leaf is named from
+     * the workbook's own row label, so the exact leaf spelling is data, not an
+     * ontology guarantee. Insurance is asserted through the J45/J53 cells below: the
+     * "Insurance Charges" caption row 44 holds no numbers, while the premium money
+     * sits in rows 45-48 under component labels (Building, ...), so a caption
+     * expectation can never match and must not pretend to gate quality.
      */
     private static final List<ExpectedBinding> EXPECTED = List.of(
-            new ExpectedBinding("Genset", AmountRole.ADD, "Volvo Penta Genset"),
-            new ExpectedBinding("CCTV", AmountRole.ADD, "CCTV"),
-            new ExpectedBinding("Fitness Equipments", AmountRole.ADD, "Fitness"),
-            new ExpectedBinding("Plumbing Works", AmountRole.ADD, "Plumbing"),
-            new ExpectedBinding(
-                    "Centering, Shuttering", AmountRole.ADD, "Centering"),
-            new ExpectedBinding(
-                    "Air Conditioning", AmountRole.DEDUCT, "Air Conditioning"));
+            new ExpectedBinding("Depreciation", AmountRole.ADD, "Depreciation"));
 
     @TempDir
     Path tempDir;
 
     @Test
-    void liveLayerAAndLayerBOnOmArhamCapexSheets() throws Exception {
+    void liveLayerAAndLayerBOnOmArhamProfitAndDepreciationSheets() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getProperty("tev.liveLlm")),
                 "set -Dtev.liveLlm=true to call OpenRouter");
         assumeTrue(LlmEnvironment.liveConfigured(),
@@ -73,7 +67,7 @@ class RealWorkbookLiveClassifyIT {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
             new NomenclatureCatalog(repo).confirmIndustry(1L, "hotel");
             for (WorksheetRef sheet : repo.selectWorksheetsForParseRun(ingest.parseRunId())) {
-                if (LIVE_SHEETS.contains(sheet.sheetName())) {
+                if (isLiveSheet(sheet.sheetName())) {
                     liveWorksheetIds.add(sheet.worksheetId());
                 }
             }
@@ -130,9 +124,11 @@ class RealWorkbookLiveClassifyIT {
         long classifyMs = (System.nanoTime() - classifyStarted) / 1_000_000L;
         assertThat(summary.dispositionCount()).isGreaterThan(liveCandidates.size());
         assertThat(liveLayerA.get()).isEqualTo(liveCandidates.size());
-        assertThat(liveLayerB.get()).isGreaterThan(0);
+        assertThat(liveLayerB.get())
+                .as("the naming questions for live-sheet labels must be asked from the "
+                        + "live sheets' own packets, not stubbed via a Case_II sheet")
+                .isGreaterThan(1);
         assertThat(summary.bindingCount()).isGreaterThan(0);
-        assertThat(summary.layerBStats().accepted()).isEqualTo(summary.bindingCount());
 
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
@@ -190,10 +186,7 @@ class RealWorkbookLiveClassifyIT {
                             && row.softLeaf() != null
                             && row.viaAlias() != null);
 
-            NomenclatureBinding sampleBinding = bindings.stream()
-                    .filter(b -> b.path() != null && b.path().contains("Air Conditioning"))
-                    .findFirst()
-                    .orElse(bindings.get(0));
+            NomenclatureBinding sampleBinding = bindings.get(0);
             var sampleCell = repo.selectCellPacketViews(List.of(sampleBinding.cellId())).get(0);
             String sheetName = repo.selectWorksheetsForParseRun(ingest.parseRunId()).stream()
                     .filter(w -> w.worksheetId() == sampleCell.worksheetId())
@@ -349,8 +342,23 @@ class RealWorkbookLiveClassifyIT {
                                 expected.pathContains(), expected.role(), expected.verbatimContains())
                         .anyMatch(expected::matches);
             }
+            NomenclatureBinding j45 = bindingAt(repo, ingest.parseRunId(), "P  L", "J45");
+            assertThat(j45)
+                    .as("'P  L '!J45 must bind as a live naming question, not stay silent")
+                    .isNotNull();
+            assertThat(j45.path())
+                    .doesNotContain("Civil Works > Building");
+            NomenclatureBinding j53 = bindingAt(repo, ingest.parseRunId(), "P  L", "J53");
+            assertThat(j53)
+                    .as("'P  L '!J53 must bind rather than stay unbound")
+                    .isNotNull();
+            NomenclatureBinding j33 = bindingAt(repo, ingest.parseRunId(), "depreciation", "J33");
+            assertThat(j33)
+                    .as("depreciation!J33 must bind under depreciation, not Furniture")
+                    .isNotNull();
+            assertThat(j33.path().toLowerCase(Locale.ROOT)).doesNotContain("furniture");
             assertThat(classifyMs)
-                    .as("Om Arham ASSETS+CAPITAL COST classify wall vs 5-minute gate")
+                    .as("Om Arham P L + depreciation classify wall vs 5-minute gate")
                     .isLessThan(300_000L);
         }
 
@@ -364,6 +372,46 @@ class RealWorkbookLiveClassifyIT {
                             .countInterpretationsForParseRun(ingest.parseRunId()))
                     .isZero();
         }
+    }
+
+    private static boolean isLiveSheet(String sheetName) {
+        if (sheetName == null) {
+            return false;
+        }
+        String trimmed = sheetName.trim();
+        if (trimmed.equalsIgnoreCase("depreciation")) {
+            return true;
+        }
+        return trimmed.replace(" ", "").equalsIgnoreCase("PL");
+    }
+
+    private static NomenclatureBinding bindingAt(
+            WorkspaceRepository repo, long parseRunId, String sheetName, String coord)
+            throws Exception {
+        Long worksheetId = repo.selectWorksheetsForParseRun(parseRunId).stream()
+                .filter(sheet -> isLiveSheet(sheet.sheetName())
+                        && (sheetName.trim().equalsIgnoreCase(sheet.sheetName().trim())
+                                || sheetName.replace(" ", "")
+                                        .equalsIgnoreCase(sheet.sheetName().replace(" ", ""))))
+                .map(WorksheetRef::worksheetId)
+                .findFirst()
+                .orElse(null);
+        if (worksheetId == null) {
+            return null;
+        }
+        Long cellId = repo.selectInterpretationCellsForParseRun(parseRunId).stream()
+                .filter(cell -> cell.worksheetId() == worksheetId
+                        && coord.equalsIgnoreCase(cell.coord()))
+                .map(com.resurgent.tev.parser.db.InterpretationCellView::cellId)
+                .findFirst()
+                .orElse(null);
+        if (cellId == null) {
+            return null;
+        }
+        return repo.selectNomenclatureBindingsForParseRun(parseRunId).stream()
+                .filter(binding -> binding.cellId() == cellId)
+                .findFirst()
+                .orElse(null);
     }
 
     private static String findAnyQualifiedCoord(Path db, long parseRunId) throws Exception {

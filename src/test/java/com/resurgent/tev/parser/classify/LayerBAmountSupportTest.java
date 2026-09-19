@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 class LayerBAmountSupportTest {
 
     @Test
-    void formulaNumericsArePromptEligibleButOnlyBindableAsHelperOrTotal() {
+    void aFormulaNumericCanTakeAnyRoleItsKindAllows() {
         PacketCell formula = new PacketCell(
                 1L, 1L, "B10", 10, 2, PacketCell.ROLE_CORE, "number",
                 null, "100", "100", "SUM(B2:B9)", false, false);
@@ -25,7 +25,9 @@ class LayerBAmountSupportTest {
         assertThat(LayerBAmountSupport.isLiteralNumeric(formula)).isFalse();
         assertThat(LayerBAmountSupport.isBindableForRole(formula, AmountRole.HELPER)).isTrue();
         assertThat(LayerBAmountSupport.isBindableForRole(formula, AmountRole.TOTAL)).isTrue();
-        assertThat(LayerBAmountSupport.isBindableForRole(formula, AmountRole.ADD)).isFalse();
+        assertThat(LayerBAmountSupport.isBindableForRole(formula, AmountRole.ADD))
+                .as("71% of numeric cells are formulas; gating on that blocked every expense")
+                .isTrue();
         assertThat(LayerBAmountSupport.isBindableForRole(literal, AmountRole.ADD)).isTrue();
         assertThat(LayerBAmountSupport.isPromptNumeric(label)).isFalse();
 
@@ -98,5 +100,145 @@ class LayerBAmountSupportTest {
                 packet.cells().get(3))).isEqualTo("Amount (Rs)");
         assertThat(LayerBAmountSupport.classifyKind(packet, packet.cells().get(3)))
                 .isEqualTo(NumericKind.MONEY);
+    }
+
+    @Test
+    void periodHeadersDoNotMakeEveryColumnCellAQuantity() {
+        Packet packet = new Packet(1L, 1L, 1L, "child", List.of(
+                new PacketCell(1L, 1L, "J31", 31, 10, PacketCell.ROLE_CONTEXT, "string",
+                        "Year 7", "Year 7", null, null, false, false),
+                new PacketCell(2L, 1L, "A45", 45, 1, PacketCell.ROLE_CORE, "string",
+                        "Insurance Premium", "Insurance Premium", null, null, false, false),
+                new PacketCell(3L, 1L, "J45", 45, 10, PacketCell.ROLE_CORE, "number",
+                        null, "125000", "125000", null, false, false),
+                new PacketCell(4L, 1L, "A46", 46, 1, PacketCell.ROLE_CORE, "string",
+                        "No. of Rooms", "No. of Rooms", null, null, false, false),
+                new PacketCell(5L, 1L, "J46", 46, 10, PacketCell.ROLE_CORE, "number",
+                        null, "40", "40", null, false, false)),
+                List.of(), true);
+
+        PacketCell premium = packet.cells().get(2);
+        PacketCell rooms = packet.cells().get(4);
+
+        assertThat(LayerBAmountSupport.resolveColumnHeader(packet, premium)).isEqualTo("Year 7");
+        assertThat(LayerBAmountSupport.classifyKind(packet, premium)).isEqualTo(NumericKind.MONEY);
+        assertThat(LayerBAmountSupport.classifyKind(packet, rooms)).isEqualTo(NumericKind.QUANTITY);
+    }
+
+    @Test
+    void aMonetaryColumnHeaderTypesMoneyWhenTheRowLabelGivesNoCue() {
+        Packet packet = new Packet(1L, 1L, 1L, "child", List.of(
+                new PacketCell(1L, 1L, "B1", 1, 2, PacketCell.ROLE_CONTEXT, "string",
+                        "Amount", "Amount", null, null, false, false),
+                new PacketCell(2L, 1L, "B2", 2, 2, PacketCell.ROLE_CORE, "number",
+                        null, "500", "500", null, false, false)),
+                List.of(), true);
+
+        PacketCell amount = packet.cells().get(1);
+
+        assertThat(LayerBAmountSupport.resolveRowLabel(packet, amount)).isEmpty();
+        assertThat(LayerBAmountSupport.classifyKind(packet, amount))
+                .as("no money row label, but the monetary column header must still cue money")
+                .isEqualTo(NumericKind.MONEY);
+        assertThat(LayerBAmountSupport.isBindableForRole(packet, amount, AmountRole.ADD)).isTrue();
+    }
+
+    @Test
+    void resolveRowLabelDoesNotFallBackToTheCoord() {
+        Packet packet = new Packet(1L, 1L, 1L, "child", List.of(
+                new PacketCell(1L, 1L, "J45", 45, 10, PacketCell.ROLE_CORE, "number",
+                        null, "125000", "125000", null, false, false)),
+                List.of(), true);
+
+        assertThat(LayerBAmountSupport.resolveRowLabel(packet, packet.cells().get(0)))
+                .isEmpty();
+    }
+
+    @Test
+    void periodHeaderShapesAreRecognisedAndPlainDurationsAreNot() {
+        assertThat(LayerBAmountSupport.isPeriodHeader("Year 1")).isTrue();
+        assertThat(LayerBAmountSupport.isPeriodHeader("YR-3")).isTrue();
+        assertThat(LayerBAmountSupport.isPeriodHeader("FY 2026")).isTrue();
+        assertThat(LayerBAmountSupport.isPeriodHeader("FY 2025-26")).isTrue();
+        assertThat(LayerBAmountSupport.isPeriodHeader("Q3")).isTrue();
+        assertThat(LayerBAmountSupport.isPeriodHeader("Month 12")).isTrue();
+        assertThat(LayerBAmountSupport.isPeriodHeader("2027")).isTrue();
+        assertThat(LayerBAmountSupport.isPeriodHeader("Years")).isTrue();
+        assertThat(LayerBAmountSupport.isPeriodHeader("No. of Years of Operation")).isFalse();
+        assertThat(LayerBAmountSupport.isPeriodHeader("Rooms")).isFalse();
+        assertThat(LayerBAmountSupport.isPeriodHeader("")).isFalse();
+    }
+
+    @Test
+    void aRateQuotedInARowLabelDoesNotCuePercent() {
+        assertThat(LayerBAmountSupport.classifyKind(
+                "Less: Depreciation @ 10 %", null, "317.83", true))
+                .isEqualTo(NumericKind.MONEY);
+        assertThat(LayerBAmountSupport.classifyKind(
+                "Building @ 10 %", null, "9.50", true))
+                .isEqualTo(NumericKind.MONEY);
+        assertThat(LayerBAmountSupport.classifyKind(
+                "Other Sales 2.5% of Total", null, "58.61", true))
+                .isEqualTo(NumericKind.MONEY);
+    }
+
+    @Test
+    void aRowLabelThatNamesARateStillCuesPercent() {
+        assertThat(LayerBAmountSupport.classifyKind("BEP%", null, "37.85", true))
+                .isEqualTo(NumericKind.PERCENT);
+        assertThat(LayerBAmountSupport.classifyKind("% of PAT", null, "12.50", true))
+                .isEqualTo(NumericKind.PERCENT);
+        assertThat(LayerBAmountSupport.classifyKind("GST %", null, "18.00", true))
+                .isEqualTo(NumericKind.PERCENT);
+    }
+
+    @Test
+    void aTotalDepreciationOfYearRowIsMoneyNotQuantity() {
+        assertThat(LayerBAmountSupport.classifyKind(
+                "TOTAL DEP. OF THE YEAR", null, "452.19", true))
+                .isEqualTo(NumericKind.MONEY);
+    }
+
+    @Test
+    void anEntityRowNeedsItsColumnUnitToDisambiguate() {
+        assertThat(LayerBAmountSupport.classifyKind(
+                "Deluxe Rooms", "AVERAGE TARIFF (in Rs.)", "5000", true))
+                .isEqualTo(NumericKind.MONEY);
+        assertThat(LayerBAmountSupport.classifyKind(
+                "Deluxe Rooms", "ROOMS FOR SALE", "190", true))
+                .isEqualTo(NumericKind.QUANTITY);
+    }
+
+    @Test
+    void aColumnUnitGovernsAnEntityRowButNotAnExplicitRowUnit() {
+        // "Year 7" is a period band: it contributes no unit, so the row label decides.
+        assertThat(LayerBAmountSupport.classifyKind(
+                "Deluxe Rooms", "Year 7", "190", true))
+                .isEqualTo(NumericKind.QUANTITY);
+        // A row that states its own unit outranks a bare column banner.
+        assertThat(LayerBAmountSupport.classifyKind(
+                "No. of Rooms", "Total", "40", true))
+                .isEqualTo(NumericKind.QUANTITY);
+    }
+
+    @Test
+    void aRowPercentOverrideBeatsAMonetaryColumnBanner() {
+        assertThat(LayerBAmountSupport.classifyKind(
+                "Occupancy %", "Amount (Rs)", "40", true))
+                .isEqualTo(NumericKind.PERCENT);
+    }
+
+    @Test
+    void aRowThatStatesItsOwnUnitOutranksTheColumnBanner() {
+        assertThat(LayerBAmountSupport.classifyKind(
+                "No. of Rooms", "AVERAGE TARIFF (in Rs.)", "5000", true))
+                .isEqualTo(NumericKind.QUANTITY);
+    }
+
+    @Test
+    void aRowLabelThatNeedsAColumn(){
+        assertThat(LayerBAmountSupport.rowLabelNeedsColumnUnit("Deluxe Rooms")).isTrue();
+        assertThat(LayerBAmountSupport.rowLabelNeedsColumnUnit("No. of Rooms")).isFalse();
+        assertThat(LayerBAmountSupport.rowLabelNeedsColumnUnit("Occupancy %")).isFalse();
     }
 }

@@ -12,6 +12,9 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import java.util.List;
 import java.util.Map;
 
+import com.resurgent.tev.parser.classify.CellKind;
+import com.resurgent.tev.parser.classify.CellScale;
+import com.resurgent.tev.parser.classify.CellType;
 import com.resurgent.tev.parser.classify.NomenclatureBinding;
 import com.resurgent.tev.parser.classify.PacketDisposition;
 import com.resurgent.tev.parser.ingest.NormalizedCell;
@@ -109,10 +112,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(23);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(24);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(23);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(24);
         }
     }
 
@@ -199,6 +202,61 @@ class PersistenceSeamTest {
                     .containsExactly(cellA1);
             assertThat(repo.selectPacketDispositionsForParseRun(parseRunId)).isEmpty();
             assertThat(repo.selectNomenclatureBindingsForParseRun(parseRunId)).isEmpty();
+        }
+    }
+
+    @Test
+    void sumAddAmountsForPathNormalizesByCellScaleBeforeSumming() throws Exception {
+        try (WorkspaceDatabase db = openDb("scale-rollup.db")) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            long sourceFileId = repo.insertSourceFile(1L, "c.xlsx", "hash", "fm_xlsx",
+                    Timestamps.now(), "0.1.0", null);
+            long parseRunId = repo.insertParseRun(sourceFileId, 1L, "0.1.0", "cfg",
+                    Timestamps.now(), Timestamps.now(), "success", null);
+            long worksheetId = repo.insertWorksheet(parseRunId, "Sheet1", 0, "visible");
+            long cellRupees = repo.insertCell(worksheetId, new NormalizedCell(
+                    "B2", 2, 2,
+                    "1000", "number", "number", "1,000", "1,000",
+                    java.math.BigDecimal.valueOf(1000), null, null,
+                    null, null, null, null, false,
+                    false, null,
+                    false, false, null, "cell", false, false, false));
+            long cellLakhs = repo.insertCell(worksheetId, new NormalizedCell(
+                    "B3", 3, 2,
+                    "2", "number", "number", "2", "2",
+                    java.math.BigDecimal.valueOf(2), null, null,
+                    null, null, null, null, false,
+                    false, null,
+                    false, false, null, "cell", false, false, false));
+
+            CandidateWrite write = new CandidateWrite(
+                    parseRunId, worksheetId, "coverage_parent", null,
+                    2, 2, 3, 2,
+                    null, null, null,
+                    false, 1.0, "sole coverage parent",
+                    "Coverage parent for Sheet1");
+            long candidateId = repo.insertCandidate(write, List.of(cellRupees, cellLakhs));
+
+            repo.insertPacketDisposition(new PacketDisposition(
+                    candidateId, parseRunId, "capex_detail", "main", "primary",
+                    List.of("Item"), List.of("Amount"), "Project Cost", null, true));
+
+            String path = "Project Cost > Civil Works > Structure";
+            repo.insertNomenclatureBinding(new NomenclatureBinding(
+                    cellRupees, parseRunId, candidateId, "Civil Works", path,
+                    "add", true, false, 0.9));
+            repo.insertNomenclatureBinding(new NomenclatureBinding(
+                    cellLakhs, parseRunId, candidateId, "Civil Works", path,
+                    "add", true, false, 0.9));
+
+            repo.insertCellType(new CellType(
+                    parseRunId, cellRupees, CellKind.MONEY, CellScale.UNIT, "input_label", 0));
+            repo.insertCellType(new CellType(
+                    parseRunId, cellLakhs, CellKind.MONEY, CellScale.LAKH, "input_label", 0));
+
+            assertThat(repo.sumAddAmountsForPath(parseRunId, path))
+                    .as("1,000 at UNIT plus 2 at LAKH must normalize to base units before summing")
+                    .isEqualTo(1000.0 + 2.0 * 100_000.0);
         }
     }
 
@@ -456,7 +514,7 @@ class PersistenceSeamTest {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(23);
+            assertThat(count(c, "schema_migration")).isEqualTo(24);
             assertThat(tableNames(c)).contains("cell_reference");
             assertThat(tableNames(c)).doesNotContain("cell_error_root");
 
@@ -504,7 +562,7 @@ class PersistenceSeamTest {
     void v15MigrationRestoresAdr0013IngestSignalsWithoutHeuristicStack() throws Exception {
         try (WorkspaceDatabase db = openDb("v15.db")) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(23);
+            assertThat(count(c, "schema_migration")).isEqualTo(24);
             assertThat(tableNames(c)).contains("cell_style", "cell_reference", "candidate");
             assertThat(tableNames(c)).doesNotContain(
                     "region",
@@ -676,7 +734,7 @@ class PersistenceSeamTest {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(
                 dbPath, WorkspaceDatabase.OpenOptions.allowDestructiveReset())) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(23);
+            assertThat(count(c, "schema_migration")).isEqualTo(24);
             assertThat(count(c, "cell")).isZero();
             assertThat(count(c, "source_file")).isZero();
             assertThat(tableNames(c)).doesNotContain("cost_head", "region");
@@ -710,5 +768,84 @@ class PersistenceSeamTest {
             }
         }
         return columns;
+    }
+
+    @Test
+    void v24AddsBindingProvenanceUnboundReasonsAndTheCellGraphEvidenceTables()
+            throws Exception {
+        try (WorkspaceDatabase db = openDb("v24.db")) {
+            java.sql.Connection c = db.connection();
+            WorkspaceRepository repo = new WorkspaceRepository(c);
+
+            assertThat(count(c, "schema_migration")).isEqualTo(24);
+            assertThat(tableNames(c)).contains("cell_type", "aggregation", "aggregation_member");
+            assertThat(columnNames(c, "nomenclature_binding"))
+                    .contains("source", "label_key", "aggregation_id");
+            assertThat(columnNames(c, "cell_interpretation")).contains("unbound_reason");
+
+            long sourceFileId = repo.insertSourceFile(1L, "v24.xlsx", "hash24", "fm_xlsx",
+                    Timestamps.now(), "0.1.0", null);
+            long parseRunId = repo.insertParseRun(sourceFileId, 1L, "0.1.0", "cfg",
+                    Timestamps.now(), null, "success", "{}");
+            long worksheetId = repo.insertWorksheet(parseRunId, "Sheet1", 0);
+            long headCellId = repo.insertCell(worksheetId, numericCell("B10", 10, 2, "300"));
+            long memberCellId = repo.insertCell(worksheetId, numericCell("B2", 2, 2, "100"));
+
+            repo.insertCellType(new com.resurgent.tev.parser.classify.CellType(
+                    parseRunId, memberCellId,
+                    com.resurgent.tev.parser.classify.CellKind.MONEY,
+                    com.resurgent.tev.parser.classify.CellScale.LAKH,
+                    com.resurgent.tev.parser.classify.TypeSource.INPUT_LABEL,
+                    0));
+            long aggregationId = repo.insertAggregation(
+                    new com.resurgent.tev.parser.classify.AggregationRow(
+                            null, parseRunId, headCellId, worksheetId, "SUM(R[-8]C:R[-1]C)",
+                            "Operating Costs",
+                            com.resurgent.tev.parser.classify.CellKind.MONEY,
+                            com.resurgent.tev.parser.classify.CellScale.LAKH));
+            repo.insertAggregationMember(aggregationId,
+                    new com.resurgent.tev.parser.classify.AggregationMemberRow(
+                            0, memberCellId,
+                            com.resurgent.tev.parser.classify.AggregationMemberRow.SIGN_PLUS,
+                            "add", "Insurance Premium"));
+
+            assertThat(repo.selectCellTypesForParseRun(parseRunId))
+                    .singleElement()
+                    .satisfies(row -> {
+                        assertThat(row.cellId()).isEqualTo(memberCellId);
+                        assertThat(row.kind())
+                                .isEqualTo(com.resurgent.tev.parser.classify.CellKind.MONEY);
+                        assertThat(row.scale())
+                                .isEqualTo(com.resurgent.tev.parser.classify.CellScale.LAKH);
+                    });
+            var aggregations = repo.selectAggregationsForParseRun(parseRunId);
+            assertThat(aggregations).singleElement().satisfies(row -> {
+                assertThat(row.headCellId()).isEqualTo(headCellId);
+                assertThat(row.relativeSignature()).isEqualTo("SUM(R[-8]C:R[-1]C)");
+                assertThat(row.headLabel()).isEqualTo("Operating Costs");
+            });
+            assertThat(repo.selectAggregationMembers(aggregationId))
+                    .singleElement()
+                    .satisfies(member -> {
+                        assertThat(member.memberCellId()).isEqualTo(memberCellId);
+                        assertThat(member.sign()).isEqualTo("plus");
+                        assertThat(member.amountRole()).isEqualTo("add");
+                    });
+
+            repo.deleteAggregationsForParseRun(parseRunId);
+            repo.deleteCellTypesForParseRun(parseRunId);
+            assertThat(repo.selectAggregationsForParseRun(parseRunId)).isEmpty();
+            assertThat(repo.selectCellTypesForParseRun(parseRunId)).isEmpty();
+            assertThat(count(c, "aggregation_member")).isEqualTo(0);
+        }
+    }
+
+    private static NormalizedCell numericCell(String coord, int row, int col, String value) {
+        return new NormalizedCell(
+                coord, row, col, value, "number", "number", value, value,
+                new java.math.BigDecimal(value), null, null,
+                null, null, null, null, false,
+                false, null,
+                false, false, null, "cell", false, false, false);
     }
 }

@@ -226,7 +226,8 @@ class CellInterpretationCoverageTest {
             public int write(
                     WorkspaceRepository repo,
                     long parseRunId,
-                    List<NomenclatureBinding> bindings) throws SQLException {
+                    List<NomenclatureBinding> bindings,
+                    java.util.Map<Long, UnboundReason> unboundReasons) throws SQLException {
                 throw new SQLException("forced interpretation write failure");
             }
         };

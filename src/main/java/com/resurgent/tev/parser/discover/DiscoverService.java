@@ -49,6 +49,10 @@ public final class DiscoverService {
             db.connection().setAutoCommit(false);
             try {
                 repo.deleteInterpretationsForParseRun(parseRunId);
+                // The cell graph's typing and aggregations are classify output too,
+                // so a successful rediscovery invalidates them with the rest.
+                repo.deleteAggregationsForParseRun(parseRunId);
+                repo.deleteCellTypesForParseRun(parseRunId);
                 repo.deleteCandidatesForParseRun(parseRunId);
 
                 for (WorksheetRef worksheet : worksheets) {
