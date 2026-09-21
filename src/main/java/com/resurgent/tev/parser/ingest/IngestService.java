@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.ingest;
 
+import com.resurgent.tev.parser.Progress;
 import com.resurgent.tev.parser.config.ParserConfig;
 import com.resurgent.tev.parser.db.CellStyle;
 import com.resurgent.tev.parser.db.Jsonb;
@@ -266,7 +267,9 @@ public final class IngestService {
         Map<String, Map<String, Long>> cellCoordMap = new HashMap<>();
         List<PendingCellTokens> pendingTokensList = new ArrayList<>();
 
+        int sheetProgress = 0;
         for (XlsxSheet sheet : sheets) {
+            Progress.step("ingest", "worksheets", ++sheetProgress, sheets.size(), 1);
             long worksheetId = repo.insertWorksheet(parseRunId, sheet.sheetName(),
                     sheetIndex, sheet.sheetState(),
                     sheet.bboxMinRow(), sheet.bboxMinCol(),

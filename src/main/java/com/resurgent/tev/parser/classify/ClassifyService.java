@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.classify;
 
+import com.resurgent.tev.parser.Progress;
 import com.resurgent.tev.parser.db.CandidateRow;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
@@ -142,7 +143,12 @@ public final class ClassifyService {
             // One session for the whole loop: Cell views and reference edges are shared
             // across Candidates instead of re-read per Packet.
             DiscoverService.PacketSession packetSession = discover.packetSession(repo);
+            Progress.phase(
+                    "classify", "building packets for " + candidates.size() + " candidates");
+            int packetProgress = 0;
             for (CandidateRow candidate : candidates) {
+                Progress.step(
+                        "classify", "packets", ++packetProgress, candidates.size(), 25);
                 boolean cheapPass = "coverage_parent".equals(candidate.candidateKind());
                 if (cheapPass) {
                     coverageParents++;
@@ -162,8 +168,11 @@ public final class ClassifyService {
             // The graph is read before the write transaction: cells and reference
             // edges do not change during classify, and holding a write lock over the
             // whole fixpoint would serialise every other writer behind it.
+            Progress.phase("classify", "reading cell graph");
             CellGraph graph = new CellGraphBuilder().read(repo, parseRunId);
+            Progress.phase("classify", "propagating types");
             CellTypes cellTypes = new TypePropagation().resolve(graph);
+            Progress.phase("classify", "types resolved");
             Map<Long, Long> candidateByCell = candidateByCell(repo, parseRunId, candidates);
 
             // Roles the graph proves bind without asking. Names it cannot supply are
@@ -238,6 +247,7 @@ public final class ClassifyService {
                 Map<Long, UnboundReason> unboundReasons =
                         new HashMap<>(deterministic.unboundReasons());
                 unboundReasons.putAll(gapFill.reasons());
+                Progress.phase("classify", "writing interpretations");
                 interpretationCount = interpretationWriter.write(
                         repo, parseRunId, bindings, unboundReasons);
                 repo.commit();

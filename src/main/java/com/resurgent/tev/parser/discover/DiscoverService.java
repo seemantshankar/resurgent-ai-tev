@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.discover;
 
+import com.resurgent.tev.parser.Progress;
 import com.resurgent.tev.parser.db.CandidateRow;
 import com.resurgent.tev.parser.db.CandidateWithMembers;
 import com.resurgent.tev.parser.db.CandidateWrite;
@@ -55,7 +56,10 @@ public final class DiscoverService {
                 repo.deleteCellTypesForParseRun(parseRunId);
                 repo.deleteCandidatesForParseRun(parseRunId);
 
+                int sheetProgress = 0;
                 for (WorksheetRef worksheet : worksheets) {
+                    Progress.step(
+                            "discover", "worksheets", ++sheetProgress, worksheets.size(), 1);
                     List<CellEvidence> evidence = repo.selectCellEvidenceForWorksheet(
                             worksheet.worksheetId());
                     boolean isolated = isIsolatedHidden(repo, parseRunId, worksheet);
@@ -98,7 +102,9 @@ public final class DiscoverService {
                     }
                 }
 
+                Progress.phase("discover", "linking related candidates");
                 relatedLinker.link(repo, parseRunId, new CellViewCache(repo));
+                Progress.phase("discover", "verifying coverage");
 
                 boolean coverageOk = verifyCoverage(repo, parseRunId, worksheets);
                 if (!coverageOk) {

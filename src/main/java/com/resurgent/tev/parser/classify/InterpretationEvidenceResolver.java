@@ -63,6 +63,12 @@ final class InterpretationEvidenceResolver {
         if (formulaText == null || formulaText.isBlank()) {
             return null;
         }
+        // Every rule below matches a division, so a formula without '/' cannot state a
+        // scale. Most formulas are sums and products, and this skips five case-insensitive
+        // regex scans over each of them.
+        if (formulaText.indexOf('/') < 0) {
+            return null;
+        }
         for (DivisorRule rule : FORMULA_DIVISORS) {
             if (rule.pattern().matcher(formulaText).find()) {
                 return rule.scale();
