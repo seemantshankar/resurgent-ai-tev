@@ -23,13 +23,18 @@ final class RelatedCandidateLinker {
     static final String RELATIONSHIP_KIND = "formula_reference";
 
     void link(WorkspaceRepository repo, long parseRunId) throws SQLException {
+        link(repo, parseRunId, new CellViewCache(repo));
+    }
+
+    void link(WorkspaceRepository repo, long parseRunId, CellViewCache cache)
+            throws SQLException {
         List<CandidateRow> candidates = repo.selectCandidatesForParseRun(parseRunId);
         if (candidates.size() < 2) {
             return;
         }
 
         Map<Long, List<CandidateRow>> byCell = indexCandidatesByMember(repo, candidates);
-        List<PersistedCellReference> edges = repo.selectPersistedCellReferencesForParseRun(parseRunId);
+        List<PersistedCellReference> edges = cache.edgesForParseRun(parseRunId);
         Set<String> seen = new HashSet<>();
 
         for (PersistedCellReference persisted : edges) {
@@ -39,7 +44,7 @@ final class RelatedCandidateLinker {
                     && edge.targetWorksheetId() != null
                     && edge.targetRange() != null) {
                 List<CellPacketView> targets =
-                        repo.selectCellsInTargetRange(edge.targetWorksheetId(), edge.targetRange());
+                        cache.targetRange(edge.targetWorksheetId(), edge.targetRange());
                 if (targets.isEmpty()) {
                     continue;
                 }

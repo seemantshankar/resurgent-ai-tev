@@ -98,7 +98,7 @@ public final class DiscoverService {
                     }
                 }
 
-                relatedLinker.link(repo, parseRunId);
+                relatedLinker.link(repo, parseRunId, new CellViewCache(repo));
 
                 boolean coverageOk = verifyCoverage(repo, parseRunId, worksheets);
                 if (!coverageOk) {
@@ -147,10 +147,37 @@ public final class DiscoverService {
 
     /** Build a Packet from an already-open workspace (amounts read from the cell graph). */
     public Packet buildPacket(WorkspaceRepository repo, long candidateId) throws DiscoverException {
-        try {
-            return packetBuilder.build(repo, candidateId);
-        } catch (SQLException e) {
-            throw new DiscoverException("packet build failed: " + e.getMessage(), e);
+        return packetSession(repo).build(candidateId);
+    }
+
+    /**
+     * Open a packet-building pass over one parse run. Cell views and reference edges are
+     * read once and shared across every Candidate built through the session, so callers
+     * that build a Packet per Candidate must use one session rather than repeated
+     * {@link #buildPacket} calls. A session is only valid while the cell graph is
+     * unchanged; do not hold one across writes.
+     */
+    public PacketSession packetSession(WorkspaceRepository repo) {
+        return new PacketSession(Objects.requireNonNull(repo, "repo"));
+    }
+
+    /** A packet-building pass; see {@link #packetSession}. */
+    public final class PacketSession {
+
+        private final WorkspaceRepository repo;
+        private final CellViewCache cache;
+
+        private PacketSession(WorkspaceRepository repo) {
+            this.repo = repo;
+            this.cache = new CellViewCache(repo);
+        }
+
+        public Packet build(long candidateId) throws DiscoverException {
+            try {
+                return packetBuilder.build(repo, candidateId, cache);
+            } catch (SQLException e) {
+                throw new DiscoverException("packet build failed: " + e.getMessage(), e);
+            }
         }
     }
 

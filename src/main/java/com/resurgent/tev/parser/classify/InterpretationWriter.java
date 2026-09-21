@@ -57,8 +57,11 @@ public class InterpretationWriter {
                         repo.selectCandidateMembersForParseRun(parseRunId));
         Map<Long, List<CandidateRow>> ownersByCell =
                 InterpretationEvidenceResolver.indexOwners(candidates, membersByCandidate);
-        Map<Long, InterpretationCellView> byId =
-                InterpretationEvidenceResolver.indexCells(cells);
+        // One cache for the whole run: Candidate scopes and merged anchors are
+        // Candidate-scoped, not Cell-scoped, so they must not be rebuilt per Cell.
+        InterpretationEvidenceResolver.ResolveCache resolveCache =
+                new InterpretationEvidenceResolver.ResolveCache(
+                        InterpretationEvidenceResolver.indexCells(cells));
         Map<Long, CandidateRow> candidatesById = new HashMap<>();
         for (CandidateRow candidate : candidates) {
             candidatesById.put(candidate.candidateId(), candidate);
@@ -71,7 +74,7 @@ public class InterpretationWriter {
             List<InterpretationEvidence> evidence = InterpretationEvidenceResolver.resolve(
                     parseRunId,
                     cell,
-                    byId,
+                    resolveCache,
                     ownersByCell,
                     membersByCandidate,
                     candidatesById,

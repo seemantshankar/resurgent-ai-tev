@@ -856,13 +856,26 @@ public final class WorkspaceRepository {
         if (targetRange == null || targetRange.isBlank()) {
             return List.of();
         }
-        List<CellPacketView> all = selectCellPacketViewsForWorksheet(worksheetId);
+        return filterToTargetRange(selectCellPacketViewsForWorksheet(worksheetId), targetRange);
+    }
+
+    /**
+     * The A1-range filter behind {@link #selectCellsInTargetRange}, over Cells a caller
+     * already holds. Callers that resolve many ranges against one worksheet read the
+     * worksheet once and filter here instead of re-querying per range.
+     */
+    public static List<CellPacketView> filterToTargetRange(
+            List<CellPacketView> worksheetCells, String targetRange) {
+        if (worksheetCells == null || worksheetCells.isEmpty()
+                || targetRange == null || targetRange.isBlank()) {
+            return List.of();
+        }
         A1Range bounds = A1Range.parse(targetRange.trim());
         if (bounds == null) {
             return List.of();
         }
         List<CellPacketView> out = new ArrayList<>();
-        for (CellPacketView cell : all) {
+        for (CellPacketView cell : worksheetCells) {
             if (bounds.contains(cell.rowNum(), cell.colNum())) {
                 out.add(cell);
             }

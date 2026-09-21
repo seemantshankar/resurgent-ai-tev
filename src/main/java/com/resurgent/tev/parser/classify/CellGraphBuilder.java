@@ -78,7 +78,8 @@ final class CellGraphBuilder {
         }
         return new HeaderScope(
                 parseRunId,
-                InterpretationEvidenceResolver.indexCells(cells),
+                new InterpretationEvidenceResolver.ResolveCache(
+                        InterpretationEvidenceResolver.indexCells(cells)),
                 InterpretationEvidenceResolver.indexOwners(candidates, membersByCandidate),
                 membersByCandidate,
                 candidatesById);
@@ -86,14 +87,14 @@ final class CellGraphBuilder {
 
     private record HeaderScope(
             long parseRunId,
-            Map<Long, InterpretationCellView> byId,
+            InterpretationEvidenceResolver.ResolveCache cache,
             Map<Long, List<CandidateRow>> ownersByCell,
             Map<Long, Set<Long>> membersByCandidate,
             Map<Long, CandidateRow> candidatesById) {
 
         String columnHeader(InterpretationCellView cell) {
             return InterpretationEvidenceResolver.resolvedColumnHeader(
-                    parseRunId, cell, byId, ownersByCell, membersByCandidate, candidatesById);
+                    parseRunId, cell, cache, ownersByCell, membersByCandidate, candidatesById);
         }
     }
 

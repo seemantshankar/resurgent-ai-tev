@@ -139,12 +139,15 @@ public final class ClassifyService {
             // graph, once per label per worksheet.
             List<PreparedPacket> prepared = new ArrayList<>();
             int coverageParents = 0;
+            // One session for the whole loop: Cell views and reference edges are shared
+            // across Candidates instead of re-read per Packet.
+            DiscoverService.PacketSession packetSession = discover.packetSession(repo);
             for (CandidateRow candidate : candidates) {
                 boolean cheapPass = "coverage_parent".equals(candidate.candidateKind());
                 if (cheapPass) {
                     coverageParents++;
                 }
-                Packet packet = discover.buildPacket(repo, candidate.candidateId());
+                Packet packet = packetSession.build(candidate.candidateId());
                 Packet redacted = PacketRedactor.redact(packet, cheapPass);
                 prepared.add(new PreparedPacket(candidate, packet, redacted, cheapPass));
             }
