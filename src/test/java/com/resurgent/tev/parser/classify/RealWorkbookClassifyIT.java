@@ -201,18 +201,60 @@ class RealWorkbookClassifyIT {
     void noLabelIsGivenConflictingRolesWithinTheRun() throws Exception {
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            Map<Long, Set<Long>> membersByHead = new HashMap<>();
+            for (AggregationRow aggregation : repo.selectAggregationsForParseRun(parseRunId)) {
+                Set<Long> members = new HashSet<>();
+                for (AggregationMemberRow member
+                        : repo.selectAggregationMembers(aggregation.aggregationId())) {
+                    members.add(member.memberCellId());
+                }
+                membersByHead.put(aggregation.headCellId(), members);
+            }
+            Map<String, Set<Long>> cellsByLabel = new HashMap<>();
             Map<String, Set<String>> rolesByLabel = new HashMap<>();
             for (NomenclatureBinding binding : repo.selectNomenclatureBindingsForParseRun(
                     parseRunId)) {
                 if (binding.labelKey() == null) {
                     continue;
                 }
+                cellsByLabel
+                        .computeIfAbsent(binding.labelKey(), key -> new HashSet<>())
+                        .add(binding.cellId());
                 rolesByLabel
                         .computeIfAbsent(binding.labelKey(), key -> new HashSet<>())
                         .add(binding.amountRole());
             }
-            assertThat(rolesByLabel.values()).allSatisfy(roles -> assertThat(roles).hasSize(1));
+            for (Map.Entry<String, Set<String>> entry : rolesByLabel.entrySet()) {
+                if (entry.getValue().size() <= 1) {
+                    continue;
+                }
+                assertThat(isOneHeadAndItsOwnMembers(
+                                cellsByLabel.get(entry.getKey()), membersByHead))
+                        .as("label %s carries roles %s outside one aggregation",
+                                entry.getKey(), entry.getValue())
+                        .isTrue();
+            }
         }
+    }
+
+    /**
+     * A label may carry several roles only when its cells are one aggregation's head
+     * and that head's own members — the gross, deduction and net of one row. The same
+     * label spread across unrelated groups is still a conflict.
+     */
+    private static boolean isOneHeadAndItsOwnMembers(
+            Set<Long> cells, Map<Long, Set<Long>> membersByHead) {
+        for (Map.Entry<Long, Set<Long>> head : membersByHead.entrySet()) {
+            if (!cells.contains(head.getKey())) {
+                continue;
+            }
+            Set<Long> group = new HashSet<>(head.getValue());
+            group.add(head.getKey());
+            if (group.containsAll(cells)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Test

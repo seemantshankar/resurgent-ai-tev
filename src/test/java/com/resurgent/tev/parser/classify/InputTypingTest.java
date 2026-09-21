@@ -145,4 +145,65 @@ class InputTypingTest {
         assertThat(unit.isResolved()).isTrue();
         assertThat(unit.kind()).isEqualTo(CellKind.PERCENT);
     }
+
+    @Test
+    void anExtensionLabelWhoseValueIsTheProductTypesMoney() {
+        // 97650 Sqft @ 600 Rs/Sqft = 58,590,000: the extended amount, not a rate.
+        GraphCell extended = new GraphCell(
+                1L, 20L, "F30", 30, 6, null, true, false,
+                "97650 Sqft@ 600 Rs/ Sqft", "Amount in Rs",
+                "5.859E7", "58590000", "number", "General");
+
+        ResolvedUnit unit = InputTyping.of(extended);
+
+        assertThat(unit.isResolved()).isTrue();
+        assertThat(unit.kind()).isEqualTo(CellKind.MONEY);
+    }
+
+    @Test
+    void anExtensionLabelWhoseValueIsNotTheProductStillTypesRate() {
+        // The label quotes a rate but the value is not qty x rate: it stays a rate.
+        GraphCell rate = new GraphCell(
+                1L, 20L, "F30", 30, 6, null, true, false,
+                "97650 Sqft@ 600 Rs/ Sqft", "Amount in Rs",
+                "600", "600", "number", "General");
+
+        ResolvedUnit unit = InputTyping.of(rate);
+
+        assertThat(unit.isResolved()).isTrue();
+        assertThat(unit.kind()).isEqualTo(CellKind.RATE);
+    }
+
+    @Test
+    void aPossessivePeriodNounRowMeasuresAPeriodNotAnAmount() {
+        // CA_CL!G51 "Months' Export Sales" under Form IV. Every value on this row is
+        // 0.0, so this typing is NOT verified by value: it rests on the schedule
+        // convention that a "Months' X" row states a holding period in months.
+        GraphCell months = new GraphCell(
+                1L, 30L, "G51", 51, 7, null, true, false,
+                "Months' Export Sales", "#REF!", "0.0", "0.0", "number", "General");
+
+        ResolvedUnit unit = InputTyping.of(months);
+
+        assertThat(unit.isResolved()).isTrue();
+        assertThat(unit.kind()).isEqualTo(CellKind.QUANTITY);
+    }
+
+    @Test
+    void aTypographicApostrophePeriodNounAlsoMeasuresAPeriod() {
+        GraphCell months = new GraphCell(
+                1L, 30L, "G51", 51, 7, null, true, false,
+                "Months\u2019 Domestic Sales", null, "0.0", "0.0", "number", "General");
+
+        assertThat(InputTyping.of(months).kind()).isEqualTo(CellKind.QUANTITY);
+    }
+
+    @Test
+    void aMoneyRowWithoutAPeriodNounIsStillMoney() {
+        GraphCell sales = new GraphCell(
+                1L, 30L, "B6", 6, 2, null, true, false,
+                "Room Sales", null, "273.02", "273.02", "number", "General");
+
+        assertThat(InputTyping.of(sales).kind()).isEqualTo(CellKind.MONEY);
+    }
 }

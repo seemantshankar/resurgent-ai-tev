@@ -190,8 +190,10 @@ final class DeterministicBinder {
 
         List<Aggregation> memberships = graph.membershipsOf(cell.cellId());
         if (!memberships.isEmpty()) {
-            // A cell may add into one group and be deducted in another. The group that
-            // adds it is the one that names it; a deduct-only cell takes its deduct.
+            // A cell may add into one group and be deducted in another. The row's own
+            // rollup speaks for it first — a cross-row total must not overwrite the
+            // operator the cell's own row applied; otherwise the group that adds it
+            // names it, so a deduct-only cell takes its deduct.
             Aggregation owner = null;
             Aggregation.Member ownerMember = null;
             for (Aggregation aggregation : memberships) {
@@ -203,7 +205,8 @@ final class DeterministicBinder {
                     if (member.cellId() != cell.cellId()) {
                         continue;
                     }
-                    if (owner == null || (member.plus() && !ownerMember.plus())) {
+                    if (owner == null
+                            || preferredOwner(graph, cell, aggregation, member, owner, ownerMember)) {
                         owner = aggregation;
                         ownerMember = member;
                     }
@@ -239,6 +242,32 @@ final class DeterministicBinder {
                 null,
                 null,
                 null);
+    }
+
+    /**
+     * The owning group for a member: the aggregation whose head sits in the member's
+     * own row outranks a cross-row total, so a net line's operator is taken as written
+     * rather than being replaced by a column total that also sums the cell. Ties go to
+     * the group that adds the cell, which is how a contra line keeps its sign.
+     */
+    private static boolean preferredOwner(
+            CellGraph graph,
+            GraphCell cell,
+            Aggregation candidate,
+            Aggregation.Member candidateMember,
+            Aggregation owner,
+            Aggregation.Member ownerMember) {
+        boolean candidateSameRow = sameRowAsHead(graph, cell, candidate);
+        boolean ownerSameRow = sameRowAsHead(graph, cell, owner);
+        if (candidateSameRow != ownerSameRow) {
+            return candidateSameRow;
+        }
+        return candidateMember.plus() && !ownerMember.plus();
+    }
+
+    private static boolean sameRowAsHead(CellGraph graph, GraphCell cell, Aggregation aggregation) {
+        GraphCell head = graph.cells().get(aggregation.headCellId());
+        return head != null && head.rowNum() == cell.rowNum();
     }
 
     private static boolean isHardLeaf(OntologySlice slice, String path) {

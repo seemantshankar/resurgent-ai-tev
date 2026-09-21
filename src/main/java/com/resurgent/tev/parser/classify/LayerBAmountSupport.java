@@ -50,6 +50,16 @@ final class LayerBAmountSupport {
      */
     private static final Pattern RATE_IN_LABEL = Pattern.compile("\\d+(?:\\.\\d+)?\\s*%");
 
+    /**
+     * A row label led by a possessive period noun — {@code Months' Export Sales},
+     * {@code Days' Consumption} — measures a holding period in periods, not a rupee
+     * amount, so the period noun outranks a money noun later in the label. Both the
+     * ASCII apostrophe and the typographic one (U+2019) are matched, because a
+     * workbook may carry either.
+     */
+    private static final Pattern PERIOD_MEASURE = Pattern.compile(
+            "(?i)^\\s*(?:months?|days?|weeks?|years?)[\u2019']");
+
     private LayerBAmountSupport() {}
 
     /** Literal numeric (no formula). */
@@ -110,6 +120,27 @@ final class LayerBAmountSupport {
     }
 
     /**
+     * A kind plus whether it rests on the bare money default. The default — "a
+     * non-blank label with no quantity token is money" — is the weakest evidence in
+     * the system; grading it as strong would let it outvote a derived kind in an
+     * aggregation. Every stated cue is {@code bareDefault == false}.
+     */
+    record KindReading(NumericKind kind, boolean bareDefault) {
+
+        static KindReading cue(NumericKind kind) {
+            return new KindReading(kind, false);
+        }
+
+        static KindReading moneyDefault() {
+            return new KindReading(NumericKind.MONEY, true);
+        }
+
+        static KindReading none() {
+            return new KindReading(NumericKind.UNKNOWN, false);
+        }
+    }
+
+    /**
      * Classify a numeric cell from its text cues alone. The row label is read first:
      * when it states its own unit it wins, whether that unit is a percentage, a rate,
      * money or a counted unit. Only when the row is a pure entity name
@@ -117,6 +148,11 @@ final class LayerBAmountSupport {
      * never a naive scan — supply the missing dimension (ADR 0020).
      */
     static NumericKind classifyKind(
+            String rowLabel, String columnHeader, String displayValue, boolean hasContext) {
+        return classifyKindReading(rowLabel, columnHeader, displayValue, hasContext).kind();
+    }
+
+    static KindReading classifyKindReading(
             String rowLabel, String columnHeader, String displayValue, boolean hasContext) {
         String label = rowLabel == null ? "" : rowLabel;
         String header = columnHeader == null ? "" : columnHeader;
@@ -128,15 +164,15 @@ final class LayerBAmountSupport {
 
         // A percent display is a fact about the cell itself and always wins.
         if (display.contains("%")) {
-            return NumericKind.PERCENT;
+            return KindReading.cue(NumericKind.PERCENT);
         }
         NumericKind rowCue = explicitUnitCue(cueLabel, true);
         if (rowCue != null) {
-            return rowCue;
+            return KindReading.cue(rowCue);
         }
         NumericKind columnCue = explicitUnitCue(cueHeader, false);
         if (columnCue != null) {
-            return columnCue;
+            return KindReading.cue(columnCue);
         }
         return classifyFromLabel(cueLabel, display, hasContext);
     }
@@ -154,34 +190,34 @@ final class LayerBAmountSupport {
     }
 
     /** The original row-label-only reading, used when the column contributes no cue. */
-    private static NumericKind classifyFromLabel(String label, String display, boolean hasContext) {
+    private static KindReading classifyFromLabel(String label, String display, boolean hasContext) {
         String haystack = (label + " " + display).toLowerCase(Locale.ROOT);
         // A quoted numeric rate in a row label says how the row was computed, not what
         // the row's own numbers are, so it never cues percent.
         String percentCue = (stripRateInLabel(label) + " " + display).toLowerCase(Locale.ROOT);
         if (KindTokens.PERCENT_TOKEN.matcher(percentCue).find()) {
-            return NumericKind.PERCENT;
+            return KindReading.cue(NumericKind.PERCENT);
         }
         if (RATE_TOKEN.matcher(haystack).find()) {
-            return NumericKind.RATE;
+            return KindReading.cue(NumericKind.RATE);
         }
         if (KindTokens.QUANTITY_TOKEN.matcher(haystack).find()
                 && !KindTokens.MONEY_TOKEN.matcher(haystack).find()) {
-            return NumericKind.QUANTITY;
+            return KindReading.cue(NumericKind.QUANTITY);
         }
         if (KindTokens.MONEY_TOKEN.matcher(haystack).find()
                 || looksLikeCurrencyDisplay(display)) {
-            return NumericKind.MONEY;
+            return KindReading.cue(NumericKind.MONEY);
         }
         if (!hasContext) {
             // Bare cell without row/column context: assume money for cost grids.
-            return NumericKind.MONEY;
+            return KindReading.moneyDefault();
         }
         if (!label.isBlank()
                 && !KindTokens.QUANTITY_TOKEN.matcher(label.toLowerCase(Locale.ROOT)).find()) {
-            return NumericKind.MONEY;
+            return KindReading.moneyDefault();
         }
-        return NumericKind.UNKNOWN;
+        return KindReading.none();
     }
 
     /**
@@ -202,6 +238,12 @@ final class LayerBAmountSupport {
         }
         if (RATE_TOKEN.matcher(lower).find()) {
             return NumericKind.RATE;
+        }
+        // A row led by a possessive period noun measures a holding period, so it
+        // outranks a money noun later in the label: Form IV states receivables as
+        // "Months' Export Sales". Rows only — a column header is not this shape.
+        if (rowContext && PERIOD_MEASURE.matcher(lower).find()) {
+            return NumericKind.QUANTITY;
         }
         if (KindTokens.MONEY_TOKEN.matcher(lower).find() || looksLikeCurrencyDisplay(text)) {
             return NumericKind.MONEY;

@@ -17,8 +17,19 @@ record CellTypes(
         Map<Long, UnboundReason> refusals,
         Map<Long, ResolvedUnit> aggregationUnits) {
 
-    /** One cell's resolved unit, how it was decided, and its distance from an input. */
-    record Typed(ResolvedUnit unit, String typeSource, int depth) {}
+    /**
+     * One cell's resolved unit, how it was decided, and its distance from an input.
+     *
+     * <p>{@code weak} marks a kind whose derivation touched a product carrying an
+     * unmarked literal, where the arithmetic could not decide the dimension on its
+     * own — a count times hardcoded constants may be a count or a per-unit amount.
+     * {@code bareDefault} marks a kind that rests on the money default ("a non-blank
+     * label with no quantity token") rather than a stated cue. An aggregation lets a
+     * weak dissenter yield to agreeing strong members, but only where the winning
+     * kind has at least one supporter that is not a bare default.
+     */
+    record Typed(
+            ResolvedUnit unit, String typeSource, int depth, boolean weak, boolean bareDefault) {}
 
     CellTypes {
         // Insertion order is kept for the same reason the graph keeps it: a run has

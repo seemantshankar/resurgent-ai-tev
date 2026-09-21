@@ -160,6 +160,38 @@ class DeterministicBinderTest {
     }
 
     @Test
+    void aCellMinusInItsOwnRowNetKeepsDeductEvenWhenAColumnTotalAddsIt() {
+        // ASSETS rows 54/60: I54 is the gross, J54 the deduction, K54 = I54-J54 the
+        // row net; J62 = J52+J54 is a column total over other rows that also adds J54.
+        // The row's own rollup owns the role, so J54 stays a deduction.
+        label("A54", 54, 1, "Insurance Premium");
+        long gross = literal("I54", 54, 9, "120.3");
+        long deduction = literal("J54", 54, 10, "120.3");
+        long rowNet = formula("K54", 54, 11, "=I54-J54", "0");
+        edge(rowNet, 0, "I54");
+        edge(rowNet, 1, "J54");
+        label("A62", 62, 1, "Total Operating Cost");
+        long other = literal("J52", 52, 10, "10");
+        long columnTotal = formula("J62", 62, 10, "=J52+J54", "130.3");
+        edge(columnTotal, 0, "J52");
+        edge(columnTotal, 1, "J54");
+
+        DeterministicBinder.Result result = bind();
+
+        assertThat(result.bindings())
+                .filteredOn(binding -> binding.cellId() == deduction)
+                .singleElement()
+                .satisfies(binding -> assertThat(binding.amountRole())
+                        .as("a cross-row column total does not overwrite the row's operator")
+                        .isEqualTo(AmountRole.DEDUCT));
+        assertThat(result.bindings())
+                .filteredOn(binding -> binding.cellId() == gross)
+                .singleElement()
+                .satisfies(binding -> assertThat(binding.amountRole()).isEqualTo(AmountRole.ADD));
+        assertThat(other).isPositive();
+    }
+
+    @Test
     void aSoftLeafIsNotAHardCatalogLeafSoTheLabelIsQueuedInstead() {
         label("A2", 2, 1, "Soft Line");
         long soft = literal("B2", 2, 2, "100");

@@ -1,6 +1,8 @@
 package com.resurgent.tev.parser.classify;
 
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Types one hardcoded cell from its own row label and displayed text. These are the
@@ -10,20 +12,78 @@ import java.util.Locale;
  */
 final class InputTyping {
 
+    /**
+     * The extension idiom: a label such as {@code 97650 Sqft@ 600 Rs/ Sqft} states a
+     * quantity and a rate. The row-label rate cue ({@code Rs/}) would otherwise type
+     * the row as a rate, but a value equal to the two multiplied is the extended
+     * amount. The arithmetic check is what makes this safe: a label that merely quotes
+     * a rate without a matching product still types as a rate.
+     */
+    private static final Pattern EXTENSION_LABEL = Pattern.compile(
+            "(?i)^\\s*([0-9][0-9,.]*)\\s*[^@]*@\\s*([0-9][0-9,.]*)\\b.*");
+
     private InputTyping() {}
 
+    /** A typed input plus whether its kind rests on the bare money default. */
+    record Reading(ResolvedUnit unit, boolean bareDefault) {}
+
     static ResolvedUnit of(GraphCell cell) {
-        NumericKind kind = LayerBAmountSupport.classifyKind(
+        return readingOf(cell).unit();
+    }
+
+    static Reading readingOf(GraphCell cell) {
+        LayerBAmountSupport.KindReading reading = LayerBAmountSupport.classifyKindReading(
                 cell.rowLabel() == null ? "" : cell.rowLabel(),
                 cell.columnLabel(),
                 cell.displayValue(),
                 true);
-        kind = applyFormat(kind, cell.numberFormat());
+        NumericKind kind = applyFormat(reading.kind(), cell.numberFormat());
+        // A number format that decided the kind is a stated cue, not the bare default.
+        boolean formatDecided = kind != reading.kind();
+        if (kind == NumericKind.RATE && statesAnExtendedAmount(cell)) {
+            kind = NumericKind.MONEY;
+        }
         CellKind cellKind = CellKind.from(kind);
         if (cellKind == null) {
-            return ResolvedUnit.unresolved();
+            return new Reading(ResolvedUnit.unresolved(), false);
         }
-        return ResolvedUnit.of(cellKind, scaleOf(cell));
+        return new Reading(
+                ResolvedUnit.of(cellKind, scaleOf(cell)),
+                reading.bareDefault() && !formatDecided);
+    }
+
+    /**
+     * True when the row label states a quantity and a rate and the cell's value is
+     * their product, which makes it the extended amount rather than a rate.
+     */
+    private static boolean statesAnExtendedAmount(GraphCell cell) {
+        String label = cell.rowLabel();
+        if (label == null || !label.contains("@")) {
+            return false;
+        }
+        Matcher matcher = EXTENSION_LABEL.matcher(label);
+        if (!matcher.matches()) {
+            return false;
+        }
+        Double quantity = parse(matcher.group(1));
+        Double rate = parse(matcher.group(2));
+        Double value = parse(cell.numericValue());
+        if (quantity == null || rate == null || value == null) {
+            return false;
+        }
+        double product = quantity * rate;
+        return Math.abs(product - value) <= Math.max(1e-6, Math.abs(product) * 1e-9);
+    }
+
+    private static Double parse(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(text.replace(",", "").trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /**

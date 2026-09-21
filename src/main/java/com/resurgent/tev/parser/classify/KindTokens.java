@@ -21,7 +21,12 @@ final class KindTokens {
     static final Pattern UNIT = Pattern.compile(
             "(?i)\\b(sq\\.?\\s*ft|sqft|sqm|nos?\\.?|keys?|rooms?|%|percent)\\b");
 
-    /** Any counted quantity cue, column or row: No. of, Qty, rooms, days, area. */
+    /**
+     * Any counted quantity cue, column or row: No. of, Qty, rooms, guests, days,
+     * area. A column header may claim a measured noun directly ({@code TOTAL GUEST
+     * PER ANNUM}), which is what keeps a guest-night column a count instead of
+     * falling to the money default.
+     */
     static final Pattern QUANTITY_TOKEN = Pattern.compile(
             "(?i)(?:\\bno\\.?\\s*of\\b|\\bnumber\\s+of\\b|\\bqty\\b|\\bquantity\\b|\\bnos\\.?\\b|"
                     + "\\bunits?\\b|\\brooms?\\b|\\bkeys\\b|\\bbeds?\\b|\\bdays?\\b|"
@@ -32,12 +37,16 @@ final class KindTokens {
     static final Pattern PERCENT_TOKEN = Pattern.compile("(?i)(?:%|\\bpercent\\b)");
 
     /**
-     * Money words plus currency symbols: amount, cost, capex, depreciation, lac,
-     * crore, Rs., INR, ₹, $, … The broad cue the kind reader uses; the reporting
-     * evidence uses the narrower {@link #CURRENCY} so prose never invents money.
+     * Money words plus currency symbols: amount, cost, revenue, sales, receipt,
+     * income, tariff, charges, capex, lac, crore, Rs., INR, ₹, $, … The broad cue
+     * the kind reader uses; the reporting evidence uses the narrower
+     * {@link #CURRENCY} so prose never invents money. Revenue nouns are included
+     * because a money block is routinely titled "Revenue"/"Sales"/"Receipts"
+     * without ever writing "Rs." (SALESPROJECTION!A56 "OVERALL REVENUE PROJECTION").
      */
     static final Pattern MONEY_TOKEN = Pattern.compile(
             "(?i)(?:\\brs\\.?\\b|\\binr\\b|₹|\\$|€|£|amount|cost|price|value|fee|payment|"
+                    + "revenue|sales|receipts?|income|turnover|tariff|charges?|"
                     + "capex|opex|expense|outlay|investment|lac|lakh|crore|less\\s*:|"
                     + "total\\s+cost|project\\s+cost|means\\s+of\\s+finance|"
                     + "depreciation|\\bdep\\.?\\b)");
