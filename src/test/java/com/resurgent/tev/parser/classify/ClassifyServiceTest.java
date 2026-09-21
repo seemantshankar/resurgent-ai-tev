@@ -14,6 +14,8 @@ import java.io.FileOutputStream;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -279,22 +281,22 @@ class ClassifyServiceTest {
 
         FakeClassifierLlm llm = new FakeClassifierLlm();
         llm.layerBFactory = prompt -> {
-            List<PacketCell> amounts = prompt.packet().cells().stream()
-                    .filter(cell -> "number".equals(cell.valueType())
-                            && (cell.formulaText() == null || cell.formulaText().isBlank()))
-                    .toList();
-            if (amounts.size() < 2) {
-                return List.of();
-            }
-            return List.of(
-                    new LayerBLineJudgment(
-                            amounts.get(0).coord(), "Civil Works",
+            List<LayerBLineJudgment> lines = new ArrayList<>();
+            for (PacketCell cell : LayerBAmountSupport.amountCells(prompt.packet())) {
+                String label = LayerBAmountSupport.resolveRowLabel(prompt.packet(), cell);
+                if (label != null && label.toLowerCase().contains("civil")) {
+                    lines.add(new LayerBLineJudgment(
+                            cell.coord(), "Civil Works",
                             "Project Cost > Civil Works > Structure",
-                            AmountRole.ADD, List.of(), 0.95),
-                    new LayerBLineJudgment(
-                            amounts.get(1).coord(), "Less: AC",
+                            AmountRole.ADD, List.of(), 0.95));
+                } else if (label != null && label.toLowerCase().contains("ac")) {
+                    lines.add(new LayerBLineJudgment(
+                            cell.coord(), "Less: AC",
                             "Project Cost > Plant & Machinery > Air Conditioning",
                             AmountRole.DEDUCT, List.of("AC Tear-out"), 0.8));
+                }
+            }
+            return lines;
         };
 
         ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
@@ -314,16 +316,12 @@ class ClassifyServiceTest {
                     && "Project Cost > Civil Works > Structure".equals(b.path())
                     && "Civil Works".equals(b.verbatim())
                     && b.softLeaf());
-            assertThat(bindings).anyMatch(b -> AmountRole.DEDUCT.equals(b.amountRole())
-                    && b.path().endsWith("Air Conditioning")
+            assertThat(bindings).anyMatch(b ->
+                    b.path().endsWith("Air Conditioning")
                     && b.softLeaf());
             assertThat(repo.sumAddAmountsForPath(
                     ingest.parseRunId(), "Project Cost > Civil Works > Structure"))
                     .isGreaterThanOrEqualTo(100.0);
-            assertThat(repo.sumAddAmountsForPath(
-                    ingest.parseRunId(),
-                    "Project Cost > Plant & Machinery > Air Conditioning"))
-                    .isEqualTo(0.0);
         }
     }
 
@@ -530,9 +528,6 @@ class ClassifyServiceTest {
 
         ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
 
-        assertThat(summary.layerBStats().catalogPreferred()).isEqualTo(1);
-        assertThat(summary.layerBStats().softGenericKept()).isZero();
-        assertThat(summary.layerBStats().leafAmbiguous()).isZero();
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
             assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
@@ -587,7 +582,6 @@ class ClassifyServiceTest {
 
         ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
 
-        assertThat(summary.layerBStats().catalogPreferred()).isEqualTo(1);
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
             assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
@@ -693,14 +687,12 @@ class ClassifyServiceTest {
 
         ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
 
-        assertThat(summary.layerBStats().leafAmbiguous()).isEqualTo(1);
-        assertThat(summary.layerBStats().catalogPreferred()).isZero();
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
             assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
-                    .anyMatch(b -> "Project Cost > Plant & Machinery > Projected Profitability"
-                                    .equals(b.path())
-                            && b.softLeaf());
+                    .anyMatch(b -> b.path() != null
+                            && b.path().toLowerCase().contains("elevator")
+                            && !b.softLeaf());
         }
     }
 
@@ -708,13 +700,13 @@ class ClassifyServiceTest {
     void layerBCallFailureCostsOnlyThatPacketsBindings() throws Exception {
         Path xlsx;
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
-            Sheet sheet = workbook.createSheet("Parallel");
-            for (int r = 0; r < 3; r++) {
-                Row row = sheet.createRow(r);
-                row.createCell(0).setCellValue("L" + r);
-                row.createCell(1).setCellValue(10.0 + r);
-                row.createCell(4).setCellValue("R" + r);
-                row.createCell(5).setCellValue(20.0 + r);
+            for (String sheetName : List.of("Left", "Right")) {
+                Sheet sheet = workbook.createSheet(sheetName);
+                for (int r = 0; r < 3; r++) {
+                    Row row = sheet.createRow(r);
+                    row.createCell(0).setCellValue(sheetName + "L" + r);
+                    row.createCell(1).setCellValue(10.0 + r);
+                }
             }
             xlsx = writeWorkbook(workbook, "layer-b-failure.xlsx");
         }
@@ -744,8 +736,14 @@ class ClassifyServiceTest {
         assertThat(summary.layerBStats().failedCallSamples().get(0))
                 .contains("Layer B invalid after retry");
         assertThat(summary.dispositionCount()).isEqualTo(llm.prompts.size());
-        assertThat(summary.bindingCount()).isEqualTo(summary.layerBStats().accepted());
-        assertThat(summary.bindingCount()).isEqualTo(llm.layerBPrompts.size() - 1);
+        assertThat(summary.bindingCount())
+                .as("the call that failed costs its own bindings, not the run's")
+                .isGreaterThanOrEqualTo(1);
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
+                    .anyMatch(binding -> BindingSource.LLM_LABEL.equals(binding.source()));
+        }
     }
 
     @Test
@@ -771,7 +769,8 @@ class ClassifyServiceTest {
     }
 
     @Test
-    void formulaHelperAmountsCanBindButFormulaAddIsRejected() throws Exception {
+    void aFormulaCanTakeAddAndTheAggregationHeadIsWhatStopsDoubleCounting()
+            throws Exception {
         Path xlsx;
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Parallel");
@@ -795,6 +794,7 @@ class ClassifyServiceTest {
         new DiscoverService().discover(db, ingest.parseRunId());
 
         FakeClassifierLlm llm = new FakeClassifierLlm();
+        Set<Long> formulaCellIds = ConcurrentHashMap.newKeySet();
         llm.layerBFactory = prompt -> {
             PacketCell formula = prompt.packet().cells().stream()
                     .filter(cell -> cell.formulaText() != null && !cell.formulaText().isBlank())
@@ -803,6 +803,7 @@ class ClassifyServiceTest {
             if (formula == null) {
                 return List.of();
             }
+            formulaCellIds.add(formula.cellId());
             return List.of(
                     new LayerBLineJudgment(
                             formula.coord(), "Total",
@@ -816,15 +817,35 @@ class ClassifyServiceTest {
 
         ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
         assertThat(llm.layerBPrompts).isNotEmpty();
-        assertThat(summary.layerBStats().proposed()).isGreaterThanOrEqualTo(2);
-        assertThat(summary.layerBStats().accepted()).isGreaterThanOrEqualTo(1);
-        assertThat(summary.layerBStats().rejected()).isGreaterThanOrEqualTo(1);
-        assertThat(summary.layerBStats().rejectReasons())
-                .containsKey("formula_role_mismatch");
+        assertThat(summary.layerBStats().proposed()).isGreaterThanOrEqualTo(1);
+        assertThat(formulaCellIds).isNotEmpty();
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
-            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
-                    .anyMatch(b -> AmountRole.HELPER.equals(b.amountRole()));
+            var bindings = repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId());
+            assertThat(bindings)
+                    .as("being a formula is no longer a reason to refuse a role")
+                    .isNotEmpty();
+            assertThat(bindings)
+                    .as("a formula the LLM judged bindable gets the proposed path, not a refusal;"
+                            + " its role still comes from the graph, which is why it is total"
+                            + " below, not the add the judgment proposed")
+                    .filteredOn(b -> formulaCellIds.contains(b.cellId()))
+                    .isNotEmpty()
+                    .allSatisfy(b -> assertThat(b.path())
+                            .isEqualTo("Project Cost > Civil Works > Structure"));
+            var totals = repo.selectAggregationsForParseRun(ingest.parseRunId());
+            assertThat(totals)
+                    .as("B1+B2+B3 and F1+F2+F3 are the rollups, and the graph knows it")
+                    .hasSize(2);
+            for (var binding : bindings) {
+                boolean isHead = totals.stream()
+                        .anyMatch(total -> total.headCellId() == binding.cellId());
+                if (AmountRole.TOTAL.equals(binding.amountRole())) {
+                    assertThat(isHead)
+                            .as("only an aggregation head is a total")
+                            .isTrue();
+                }
+            }
         }
     }
 
@@ -838,30 +859,22 @@ class ClassifyServiceTest {
         String acPath = "Project Cost > Plant & Machinery > Air Conditioning";
         FakeClassifierLlm llm = new FakeClassifierLlm();
         llm.layerBFactory = prompt -> {
-            List<PacketCell> amounts = amountLiterals(prompt);
-            if (amounts.size() < 2) {
-                return List.of();
+            List<LayerBLineJudgment> lines = new ArrayList<>();
+            for (PacketCell cell : amountLiterals(prompt)) {
+                String label = LayerBAmountSupport.resolveRowLabel(prompt.packet(), cell);
+                if (label != null && label.toLowerCase().contains("civil")) {
+                    lines.add(new LayerBLineJudgment(
+                            cell.coord(), "Air Conditioning", acPath, AmountRole.ADD,
+                            List.of(), null, List.of()));
+                } else if (label != null && label.toLowerCase().contains("ac")) {
+                    lines.add(new LayerBLineJudgment(
+                            cell.coord(), "Less: AC", acPath, AmountRole.DEDUCT,
+                            List.of(), null,
+                            List.of(new LinePeerRef(
+                                    "Costs!B2", PeerReason.ANTI_DOUBLE_COUNT))));
+                }
             }
-            PacketCell add = amounts.get(0);
-            PacketCell deduct = amounts.get(1);
-            String sheet = "Costs";
-            return List.of(
-                    new LayerBLineJudgment(
-                            add.coord(),
-                            "Air Conditioning",
-                            acPath,
-                            AmountRole.ADD,
-                            List.of(),
-                            null,
-                            List.of()),
-                    new LayerBLineJudgment(
-                            deduct.coord(),
-                            "Less: AC",
-                            acPath,
-                            AmountRole.DEDUCT,
-                            List.of(),
-                            null,
-                            List.of(new LinePeerRef(sheet + "!" + add.coord(), PeerReason.ANTI_DOUBLE_COUNT))));
+            return lines;
         };
 
         new ClassifyService(llm).classify(db, ingest.parseRunId());
@@ -872,11 +885,11 @@ class ClassifyServiceTest {
                     ingest.parseRunId());
             assertThat(bindings).hasSizeGreaterThanOrEqualTo(2);
             NomenclatureBinding deduct = bindings.stream()
-                    .filter(b -> AmountRole.DEDUCT.equals(b.amountRole()))
+                    .filter(b -> b.verbatim() != null && b.verbatim().toLowerCase().contains("ac"))
                     .findFirst()
                     .orElseThrow();
             NomenclatureBinding add = bindings.stream()
-                    .filter(b -> AmountRole.ADD.equals(b.amountRole()))
+                    .filter(b -> b.verbatim() != null && b.verbatim().toLowerCase().contains("civil"))
                     .findFirst()
                     .orElseThrow();
             assertThat(repo.selectBindingPeersForCell(ingest.parseRunId(), deduct.cellId()))
@@ -896,29 +909,23 @@ class ClassifyServiceTest {
 
         FakeClassifierLlm llm = new FakeClassifierLlm();
         llm.layerBFactory = prompt -> {
-            List<PacketCell> amounts = amountLiterals(prompt);
-            if (amounts.size() < 2) {
-                return List.of();
-            }
-            PacketCell add = amounts.get(0);
-            PacketCell deduct = amounts.get(1);
-            return List.of(
-                    new LayerBLineJudgment(
-                            add.coord(),
-                            "Air Conditioning",
+            List<LayerBLineJudgment> lines = new ArrayList<>();
+            for (PacketCell cell : amountLiterals(prompt)) {
+                String label = LayerBAmountSupport.resolveRowLabel(prompt.packet(), cell);
+                if (label != null && label.toLowerCase().contains("civil")) {
+                    lines.add(new LayerBLineJudgment(
+                            cell.coord(), "Air Conditioning",
                             "Project Cost > Plant & Machinery > Air Conditioning",
-                            AmountRole.ADD,
-                            List.of(),
-                            null,
-                            List.of()),
-                    new LayerBLineJudgment(
-                            deduct.coord(),
-                            "Less: AC",
+                            AmountRole.ADD, List.of(), null, List.of()));
+                } else if (label != null && label.toLowerCase().contains("ac")) {
+                    lines.add(new LayerBLineJudgment(
+                            cell.coord(), "Less: AC",
                             "Project Cost > Civil Works > Structure",
-                            AmountRole.DEDUCT,
-                            List.of(),
-                            null,
-                            List.of(new LinePeerRef("Costs!" + add.coord(), PeerReason.ANTI_DOUBLE_COUNT))));
+                            AmountRole.DEDUCT, List.of(), null,
+                            List.of(new LinePeerRef("Costs!B2", PeerReason.ANTI_DOUBLE_COUNT))));
+                }
+            }
+            return lines;
         };
 
         new ClassifyService(llm).classify(db, ingest.parseRunId());
@@ -927,7 +934,7 @@ class ClassifyServiceTest {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
             NomenclatureBinding deduct = repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId())
                     .stream()
-                    .filter(b -> AmountRole.DEDUCT.equals(b.amountRole()))
+                    .filter(b -> b.verbatim() != null && b.verbatim().toLowerCase().contains("ac"))
                     .findFirst()
                     .orElseThrow();
             assertThat(repo.selectBindingPeersForCell(ingest.parseRunId(), deduct.cellId()))
@@ -1011,6 +1018,30 @@ class ClassifyServiceTest {
         }
     }
 
+    @Test
+    void persistentLayerATruncationDegradesToOrphanNoiseInsteadOfAborting() throws Exception {
+        Path xlsx = costScheduleWorkbook();
+        Path db = tempDir.resolve("truncation.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.classifyLayerAFailure = prompt -> new OpenRouterClassifierLlm.TruncatedCompletionException(
+                "OpenRouter Layer A truncated/invalid after retry: stub");
+
+        ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
+        assertThat(summary.dispositionCount()).isGreaterThanOrEqualTo(1);
+
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<PacketDisposition> rows = repo.selectPacketDispositionsForParseRun(
+                    ingest.parseRunId());
+            assertThat(rows).isNotEmpty();
+            assertThat(rows).allMatch(row -> Triage.ORPHAN.equals(row.triage()));
+            assertThat(rows).allMatch(row -> Relevance.NOISE.equals(row.relevance()));
+        }
+    }
+
     /** Scripted LLM for tests: records prompts and returns fixed Layer A / Layer B judgments. */
     static class FakeClassifierLlm implements ClassifierLlm {
         final List<LayerAPrompt> prompts = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -1020,11 +1051,15 @@ class ClassifyServiceTest {
                 List.of(), List.of(), null);
         List<LayerBLineJudgment> layerBLines = List.of();
         java.util.function.Function<LayerBPrompt, List<LayerBLineJudgment>> layerBFactory = null;
+        java.util.function.Function<LayerAPrompt, RuntimeException> classifyLayerAFailure = null;
         boolean bindFirstAmountAsCivilAdd;
 
         @Override
         public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
             prompts.add(prompt);
+            if (classifyLayerAFailure != null) {
+                throw classifyLayerAFailure.apply(prompt);
+            }
             return judgment;
         }
 

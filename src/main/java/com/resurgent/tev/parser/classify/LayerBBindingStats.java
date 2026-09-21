@@ -20,6 +20,7 @@ public final class LayerBBindingStats {
     private int catalogPreferred;
     private int softGenericKept;
     private int leafAmbiguous;
+    private int deterministic;
     private final Map<String, Integer> rejectReasons = new LinkedHashMap<>();
     private final List<String> rejectSamples = new ArrayList<>();
     private final List<String> failedCallSamples = new ArrayList<>();
@@ -49,6 +50,20 @@ public final class LayerBBindingStats {
     /** Soft leaf kept because evidence named more than one hard catalog leaf. */
     public void addLeafAmbiguous() {
         leafAmbiguous++;
+    }
+
+    /** Bindings from one group-level answer applied across every cell sharing a label. */
+    public void addLabelBindings(int count) {
+        accepted += count;
+    }
+
+    /** Bindings the cell graph proved without asking anything. */
+    public void addDeterministic(int count) {
+        deterministic += count;
+    }
+
+    public int deterministic() {
+        return deterministic;
     }
 
     /** A Layer B call or chunk the model never answered usably; its lines are lost. */
@@ -121,6 +136,7 @@ public final class LayerBBindingStats {
                 + " catalogPreferred=" + catalogPreferred
                 + " softGenericKept=" + softGenericKept
                 + " leafAmbiguous=" + leafAmbiguous
+                + " deterministic=" + deterministic
                 + " reasons=" + formatRejectReasons();
     }
 
@@ -145,9 +161,6 @@ public final class LayerBBindingStats {
         String trimmed = Objects.requireNonNull(reason).replaceAll("\\s+", " ").trim();
         if (trimmed.startsWith("non_money_numeric")) {
             return "non_money_cost_role";
-        }
-        if (trimmed.startsWith("formula amount at")) {
-            return "formula_role_mismatch";
         }
         if (trimmed.startsWith("Layer B binding requires an amount cell")) {
             return "non_amount_or_formula_role";

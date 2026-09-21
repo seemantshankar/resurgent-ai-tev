@@ -169,6 +169,293 @@ class RealWorkbookClassifyIT {
         }
     }
 
+
+    @Test
+    void noRowCarriesMoreThanOnePathAcrossItsPeriodSeries() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            Map<Long, com.resurgent.tev.parser.db.InterpretationCellView> cells =
+                    repo.selectInterpretationCellsForParseRun(parseRunId).stream()
+                            .collect(java.util.stream.Collectors.toMap(
+                                    com.resurgent.tev.parser.db.InterpretationCellView::cellId,
+                                    cell -> cell));
+            Map<String, Set<String>> pathsByRow = new HashMap<>();
+            for (NomenclatureBinding binding : repo.selectNomenclatureBindingsForParseRun(
+                    parseRunId)) {
+                var cell = cells.get(binding.cellId());
+                if (cell == null) {
+                    continue;
+                }
+                pathsByRow
+                        .computeIfAbsent(cell.worksheetId() + "!" + cell.rowNum(),
+                                key -> new HashSet<>())
+                        .add(binding.path());
+            }
+            assertThat(pathsByRow.values())
+                    .as("a row means one thing across its period columns")
+                    .allSatisfy(paths -> assertThat(paths).hasSize(1));
+        }
+    }
+
+    @Test
+    void noLabelIsGivenConflictingRolesWithinTheRun() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            Map<Long, Set<Long>> membersByHead = new HashMap<>();
+            for (AggregationRow aggregation : repo.selectAggregationsForParseRun(parseRunId)) {
+                Set<Long> members = new HashSet<>();
+                for (AggregationMemberRow member
+                        : repo.selectAggregationMembers(aggregation.aggregationId())) {
+                    members.add(member.memberCellId());
+                }
+                membersByHead.put(aggregation.headCellId(), members);
+            }
+            Map<String, Set<Long>> cellsByLabel = new HashMap<>();
+            Map<String, Set<String>> rolesByLabel = new HashMap<>();
+            for (NomenclatureBinding binding : repo.selectNomenclatureBindingsForParseRun(
+                    parseRunId)) {
+                if (binding.labelKey() == null) {
+                    continue;
+                }
+                cellsByLabel
+                        .computeIfAbsent(binding.labelKey(), key -> new HashSet<>())
+                        .add(binding.cellId());
+                rolesByLabel
+                        .computeIfAbsent(binding.labelKey(), key -> new HashSet<>())
+                        .add(binding.amountRole());
+            }
+            for (Map.Entry<String, Set<String>> entry : rolesByLabel.entrySet()) {
+                if (entry.getValue().size() <= 1) {
+                    continue;
+                }
+                assertThat(isOneHeadAndItsOwnMembers(
+                                cellsByLabel.get(entry.getKey()), membersByHead))
+                        .as("label %s carries roles %s outside one aggregation",
+                                entry.getKey(), entry.getValue())
+                        .isTrue();
+            }
+        }
+    }
+
+    /**
+     * A label may carry several roles only when its cells are one aggregation's head
+     * and that head's own members — the gross, deduction and net of one row. The same
+     * label spread across unrelated groups is still a conflict.
+     */
+    private static boolean isOneHeadAndItsOwnMembers(
+            Set<Long> cells, Map<Long, Set<Long>> membersByHead) {
+        for (Map.Entry<Long, Set<Long>> head : membersByHead.entrySet()) {
+            if (!cells.contains(head.getKey())) {
+                continue;
+            }
+            Set<Long> group = new HashSet<>(head.getValue());
+            group.add(head.getKey());
+            if (group.containsAll(cells)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Test
+    void aCellInTwoCandidatesGetsExactlyOneBinding() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<NomenclatureBinding> bindings =
+                    repo.selectNomenclatureBindingsForParseRun(parseRunId);
+            assertThat(bindings).extracting(NomenclatureBinding::cellId).doesNotHaveDuplicates();
+        }
+    }
+
+    @Test
+    void everyUnboundNumericCellCarriesAReason() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<CellInterpretation> unbound =
+                    repo.selectCellInterpretationsForParseRun(parseRunId).stream()
+                            .filter(row -> NomenclatureStatus.UNBOUND.equals(
+                                    row.nomenclatureStatus()))
+                            .toList();
+            assertThat(unbound).isNotEmpty();
+            long withReason = unbound.stream()
+                    .filter(row -> row.unboundReason() != null && !row.unboundReason().isBlank())
+                    .count();
+            assertThat(unbound.stream()
+                    .filter(row -> row.unboundReason() != null)
+                    .map(CellInterpretation::unboundReason))
+                    .allMatch(reason -> UnboundReason.wireNames().contains(reason));
+            assertThat(withReason)
+                    .as("coverage comes from what can be proven; the rest says why not")
+                    .isEqualTo(unbound.size());
+            assertThat(unbound.stream()
+                    .map(CellInterpretation::unboundReason)
+                    .distinct()
+                    .toList())
+                    .as("reasons are specific, not one blanket default")
+                    .hasSizeGreaterThan(1);
+        }
+    }
+
+    @Test
+    void noMemberOfANonMoneyAggregationCarriesACostRole() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            Map<Long, String> roleByCell = new HashMap<>();
+            for (NomenclatureBinding binding : repo.selectNomenclatureBindingsForParseRun(
+                    parseRunId)) {
+                roleByCell.put(binding.cellId(), binding.amountRole());
+            }
+            for (AggregationRow aggregation : repo.selectAggregationsForParseRun(parseRunId)) {
+                if (aggregation.resolvedKind() == null
+                        || aggregation.resolvedKind().allowsCostRole()) {
+                    continue;
+                }
+                for (AggregationMemberRow member
+                        : repo.selectAggregationMembers(aggregation.aggregationId())) {
+                    assertThat(roleByCell.get(member.memberCellId()))
+                            .as("a guest count is not a cost, whatever its sign")
+                            .isNotIn(AmountRole.ADD, AmountRole.DEDUCT, AmountRole.TOTAL);
+                }
+            }
+        }
+    }
+
+    @Test
+    void layerBOutcomeIsReportedForTheRun() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            List<NomenclatureBinding> bindings =
+                    repo.selectNomenclatureBindingsForParseRun(parseRunId);
+            Map<String, Long> bySource = new HashMap<>();
+            Map<String, Long> byRole = new HashMap<>();
+            for (NomenclatureBinding binding : bindings) {
+                bySource.merge(binding.source(), 1L, Long::sum);
+                byRole.merge(binding.amountRole(), 1L, Long::sum);
+            }
+            Map<String, Long> reasons = new HashMap<>();
+            long unboundInBoundRow = 0;
+            Map<String, Long> boundRows = new HashMap<>();
+            Map<Long, com.resurgent.tev.parser.db.InterpretationCellView> cells =
+                    repo.selectInterpretationCellsForParseRun(parseRunId).stream()
+                            .collect(java.util.stream.Collectors.toMap(
+                                    com.resurgent.tev.parser.db.InterpretationCellView::cellId,
+                                    cell -> cell));
+            for (NomenclatureBinding binding : bindings) {
+                var cell = cells.get(binding.cellId());
+                if (cell != null) {
+                    boundRows.merge(cell.worksheetId() + "!" + cell.rowNum(), 1L, Long::sum);
+                }
+            }
+            for (CellInterpretation row : repo.selectCellInterpretationsForParseRun(parseRunId)) {
+                if (!NomenclatureStatus.UNBOUND.equals(row.nomenclatureStatus())) {
+                    continue;
+                }
+                reasons.merge(row.unboundReason(), 1L, Long::sum);
+                var cell = cells.get(row.cellId());
+                if (cell != null && cell.numericValue() != null
+                        && boundRows.containsKey(cell.worksheetId() + "!" + cell.rowNum())) {
+                    unboundInBoundRow++;
+                }
+            }
+            System.out.println("layer-b outcome: bindings=" + bindings.size()
+                    + " bySource=" + bySource
+                    + " byRole=" + byRole
+                    + " boundRows=" + boundRows.size()
+                    + " unboundNumericInABoundRow=" + unboundInBoundRow);
+            Set<String> awaitingNames = new HashSet<>();
+            for (CellInterpretation row : repo.selectCellInterpretationsForParseRun(parseRunId)) {
+                if (!UnboundReason.LLM_DECLINED.wireName().equals(row.unboundReason())) {
+                    continue;
+                }
+                var cell = cells.get(row.cellId());
+                if (cell != null) {
+                    awaitingNames.add(cell.worksheetId() + "!" + cell.rowNum());
+                }
+            }
+            System.out.println("layer-b unbound reasons: " + reasons);
+            System.out.println("layer-b rows awaiting a name: " + awaitingNames.size());
+
+            // This run uses a fake model that answers no Layer B line, so what binds
+            // here is exactly what the graph proves on its own. Coverage beyond this
+            // comes from the group-level naming question, which needs a live model.
+            assertThat(bindings).isNotEmpty();
+            assertThat(byRole.getOrDefault(AmountRole.ADD, 0L))
+                    .as("add bindings now exist, so a leaf rollup means something")
+                    .isNotZero();
+            assertThat(bySource.getOrDefault(BindingSource.AGGREGATION_HEAD, 0L)
+                    + bySource.getOrDefault(BindingSource.DERIVED, 0L))
+                    .as("a formula cell can finally carry a graph-proven role")
+                    .isNotZero();
+        }
+    }
+
+    @Test
+    void layoutDefeatersAreNotBoundAsThePresentationApproachWouldHave() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            NomenclatureBinding j45 = bindingAt(repo, "P  L ", "J45");
+            if (j45 != null) {
+                assertThat(j45.path())
+                        .as("'P  L '!J45 is operating cost, not a Civil Works asset")
+                        .doesNotContain("Civil Works > Building");
+            }
+            NomenclatureBinding j33 = bindingAt(repo, "depreciation", "J33");
+            if (j33 != null) {
+                assertThat(j33.path().toLowerCase()).doesNotContain("furniture");
+            }
+            assertThat(roleAt(repo, "power cost", "J20"))
+                    .as("power factor is a driver")
+                    .isNotIn(AmountRole.ADD, AmountRole.DEDUCT, AmountRole.TOTAL);
+            assertThat(roleAt(repo, "SALESPROJECTION", "G15"))
+                    .as("tariff is a driver")
+                    .isNotIn(AmountRole.ADD, AmountRole.DEDUCT, AmountRole.TOTAL);
+            assertThat(roleAt(repo, "SALESPROJECTION", "H15"))
+                    .as("guest-nights sit in a count group")
+                    .isNotIn(AmountRole.ADD, AmountRole.DEDUCT, AmountRole.TOTAL);
+        }
+    }
+
+    private static String roleAt(
+            WorkspaceRepository repo, String sheetName, String coord) throws Exception {
+        NomenclatureBinding binding = bindingAt(repo, sheetName, coord);
+        return binding == null ? null : binding.amountRole();
+    }
+
+    private static NomenclatureBinding bindingAt(
+            WorkspaceRepository repo, String sheetName, String coord) throws Exception {
+        Long worksheetId = repo.selectWorksheetsForParseRun(parseRunId).stream()
+                .filter(sheet -> sheetName.equalsIgnoreCase(sheet.sheetName().trim())
+                        || sheetName.equalsIgnoreCase(sheet.sheetName()))
+                .map(com.resurgent.tev.parser.db.WorksheetRef::worksheetId)
+                .findFirst()
+                .orElse(null);
+        if (worksheetId == null) {
+            return null;
+        }
+        Long cellId = repo.selectInterpretationCellsForParseRun(parseRunId).stream()
+                .filter(cell -> cell.worksheetId() == worksheetId
+                        && coord.equalsIgnoreCase(cell.coord()))
+                .map(com.resurgent.tev.parser.db.InterpretationCellView::cellId)
+                .findFirst()
+                .orElse(null);
+        if (cellId == null) {
+            return null;
+        }
+        return repo.selectNomenclatureBindingsForParseRun(parseRunId).stream()
+                .filter(binding -> binding.cellId() == cellId)
+                .findFirst()
+                .orElse(null);
+    }
+
+    @Test
+    void theGraphAndItsTypingAreWrittenForTheRun() throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectAggregationsForParseRun(parseRunId)).isNotEmpty();
+            assertThat(repo.selectCellTypesForParseRun(parseRunId)).isNotEmpty();
+        }
+    }
+
     private static Set<String> distinctiveAmounts(WorkspaceDatabase workspace) throws Exception {
         Set<String> sentinels = new LinkedHashSet<>();
         try (ResultSet rs = workspace.connection().createStatement().executeQuery(
@@ -246,6 +533,11 @@ class RealWorkbookClassifyIT {
 
         @Override
         public List<LayerBLineJudgment> classifyLayerB(LayerBPrompt prompt) {
+            for (PacketCell cell : prompt.packet().cells()) {
+                leakIfPresent(cell.numericValue());
+                leakIfPresent(cell.displayValue());
+                leakIfPresent(cell.textValue());
+            }
             return List.of();
         }
 

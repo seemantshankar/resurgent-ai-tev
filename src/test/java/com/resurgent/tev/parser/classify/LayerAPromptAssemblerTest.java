@@ -54,4 +54,11 @@ class LayerAPromptAssemblerTest {
         assertThat(full).contains("\"hasFormula\":true");
         assertThat(full).contains("\"formulaChars\"");
     }
+
+    @Test
+    void systemPromptInstructsBrevityAndJsonOnly() {
+        assertThat(LayerAPromptAssembler.SYSTEM).contains("JSON object only");
+        assertThat(LayerAPromptAssembler.SYSTEM).contains("no markdown");
+        assertThat(LayerAPromptAssembler.SYSTEM).contains("no internal deliberation");
+    }
 }

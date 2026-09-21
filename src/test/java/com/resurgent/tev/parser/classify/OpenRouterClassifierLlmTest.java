@@ -201,8 +201,41 @@ class OpenRouterClassifierLlmTest {
         OntologySlice slice = new OntologySlice(
                 IndustryResolution.unspecified(), List.of(), List.of());
         org.junit.jupiter.api.Assertions.assertThrows(
-                IllegalStateException.class,
+                OpenRouterClassifierLlm.TruncatedCompletionException.class,
                 () -> llm.classifyLayerA(new LayerAPrompt(packet, slice, null, false)));
+    }
+
+    @Test
+    void persistentTruncationOnRetryThrowsTruncatedCompletionException() {
+        AtomicInteger calls = new AtomicInteger();
+        List<String> bodies = new ArrayList<>();
+        OpenRouterClassifierLlm.HttpCompletionsClient client =
+                new OpenRouterClassifierLlm.HttpCompletionsClient(
+                        "key",
+                        "model",
+                        OpenRouterClassifierLlm.DEFAULT_URL,
+                        body -> {
+                            bodies.add(body);
+                            calls.incrementAndGet();
+                            return new OpenRouterClassifierLlm.ExchangeResponse(
+                                    200,
+                                    "{\"choices\":[{\"finish_reason\":\"length\","
+                                            + "\"message\":{\"content\":null}}]}",
+                                    Optional.empty());
+                        },
+                        delay -> {
+                            throw new AssertionError("no sleep");
+                        });
+        OpenRouterClassifierLlm llm = new OpenRouterClassifierLlm(client);
+        Packet packet = new Packet(1L, 1L, 1L, "child", List.of(), List.of(), true);
+        OntologySlice slice = new OntologySlice(
+                IndustryResolution.unspecified(), List.of(), List.of());
+        org.junit.jupiter.api.Assertions.assertThrows(
+                OpenRouterClassifierLlm.TruncatedCompletionException.class,
+                () -> llm.classifyLayerA(new LayerAPrompt(packet, slice, null, false)));
+        assertThat(calls.get()).isEqualTo(2);
+        assertThat(bodies.get(0)).contains("\"max_tokens\":4096");
+        assertThat(bodies.get(1)).contains("\"max_tokens\":12288");
     }
 
     @Test
@@ -401,6 +434,75 @@ class OpenRouterClassifierLlmTest {
                         body -> {
                             if (calls.incrementAndGet() == 1) {
                                 throw new java.io.IOException("Operation timed out");
+                            }
+                            return new OpenRouterClassifierLlm.ExchangeResponse(
+                                    200,
+                                    "{\"choices\":[{\"message\":{\"content\":"
+                                            + "\"{\\\"scheduleFamily\\\":\\\"assumptions\\\","
+                                            + "\\\"triage\\\":\\\"main\\\","
+                                            + "\\\"relevance\\\":\\\"supporting\\\","
+                                            + "\\\"rowLabels\\\":[],\\\"columnHeaders\\\":[],"
+                                            + "\\\"packetDefaultHead\\\":null}\"}}]}",
+                                    Optional.empty());
+                        },
+                        sleeps::add);
+
+        String content = client.complete("system", "user");
+        assertThat(calls.get()).isEqualTo(2);
+        assertThat(sleeps).isNotEmpty();
+        assertThat(content).contains("assumptions");
+    }
+
+    @Test
+    void retriesConnectionResetThenSucceeds() {
+        AtomicInteger calls = new AtomicInteger();
+        List<Duration> sleeps = new ArrayList<>();
+        OpenRouterClassifierLlm.HttpCompletionsClient client =
+                new OpenRouterClassifierLlm.HttpCompletionsClient(
+                        "key",
+                        "model",
+                        OpenRouterClassifierLlm.DEFAULT_URL,
+                        body -> {
+                            if (calls.incrementAndGet() == 1) {
+                                throw new java.io.IOException("Connection reset");
+                            }
+                            return new OpenRouterClassifierLlm.ExchangeResponse(
+                                    200,
+                                    "{\"choices\":[{\"message\":{\"content\":"
+                                            + "\"{\\\"scheduleFamily\\\":\\\"assumptions\\\","
+                                            + "\\\"triage\\\":\\\"main\\\","
+                                            + "\\\"relevance\\\":\\\"supporting\\\","
+                                            + "\\\"rowLabels\\\":[],\\\"columnHeaders\\\":[],"
+                                            + "\\\"packetDefaultHead\\\":null}\"}}]}",
+                                    Optional.empty());
+                        },
+                        sleeps::add);
+
+        String content = client.complete("system", "user");
+        assertThat(calls.get()).isEqualTo(2);
+        assertThat(sleeps).isNotEmpty();
+        assertThat(content).contains("assumptions");
+    }
+
+    @Test
+    void retriesNullMessageContentThenSucceeds() {
+        AtomicInteger calls = new AtomicInteger();
+        List<Duration> sleeps = new ArrayList<>();
+        OpenRouterClassifierLlm.HttpCompletionsClient client =
+                new OpenRouterClassifierLlm.HttpCompletionsClient(
+                        "key",
+                        "model",
+                        OpenRouterClassifierLlm.DEFAULT_URL,
+                        body -> {
+                            if (calls.incrementAndGet() == 1) {
+                                return new OpenRouterClassifierLlm.ExchangeResponse(
+                                        200,
+                                        "{\"choices\":[{\"finish_reason\":\"stop\","
+                                                + "\"message\":{\"role\":\"assistant\","
+                                                + "\"content\":null,\"refusal\":null}}],"
+                                                + "\"usage\":{\"prompt_tokens\":10,"
+                                                + "\"completion_tokens\":5}}",
+                                        Optional.empty());
                             }
                             return new OpenRouterClassifierLlm.ExchangeResponse(
                                     200,

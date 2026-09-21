@@ -24,9 +24,9 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Seam: {@link ClassifyService} scheduling for #122 — coverage-parent
- * concurrency, A→B pipeline, and deadline abort without a live LLM.
- */
+     * Seam: {@link ClassifyService} scheduling for #122 — coverage-parent
+     * concurrency and deadline abort without a live LLM.
+     */
 class ClassifySchedulingTest {
 
     @TempDir
@@ -68,7 +68,7 @@ class ClassifySchedulingTest {
 
     @Test
     @Timeout(15)
-    void layerBStartsWhenItsLayerAFinishesWithoutWaitingForSiblingPackets() throws Exception {
+    void namingQuestionsStartAfterAllLayerAFinish() throws Exception {
         Path xlsx = parallelBands("pipeline.xlsx");
         Path db = tempDir.resolve("pipeline.db");
         IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
@@ -103,8 +103,8 @@ class ClassifySchedulingTest {
         assertThat(summary.bindingCount()).isGreaterThanOrEqualTo(1);
         assertThat(firstBStartedNanos.get()).isPositive();
         assertThat(firstBStartedNanos.get())
-                .as("Layer B for a finished packet must start before a sibling Layer A finishes")
-                .isLessThan(slowAFinishedNanos.get());
+                .as("naming questions start after Layer A, not pipelined per packet")
+                .isGreaterThan(slowAFinishedNanos.get());
     }
 
     @Test
@@ -210,7 +210,6 @@ class ClassifySchedulingTest {
         assertThat(summary.layerBStats().failedCalls()).isPositive();
         assertThat(summary.layerBStats().failedCallSamples())
                 .anyMatch(sample -> sample.contains("exceeded attempt deadline"));
-        assertThat(summary.bindingCount()).isZero();
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
             assertThat(repo.selectPacketDispositionsForParseRun(ingest.parseRunId()))

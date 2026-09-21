@@ -64,11 +64,15 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
                 LayerAJudgment judgment = LayerAResponseParser.parse(retry.content());
                 recordMetric("A", user, retry, started, 2);
                 return judgment;
+            } catch (TruncatedCompletionException second) {
+                recordMetric("A", user, retry, started, 2);
+                throw new TruncatedCompletionException(
+                        "OpenRouter Layer A truncated/invalid after retry: " + second.getMessage(),
+                        second);
             } catch (RuntimeException second) {
                 recordMetric("A", user, retry, started, 2);
                 throw new IllegalStateException(
-                        "OpenRouter Layer A truncated/invalid after retry: " + second.getMessage(),
-                        second);
+                        "OpenRouter Layer A invalid after retry: " + second.getMessage(), second);
             }
         } catch (RuntimeException firstError) {
             CompletionResult retry = client.completeDetailed(
@@ -268,16 +272,26 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
         TruncatedCompletionException(String message) {
             super(message);
         }
+
+        TruncatedCompletionException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 
-    /** Firm Layer A completion budget — disposition JSON is bounded (#122). */
-    public static final int LAYER_A_MAX_COMPLETION_TOKENS = 2_048;
+    /**
+     * Firm Layer A completion budget — the disposition JSON itself is small, so
+     * this stays a mitigation for model verbosity (hidden deliberation burning
+     * the budget before any JSON), not a ceiling driven by JSON size.
+     */
+    public static final int LAYER_A_MAX_COMPLETION_TOKENS = 4_096;
     /**
      * Layer A retry budget after truncation. The firm budget is ample for the
      * JSON, but a model that deliberates past it emits no visible content at
      * all; the retry buys room for the answer rather than re-losing the call.
+     * Like the first-call budget, this is a verbosity mitigation, not a
+     * JSON-size ceiling.
      */
-    public static final int LAYER_A_RETRY_MAX_COMPLETION_TOKENS = 6_144;
+    public static final int LAYER_A_RETRY_MAX_COMPLETION_TOKENS = 12_288;
     /**
      * OpenRouter rejects {@code reasoning.effort} and {@code reasoning.max_tokens}
      * on the same request. Layer A uses {@code effort=low} plus
@@ -354,6 +368,13 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
         private static final ObjectMapper MAPPER = new ObjectMapper();
         static final int MAX_ATTEMPTS = 4;
         static final Duration MAX_BACKOFF = Duration.ofSeconds(30);
+
+        /** Provider returned a 2xx body whose message content is empty or null. */
+        static final class NoMessageContentException extends RuntimeException {
+            NoMessageContentException(String message) {
+                super(message);
+            }
+        }
         /**
          * Per-send HTTP budget. Must stay shorter than
          * {@link ClassifyLimits#DEFAULT_ATTEMPT_DEADLINE} so a stalled TCP read
@@ -535,6 +556,9 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
                 if (cursor instanceof InterruptedException) {
                     return false;
                 }
+                if (cursor instanceof NoMessageContentException) {
+                    return true;
+                }
                 if (cursor instanceof HttpTimeoutException
                         || cursor instanceof java.net.SocketTimeoutException) {
                     return true;
@@ -543,7 +567,12 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
                     String message = cursor.getMessage();
                     if (message != null) {
                         String lower = message.toLowerCase(Locale.ROOT);
-                        if (lower.contains("timed out") || lower.contains("timeout")) {
+                        if (lower.contains("timed out")
+                                || lower.contains("timeout")
+                                || lower.contains("reset")
+                                || lower.contains("broken pipe")
+                                || lower.contains("eof")
+                                || lower.contains("refused")) {
                             return true;
                         }
                     }
@@ -798,7 +827,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
                 if (truncated) {
                     text = "{}";
                 } else {
-                    throw new IllegalStateException(
+                    throw new NoMessageContentException(
                             "OpenRouter response had no message content "
                                     + snippet(responseJson));
                 }
