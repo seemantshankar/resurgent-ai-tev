@@ -43,6 +43,10 @@ final class CellGraphBuilder {
     private static final Pattern SUM_CALL = Pattern.compile("(?i)^sum\\s*\\((.*)\\)$");
     private static final Pattern NUMERIC_ATOM = Pattern.compile(
             "(?<![A-Za-z$\\d.])\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+|\\^\\s*-?\\d+)?(?![\\d.])");
+
+    /** One unsigned decimal or scientific numeral and nothing else. */
+    private static final Pattern PURE_LITERAL =
+            Pattern.compile("\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?");
     private static final Pattern A1_TOKEN = Pattern.compile(
             "\\$?[A-Za-z]{1,3}\\$?\\d{1,7}(?::\\$?[A-Za-z]{1,3}\\$?\\d{1,7})?");
 
@@ -218,7 +222,7 @@ final class CellGraphBuilder {
      */
     private Parsed parse(GraphCell cell, List<CellReferenceEdge> edges, Index index) {
         String expr = stripLeadingEquals(cell.formulaText());
-        List<Term> terms = topLevelTerms(expr);
+        List<Term> terms = additiveTerms(expr);
         List<EdgePlacement> placements = placeEdges(expr, edges);
 
         List<CellDependency> dependencies = new ArrayList<>();
@@ -232,6 +236,21 @@ final class CellGraphBuilder {
                 }
             }
             TermShape shape = shapeOf(term.text());
+            // A term that is nothing but a number adds a literal amount to the sum: the
+            // workbook adds raw numbers, so its scale is the group's. Such a literal is
+            // a summand, not a dependency on another cell; losing it would leave the
+            // head's own value unreconciled against its members.
+            if (inTerm.isEmpty()) {
+                Double literal = pureLiteral(term.text());
+                if (literal != null) {
+                    dependencies.add(CellDependency.constant(
+                            term.plus()
+                                    ? DependencyRole.SUMMAND_PLUS
+                                    : DependencyRole.SUMMAND_MINUS,
+                            literal));
+                    continue;
+                }
+            }
             for (NumericAtom atom : topLevelConstants(term, shape)) {
                 dependencies.add(CellDependency.constant(
                         constantRole(shape, term, atom), atom.value()));
@@ -287,13 +306,30 @@ final class CellGraphBuilder {
         return new Parsed(List.copyOf(dependencies), aggregation);
     }
 
-    /** A cell named twice in one head counts once, keeping the first sign it was given. */
+    /**
+     * A cell named more than once in one head counts once, with its signs netted:
+     * {@code SUM(C13:C21)-C13} adds C13 and takes it straight back out, so C13
+     * contributes nothing and is no member at all. Keeping the first sign instead
+     * would leave the head's own value unreconcilable against its members.
+     */
     private static List<Aggregation.Member> dedupeMembers(List<Aggregation.Member> members) {
         Map<Long, Aggregation.Member> byCell = new LinkedHashMap<>();
+        Map<Long, Integer> netSign = new LinkedHashMap<>();
         for (Aggregation.Member member : members) {
             byCell.putIfAbsent(member.cellId(), member);
+            netSign.merge(member.cellId(), member.plus() ? 1 : -1, Integer::sum);
         }
-        return List.copyOf(byCell.values());
+        List<Aggregation.Member> kept = new ArrayList<>();
+        for (Aggregation.Member member : byCell.values()) {
+            int net = netSign.get(member.cellId());
+            if (net == 0) {
+                continue;
+            }
+            kept.add(net > 0 == member.plus()
+                    ? member
+                    : new Aggregation.Member(member.cellId(), net > 0, member.label()));
+        }
+        return List.copyOf(kept);
     }
 
     private static UnboundReason barrierOf(CellReferenceEdge edge) {
@@ -376,6 +412,29 @@ final class CellGraphBuilder {
     }
 
     private record NumericAtom(double value, int start) {}
+
+    /**
+     * A whole term that is one number, or {@code null} when it is anything else. Used
+     * for the literal amounts that sit in a top-level additive chain — {@code A+B-72} —
+     * whose sign comes from the term, not the text, so the text is read unsigned.
+     */
+    private static Double pureLiteral(String termText) {
+        if (termText == null) {
+            return null;
+        }
+        String text = termText.trim();
+        if (text.startsWith("+")) {
+            text = text.substring(1).trim();
+        }
+        if (text.isEmpty() || !PURE_LITERAL.matcher(text).matches()) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(text);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
 
     /**
      * One atom's value: {@code 10^5} evaluates to 100000, plain and
@@ -503,18 +562,88 @@ final class CellGraphBuilder {
         }
     }
 
+    /** Guard against pathological nesting; real formulas bracket a handful deep. */
+    private static final int MAX_GROUP_DEPTH = 16;
+
+    /**
+     * The additive terms of an expression with the sign of every parenthesised group
+     * distributed over what is inside it: {@code A-(B-C)} is {@code A} added,
+     * {@code B} subtracted and {@code C} <em>added</em>. Read as top-level terms
+     * alone, the group is one opaque operand and the cells inside it lose both their
+     * membership and the role their real sign gives them — and the sign drives the
+     * add/deduct role, so C would be filed as a deduct when the arithmetic adds it.
+     *
+     * <p>Only a bare bracketed chain is descended into: {@code SUM(...)} and any
+     * other call does not start with {@code (}, and {@code (B-C)*2} does not end
+     * with {@code )}, so both keep the shape they already had.
+     */
+    private static List<Term> additiveTerms(String expr) {
+        List<Term> flattened = new ArrayList<>();
+        for (Term term : topLevelTerms(expr, 0, expr.length(), true)) {
+            flatten(term, 0, flattened);
+        }
+        return List.copyOf(flattened);
+    }
+
+    private static void flatten(Term term, int depth, List<Term> out) {
+        int[] body = depth < MAX_GROUP_DEPTH ? parenBody(term) : null;
+        if (body != null) {
+            List<Term> inner = topLevelTerms(term.source(), body[0], body[1], term.plus());
+            if (inner.size() > 1) {
+                for (Term part : inner) {
+                    flatten(part, depth + 1, out);
+                }
+                return;
+            }
+        }
+        out.add(term);
+    }
+
+    /**
+     * The span inside a term that is nothing but one bracketed group, or {@code null}
+     * when the term is anything else. Trimming brackets keeps absolute offsets, so
+     * the operand placements found in the whole formula still land inside the terms.
+     */
+    private static int[] parenBody(Term term) {
+        String source = term.source();
+        int start = term.start();
+        int end = term.end();
+        while (start < end && Character.isWhitespace(source.charAt(start))) {
+            start++;
+        }
+        while (end > start && Character.isWhitespace(source.charAt(end - 1))) {
+            end--;
+        }
+        if (end - start <= 2 || source.charAt(start) != '(' || source.charAt(end - 1) != ')') {
+            return null;
+        }
+        if (!balanced(source.substring(start + 1, end - 1))) {
+            return null;
+        }
+        return new int[] {start + 1, end - 1};
+    }
+
     /**
      * Split an expression on its top-level {@code +} and {@code -}, ignoring
      * operators inside parentheses, quotes, or a sign position (a leading minus, or
      * the exponent of {@code 1E-5}).
      */
     static List<Term> topLevelTerms(String expr) {
+        return topLevelTerms(expr, 0, expr.length(), true);
+    }
+
+    /**
+     * The same split over one span of the expression, with {@code outerPlus} the sign
+     * the span inherits from the group it sits in: inside a subtracted group every
+     * sign is flipped.
+     */
+    private static List<Term> topLevelTerms(String expr, int from, int to, boolean outerPlus) {
         List<Term> terms = new ArrayList<>();
         int depth = 0;
         boolean inQuotes = false;
-        boolean plus = true;
-        int start = 0;
-        for (int i = 0; i < expr.length(); i++) {
+        boolean plus = outerPlus;
+        int start = from;
+        for (int i = from; i < to; i++) {
             char c = expr.charAt(i);
             if (c == '\'' || c == '"') {
                 inQuotes = !inQuotes;
@@ -531,12 +660,12 @@ final class CellGraphBuilder {
                 if (i > start) {
                     terms.add(new Term(expr, start, i, plus));
                 }
-                plus = c == '+';
+                plus = (c == '+') == outerPlus;
                 start = i + 1;
             }
         }
-        if (start < expr.length()) {
-            terms.add(new Term(expr, start, expr.length(), plus));
+        if (start < to) {
+            terms.add(new Term(expr, start, to, plus));
         }
         return terms;
     }

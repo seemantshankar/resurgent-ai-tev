@@ -112,10 +112,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(24);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(25);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(24);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(25);
         }
     }
 
@@ -250,9 +250,11 @@ class PersistenceSeamTest {
                     "add", true, false, 0.9));
 
             repo.insertCellType(new CellType(
-                    parseRunId, cellRupees, CellKind.MONEY, CellScale.UNIT, "input_label", 0));
+                    parseRunId, cellRupees, CellKind.MONEY, CellScale.UNIT, "input_label", 0,
+                    com.resurgent.tev.parser.classify.ScaleProvenance.STATED));
             repo.insertCellType(new CellType(
-                    parseRunId, cellLakhs, CellKind.MONEY, CellScale.LAKH, "input_label", 0));
+                    parseRunId, cellLakhs, CellKind.MONEY, CellScale.LAKH, "input_label", 0,
+                    com.resurgent.tev.parser.classify.ScaleProvenance.STATED));
 
             assertThat(repo.sumAddAmountsForPath(parseRunId, path))
                     .as("1,000 at UNIT plus 2 at LAKH must normalize to base units before summing")
@@ -514,7 +516,7 @@ class PersistenceSeamTest {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(24);
+            assertThat(count(c, "schema_migration")).isEqualTo(25);
             assertThat(tableNames(c)).contains("cell_reference");
             assertThat(tableNames(c)).doesNotContain("cell_error_root");
 
@@ -562,7 +564,7 @@ class PersistenceSeamTest {
     void v15MigrationRestoresAdr0013IngestSignalsWithoutHeuristicStack() throws Exception {
         try (WorkspaceDatabase db = openDb("v15.db")) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(24);
+            assertThat(count(c, "schema_migration")).isEqualTo(25);
             assertThat(tableNames(c)).contains("cell_style", "cell_reference", "candidate");
             assertThat(tableNames(c)).doesNotContain(
                     "region",
@@ -734,7 +736,7 @@ class PersistenceSeamTest {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(
                 dbPath, WorkspaceDatabase.OpenOptions.allowDestructiveReset())) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(24);
+            assertThat(count(c, "schema_migration")).isEqualTo(25);
             assertThat(count(c, "cell")).isZero();
             assertThat(count(c, "source_file")).isZero();
             assertThat(tableNames(c)).doesNotContain("cost_head", "region");
@@ -777,7 +779,7 @@ class PersistenceSeamTest {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(24);
+            assertThat(count(c, "schema_migration")).isEqualTo(25);
             assertThat(tableNames(c)).contains("cell_type", "aggregation", "aggregation_member");
             assertThat(columnNames(c, "nomenclature_binding"))
                     .contains("source", "label_key", "aggregation_id");
@@ -796,7 +798,8 @@ class PersistenceSeamTest {
                     com.resurgent.tev.parser.classify.CellKind.MONEY,
                     com.resurgent.tev.parser.classify.CellScale.LAKH,
                     com.resurgent.tev.parser.classify.TypeSource.INPUT_LABEL,
-                    0));
+                    0,
+                    com.resurgent.tev.parser.classify.ScaleProvenance.STATED));
             long aggregationId = repo.insertAggregation(
                     new com.resurgent.tev.parser.classify.AggregationRow(
                             null, parseRunId, headCellId, worksheetId, "SUM(R[-8]C:R[-1]C)",
@@ -817,6 +820,9 @@ class PersistenceSeamTest {
                                 .isEqualTo(com.resurgent.tev.parser.classify.CellKind.MONEY);
                         assertThat(row.scale())
                                 .isEqualTo(com.resurgent.tev.parser.classify.CellScale.LAKH);
+                        assertThat(row.scaleProvenance())
+                                .isEqualTo(com.resurgent.tev.parser.classify
+                                        .ScaleProvenance.STATED);
                     });
             var aggregations = repo.selectAggregationsForParseRun(parseRunId);
             assertThat(aggregations).singleElement().satisfies(row -> {
@@ -837,6 +843,51 @@ class PersistenceSeamTest {
             assertThat(repo.selectAggregationsForParseRun(parseRunId)).isEmpty();
             assertThat(repo.selectCellTypesForParseRun(parseRunId)).isEmpty();
             assertThat(count(c, "aggregation_member")).isEqualTo(0);
+        }
+    }
+
+    @Test
+    void v25RecordsScaleProvenanceSoAnUnstatedDefaultIsNotAConfidentClaim() throws Exception {
+        try (WorkspaceDatabase db = openDb("v25.db")) {
+            java.sql.Connection c = db.connection();
+            WorkspaceRepository repo = new WorkspaceRepository(c);
+
+            assertThat(count(c, "schema_migration")).isEqualTo(25);
+            assertThat(columnNames(c, "cell_type")).contains("scale_provenance");
+
+            long sourceFileId = repo.insertSourceFile(1L, "v25.xlsx", "hash25", "fm_xlsx",
+                    Timestamps.now(), "0.1.0", null);
+            long parseRunId = repo.insertParseRun(sourceFileId, 1L, "0.1.0", "cfg",
+                    Timestamps.now(), null, "success", "{}");
+            long worksheetId = repo.insertWorksheet(parseRunId, "Sheet1", 0);
+            long unstated = repo.insertCell(worksheetId, numericCell("B7", 7, 2, "216.664"));
+            long adopted = repo.insertCell(worksheetId, numericCell("C7", 7, 3, "243.747"));
+
+            repo.insertCellType(new com.resurgent.tev.parser.classify.CellType(
+                    parseRunId, unstated,
+                    com.resurgent.tev.parser.classify.CellKind.MONEY,
+                    com.resurgent.tev.parser.classify.CellScale.UNIT,
+                    com.resurgent.tev.parser.classify.TypeSource.INPUT_LABEL,
+                    0,
+                    com.resurgent.tev.parser.classify.ScaleProvenance.UNSTATED));
+            repo.insertCellType(new com.resurgent.tev.parser.classify.CellType(
+                    parseRunId, adopted,
+                    com.resurgent.tev.parser.classify.CellKind.MONEY,
+                    com.resurgent.tev.parser.classify.CellScale.LAKH,
+                    com.resurgent.tev.parser.classify.TypeSource.INPUT_LABEL,
+                    0,
+                    com.resurgent.tev.parser.classify.ScaleProvenance.ADOPTED));
+
+            assertThat(repo.selectCellType(parseRunId, unstated))
+                    .get()
+                    .satisfies(row -> assertThat(row.scaleProvenance())
+                            .isEqualTo(com.resurgent.tev.parser.classify
+                                    .ScaleProvenance.UNSTATED));
+            assertThat(repo.selectCellType(parseRunId, adopted))
+                    .get()
+                    .satisfies(row -> assertThat(row.scaleProvenance())
+                            .isEqualTo(com.resurgent.tev.parser.classify
+                                    .ScaleProvenance.ADOPTED));
         }
     }
 

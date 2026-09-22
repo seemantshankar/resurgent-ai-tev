@@ -79,6 +79,23 @@ class LayerAResponseParserTest {
     }
 
     @Test
+    void rejectsUnknownScheduleFamilyAfterNormalization() {
+        assertThatThrownBy(() -> LayerAResponseParser.parse("""
+                {"scheduleFamily":"depreciation_schedule","triage":"main","relevance":"primary"}
+                """))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("family=null");
+    }
+
+    @Test
+    void normalizesCapExDetailSynonymOntoSeedFamily() {
+        LayerAJudgment judgment = LayerAResponseParser.parse("""
+                {"schedule_family":"CapEx Detail","triage":"main","relevance":"primary"}
+                """);
+        assertThat(judgment.scheduleFamily()).isEqualTo(ScheduleFamily.CAPEX_DETAIL);
+    }
+
+    @Test
     void rejectsCompletionWithoutJsonObject() {
         assertThatThrownBy(() -> LayerAResponseParser.parse("no json here"))
                 .isInstanceOf(IllegalStateException.class)

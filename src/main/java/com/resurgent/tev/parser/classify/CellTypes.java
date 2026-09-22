@@ -27,9 +27,19 @@ record CellTypes(
      * label with no quantity token") rather than a stated cue. An aggregation lets a
      * weak dissenter yield to agreeing strong members, but only where the winning
      * kind has at least one supporter that is not a bare default.
+     *
+     * <p>{@code scaleProvenance} is the scale's own trust, separate from the kind's:
+     * stated by this cell's evidence, adopted from an additive consumer, or unstated.
+     * A binding over a money cell with an unstated scale reports that fact rather
+     * than passing the unit default off as a claim.
      */
     record Typed(
-            ResolvedUnit unit, String typeSource, int depth, boolean weak, boolean bareDefault) {}
+            ResolvedUnit unit,
+            String typeSource,
+            int depth,
+            boolean weak,
+            boolean bareDefault,
+            ScaleProvenance scaleProvenance) {}
 
     CellTypes {
         // Insertion order is kept for the same reason the graph keeps it: a run has
@@ -42,6 +52,12 @@ record CellTypes(
     Optional<ResolvedUnit> unitOf(long cellId) {
         Typed row = typed.get(cellId);
         return row == null ? Optional.empty() : Optional.of(row.unit());
+    }
+
+    /** How this cell's scale was established, or empty when the cell did not type. */
+    Optional<ScaleProvenance> scaleProvenanceOf(long cellId) {
+        Typed row = typed.get(cellId);
+        return row == null ? Optional.empty() : Optional.of(row.scaleProvenance());
     }
 
     /** The unit a whole aggregation resolved to, or unresolved when its members disagreed. */
@@ -69,7 +85,8 @@ record CellTypes(
                     row.unit().kind(),
                     row.unit().scale(),
                     row.typeSource(),
-                    row.depth()));
+                    row.depth(),
+                    row.scaleProvenance()));
         }
         return List.copyOf(rows);
     }

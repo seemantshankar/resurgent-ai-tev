@@ -13,6 +13,7 @@ import com.resurgent.tev.parser.nomenclature.NomenclatureNode;
 import com.resurgent.tev.parser.nomenclature.OntologySlice;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -34,7 +35,6 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.regex.Pattern;
 
 /**
  * Packet classification application service: Layer A disposition and Layer B
@@ -43,8 +43,6 @@ import java.util.regex.Pattern;
  * persist in separate tables.
  */
 public final class ClassifyService {
-
-    private static final Pattern COORD_SHAPED = Pattern.compile("[A-Z]{1,3}[0-9]{1,7}");
 
     private final ClassifierLlm llm;
     private final DiscoverService discover;
@@ -281,6 +279,7 @@ public final class ClassifyService {
                     coverageParents,
                     bindings.size(),
                     interpretationCount,
+                    llmPhase.unclassifiedCandidateIds(),
                     layerBStats);
         } catch (ClassifyException e) {
             throw e;
@@ -307,26 +306,9 @@ public final class ClassifyService {
             ScheduledExecutorService watchdog,
             long deadlineNanos) throws ClassifyException {
         CandidateRow candidate = prepared.candidate();
-        LayerAJudgment raw;
-        try {
-            raw = callLlm(
-                    () -> llm.classifyLayerA(new LayerAPrompt(
-                            prepared.redacted(), slice, parent, prepared.cheapPass())),
-                    "Layer A candidate " + candidate.candidateId(),
-                    watchdog,
-                    deadlineNanos);
-        } catch (OpenRouterClassifierLlm.TruncatedCompletionException truncated) {
-            String family = parent != null
-                    && parent.scheduleFamily() != null
-                    && !parent.scheduleFamily().isBlank()
-                    ? parent.scheduleFamily()
-                    : "unclassified";
-            System.err.println("OpenRouter Layer A persistent truncation for candidate "
-                    + candidate.candidateId() + ": " + truncated.getMessage()
-                    + "; degrading to orphan/noise");
-            raw = new LayerAJudgment(
-                    family, Triage.ORPHAN, Relevance.NOISE,
-                    List.of(), List.of(), null);
+        LayerAJudgment raw = callLayerAWithRetry(slice, prepared, parent, watchdog, deadlineNanos);
+        if (raw == null) {
+            return null;
         }
         LayerAJudgment judgment = requireJudgment(raw, candidate.candidateId());
         PacketDisposition disposition = new PacketDisposition(
@@ -348,10 +330,73 @@ public final class ClassifyService {
         return new LayerAWork(prepared, judgment, disposition, facts);
     }
 
+    /**
+     * One Layer A attempt, then one retry at the shorter retry budget. Returns null when
+     * both miss, leaving that Candidate unclassified: a single straggler used to reject
+     * the whole run and discard every other Candidate's work, and the tail is per-request
+     * provider scheduling (identical prompts run in 2s or 112s), so a fresh request has a
+     * real chance of landing fast.
+     */
+    private LayerAJudgment callLayerAWithRetry(
+            OntologySlice slice,
+            PreparedPacket prepared,
+            LayerAJudgment parent,
+            ScheduledExecutorService watchdog,
+            long deadlineNanos) throws ClassifyException {
+        try {
+            return callLayerAOnce(
+                    slice, prepared, parent, watchdog, deadlineNanos, limits.attemptDeadline());
+        } catch (AttemptDeadlineException firstMiss) {
+            System.err.println("Layer A candidate " + prepared.candidate().candidateId()
+                    + " exceeded the " + limits.attemptDeadline().toMillis()
+                    + "ms attempt deadline; retrying once at "
+                    + limits.retryAttemptDeadline().toMillis() + "ms");
+        }
+        try {
+            return callLayerAOnce(
+                    slice, prepared, parent, watchdog, deadlineNanos,
+                    limits.retryAttemptDeadline());
+        } catch (AttemptDeadlineException secondMiss) {
+            System.err.println("Layer A candidate " + prepared.candidate().candidateId()
+                    + " missed the retry deadline too; leaving it unclassified");
+            return null;
+        }
+    }
+
+    private LayerAJudgment callLayerAOnce(
+            OntologySlice slice,
+            PreparedPacket prepared,
+            LayerAJudgment parent,
+            ScheduledExecutorService watchdog,
+            long deadlineNanos,
+            Duration attemptDeadline) throws ClassifyException {
+        try {
+            return callLlm(
+                    () -> llm.classifyLayerA(new LayerAPrompt(
+                            prepared.redacted(), slice, parent, prepared.cheapPass())),
+                    "Layer A candidate " + prepared.candidate().candidateId(),
+                    watchdog,
+                    deadlineNanos,
+                    attemptDeadline);
+        } catch (OpenRouterClassifierLlm.TruncatedCompletionException truncated) {
+            String family = parent != null
+                    && ScheduleFamily.isKnown(parent.scheduleFamily())
+                    ? parent.scheduleFamily()
+                    : ScheduleFamily.ASSUMPTIONS;
+            System.err.println("OpenRouter Layer A persistent truncation for candidate "
+                    + prepared.candidate().candidateId() + ": " + truncated.getMessage()
+                    + "; degrading to orphan/noise");
+            return new LayerAJudgment(
+                    family, Triage.ORPHAN, Relevance.NOISE,
+                    List.of(), List.of(), null);
+        }
+    }
+
     private record LlmPhaseResult(
             List<PacketDisposition> dispositions,
             List<ProjectFactBinding> facts,
-            Map<Long, LayerAJudgment> layerA) {}
+            Map<Long, LayerAJudgment> layerA,
+            List<Long> unclassifiedCandidateIds) {}
 
     @FunctionalInterface
     private interface ClassifyTask {
@@ -366,6 +411,8 @@ public final class ClassifyService {
         Map<Long, PacketDisposition> dispositions = new ConcurrentHashMap<>();
         Map<Long, List<ProjectFactBinding>> facts = new ConcurrentHashMap<>();
         Set<Long> submittedA = ConcurrentHashMap.newKeySet();
+        Set<Long> unclassified = ConcurrentHashMap.newKeySet();
+        Set<Long> settledWorksheets = ConcurrentHashMap.newKeySet();
         AtomicReference<ClassifyException> failure = new AtomicReference<>();
         Object scheduleLock = new Object();
 
@@ -386,7 +433,8 @@ public final class ClassifyService {
                     }
                     if (!packet.cheapPass()
                             && parentContext(packet.candidate(), judged, coverageByWorksheet)
-                                    == null) {
+                                    == null
+                            && !settledWorksheets.contains(packet.candidate().worksheetId())) {
                         submittedA.remove(id);
                         continue;
                     }
@@ -395,13 +443,22 @@ public final class ClassifyService {
                                 packet.candidate(), judged, coverageByWorksheet);
                         LayerAWork work = layerAWork(
                                 slice, parseRunId, packet, parent, watchdog, deadlineNanos);
-                        judged.put(id, work.judgment());
-                        if (packet.cheapPass()) {
-                            coverageByWorksheet.put(
-                                    packet.candidate().worksheetId(), work.judgment());
+                        if (work == null) {
+                            unclassified.add(id);
+                        } else {
+                            judged.put(id, work.judgment());
+                            if (packet.cheapPass()) {
+                                coverageByWorksheet.put(
+                                        packet.candidate().worksheetId(), work.judgment());
+                            }
+                            dispositions.put(id, work.disposition());
+                            facts.put(id, work.facts());
                         }
-                        dispositions.put(id, work.disposition());
-                        facts.put(id, work.facts());
+                        if (packet.cheapPass()) {
+                            // A coverage parent that never produced a judgment must still
+                            // settle, or its children wait on a disposition that is not coming.
+                            settledWorksheets.add(packet.candidate().worksheetId());
+                        }
                         submitReady[0].run();
                     });
                 }
@@ -426,7 +483,7 @@ public final class ClassifyService {
             if (failure.get() != null) {
                 throw failure.get();
             }
-            return assemblePhase(prepared, dispositions, facts, judged);
+            return assemblePhase(prepared, dispositions, facts, judged, unclassified);
         } finally {
             pool.shutdownNow();
             watchdog.shutdownNow();
@@ -476,14 +533,23 @@ public final class ClassifyService {
             String label,
             ScheduledExecutorService watchdog,
             long deadlineNanos) throws ClassifyException {
+        return callLlm(call, label, watchdog, deadlineNanos, limits.attemptDeadline());
+    }
+
+    private <T> T callLlm(
+            Callable<T> call,
+            String label,
+            ScheduledExecutorService watchdog,
+            long deadlineNanos,
+            Duration attemptDeadline) throws ClassifyException {
         long remainingClassify = deadlineNanos - System.nanoTime();
         if (remainingClassify <= 0) {
             throw new ClassifyException("incomplete: classify deadline exceeded");
         }
-        long attemptNanos = Math.min(limits.attemptDeadline().toNanos(), remainingClassify);
+        long attemptNanos = Math.min(attemptDeadline.toNanos(), remainingClassify);
         // When the run-level budget is what clipped this attempt, the failure is the
         // classify deadline, not the attempt deadline: a per-chunk retry cannot help.
-        boolean clippedByClassifyDeadline = remainingClassify <= limits.attemptDeadline().toNanos();
+        boolean clippedByClassifyDeadline = remainingClassify <= attemptDeadline.toNanos();
         Thread worker = Thread.currentThread();
         ScheduledFuture<?> abort = watchdog.schedule(
                 worker::interrupt, attemptNanos, TimeUnit.NANOSECONDS);
@@ -528,14 +594,21 @@ public final class ClassifyService {
             List<PreparedPacket> prepared,
             Map<Long, PacketDisposition> dispositions,
             Map<Long, List<ProjectFactBinding>> facts,
-            Map<Long, LayerAJudgment> judged) throws ClassifyException {
+            Map<Long, LayerAJudgment> judged,
+            Set<Long> unclassified) throws ClassifyException {
         List<PacketDisposition> orderedDispositions = new ArrayList<>();
         List<ProjectFactBinding> orderedFacts = new ArrayList<>();
         Map<Long, LayerAJudgment> layerA = new LinkedHashMap<>();
+        List<Long> unclassifiedIds = new ArrayList<>();
         for (PreparedPacket packet : prepared) {
             long id = packet.candidate().candidateId();
             PacketDisposition disposition = dispositions.get(id);
             if (disposition == null) {
+                if (unclassified.contains(id)) {
+                    unclassifiedIds.add(id);
+                    continue;
+                }
+                // Neither classified nor deliberately skipped: a real scheduling bug.
                 throw new ClassifyException(
                         "incomplete: missing Layer A for candidate " + id);
             }
@@ -546,7 +619,20 @@ public final class ClassifyService {
                 layerA.put(id, judgment);
             }
         }
-        return new LlmPhaseResult(orderedDispositions, orderedFacts, Map.copyOf(layerA));
+        if (!unclassifiedIds.isEmpty()) {
+            if (unclassifiedIds.size() == prepared.size()) {
+                // Every candidate missed: that is a systemic outage, not a straggler. The
+                // write below would delete the run's existing dispositions and insert
+                // nothing, so abort and keep the previous snapshot instead.
+                throw new ClassifyException(
+                        "incomplete: every Layer A candidate missed its deadline ("
+                                + unclassifiedIds.size() + "); previous snapshot kept");
+            }
+            System.err.println("Layer A left " + unclassifiedIds.size()
+                    + " candidate(s) unclassified: " + unclassifiedIds);
+        }
+        return new LlmPhaseResult(
+                orderedDispositions, orderedFacts, Map.copyOf(layerA), List.copyOf(unclassifiedIds));
     }
 
     private record MaterializeResult(
@@ -625,33 +711,24 @@ public final class ClassifyService {
                     "Layer B binding requires an amount cell at " + line.coord());
         }
         String path = line.path().trim();
-        boolean derivedLeaf = false;
         LeafSelectionOutcome leafSelection = LeafSelectionOutcome.NONE;
-        HardLeafChoice evidenceLeaf = hardCatalogLeafFromEvidence(slice, packet, cell, line);
+        HardLeafChoice evidenceLeaf = hardCatalogLeafFromEvidence(slice, packet, cell, line, path);
         Optional<NomenclatureNode> midLevel = slice.node(path);
         if (midLevel.isPresent() && !midLevel.get().leaf()) {
             if (evidenceLeaf.kind() == HardLeafChoice.Kind.UNIQUE) {
                 path = evidenceLeaf.path();
                 leafSelection = LeafSelectionOutcome.CATALOG_PREFERRED;
             } else {
-                // The model placed the amount under a mid-level because no leaf fits it.
-                // Name a leaf from the row's own label so the amount still rolls up under
-                // the mid-level it was assigned, instead of discarding the line.
-                String derived = softLeafNameFrom(line.verbatim());
-                if (derived == null) {
-                    throw new ClassifyException(
-                            "Layer B path must be a leaf join key, not mid-level: '" + path + "'");
-                }
-                path = path + " > " + derived;
-                derivedLeaf = true;
-                leafSelection = evidenceLeaf.kind() == HardLeafChoice.Kind.AMBIGUOUS
-                        ? LeafSelectionOutcome.LEAF_AMBIGUOUS
-                        : LeafSelectionOutcome.SOFT_GENERIC_KEPT;
+                // Mid-level without a unique hard-leaf match used to invent a leaf from
+                // the row text. That copied suppliers and rates into the catalogue. The
+                // model must name a category via soft[], or the amount stays unbound.
+                throw new ClassifyException(TranscribedLeaf.REJECT_REASON
+                        + ": mid-level '" + path
+                        + "' needs a category leaf, not the row text");
             }
         } else if (wouldBindAsSoft(slice, path)) {
             if (evidenceLeaf.kind() == HardLeafChoice.Kind.UNIQUE) {
                 path = evidenceLeaf.path();
-                derivedLeaf = false;
                 leafSelection = LeafSelectionOutcome.CATALOG_PREFERRED;
             } else if (evidenceLeaf.kind() == HardLeafChoice.Kind.AMBIGUOUS) {
                 leafSelection = LeafSelectionOutcome.LEAF_AMBIGUOUS;
@@ -685,6 +762,10 @@ public final class ClassifyService {
             }
             String parentPath = path.substring(0, sep);
             String leafName = path.substring(sep + 3).trim();
+            if (TranscribedLeaf.isTranscribed(leafName)) {
+                throw new ClassifyException(TranscribedLeaf.REJECT_REASON
+                        + ": leaf '" + leafName + "' is row evidence, not a category");
+            }
             NomenclatureNode parent = slice.node(parentPath).orElse(null);
             if (parent == null || parent.leaf()) {
                 throw new ClassifyException(
@@ -692,14 +773,11 @@ public final class ClassifyService {
                                 + "'; soft leaves attach under known mid-levels");
             }
             try {
-                // A derived leaf takes no aliases: the model's aliases described the
-                // mid-level it asked for, not this row. Staged rather than written: the
-                // classify write transaction persists it, so a run that later rolls back
-                // never leaves an unbound soft leaf behind (ADR: the overlay must not
-                // outlive the binding it exists for).
+                // Staged rather than written: the classify write transaction persists it,
+                // so a run that later rolls back never leaves an unbound soft leaf behind
+                // (ADR: the overlay must not outlive the binding it exists for).
                 NomenclatureCatalog.StagedSoftLeaf staged = catalog.stagePendingSoftLeaf(
-                        slice, mandateId, parentPath, leafName,
-                        derivedLeaf ? List.of() : line.aliases());
+                        slice, mandateId, parentPath, leafName, line.aliases());
                 slice = staged.slice();
                 mintedLeaf = staged.pending();
                 softLeaf = true;
@@ -755,9 +833,10 @@ public final class ClassifyService {
             OntologySlice slice,
             Packet packet,
             PacketCell cell,
-            LayerBLineJudgment line) {
+            LayerBLineJudgment line,
+            String proposedPath) {
         LinkedHashSet<String> hardLeaves = new LinkedHashSet<>();
-        for (String evidence : evidenceTexts(packet, cell, line)) {
+        for (String evidence : evidenceTexts(packet, cell, line, proposedPath)) {
             Optional<String> resolved = slice.resolve(evidence);
             if (resolved.isEmpty()) {
                 continue;
@@ -781,7 +860,7 @@ public final class ClassifyService {
     }
 
     private static List<String> evidenceTexts(
-            Packet packet, PacketCell cell, LayerBLineJudgment line) {
+            Packet packet, PacketCell cell, LayerBLineJudgment line, String proposedPath) {
         LinkedHashSet<String> texts = new LinkedHashSet<>();
         String rowLabel = LayerBAmountSupport.resolveRowLabel(packet, cell);
         if (rowLabel != null && !rowLabel.isBlank()) {
@@ -790,7 +869,19 @@ public final class ClassifyService {
         if (line.verbatim() != null && !line.verbatim().isBlank()) {
             texts.add(line.verbatim().trim());
         }
+        String leafSegment = leafSegmentOf(proposedPath);
+        if (leafSegment != null && !leafSegment.isBlank()) {
+            texts.add(leafSegment.trim());
+        }
         return List.copyOf(texts);
+    }
+
+    private static String leafSegmentOf(String path) {
+        if (path == null || path.isBlank()) {
+            return null;
+        }
+        int sep = path.lastIndexOf(" > ");
+        return sep < 0 ? path.trim() : path.substring(sep + 3).trim();
     }
 
     private static boolean evidenceMatchedViaAlias(
@@ -799,7 +890,7 @@ public final class ClassifyService {
             PacketCell cell,
             LayerBLineJudgment line,
             String path) {
-        for (String evidence : evidenceTexts(packet, cell, line)) {
+        for (String evidence : evidenceTexts(packet, cell, line, path)) {
             String needle = OntologySlice.normalize(evidence);
             boolean matched = slice.aliases().stream()
                     .anyMatch(alias -> OntologySlice.normalize(alias.aliasText()).equals(needle)
@@ -825,23 +916,6 @@ public final class ClassifyService {
         static HardLeafChoice ambiguous() {
             return new HardLeafChoice(Kind.AMBIGUOUS, null);
         }
-    }
-
-    /**
-     * A leaf name for an amount the model placed on a mid-level, taken from the
-     * row's own label. Returns null when the label cannot name a leaf: blank, a
-     * bare coord (the parser's fallback when label resolution found nothing), a
-     * path separator that would invent a mid-level, or implausibly long prose.
-     */
-    private static String softLeafNameFrom(String verbatim) {
-        if (verbatim == null) {
-            return null;
-        }
-        String name = verbatim.trim();
-        if (name.isEmpty() || name.contains(">") || name.length() > 120) {
-            return null;
-        }
-        return COORD_SHAPED.matcher(name).matches() ? null : name;
     }
 
     private static Optional<ProjectFactBinding> materializeFact(
@@ -894,6 +968,7 @@ public final class ClassifyService {
             return new GapFillResult(List.of(), Map.of(), List.of(), List.of(), List.of());
         }
         List<LabelGapFiller.Queued> queued = new ArrayList<>();
+        Set<String> skippedUnclassified = new LinkedHashSet<>();
         Map<String, List<DeterministicBinder.QueuedGroup>> byLabel = new LinkedHashMap<>();
         for (DeterministicBinder.QueuedGroup group : deterministic.queued()) {
             byLabel.computeIfAbsent(group.label().key(), key -> new ArrayList<>()).add(group);
@@ -902,6 +977,13 @@ public final class ClassifyService {
             DeterministicBinder.QueuedGroup representative = entry.getValue().get(0);
             GraphCell cell = graph.cells().get(representative.cellId());
             if (cell == null) {
+                continue;
+            }
+            if (!layerA.containsKey(representative.candidateId())) {
+                // This Candidate's Layer A never produced a disposition (retry missed).
+                // Asking Layer B without one would invent context, so the group's names
+                // stay unbound as LLM_UNAVAILABLE rather than being asked and declined.
+                skippedUnclassified.add(entry.getKey());
                 continue;
             }
             PacketCell amount = packetCellOf(cell);
@@ -963,8 +1045,11 @@ public final class ClassifyService {
         for (Map.Entry<String, List<DeterministicBinder.QueuedGroup>> entry : byLabel.entrySet()) {
             LayerBLineJudgment answer = answers.get(entry.getKey());
             if (answer == null) {
+                UnboundReason reason = skippedUnclassified.contains(entry.getKey())
+                        ? UnboundReason.LLM_UNAVAILABLE
+                        : UnboundReason.LLM_DECLINED;
                 for (DeterministicBinder.QueuedGroup group : entry.getValue()) {
-                    reasons.put(group.cellId(), UnboundReason.LLM_DECLINED);
+                    reasons.put(group.cellId(), reason);
                 }
                 continue;
             }
@@ -1017,8 +1102,12 @@ public final class ClassifyService {
                 }
             }
             if (mintedPath.binding() == null) {
+                UnboundReason refuse = mintedPath.rejectReason() != null
+                        && mintedPath.rejectReason().startsWith(TranscribedLeaf.REJECT_REASON)
+                        ? UnboundReason.TRANSCRIBED_LABEL
+                        : UnboundReason.LLM_DECLINED;
                 for (DeterministicBinder.QueuedGroup group : entry.getValue()) {
-                    reasons.put(group.cellId(), UnboundReason.LLM_DECLINED);
+                    reasons.put(group.cellId(), refuse);
                 }
                 stats.addRejected(mintedPath.rejectReason());
                 continue;
@@ -1195,7 +1284,7 @@ public final class ClassifyService {
     private static LayerAJudgment requireJudgment(LayerAJudgment judgment, long candidateId)
             throws ClassifyException {
         if (judgment == null
-                || judgment.scheduleFamily() == null || judgment.scheduleFamily().isBlank()
+                || !ScheduleFamily.isKnown(judgment.scheduleFamily())
                 || !Triage.isKnown(judgment.triage())
                 || !Relevance.isKnown(judgment.relevance())) {
             throw new ClassifyException(

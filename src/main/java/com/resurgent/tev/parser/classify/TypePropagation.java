@@ -30,6 +30,7 @@ final class TypePropagation {
 
     CellTypes resolve(CellGraph graph) {
         Objects.requireNonNull(graph, "graph");
+        statesDivisorScale.clear();
         Map<Long, CellTypes.Typed> typed = new LinkedHashMap<>();
         Map<Long, UnboundReason> refusals = new LinkedHashMap<>();
         Set<Long> inCycle = cycles(graph);
@@ -58,7 +59,7 @@ final class TypePropagation {
                 }
             }
             InputTyping.Reading fallback =
-                    new InputTyping.Reading(ResolvedUnit.unresolved(), false);
+                    new InputTyping.Reading(ResolvedUnit.unresolved(), false, ScaleProvenance.UNSTATED);
             for (InputTyping.Reading candidate : own.values()) {
                 if (!fallback.unit().isResolved()) {
                     fallback = candidate;
@@ -66,7 +67,8 @@ final class TypePropagation {
                 }
                 if (fallback.unit().kind() != candidate.unit().kind()
                         || fallback.unit().scale() != candidate.unit().scale()) {
-                    fallback = new InputTyping.Reading(ResolvedUnit.unresolved(), false);
+                    fallback = new InputTyping.Reading(
+                            ResolvedUnit.unresolved(), false, ScaleProvenance.UNSTATED);
                     break;
                 }
             }
@@ -79,7 +81,7 @@ final class TypePropagation {
                 if (reading.unit().isResolved()) {
                     typed.put(cell.cellId(), new CellTypes.Typed(
                             reading.unit(), TypeSource.INPUT_LABEL, 0,
-                            false, reading.bareDefault()));
+                            false, reading.bareDefault(), reading.scaleProvenance()));
                 } else {
                     refusals.put(cell.cellId(), UnboundReason.NO_LABEL);
                 }
@@ -109,11 +111,18 @@ final class TypePropagation {
                 // the formula must be revisited, or a subset guess (percent from the
                 // percent factor alone, money from the money factor alone) would be
                 // written and never corrected.
+                // A bare literal adopts the scale an additive consumer states, and that
+                // adoption is written onto the operand's own type so it reaches the
+                // binder and the rollup rather than only this formula's local reading.
+                // It runs before derive so the formula sees the adopted scale below.
+                if (adoptSummandScales(graph, cellId, typed, refusals)) {
+                    changed = true;
+                }
                 Outcome outcome = derive(graph, cellId, typed, refusals);
                 if (outcome.unit() != null) {
                     CellTypes.Typed next = new CellTypes.Typed(
                             outcome.unit(), TypeSource.PROPAGATED, outcome.depth(),
-                            outcome.weak(), outcome.bareDefault());
+                            outcome.weak(), outcome.bareDefault(), outcome.scaleProvenance());
                     CellTypes.Typed current = typed.get(cellId);
                     if (current == null
                             || !current.unit().equals(next.unit())
@@ -150,18 +159,23 @@ final class TypePropagation {
     }
 
     private record Outcome(
-            ResolvedUnit unit, UnboundReason refusal, int depth, Strength strength) {
+            ResolvedUnit unit,
+            UnboundReason refusal,
+            int depth,
+            Strength strength,
+            ScaleProvenance scaleProvenance) {
 
-        static Outcome typed(ResolvedUnit unit, int depth, Strength strength) {
-            return new Outcome(unit, null, depth, strength);
+        static Outcome typed(
+                ResolvedUnit unit, int depth, Strength strength, ScaleProvenance scaleProvenance) {
+            return new Outcome(unit, null, depth, strength, scaleProvenance);
         }
 
         static Outcome refused(UnboundReason refusal) {
-            return new Outcome(null, refusal, 0, Strength.strong());
+            return new Outcome(null, refusal, 0, Strength.strong(), ScaleProvenance.UNSTATED);
         }
 
         static Outcome pending() {
-            return new Outcome(null, null, 0, Strength.strong());
+            return new Outcome(null, null, 0, Strength.strong(), ScaleProvenance.UNSTATED);
         }
 
         boolean weak() {
@@ -206,6 +220,7 @@ final class TypePropagation {
         if (dependencies.isEmpty()) {
             return Outcome.refused(UnboundReason.UNTYPABLE);
         }
+        GraphCell cell = graph.cells().get(cellId);
 
         List<Operand> summands = new ArrayList<>();
         List<Operand> factors = new ArrayList<>();
@@ -254,19 +269,19 @@ final class TypePropagation {
             depth = Math.max(depth, operand.depth() + 1);
             bucket(dependency.role(), summands, factors, divisors, others)
                     .add(Operand.typed(
-                            operand.unit(), operand.weak(), operand.bareDefault()));
+                            operand.unit(), operand.weak(), operand.bareDefault(),
+                            operand.scaleProvenance()));
         }
 
-        // A scale no cue stated is not a claim of rupees; it adopts the scale the
-        // typed operands agree on. J26 = 314.4 is a bare literal with no label, no
-        // divisor and no header, so money/unit was an unearned assertion; in
-        // I26 - J26, where I26 is money/lakh, J26 is lakh. A cell whose kind came
-        // from a stated cue (Amount in Rs) keeps its own scale, so a genuine
-        // rupees-against-lakhs conflict is still refused.
-        adoptUnstatedScale(summands);
-        adoptUnstatedScale(factors);
-        adoptUnstatedScale(divisors);
-        adoptUnstatedScale(others);
+        // Adoption is not local to this formula. A bare literal's scale is written
+        // onto the operand's own type by adoptSummandScales before this runs, so the
+        // operand below already carries the scale an additive consumer stated. That
+        // is what makes the reading reach the binder and the rollup, and what keeps
+        // an adopted scale from having to be re-guessed here.
+
+        ScaleProvenance summandProvenance = provenanceOf(cell, summands);
+        ScaleProvenance productProvenance = provenanceOf(cell, factors, divisors);
+        ScaleProvenance otherProvenance = provenanceOf(cell, others);
 
         if (!summands.isEmpty()) {
             ResolvedUnit sum = combineSummands(summands);
@@ -274,7 +289,7 @@ final class TypePropagation {
                 return Outcome.refused(sum.refusal());
             }
             if (sum.isResolved()) {
-                return Outcome.typed(sum, depth, strengthOf(summands, false));
+                return Outcome.typed(sum, depth, strengthOf(summands, false), summandProvenance);
             }
         }
         if (!factors.isEmpty() || !divisors.isEmpty()) {
@@ -303,10 +318,11 @@ final class TypePropagation {
                         return Outcome.typed(
                                 ResolvedUnit.of(settledKind, product.scale()),
                                 depth,
-                                Strength.strong());
+                                Strength.strong(),
+                                productProvenance);
                     }
                 }
-                return Outcome.typed(product, depth, strength);
+                return Outcome.typed(product, depth, strength, productProvenance);
             }
         }
         if (!others.isEmpty()) {
@@ -314,38 +330,145 @@ final class TypePropagation {
             // but only when they all agree on one.
             ResolvedUnit combined = combineSummands(others);
             if (combined.isResolved()) {
-                return Outcome.typed(combined, depth, strengthOf(others, false));
+                return Outcome.typed(
+                        combined, depth, strengthOf(others, false), otherProvenance);
             }
         }
         return pending ? Outcome.pending() : Outcome.refused(UnboundReason.UNTYPABLE);
     }
 
     /**
-     * A bucket of operands whose unstated scales adopt the one scale the typed
-     * operands state. When no operand states a scale, or the stated ones disagree,
-     * nothing changes and the combination decides as before.
+     * Whether a Cell's own formula states a scale in a divisor, memoised for this run.
+     *
+     * <p>A Cell's formula text does not change while types propagate, but {@code derive}
+     * asks three times per Cell and the pass loop runs up to {@link #MAX_PASSES} times,
+     * so the underlying scan was repeated thousands of times per Cell for one fixed
+     * answer.
      */
-    private static void adoptUnstatedScale(List<Operand> operands) {
-        CellScale stated = null;
-        for (Operand operand : operands) {
-            if (operand.isConstant() || operand.scaleUnstated()) {
+    private final Map<Long, Boolean> statesDivisorScale = new HashMap<>();
+
+    private boolean statesDivisorScale(GraphCell cell) {
+        if (cell == null) {
+            return false;
+        }
+        Boolean cached = statesDivisorScale.get(cell.cellId());
+        if (cached != null) {
+            return cached;
+        }
+        boolean stated =
+                InterpretationEvidenceResolver.formulaDivisorScale(cell.formulaText()) != null;
+        statesDivisorScale.put(cell.cellId(), stated);
+        return stated;
+    }
+
+    /**
+     * A scale's provenance for an expression: stated when this cell's own formula
+     * states a scale in a divisor ({@code /10^5} → lakh, {@code 8000*300/100000} → lakh),
+     * otherwise the strongest provenance among the typed operands. Constants carry no
+     * provenance; an expression over only constants has no evidence either.
+     */
+    private ScaleProvenance provenanceOf(GraphCell cell, List<Operand>... buckets) {
+        if (statesDivisorScale(cell)) {
+            return ScaleProvenance.STATED;
+        }
+        ScaleProvenance provenance = ScaleProvenance.UNSTATED;
+        for (List<Operand> bucket : buckets) {
+            for (Operand operand : bucket) {
+                if (operand.isConstant()) {
+                    continue;
+                }
+                provenance = ScaleProvenance.strongest(provenance, operand.provenance());
+            }
+        }
+        return provenance;
+    }
+
+    /**
+     * Writes onto an unstated operand's own type the one scale its additive consumer
+     * states. Restricted to {@code +} and {@code -}: every member of an additive group
+     * shares the group's scale, so {@code K54 = I54 - J54} proves J54 is lakh when I54
+     * is, and {@code J47 = SUM(J9:J39)} proves its unstated members are lakh once J47
+     * has one. A product or quotient carries no such proof — {@code F159 = D159*E159}
+     * moves a money scale onto a quantity and a rate — so those buckets are never
+     * adopted.
+     *
+     * <p>The fixpoint guard is in what may be a source: only a <em>claimed</em> scale
+     * (stated by a cue, or adopted from one), never an unstated default, so a chain of
+     * unstated cells can never invent a scale between them. Every adopted scale
+     * therefore traces back to a cue. An adopted cell may source a further adoption,
+     * which is what lets a scale converge outward; the chain is monotone (only
+     * {@code UNSTATED} operands are candidates, and a scale is never overwritten), so
+     * it terminates rather than oscillating. Adoption waits while any summand is still
+     * pending, so it cannot settle on a source that later turns out to disagree.
+     *
+     * @return true when at least one operand's type changed
+     */
+    private static boolean adoptSummandScales(
+            CellGraph graph,
+            long headCellId,
+            Map<Long, CellTypes.Typed> typed,
+            Map<Long, UnboundReason> refusals) {
+        // A head's own claimed scale is the group's scale — it may have been adopted
+        // from a consumer's formula, as J47 was from K47 = I47 - J47 — so it can hand
+        // that scale to the members that state none.
+        CellTypes.Typed head = typed.get(headCellId);
+        CellScale stated = head != null && head.scaleProvenance().isClaimed()
+                ? head.unit().scale()
+                : null;
+        List<Long> candidates = new ArrayList<>();
+        for (CellDependency dependency : graph.dependenciesOf(headCellId)) {
+            if (dependency.isConstant() || dependency.isBarrier()) {
+                continue;
+            }
+            if (!dependency.role().isSummand()) {
+                continue;
+            }
+            Long operandId = dependency.cellId();
+            if (operandId == null) {
+                continue;
+            }
+            CellTypes.Typed row = typed.get(operandId);
+            if (row == null) {
+                if (!refusals.containsKey(operandId)) {
+                    // Still pending: a scale stated later would be adopted from a
+                    // different source, so wait rather than settle on this one.
+                    return false;
+                }
+                continue;
+            }
+            if (!row.unit().isMoney()) {
+                continue;
+            }
+            if (!row.scaleProvenance().isClaimed()) {
+                candidates.add(operandId);
                 continue;
             }
             if (stated == null) {
-                stated = operand.unit().scale();
-            } else if (stated != operand.unit().scale()) {
-                return;
+                stated = row.unit().scale();
+            } else if (stated != row.unit().scale()) {
+                // Two claimed scales disagree: a genuine conflict, not an adoption.
+                return false;
             }
         }
-        if (stated == null) {
-            return;
+        if (stated == null || candidates.isEmpty()) {
+            return false;
         }
-        for (int index = 0; index < operands.size(); index++) {
-            Operand operand = operands.get(index);
-            if (operand.scaleUnstated()) {
-                operands.set(index, operand.withScale(stated));
+        boolean changed = false;
+        for (Long operandId : candidates) {
+            CellTypes.Typed row = typed.get(operandId);
+            if (row == null || row.scaleProvenance().isClaimed()) {
+                continue;
             }
+            typed.put(operandId, new CellTypes.Typed(
+                    ResolvedUnit.of(row.unit().kind(), stated),
+                    row.typeSource(),
+                    row.depth(),
+                    row.weak(),
+                    row.bareDefault(),
+                    ScaleProvenance.ADOPTED));
+            changed = true;
         }
+        return changed;
     }
 
     /** The typed operands of a product: its factors and typed divisors. */
@@ -476,51 +599,40 @@ final class TypePropagation {
 
     /** One operand: either a typed cell or a hardcoded number. */
     private record Operand(
-            ResolvedUnit unit, Double constant, boolean weak, boolean bareDefault) {
+            ResolvedUnit unit,
+            Double constant,
+            boolean weak,
+            boolean bareDefault,
+            ScaleProvenance provenance) {
 
-        static Operand typed(ResolvedUnit unit, boolean weak, boolean bareDefault) {
-            return new Operand(unit, null, weak, bareDefault);
+        static Operand typed(
+                ResolvedUnit unit,
+                boolean weak,
+                boolean bareDefault,
+                ScaleProvenance provenance) {
+            return new Operand(unit, null, weak, bareDefault, provenance);
         }
 
         static Operand constant(double value) {
-            return new Operand(null, value, false, false);
+            return new Operand(null, value, false, false, ScaleProvenance.UNSTATED);
         }
 
         boolean isConstant() {
             return constant != null;
         }
-
-        /**
-         * True when the operand's scale rests on nothing: the kind was the bare money
-         * default and no divisor, row label or column header stated a scale. Such a
-         * scale is unearned and adopts from the operands that do state one.
-         */
-        boolean scaleUnstated() {
-            return !isConstant() && TypePropagation.scaleUnstated(unit, bareDefault);
-        }
-
-        Operand withScale(CellScale scale) {
-            return new Operand(
-                    ResolvedUnit.of(unit.kind(), scale), constant, weak, bareDefault);
-        }
     }
 
     /**
-     * True when a money cell's scale rests on nothing: the kind was the bare money
-     * default and no divisor, row label or column header stated a scale. A cell whose
-     * kind came from a stated cue (Amount in Rs) keeps its own scale even when it is
-     * rupees, so a genuine rupees-against-lakhs conflict is still refused.
+     * A sum takes its members' unit, and only when the members that state one agree. A
+     * member whose scale is unstated adopts the stated one rather than forcing a
+     * conflict: it is an additive sibling, so it shares the group's scale by
+     * construction. The same rule as {@link #consensus}, so a formula and an
+     * aggregation over the same cells cannot disagree about their unit.
      */
-    private static boolean scaleUnstated(ResolvedUnit unit, boolean bareDefault) {
-        return bareDefault
-                && unit.scale() == CellScale.UNIT
-                && unit.kind() == CellKind.MONEY;
-    }
-
-    /** A sum takes its members' unit, and only when every typed member agrees. */
     private static ResolvedUnit combineSummands(List<Operand> operands) {
         CellKind kind = null;
-        CellScale scale = null;
+        CellScale stated = null;
+        boolean scaleDisagrees = false;
         for (Operand operand : operands) {
             if (operand.isConstant()) {
                 continue;
@@ -531,17 +643,25 @@ final class TypePropagation {
             }
             if (kind == null) {
                 kind = unit.kind();
-                scale = unit.scale();
-                continue;
-            }
-            if (kind != unit.kind()) {
+            } else if (kind != unit.kind()) {
                 return ResolvedUnit.refused(UnboundReason.KIND_CONFLICT);
             }
-            if (scale != unit.scale()) {
-                return ResolvedUnit.refused(UnboundReason.SCALE_CONFLICT);
+            if (!operand.provenance().isClaimed()) {
+                continue;
+            }
+            if (stated == null) {
+                stated = unit.scale();
+            } else if (stated != unit.scale()) {
+                scaleDisagrees = true;
             }
         }
-        return kind == null ? ResolvedUnit.unresolved() : ResolvedUnit.of(kind, scale);
+        if (kind == null) {
+            return ResolvedUnit.unresolved();
+        }
+        if (scaleDisagrees) {
+            return ResolvedUnit.refused(UnboundReason.SCALE_CONFLICT);
+        }
+        return ResolvedUnit.of(kind, stated == null ? CellScale.UNIT : stated);
     }
 
     /**
@@ -660,16 +780,17 @@ final class TypePropagation {
             Map<Long, UnboundReason> refusals) {
         Map<Long, ResolvedUnit> units = new LinkedHashMap<>();
         for (Aggregation aggregation : graph.aggregations()) {
-            ResolvedUnit strong = consensus(aggregation, typed, row -> !row.weak());
-            ResolvedUnit resolved;
-            if (strong.refusal() != null) {
+            Consensus strong = consensus(aggregation, typed, row -> !row.weak());
+            Consensus chosen;
+            if (strong.unit().refusal() != null) {
                 // The members whose kinds were known disagree: a genuine conflict.
-                resolved = strong;
-            } else if (strong.isResolved() && hasNonDefaultSupporter(aggregation, typed)) {
-                resolved = strong;
+                chosen = strong;
+            } else if (strong.unit().isResolved() && hasNonDefaultSupporter(aggregation, typed)) {
+                chosen = strong;
             } else {
-                resolved = consensus(aggregation, typed, row -> true);
+                chosen = consensus(aggregation, typed, row -> true);
             }
+            ResolvedUnit resolved = chosen.unit();
             if (resolved.refusal() != null) {
                 units.put(aggregation.headCellId(), resolved);
                 refusals.putIfAbsent(aggregation.headCellId(), resolved.refusal());
@@ -687,19 +808,24 @@ final class TypePropagation {
             if (head != null && head.numeric()) {
                 typed.computeIfAbsent(aggregation.headCellId(),
                         id -> new CellTypes.Typed(
-                                resolved, TypeSource.AGGREGATION, 1, false, false));
+                                resolved, TypeSource.AGGREGATION, 1, false, false,
+                                chosen.provenance()));
             }
         }
         return units;
     }
 
+    /** An aggregation's unit and the trust its scale carries. */
+    private record Consensus(ResolvedUnit unit, ScaleProvenance provenance) {}
+
     /** The common unit of the members passing {@code include}, or a refusal. */
-    private static ResolvedUnit consensus(
+    private static Consensus consensus(
             Aggregation aggregation,
             Map<Long, CellTypes.Typed> typed,
             java.util.function.Predicate<CellTypes.Typed> include) {
         CellKind kind = null;
         CellScale stated = null;
+        ScaleProvenance provenance = ScaleProvenance.UNSTATED;
         boolean scaleDisagrees = false;
         for (Aggregation.Member member : aggregation.members()) {
             CellTypes.Typed row = typed.get(member.cellId());
@@ -709,11 +835,13 @@ final class TypePropagation {
             if (kind == null) {
                 kind = row.unit().kind();
             } else if (kind != row.unit().kind()) {
-                return ResolvedUnit.refused(UnboundReason.KIND_CONFLICT);
+                return new Consensus(
+                        ResolvedUnit.refused(UnboundReason.KIND_CONFLICT), ScaleProvenance.UNSTATED);
             }
-            // An unearned scale adopts the one the other members state, so a bare
-            // literal in a lakh group is lakh rather than a rupees claim.
-            if (scaleUnstated(row.unit(), row.bareDefault())) {
+            // An unstated scale adopts the one the other members state, so a bare
+            // literal in a lakh group is lakh rather than a rupees claim. A scale that
+            // was itself adopted does not become a source here either.
+            if (!row.scaleProvenance().isClaimed()) {
                 continue;
             }
             if (stated == null) {
@@ -721,14 +849,17 @@ final class TypePropagation {
             } else if (stated != row.unit().scale()) {
                 scaleDisagrees = true;
             }
+            provenance = ScaleProvenance.strongest(provenance, row.scaleProvenance());
         }
         if (kind == null) {
-            return ResolvedUnit.unresolved();
+            return new Consensus(ResolvedUnit.unresolved(), ScaleProvenance.UNSTATED);
         }
         if (scaleDisagrees) {
-            return ResolvedUnit.refused(UnboundReason.SCALE_CONFLICT);
+            return new Consensus(
+                    ResolvedUnit.refused(UnboundReason.SCALE_CONFLICT), ScaleProvenance.UNSTATED);
         }
-        return ResolvedUnit.of(kind, stated == null ? CellScale.UNIT : stated);
+        return new Consensus(
+                ResolvedUnit.of(kind, stated == null ? CellScale.UNIT : stated), provenance);
     }
 
     /** True when a non-weak member rests on more than the bare money default. */

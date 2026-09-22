@@ -38,6 +38,8 @@ final class LayerBPromptAssembler {
             quantity/rate/percent may use 3=helper only (supporting drivers), never cost roles.
             Formula=true cells may only use 2=total or 3=helper.
             Prefer lines over soft when a leaf already exists. Empty lines/soft allowed.
+            soft n is a short category name, never the row text, a rate, a supplier,
+            a quantity, a specification, or a formula error (#REF!).
             Use context[] (headers, units, section labels) to disambiguate quantity/rate/total.
             Optional peers on a line: peers:[{coord,reason}] with reason=anti_double_count only.
             Peer coords may be sheet-qualified (SHEET!F31) and may sit outside this Packet.

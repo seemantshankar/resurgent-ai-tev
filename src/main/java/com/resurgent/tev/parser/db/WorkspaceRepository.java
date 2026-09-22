@@ -15,6 +15,7 @@ import com.resurgent.tev.parser.classify.InterpretationEvidence;
 import com.resurgent.tev.parser.classify.NomenclatureBinding;
 import com.resurgent.tev.parser.classify.PacketDisposition;
 import com.resurgent.tev.parser.classify.ProjectFactBinding;
+import com.resurgent.tev.parser.classify.ScaleProvenance;
 import com.resurgent.tev.parser.nomenclature.ProjectFactField;
 import com.resurgent.tev.parser.ingest.NormalizedCell;
 import com.resurgent.tev.parser.nomenclature.IndustryResolution;
@@ -2106,21 +2107,25 @@ public final class WorkspaceRepository {
 
     public void insertCellType(CellType row) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO cell_type (parse_run_id, cell_id, kind, scale, type_source, depth)"
-                        + " VALUES (?, ?, ?, ?, ?, ?)")) {
+                "INSERT INTO cell_type"
+                        + " (parse_run_id, cell_id, kind, scale, type_source, depth,"
+                        + " scale_provenance)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?)")) {
             ps.setLong(1, row.parseRunId());
             ps.setLong(2, row.cellId());
             ps.setString(3, row.kind().wireName());
             ps.setString(4, row.scale().wireName());
             ps.setString(5, row.typeSource());
             ps.setInt(6, row.depth());
+            ps.setString(7, row.scaleProvenance().wireName());
             ps.executeUpdate();
         }
     }
 
     public List<CellType> selectCellTypesForParseRun(long parseRunId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT parse_run_id, cell_id, kind, scale, type_source, depth FROM cell_type"
+                "SELECT parse_run_id, cell_id, kind, scale, type_source, depth,"
+                        + " scale_provenance FROM cell_type"
                         + " WHERE parse_run_id = ? ORDER BY cell_id")) {
             ps.setLong(1, parseRunId);
             try (ResultSet rs = ps.executeQuery()) {
@@ -2132,16 +2137,41 @@ public final class WorkspaceRepository {
                             CellKind.fromWire(rs.getString("kind")),
                             CellScale.fromWire(rs.getString("scale")),
                             rs.getString("type_source"),
-                            rs.getInt("depth")));
+                            rs.getInt("depth"),
+                            ScaleProvenance.fromWire(rs.getString("scale_provenance"))));
                 }
                 return rows;
             }
         }
     }
 
-    /** Aggregation members cascade with the aggregation row. */
-    public void deleteAggregationsForParseRun(long parseRunId) throws SQLException {
+    /** The typing evidence for one cell, or empty when it never typed. */
+    public java.util.Optional<CellType> selectCellType(long parseRunId, long cellId)
+            throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT parse_run_id, cell_id, kind, scale, type_source, depth,"
+                        + " scale_provenance FROM cell_type"
+                        + " WHERE parse_run_id = ? AND cell_id = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, cellId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return java.util.Optional.empty();
+                }
+                return java.util.Optional.of(new CellType(
+                        rs.getLong("parse_run_id"),
+                        rs.getLong("cell_id"),
+                        CellKind.fromWire(rs.getString("kind")),
+                        CellScale.fromWire(rs.getString("scale")),
+                        rs.getString("type_source"),
+                        rs.getInt("depth"),
+                        ScaleProvenance.fromWire(rs.getString("scale_provenance"))));
+            }
+        }
+    }
+
+    /** Aggregation members cascade with the aggregation row. */
+    public void deleteAggregationsForParseRun(long parseRunId) throws SQLException {        try (PreparedStatement ps = connection.prepareStatement(
                 "DELETE FROM aggregation_member WHERE aggregation_id IN"
                         + " (SELECT aggregation_id FROM aggregation WHERE parse_run_id = ?)")) {
             ps.setLong(1, parseRunId);

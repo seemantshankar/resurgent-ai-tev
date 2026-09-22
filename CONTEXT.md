@@ -53,7 +53,7 @@ The feature name for the deterministic pass that emits Candidates and Packets fr
 _Avoid_: using “region” for Candidate, Packet, or any code identifier
 
 **Layer A (Packet disposition)**:
-LLM judgment on what kind of island a Packet is: schedule family, Scratch/Orphan triage, axis labels where present, and relevance (`primary` | `supporting` | `noise`). Not a nomenclature path.
+LLM judgment on what kind of island a Packet is: schedule family (`capex_detail` | `means_of_finance` | `profit_and_loss` | `balance_sheet` | `cash_flow` | `assumptions` | `project_summary`), Scratch/Orphan triage, axis labels where present, and relevance (`primary` | `supporting` | `noise`). Not a nomenclature path.
 _Avoid_: classification (alone), region type, cost head
 
 **Layer B (nomenclature binding)**:
@@ -69,7 +69,7 @@ A head cell whose formula sums or nets its members, with membership read from th
 _Avoid_: total row, section, cost-head rollup, trusted total
 
 **Unbound reason**:
-Why a numeric cell carries no binding: `untypable`, `external_dependency`, `broken_dependency`, `range_truncated`, `no_label`, `ambiguous_label`, `kind_conflict`, `scale_conflict`, `non_money_group`, `driver_only`, `cycle`, `llm_declined`, `llm_unavailable`. Enumerated in code and pinned by a unit test, not by a database CHECK. A principled boundary, not an accumulating pile of exceptions.
+Why a numeric cell carries no binding: `untypable`, `external_dependency`, `broken_dependency`, `range_truncated`, `no_label`, `ambiguous_label`, `kind_conflict`, `scale_conflict`, `non_money_group`, `driver_only`, `cycle`, `llm_declined`, `llm_unavailable`, `transcribed_label`. Enumerated in code and pinned by a unit test, not by a database CHECK. A principled boundary, not an accumulating pile of exceptions.
 _Avoid_: error, failure, skipped
 
 **Binding source**:

@@ -493,4 +493,47 @@ class CellGraphBuilderTest {
                         org.assertj.core.api.Assertions.tuple(prior, DependencyRole.FACTOR),
                         org.assertj.core.api.Assertions.tuple(growth, DependencyRole.FACTOR));
     }
+
+    @Test
+    void aSubtractedParenthesisedGroupDistributesItsSignOverEachInnerTerm() {
+        long gross = literal("B2", 2, 2, "100");
+        long tax = literal("B3", 3, 2, "30");
+        long credit = literal("B4", 4, 2, "5");
+        long head = formula("B5", 5, 2, "=B2-(B3-B4)", "75");
+        edge(head, 0, "B2");
+        edge(head, 1, "B3");
+        edge(head, 2, "B4");
+
+        CellGraph graph = build();
+
+        assertThat(graph.aggregationHeadedBy(head).orElseThrow().members())
+                .as("the minus in front of the group flips the sign of each term inside it")
+                .extracting(Aggregation.Member::cellId, Aggregation.Member::amountRole)
+                .containsExactly(
+                        org.assertj.core.api.Assertions.tuple(gross, AmountRole.ADD),
+                        org.assertj.core.api.Assertions.tuple(tax, AmountRole.DEDUCT),
+                        org.assertj.core.api.Assertions.tuple(credit, AmountRole.ADD));
+    }
+
+    @Test
+    void aCellSubtractedBackOutOfItsOwnSumNetsOutOfTheMembers() {
+        long excluded = literal("B2", 2, 2, "10");
+        long second = literal("B3", 3, 2, "20");
+        long third = literal("B4", 4, 2, "30");
+        long head = formula("B5", 5, 2, "=SUM(B2:B4)-B2", "50");
+        edge(head, 0, "B2:B4");
+        edge(head, 1, "B2");
+
+        CellGraph graph = build();
+
+        assertThat(graph.aggregationHeadedBy(head).orElseThrow().members())
+                .as("a cell added and subtracted once contributes nothing to its head")
+                .extracting(Aggregation.Member::cellId, Aggregation.Member::amountRole)
+                .containsExactly(
+                        org.assertj.core.api.Assertions.tuple(second, AmountRole.ADD),
+                        org.assertj.core.api.Assertions.tuple(third, AmountRole.ADD));
+        assertThat(graph.aggregationHeadedBy(head).orElseThrow().members())
+                .extracting(Aggregation.Member::cellId)
+                .doesNotContain(excluded);
+    }
 }

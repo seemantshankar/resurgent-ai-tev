@@ -126,9 +126,9 @@ final class LayerAResponseParser {
             return null;
         }
         String key = snake(raw);
-        return switch (key) {
-            case "capex", "capexdetail", "capital_cost", "project_cost", "assets" ->
-                    ScheduleFamily.CAPEX_DETAIL;
+        String family = switch (key) {
+            case "capex", "capexdetail", "capital_cost", "project_cost", "assets",
+                    "capex_detail" -> ScheduleFamily.CAPEX_DETAIL;
             case "mof", "meansoffinance", "means_of_finance" -> ScheduleFamily.MEANS_OF_FINANCE;
             case "pnl", "p_l", "pl", "profitandloss", "profit_and_loss", "profitloss" ->
                     ScheduleFamily.PROFIT_AND_LOSS;
@@ -137,8 +137,9 @@ final class LayerAResponseParser {
             case "assumption", "assumptions" -> ScheduleFamily.ASSUMPTIONS;
             case "projectsummary", "project_summary", "at_glance", "atglance" ->
                     ScheduleFamily.PROJECT_SUMMARY;
-            default -> key;
+            default -> null;
         };
+        return ScheduleFamily.isKnown(family) ? family : null;
     }
 
     static String normalizeTriage(String raw) {

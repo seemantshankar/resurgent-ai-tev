@@ -400,7 +400,7 @@ class ClassifyServiceTest {
     }
 
     @Test
-    void midLevelLineBindingDerivesASoftLeafFromTheRowLabel() throws Exception {
+    void softLeafUnderKnownParentMintsACategoryName() throws Exception {
         Path xlsx;
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Costs");
@@ -419,9 +419,9 @@ class ClassifyServiceTest {
             more.createCell(1).setCellValue(40.0);
             more.createCell(4).setCellValue("Paint");
             more.createCell(5).setCellValue(30.0);
-            xlsx = writeWorkbook(workbook, "mid-level.xlsx");
+            xlsx = writeWorkbook(workbook, "soft-category.xlsx");
         }
-        Path db = tempDir.resolve("mid-level.db");
+        Path db = tempDir.resolve("soft-category.db");
         IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
         new DiscoverService().discover(db, ingest.parseRunId());
 
@@ -432,7 +432,7 @@ class ClassifyServiceTest {
                 .findFirst()
                 .map(cell -> List.of(new LayerBLineJudgment(
                         cell.coord(), "CCTV System",
-                        "Project Cost > Plant & Machinery",
+                        "Project Cost > Plant & Machinery > CCTV System",
                         AmountRole.ADD, List.of(), 0.9)))
                 .orElse(List.of());
 
@@ -453,7 +453,7 @@ class ClassifyServiceTest {
     }
 
     @Test
-    void midLevelLineBindingIsRejectedWhenTheRowLabelCannotNameALeaf() throws Exception {
+    void midLevelWithoutCategoryLeafIsRefusedAsTranscribedLabel() throws Exception {
         Path xlsx;
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Costs");
@@ -482,7 +482,8 @@ class ClassifyServiceTest {
         ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
 
         assertThat(summary.bindingCount()).isZero();
-        assertThat(summary.layerBStats().rejectReasons()).containsKey("path_not_leaf");
+        assertThat(summary.layerBStats().rejectReasons())
+                .containsKey(TranscribedLeaf.REJECT_REASON);
     }
 
     @Test
@@ -626,7 +627,7 @@ class ClassifyServiceTest {
                 .findFirst()
                 .map(cell -> List.of(new LayerBLineJudgment(
                         cell.coord(), "CCTV System",
-                        "Project Cost > Plant & Machinery",
+                        "Project Cost > Plant & Machinery > CCTV System",
                         AmountRole.ADD, List.of(), 0.9)))
                 .orElse(List.of());
 
@@ -1113,6 +1114,161 @@ class ClassifyServiceTest {
             more.createCell(4).setCellValue("Glass");
             more.createCell(5).setCellValue(20.0);
             return writeWorkbook(workbook, name);
+        }
+    }
+
+    @Test
+    void supplierLeafUnderWrongParentBindsViaHotelAlias() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Costs");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Item");
+            header.createCell(1).setCellValue("Amount");
+            header.createCell(4).setCellValue("Other");
+            header.createCell(5).setCellValue("Amt");
+            Row add = sheet.createRow(1);
+            add.createCell(0).setCellValue("Civil Works");
+            add.createCell(1).setCellValue(250.0);
+            add.createCell(4).setCellValue("Glass");
+            add.createCell(5).setCellValue(20.0);
+            Row more = sheet.createRow(2);
+            more.createCell(0).setCellValue("Steel");
+            more.createCell(1).setCellValue(40.0);
+            more.createCell(4).setCellValue("Paint");
+            more.createCell(5).setCellValue(30.0);
+            xlsx = writeWorkbook(workbook, "alias-elevator.xlsx");
+        }
+        Path db = tempDir.resolve("alias-elevator.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            new NomenclatureCatalog(new WorkspaceRepository(workspace.connection()))
+                    .confirmIndustry(1L, "hotel");
+        }
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.layerBFactory = prompt -> LayerBAmountSupport.amountCells(prompt.packet()).stream()
+                .filter(cell -> "Civil Works".equals(
+                        LayerBAmountSupport.resolveRowLabel(prompt.packet(), cell)))
+                .findFirst()
+                .map(cell -> List.of(new LayerBLineJudgment(
+                        cell.coord(), "Civil Works",
+                        "Project Cost > Civil Works > Elevator (Supplier - Kone Elevator India Pvt. Ltd.)",
+                        AmountRole.ADD, List.of(), 0.9)))
+                .orElse(List.of());
+
+        new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
+                    .anyMatch(b -> "Project Cost > Plant & Machinery > Elevator / Lift"
+                                    .equals(b.path())
+                            && !b.softLeaf());
+            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
+                    .noneMatch(b -> b.path() != null && b.path().contains("Kone"));
+        }
+    }
+
+    @Test
+    void transcribedSoftLeafIsRefused() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Costs");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Item");
+            header.createCell(1).setCellValue("Amount");
+            header.createCell(4).setCellValue("Other");
+            header.createCell(5).setCellValue("Amt");
+            Row add = sheet.createRow(1);
+            add.createCell(0).setCellValue("Civil Works");
+            add.createCell(1).setCellValue(100.0);
+            add.createCell(4).setCellValue("Glass");
+            add.createCell(5).setCellValue(20.0);
+            Row more = sheet.createRow(2);
+            more.createCell(0).setCellValue("Steel");
+            more.createCell(1).setCellValue(40.0);
+            more.createCell(4).setCellValue("Paint");
+            more.createCell(5).setCellValue(30.0);
+            xlsx = writeWorkbook(workbook, "transcribed.xlsx");
+        }
+        Path db = tempDir.resolve("transcribed.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.layerBFactory = prompt -> LayerBAmountSupport.amountCells(prompt.packet()).stream()
+                .filter(cell -> "Civil Works".equals(
+                        LayerBAmountSupport.resolveRowLabel(prompt.packet(), cell)))
+                .findFirst()
+                .map(cell -> List.of(new LayerBLineJudgment(
+                        cell.coord(), "Civil Works",
+                        "Project Cost > Plant & Machinery > 97650 Sqft@ 600 Rs/ Sqft",
+                        AmountRole.ADD, List.of(), 0.9)))
+                .orElse(List.of());
+
+        ClassifySummary summary = new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        assertThat(summary.layerBStats().rejectReasons())
+                .containsKey(TranscribedLeaf.REJECT_REASON);
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
+                    .noneMatch(b -> b.path() != null && b.path().contains("97650"));
+            assertThat(repo.selectCellInterpretationsForParseRun(ingest.parseRunId()))
+                    .anyMatch(row -> UnboundReason.TRANSCRIBED_LABEL.wireName()
+                            .equals(row.unboundReason()));
+        }
+    }
+
+    @Test
+    void shortCategorySoftLeafStillMints() throws Exception {
+        Path xlsx;
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("PnL");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Item");
+            header.createCell(1).setCellValue("Amount");
+            header.createCell(4).setCellValue("Other");
+            header.createCell(5).setCellValue("Amt");
+            Row add = sheet.createRow(1);
+            add.createCell(0).setCellValue("Less: Closing Stock of Finished Goods");
+            add.createCell(1).setCellValue(50.0);
+            add.createCell(4).setCellValue("Glass");
+            add.createCell(5).setCellValue(20.0);
+            Row more = sheet.createRow(2);
+            more.createCell(0).setCellValue("Steel");
+            more.createCell(1).setCellValue(40.0);
+            more.createCell(4).setCellValue("Paint");
+            more.createCell(5).setCellValue(30.0);
+            xlsx = writeWorkbook(workbook, "closing-stock.xlsx");
+        }
+        Path db = tempDir.resolve("closing-stock.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        FakeClassifierLlm llm = new FakeClassifierLlm();
+        llm.layerBFactory = prompt -> LayerBAmountSupport.amountCells(prompt.packet()).stream()
+                .filter(cell -> {
+                    String label = LayerBAmountSupport.resolveRowLabel(prompt.packet(), cell);
+                    return label != null && label.contains("Closing Stock");
+                })
+                .findFirst()
+                .map(cell -> List.of(new LayerBLineJudgment(
+                        cell.coord(), "Less: Closing Stock of Finished Goods",
+                        "Profit & Loss > Closing Stock",
+                        AmountRole.DEDUCT, List.of(), 0.9)))
+                .orElse(List.of());
+
+        new ClassifyService(llm).classify(db, ingest.parseRunId());
+
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectNomenclatureBindingsForParseRun(ingest.parseRunId()))
+                    .anyMatch(b -> "Profit & Loss > Closing Stock".equals(b.path())
+                            && AmountRole.DEDUCT.equals(b.amountRole())
+                            && b.softLeaf());
         }
     }
 

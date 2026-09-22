@@ -1,6 +1,6 @@
 package com.resurgent.tev.parser.classify;
 
-/** Schedule family for Layer A Packet disposition. Extensible; these are the seed values. */
+/** Schedule family for Layer A Packet disposition. Closed set of seven values. */
 public final class ScheduleFamily {
 
     public static final String CAPEX_DETAIL = "capex_detail";
@@ -12,4 +12,14 @@ public final class ScheduleFamily {
     public static final String PROJECT_SUMMARY = "project_summary";
 
     private ScheduleFamily() {}
+
+    public static boolean isKnown(String value) {
+        return CAPEX_DETAIL.equals(value)
+                || MEANS_OF_FINANCE.equals(value)
+                || PROFIT_AND_LOSS.equals(value)
+                || BALANCE_SHEET.equals(value)
+                || CASH_FLOW.equals(value)
+                || ASSUMPTIONS.equals(value)
+                || PROJECT_SUMMARY.equals(value);
+    }
 }

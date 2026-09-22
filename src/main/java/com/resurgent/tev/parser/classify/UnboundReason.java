@@ -37,7 +37,13 @@ public enum UnboundReason {
     /** The model answered but named nothing usable. */
     LLM_DECLINED,
     /** The model was never reached for this group. */
-    LLM_UNAVAILABLE;
+    LLM_UNAVAILABLE,
+    /**
+     * The proposed leaf is the row's own text (a supplier, rate, quantity, spec, or
+     * formula error) rather than a category. The text stays on the row as evidence;
+     * the amount stays unbound until a real category is known.
+     */
+    TRANSCRIBED_LABEL;
 
     public String wireName() {
         return name().toLowerCase(Locale.ROOT);

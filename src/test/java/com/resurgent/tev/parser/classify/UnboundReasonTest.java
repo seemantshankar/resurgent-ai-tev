@@ -25,7 +25,8 @@ class UnboundReasonTest {
                 "driver_only",
                 "cycle",
                 "llm_declined",
-                "llm_unavailable");
+                "llm_unavailable",
+                "transcribed_label");
     }
 
     @Test

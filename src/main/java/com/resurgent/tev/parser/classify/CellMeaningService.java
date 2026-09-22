@@ -69,6 +69,7 @@ public final class CellMeaningService {
             List<FormulaAnnotation> formulaAnnotations = interpretation == null
                     ? List.of()
                     : repo.selectFormulaAnnotations(parseRunId, cellId.get());
+            CellType cellType = repo.selectCellType(parseRunId, cellId.get()).orElse(null);
             return new CellMeaning(
                     address.displayQualifiedCoord(cell.coord()),
                     cell,
@@ -80,7 +81,8 @@ public final class CellMeaningService {
                     interpretation,
                     evidence,
                     formulaAnnotations,
-                    interpretation == null ? null : interpretation.formulaGloss());
+                    interpretation == null ? null : interpretation.formulaGloss(),
+                    cellType);
         } catch (ClassifyException e) {
             throw e;
         } catch (SQLException e) {

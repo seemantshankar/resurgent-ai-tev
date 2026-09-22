@@ -25,7 +25,10 @@ final class InputTyping {
     private InputTyping() {}
 
     /** A typed input plus whether its kind rests on the bare money default. */
-    record Reading(ResolvedUnit unit, boolean bareDefault) {}
+    record Reading(ResolvedUnit unit, boolean bareDefault, ScaleProvenance scaleProvenance) {}
+
+    /** A scale and whether this cell's own evidence actually named it. */
+    record ScaleReading(CellScale scale, ScaleProvenance provenance) {}
 
     static ResolvedUnit of(GraphCell cell) {
         return readingOf(cell).unit();
@@ -45,11 +48,13 @@ final class InputTyping {
         }
         CellKind cellKind = CellKind.from(kind);
         if (cellKind == null) {
-            return new Reading(ResolvedUnit.unresolved(), false);
+            return new Reading(ResolvedUnit.unresolved(), false, ScaleProvenance.UNSTATED);
         }
+        ScaleReading scale = scaleReadingOf(cell);
         return new Reading(
-                ResolvedUnit.of(cellKind, scaleOf(cell)),
-                reading.bareDefault() && !formatDecided);
+                ResolvedUnit.of(cellKind, scale.scale()),
+                reading.bareDefault() && !formatDecided,
+                scale.provenance());
     }
 
     /**
@@ -88,22 +93,43 @@ final class InputTyping {
 
     /**
      * Scale named by the cell's own formula divisor ({@code /10^5} → lakh), else by
-     * the row label, else by the column header, else nothing. A constant-only formula
-     * such as {@code 8000*300/100000} states its scale in its own arithmetic; typing
-     * it from labels alone would lose it. The cell's resulting figure never implies a
-     * scale (ADR 0020).
+     * the row label, else by the column header, else by a currency cue (rupees is
+     * the unit scale), else nothing. A constant-only formula such as
+     * {@code 8000*300/100000} states its scale in its own arithmetic; typing it from
+     * labels alone would lose it. The cell's resulting figure never implies a scale
+     * (ADR 0020).
+     *
+     * <p>What matters to the guard is not just the value but whether this cell's own
+     * evidence <em>named</em> it. A bare literal in a {@code (Rs. in Lacs)} block
+     * states nothing itself, so its unit default is unstated and may only become a
+     * claim by adopting the scale an additive consumer states — never by assertion.
      */
-    static CellScale scaleOf(GraphCell cell) {
+    static ScaleReading scaleReadingOf(GraphCell cell) {
         CellScale fromFormula = InterpretationEvidenceResolver.formulaDivisorScale(cell.formulaText());
         if (fromFormula != null) {
-            return fromFormula;
+            return new ScaleReading(fromFormula, ScaleProvenance.STATED);
         }
         CellScale fromLabel = CellScale.fromText(cell.rowLabel());
         if (fromLabel != null) {
-            return fromLabel;
+            return new ScaleReading(fromLabel, ScaleProvenance.STATED);
         }
         CellScale fromColumn = CellScale.fromText(cell.columnLabel());
-        return fromColumn == null ? CellScale.UNIT : fromColumn;
+        if (fromColumn != null) {
+            return new ScaleReading(fromColumn, ScaleProvenance.STATED);
+        }
+        if (namesCurrency(cell.rowLabel()) || namesCurrency(cell.columnLabel())) {
+            return new ScaleReading(CellScale.UNIT, ScaleProvenance.STATED);
+        }
+        return new ScaleReading(CellScale.UNIT, ScaleProvenance.UNSTATED);
+    }
+
+    /** The scale's value only; callers that need provenance use {@link #scaleReadingOf}. */
+    static CellScale scaleOf(GraphCell cell) {
+        return scaleReadingOf(cell).scale();
+    }
+
+    private static boolean namesCurrency(String text) {
+        return text != null && KindTokens.CURRENCY.matcher(text).find();
     }
 
     /**

@@ -368,6 +368,14 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
         private static final ObjectMapper MAPPER = new ObjectMapper();
         static final int MAX_ATTEMPTS = 4;
         static final Duration MAX_BACKOFF = Duration.ofSeconds(30);
+        /** Extra wait added on top of an honored Retry-After floor to spread lockstep wakes. */
+        static final int JITTER_FRACTION_PCT = 25;
+        /**
+         * Ceiling on that extra wait. Decorrelation only needs a spread comparable
+         * to the ~2s request service window, so a percentage of the 30s clamp would
+         * add seconds of sleep without buying any extra spread.
+         */
+        static final int MAX_RETRY_AFTER_JITTER_MILLIS = 2_000;
 
         /** Provider returned a 2xx body whose message content is empty or null. */
         static final class NoMessageContentException extends RuntimeException {
@@ -512,14 +520,28 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
                         if (response.statusCode() >= 200 && response.statusCode() < 300) {
                             return contentWithUsage(response.body(), attempt);
                         }
-                        if (response.statusCode() != 429 || attempt == MAX_ATTEMPTS) {
+                        if (response.statusCode() != 429) {
                             throw new IllegalStateException(
                                     "OpenRouter HTTP " + response.statusCode()
                                             + " " + snippet(response.body()));
                         }
+                        String retryAfter = response.retryAfter().orElse("absent");
+                        if (attempt == MAX_ATTEMPTS) {
+                            System.err.printf(
+                                    "OpenRouter 429 attempt=%d/%d retryAfter=%s givingUp=true%n",
+                                    attempt, MAX_ATTEMPTS, retryAfter);
+                            throw new IllegalStateException(
+                                    "OpenRouter HTTP 429 after " + MAX_ATTEMPTS
+                                            + " attempts (retryAfter=" + retryAfter + ") "
+                                            + snippet(response.body()));
+                        }
+                        Duration backoff = retryDelay(response.retryAfter(), attempt);
+                        System.err.printf(
+                                "OpenRouter 429 attempt=%d/%d retryAfter=%s backoffMs=%d%n",
+                                attempt, MAX_ATTEMPTS, retryAfter, backoff.toMillis());
                         last = new IllegalStateException(
                                 "OpenRouter HTTP 429 " + snippet(response.body()));
-                        sleeper.sleep(retryDelay(response.retryAfter(), attempt));
+                        sleeper.sleep(backoff);
                     } catch (IllegalStateException e) {
                         throw e;
                     } catch (InterruptedException e) {
@@ -582,20 +604,40 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
         }
 
         static Duration retryDelay(Optional<String> retryAfter, int attempt) {
+            return retryDelay(
+                    retryAfter, attempt, java.util.concurrent.ThreadLocalRandom.current().nextDouble());
+        }
+
+        /**
+         * Backoff with jitter. {@code jitter} is a uniform draw in [0,1).
+         * An honored Retry-After is a floor: the delay is the (capped) header
+         * value plus up to {@value #JITTER_FRACTION_PCT}% of it, itself capped
+         * at {@link #MAX_RETRY_AFTER_JITTER_MILLIS}, because every concurrent
+         * thread receives the same header and identical sleeps would re-collide
+         * in lockstep. The blind exponential path uses equal jitter
+         * ([base/2, base]) so retries decorrelate without collapsing to zero.
+         */
+        static Duration retryDelay(Optional<String> retryAfter, int attempt, double jitter) {
+            double spread = Math.min(1.0, Math.max(0.0, jitter));
             if (retryAfter != null && retryAfter.isPresent()) {
                 String raw = retryAfter.get().trim();
                 try {
                     long seconds = Long.parseLong(raw);
                     if (seconds >= 0) {
                         Duration parsed = Duration.ofSeconds(seconds);
-                        return parsed.compareTo(MAX_BACKOFF) > 0 ? MAX_BACKOFF : parsed;
+                        Duration base = parsed.compareTo(MAX_BACKOFF) > 0 ? MAX_BACKOFF : parsed;
+                        double jitterBudget = Math.min(
+                                base.toMillis() * JITTER_FRACTION_PCT / 100.0,
+                                MAX_RETRY_AFTER_JITTER_MILLIS);
+                        return base.plusMillis((long) (jitterBudget * spread));
                     }
                 } catch (NumberFormatException ignored) {
                     // Fall through to exponential backoff.
                 }
             }
-            long millis = Math.min(MAX_BACKOFF.toMillis(), 500L << Math.max(0, attempt - 1));
-            return Duration.ofMillis(millis);
+            long capped = Math.min(MAX_BACKOFF.toMillis(), 500L << Math.max(0, attempt - 1));
+            long half = capped / 2;
+            return Duration.ofMillis(half + (long) (half * spread));
         }
 
         /**
@@ -668,10 +710,16 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
             schema.put("type", "object");
             schema.put("additionalProperties", false);
             ObjectNode properties = schema.putObject("properties");
-            objectProperty(properties, "scheduleFamily",
-                    "snake_case family (capex_detail, means_of_finance, profit_and_loss, "
-                            + "balance_sheet, cash_flow, assumptions, project_summary, "
-                            + "or another short snake_case name)");
+            enumProperty(properties, "scheduleFamily",
+                    "one of the seven schedule families; depreciation worksheets must pick "
+                            + "among these rather than inventing a family name",
+                    ScheduleFamily.CAPEX_DETAIL,
+                    ScheduleFamily.MEANS_OF_FINANCE,
+                    ScheduleFamily.PROFIT_AND_LOSS,
+                    ScheduleFamily.BALANCE_SHEET,
+                    ScheduleFamily.CASH_FLOW,
+                    ScheduleFamily.ASSUMPTIONS,
+                    ScheduleFamily.PROJECT_SUMMARY);
             enumProperty(properties, "triage",
                     "main keeps the Packet on the main schedule; scratch is a working paper; "
                             + "orphan is unattached",

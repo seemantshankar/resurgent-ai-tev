@@ -110,6 +110,12 @@ class OpenRouterClassifierLlmTest {
                 .contains("main")
                 .contains("scratch")
                 .contains("orphan");
+        assertThat(root.path("response_format").path("json_schema").path("schema")
+                .path("properties").path("scheduleFamily").path("enum").toString())
+                .contains("capex_detail")
+                .contains("profit_and_loss")
+                .contains("project_summary")
+                .doesNotContain("depreciation");
         assertThat(root.path("provider").path("require_parameters").asBoolean()).isTrue();
         assertThat(root.path("provider").path("data_collection").asText()).isEqualTo("deny");
         assertThat(root.path("plugins").toString()).contains("response-healing");
@@ -396,7 +402,10 @@ class OpenRouterClassifierLlmTest {
 
         String content = client.complete("system", "user");
         assertThat(calls.get()).isEqualTo(2);
-        assertThat(sleeps).containsExactly(Duration.ofSeconds(2));
+        assertThat(sleeps).hasSize(1);
+        assertThat(sleeps.get(0))
+                .as("Retry-After is a floor; jitter only adds up to 25% on top")
+                .isBetween(Duration.ofSeconds(2), Duration.ofMillis(2500));
         assertThat(content).contains("assumptions");
     }
 
@@ -546,12 +555,76 @@ class OpenRouterClassifierLlmTest {
     }
 
     @Test
-    void retryDelayFallsBackToCappedExponentialBackoff() {
-        assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(Optional.empty(), 1))
-                .isEqualTo(Duration.ofMillis(500));
-        assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(Optional.empty(), 3))
-                .isEqualTo(Duration.ofMillis(2000));
-        assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(Optional.of("999"), 1))
+    void retryDelayHonorsRetryAfterFloorAndJittersBlindBackoff() {
+        // Blind exponential path: equal jitter over [base/2, base], capped at MAX_BACKOFF.
+        assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(
+                Optional.empty(), 1, 0.0)).isEqualTo(Duration.ofMillis(250));
+        assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(
+                Optional.empty(), 1, 1.0)).isEqualTo(Duration.ofMillis(500));
+        assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(
+                Optional.empty(), 3, 0.0)).isEqualTo(Duration.ofMillis(1000));
+        assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(
+                Optional.empty(), 3, 1.0)).isEqualTo(Duration.ofMillis(2000));
+        // Retry-After path: never below the server value, capped, plus up to 25% jitter.
+        assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(
+                Optional.of("2"), 1, 0.0)).isEqualTo(Duration.ofSeconds(2));
+        assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(
+                Optional.of("2"), 1, 1.0)).isEqualTo(Duration.ofMillis(2500));
+        assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(
+                Optional.of("999"), 1, 0.0))
                 .isEqualTo(OpenRouterClassifierLlm.HttpCompletionsClient.MAX_BACKOFF);
+        assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(
+                Optional.of("999"), 1, 1.0))
+                .as("jitter at the clamp is capped, not 25% of 30s")
+                .isEqualTo(OpenRouterClassifierLlm.HttpCompletionsClient.MAX_BACKOFF
+                        .plusMillis(OpenRouterClassifierLlm.HttpCompletionsClient
+                                .MAX_RETRY_AFTER_JITTER_MILLIS));
+        // Unparseable Retry-After falls back to the exponential path.
+        assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(
+                Optional.of("soon"), 1, 0.0)).isEqualTo(Duration.ofMillis(250));
+    }
+
+    @Test
+    void retryDelayRandomOverloadStaysInsideJitterEnvelope() {
+        for (int i = 0; i < 100; i++) {
+            assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(
+                    Optional.of("30"), 2))
+                    .isBetween(
+                            Duration.ofSeconds(30),
+                            Duration.ofMillis(30_000 + OpenRouterClassifierLlm
+                                    .HttpCompletionsClient.MAX_RETRY_AFTER_JITTER_MILLIS));
+            assertThat(OpenRouterClassifierLlm.HttpCompletionsClient.retryDelay(
+                    Optional.empty(), 2))
+                    .isBetween(Duration.ofMillis(500), Duration.ofMillis(1000));
+        }
+    }
+
+    @Test
+    void exhaustsHttp429RetriesThenFails() {
+        AtomicInteger calls = new AtomicInteger();
+        List<Duration> sleeps = new ArrayList<>();
+        OpenRouterClassifierLlm.HttpCompletionsClient client =
+                new OpenRouterClassifierLlm.HttpCompletionsClient(
+                        "key",
+                        "model",
+                        OpenRouterClassifierLlm.DEFAULT_URL,
+                        body -> {
+                            calls.incrementAndGet();
+                            return new OpenRouterClassifierLlm.ExchangeResponse(
+                                    429,
+                                    "{\"error\":\"rate limited\"}",
+                                    Optional.of("1"));
+                        },
+                        sleeps::add);
+
+        IllegalStateException failure = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalStateException.class, () -> client.complete("system", "user"));
+        assertThat(failure.getMessage()).contains("429");
+        assertThat(calls.get())
+                .isEqualTo(OpenRouterClassifierLlm.HttpCompletionsClient.MAX_ATTEMPTS);
+        assertThat(sleeps)
+                .hasSize(OpenRouterClassifierLlm.HttpCompletionsClient.MAX_ATTEMPTS - 1)
+                .allSatisfy(delay -> assertThat(delay)
+                        .isBetween(Duration.ofSeconds(1), Duration.ofMillis(1250)));
     }
 }

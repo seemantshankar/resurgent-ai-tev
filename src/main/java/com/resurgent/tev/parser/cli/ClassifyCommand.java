@@ -88,6 +88,12 @@ public final class ClassifyCommand implements Callable<Integer> {
                     summary.bindingCount(),
                     summary.layerBStats().summaryLine(),
                     summary.interpretationCount());
+            if (!summary.unclassifiedCandidateIds().isEmpty()) {
+                out.printf(
+                        "Unclassified candidates (%d): %s%n",
+                        summary.unclassifiedCandidateIds().size(),
+                        summary.unclassifiedCandidateIds());
+            }
             return 0;
         } catch (ClassifyException e) {
             err.println("classify rejected: " + e.getMessage());

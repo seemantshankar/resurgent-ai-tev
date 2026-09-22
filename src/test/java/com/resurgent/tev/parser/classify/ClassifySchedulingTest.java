@@ -143,8 +143,93 @@ class ClassifySchedulingTest {
     }
 
     @Test
-    @Timeout(15)
-    void attemptDeadlineAbortsWithoutWritingAndLeavesPriorSnapshotIntact() throws Exception {
+    @Timeout(30)
+    void attemptDeadlineRetriesOnceAndKeepsTheRun() throws Exception {
+        Path xlsx = twoSheetCosts("retry.xlsx");
+        Path db = tempDir.resolve("retry.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        ClassifyServiceTest.FakeClassifierLlm first = new ClassifyServiceTest.FakeClassifierLlm();
+        first.judgment = new LayerAJudgment(
+                ScheduleFamily.CAPEX_DETAIL, Triage.MAIN, Relevance.PRIMARY,
+                List.of(), List.of(), null);
+        new ClassifyService(first).classify(db, ingest.parseRunId());
+
+        AtomicInteger attempts = new AtomicInteger();
+        ClassifyServiceTest.FakeClassifierLlm slow = new ClassifyServiceTest.FakeClassifierLlm() {
+            @Override
+            public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
+                attempts.incrementAndGet();
+                sleepQuietly(2_000);
+                return super.classifyLayerA(prompt);
+            }
+        };
+        slow.judgment = new LayerAJudgment(
+                ScheduleFamily.ASSUMPTIONS, Triage.SCRATCH, Relevance.NOISE,
+                List.of(), List.of(), null);
+
+        ClassifyLimits tight = new ClassifyLimits(
+                8, Duration.ofMillis(150), Duration.ofSeconds(30));
+        ClassifySummary summary = new ClassifyService(slow, new DiscoverService(), tight)
+                .classify(db, ingest.parseRunId());
+
+        assertThat(summary.unclassifiedCandidateIds()).isEmpty();
+        assertThat(summary.dispositionCount()).isPositive();
+        assertThat(attempts.get())
+                .as("each straggler burns its first attempt and is answered by the retry")
+                .isEqualTo(2 * summary.dispositionCount());
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            var rows = repo.selectPacketDispositionsForParseRun(ingest.parseRunId());
+            assertThat(rows).isNotEmpty();
+            assertThat(rows).allMatch(row -> ScheduleFamily.ASSUMPTIONS.equals(row.scheduleFamily()));
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void stragglerLeavesOnlyThatCandidateUnclassifiedAndReportsIt() throws Exception {
+        Path xlsx = twoSheetCosts("partial.xlsx");
+        Path db = tempDir.resolve("partial.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        ClassifyServiceTest.FakeClassifierLlm slowParents =
+                new ClassifyServiceTest.FakeClassifierLlm() {
+                    @Override
+                    public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
+                        if (prompt.cheapPass()) {
+                            sleepQuietly(2_000);
+                        }
+                        return super.classifyLayerA(prompt);
+                    }
+                };
+        slowParents.judgment = new LayerAJudgment(
+                ScheduleFamily.CAPEX_DETAIL, Triage.MAIN, Relevance.PRIMARY,
+                List.of(), List.of(), null);
+
+        ClassifyLimits tight = new ClassifyLimits(
+                8, Duration.ofMillis(150), Duration.ofSeconds(30), Duration.ofMillis(150));
+        ClassifySummary summary = new ClassifyService(slowParents, new DiscoverService(), tight)
+                .classify(db, ingest.parseRunId());
+
+        assertThat(summary.unclassifiedCandidateIds())
+                .as("only the two coverage parents missed both attempts")
+                .hasSize(summary.coverageParentCount());
+        assertThat(summary.dispositionCount())
+                .as("children still classify once their unclassified parent settles")
+                .isPositive();
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
+            assertThat(repo.selectPacketDispositionsForParseRun(ingest.parseRunId()))
+                    .isNotEmpty();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void allCandidatesUnclassifiedAbortsWithoutWritingAndKeepsPriorSnapshot() throws Exception {
         Path xlsx = twoSheetCosts("deadline.xlsx");
         Path db = tempDir.resolve("deadline.db");
         IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
@@ -168,7 +253,7 @@ class ClassifySchedulingTest {
                 List.of(), List.of(), null);
 
         ClassifyLimits tight = new ClassifyLimits(
-                8, Duration.ofMillis(150), Duration.ofSeconds(5));
+                8, Duration.ofMillis(150), Duration.ofSeconds(30), Duration.ofMillis(150));
         assertThatThrownBy(() -> new ClassifyService(slow, new DiscoverService(), tight)
                         .classify(db, ingest.parseRunId()))
                 .isInstanceOf(ClassifyException.class)

@@ -174,6 +174,9 @@ public final class LayerBBindingStats {
         if (trimmed.startsWith("Layer B path must be a leaf")) {
             return "path_not_leaf";
         }
+        if (trimmed.startsWith(TranscribedLeaf.REJECT_REASON)) {
+            return TranscribedLeaf.REJECT_REASON;
+        }
         if (trimmed.startsWith("cannot invent mid-level")) {
             return "invented_mid_level";
         }

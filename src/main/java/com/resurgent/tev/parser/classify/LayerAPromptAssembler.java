@@ -18,8 +18,8 @@ final class LayerAPromptAssembler {
             Optional ProjectFacts (identity/ops, never under Project Cost): facts array of
             {coord?, verbatim, factPath} using projectFactFields from the ontology slice.
             Return a single JSON object with keys:
-              scheduleFamily: snake_case family (capex_detail, means_of_finance, profit_and_loss,
-                balance_sheet, cash_flow, assumptions, project_summary, or another short snake_case name)
+              scheduleFamily: one of capex_detail | means_of_finance | profit_and_loss |
+                balance_sheet | cash_flow | assumptions | project_summary
               triage: main | scratch | orphan
               relevance: primary | supporting | noise
               rowLabels: array of distinct row-axis labels you can see (empty if none)

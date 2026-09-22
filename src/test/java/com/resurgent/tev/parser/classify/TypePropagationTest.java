@@ -231,6 +231,112 @@ class TypePropagationTest {
     }
 
     @Test
+    void anUnstatedLiteralAdoptsTheScaleItsSubtractingConsumerStates() {
+        label("A1", 1, 1, "Estimate");
+        long rupees = literal("B1", 1, 2, "12000000");
+        long estimate = formula("C1", 1, 3, "=B1/100000", "120");
+        edge(estimate, 0, "B1");
+        label("A2", 2, 1, "Elevator (Supplier - Kone Elevator India Pvt. Ltd.)");
+        long quotation = literal("D1", 1, 4, "120.3");
+        long net = formula("E1", 1, 5, "=C1-D1", "0");
+        edge(net, 0, "C1");
+        edge(net, 1, "D1");
+
+        CellTypes types = resolve();
+
+        assertThat(types.unitOf(quotation).orElseThrow().scale())
+                .as("the quotation is lakh, or the net could not be zero")
+                .isEqualTo(CellScale.LAKH);
+        assertThat(types.scaleProvenanceOf(quotation)).contains(ScaleProvenance.ADOPTED);
+        assertThat(types.unitOf(net).orElseThrow().scale()).isEqualTo(CellScale.LAKH);
+        assertThat(types.scaleProvenanceOf(net))
+                .as("the net's own scale comes from the estimate's divisor, so it is stated")
+                .contains(ScaleProvenance.STATED);
+    }
+
+    @Test
+    void aProductDoesNotMoveItsScaleOntoItsOperands() {
+        label("A1", 1, 1, "Qty");
+        long quantity = literal("B1", 1, 2, "610");
+        label("A2", 2, 1, "Rate");
+        long rate = literal("B2", 2, 2, "33000");
+        long amount = formula("B3", 3, 2, "=B1*B2/100000", "201.3");
+        edge(amount, 0, "B1");
+        edge(amount, 1, "B2");
+
+        CellTypes types = resolve();
+
+        assertThat(types.unitOf(amount).orElseThrow().scale()).isEqualTo(CellScale.LAKH);
+        assertThat(types.unitOf(quantity).orElseThrow().scale())
+                .as("a quantity times a rate proves nothing about the quantity's scale")
+                .isEqualTo(CellScale.UNIT);
+        assertThat(types.scaleProvenanceOf(quantity)).contains(ScaleProvenance.UNSTATED);
+        assertThat(types.scaleProvenanceOf(rate)).contains(ScaleProvenance.UNSTATED);
+    }
+
+    @Test
+    void anAdoptedScaleConvergesThroughAHeadToItsUnstatedMembers() {
+        label("A1", 1, 1, "Quoted part one");
+        long partOne = literal("B1", 1, 2, "10");
+        label("A2", 2, 1, "Quoted part two");
+        long partTwo = literal("B2", 2, 2, "20");
+        long quotedTotal = formula("B3", 3, 2, "=B1+B2", "30");
+        edge(quotedTotal, 0, "B1");
+        edge(quotedTotal, 1, "B2");
+        label("A4", 4, 1, "Estimate");
+        long rupees = literal("B4", 4, 2, "5000000");
+        long estimate = formula("B5", 5, 2, "=B4/100000", "50");
+        edge(estimate, 0, "B4");
+        long net = formula("B6", 6, 2, "=B5-B3", "20");
+        edge(net, 0, "B5");
+        edge(net, 1, "B3");
+
+        CellTypes types = resolve();
+
+        assertThat(types.scaleProvenanceOf(quotedTotal)).contains(ScaleProvenance.ADOPTED);
+        assertThat(types.unitOf(partOne).orElseThrow().scale())
+                .as("the scale converges from the total down to the members it sums")
+                .isEqualTo(CellScale.LAKH);
+        assertThat(types.unitOf(partTwo).orElseThrow().scale()).isEqualTo(CellScale.LAKH);
+        assertThat(types.scaleProvenanceOf(partOne)).contains(ScaleProvenance.ADOPTED);
+    }
+
+    @Test
+    void twoClaimedScalesStillConflictRatherThanAdopting() {
+        label("A1", 1, 1, "Estimate");
+        long rupees = literal("B1", 1, 2, "12000000");
+        long lakhs = formula("B2", 2, 2, "=B1/100000", "120");
+        edge(lakhs, 0, "B1");
+        label("A3", 3, 1, "Amount in Rs");
+        long rupeeLiteral = literal("B3", 3, 2, "5000");
+        long net = formula("B4", 4, 2, "=B2-B3", "0");
+        edge(net, 0, "B2");
+        edge(net, 1, "B3");
+
+        CellTypes types = resolve();
+
+        assertThat(types.scaleProvenanceOf(rupeeLiteral))
+                .as("a stated currency cue earns the unit scale")
+                .contains(ScaleProvenance.STATED);
+        assertThat(types.refusalOf(net))
+                .as("a stated rupee amount against a stated lakh one is a conflict")
+                .contains(UnboundReason.SCALE_CONFLICT);
+    }
+
+    @Test
+    void aScaleWithNoAdditiveConsumerStaysUnstated() {
+        label("A1", 1, 1, "F & B Sales");
+        long bare = literal("B1", 1, 2, "216.664");
+
+        CellTypes types = resolve();
+
+        assertThat(types.unitOf(bare).orElseThrow().scale()).isEqualTo(CellScale.UNIT);
+        assertThat(types.scaleProvenanceOf(bare))
+                .as("nothing names a scale, so the unit default is not a claim")
+                .contains(ScaleProvenance.UNSTATED);
+    }
+
+    @Test
     void aChainThroughAnExternalLinkRefusesWithExternalDependency() {
         long external = formula("B1", 1, 2, "=[1]Other!A1", "10");
         externalEdge(external, 0, "[1]Other!A1");
