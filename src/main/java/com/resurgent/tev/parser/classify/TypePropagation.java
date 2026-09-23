@@ -33,6 +33,7 @@ final class TypePropagation {
         statesDivisorScale.clear();
         Map<Long, CellTypes.Typed> typed = new LinkedHashMap<>();
         Map<Long, UnboundReason> refusals = new LinkedHashMap<>();
+        Map<Long, CellScale> blockScale = blockScales(graph);
         Set<Long> inCycle = cycles(graph);
 
         Map<String, List<InputCell>> bySeries = new LinkedHashMap<>();
@@ -79,9 +80,9 @@ final class TypePropagation {
                 }
                 InputTyping.Reading reading = own.getOrDefault(cell.cellId(), fallback);
                 if (reading.unit().isResolved()) {
-                    typed.put(cell.cellId(), new CellTypes.Typed(
+                    typed.put(cell.cellId(), inBlock(blockScale, cell, new CellTypes.Typed(
                             reading.unit(), TypeSource.INPUT_LABEL, 0,
-                            false, reading.bareDefault(), reading.scaleProvenance()));
+                            false, reading.bareDefault(), reading.scaleProvenance())));
                 } else {
                     refusals.put(cell.cellId(), UnboundReason.NO_LABEL);
                 }
@@ -102,7 +103,14 @@ final class TypePropagation {
                     continue;
                 }
                 long cellId = cell.cellId();
-                if (inputIds.contains(cellId) || refusals.containsKey(cellId)) {
+                if (inputIds.contains(cellId)) {
+                    continue;
+                }
+                // A scale refusal is not final: a later pass can inherit the block
+                // banner onto an operand and the sum then agrees. Any other refusal
+                // still ends the cell.
+                UnboundReason already = refusals.get(cellId);
+                if (already != null && already != UnboundReason.SCALE_CONFLICT) {
                     continue;
                 }
                 // A formula is re-derived every pass rather than frozen the first time it
@@ -120,22 +128,27 @@ final class TypePropagation {
                 }
                 Outcome outcome = derive(graph, cellId, typed, refusals);
                 if (outcome.unit() != null) {
-                    CellTypes.Typed next = new CellTypes.Typed(
+                    CellTypes.Typed next = inBlock(blockScale, cell, new CellTypes.Typed(
                             outcome.unit(), TypeSource.PROPAGATED, outcome.depth(),
-                            outcome.weak(), outcome.bareDefault(), outcome.scaleProvenance());
+                            outcome.weak(), outcome.bareDefault(), outcome.scaleProvenance()));
                     CellTypes.Typed current = typed.get(cellId);
-                    if (current == null
+                    boolean healed = refusals.remove(cellId) != null;
+                    if (healed
+                            || current == null
                             || !current.unit().equals(next.unit())
                             || current.depth() != next.depth()
                             || current.weak() != next.weak()
-                            || current.bareDefault() != next.bareDefault()) {
+                            || current.bareDefault() != next.bareDefault()
+                            || current.scaleProvenance() != next.scaleProvenance()) {
                         typed.put(cellId, next);
                         changed = true;
                     }
                 } else if (outcome.refusal() != null) {
                     typed.remove(cellId);
-                    refusals.put(cellId, outcome.refusal());
-                    changed = true;
+                    if (!outcome.refusal().equals(refusals.get(cellId))) {
+                        refusals.put(cellId, outcome.refusal());
+                        changed = true;
+                    }
                 }
             }
             if (!changed) {
@@ -157,6 +170,76 @@ final class TypePropagation {
                 resolveAggregations(graph, typed, refusals);
         return new CellTypes(typed, refusals, aggregationUnits);
     }
+
+    /**
+     * The banner above each numeric cell. A banner is a cell whose whole text is a
+     * unit ({@code Rs. In Lacs}, {@code (Amt. in Rs.)}). It covers every amount
+     * below it on that sheet until the next banner. The formula then explains the
+     * number; it does not choose a second unit for the block.
+     */
+    private static Map<Long, CellScale> blockScales(CellGraph graph) {
+        Set<Long> rowsWithAmount = new HashSet<>();
+        for (GraphCell cell : graph.cells().values()) {
+            if (cell.numeric()) {
+                rowsWithAmount.add(cell.worksheetId() * 1_000_000L + cell.rowNum());
+            }
+        }
+        Map<Long, List<Banner>> banners = new HashMap<>();
+        for (GraphCell cell : graph.cells().values()) {
+            if (cell.numeric() || cell.isFormula()) {
+                continue;
+            }
+            if (rowsWithAmount.contains(cell.worksheetId() * 1_000_000L + cell.rowNum())) {
+                continue;
+            }
+            CellScale scale = CellScale.blockBanner(cell.displayValue());
+            if (scale == null) {
+                continue;
+            }
+            banners.computeIfAbsent(cell.worksheetId(), id -> new ArrayList<>())
+                    .add(new Banner(cell.rowNum(), scale));
+        }
+        Map<Long, CellScale> inherited = new HashMap<>();
+        for (GraphCell cell : graph.cells().values()) {
+            if (!cell.numeric()) {
+                continue;
+            }
+            Banner governing = null;
+            for (Banner banner : banners.getOrDefault(cell.worksheetId(), List.of())) {
+                if (banner.row() >= cell.rowNum()) {
+                    continue;
+                }
+                if (governing == null || banner.row() > governing.row()) {
+                    governing = banner;
+                }
+            }
+            if (governing != null) {
+                inherited.put(cell.cellId(), governing.scale());
+            }
+        }
+        return inherited;
+    }
+
+    /** A money amount takes its block's banner. A rate, a count, or a percent does not. */
+    private static CellTypes.Typed inBlock(
+            Map<Long, CellScale> blockScale, GraphCell cell, CellTypes.Typed typed) {
+        CellScale banner = blockScale.get(cell.cellId());
+        if (banner == null || typed.unit().kind() != CellKind.MONEY) {
+            return typed;
+        }
+        if (typed.unit().scale() == banner && typed.scaleProvenance() == ScaleProvenance.STATED) {
+            return typed;
+        }
+        return new CellTypes.Typed(
+                ResolvedUnit.of(CellKind.MONEY, banner),
+                typed.typeSource(),
+                typed.depth(),
+                typed.weak(),
+                false,
+                ScaleProvenance.STATED);
+    }
+
+    private record Banner(int row, CellScale scale) {}
 
     private record Outcome(
             ResolvedUnit unit,

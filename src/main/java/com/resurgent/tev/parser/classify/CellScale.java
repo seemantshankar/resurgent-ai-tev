@@ -75,6 +75,34 @@ public enum CellScale {
     static final Pattern SCALE_TOKEN = Pattern.compile(
             "(?i)\\b(lakhs?|lacs?|crores?|millions?|billions?|thousands?|000s?)\\b");
 
+    /**
+     * The scale a whole cell states for the block beneath it, or {@code null} when
+     * the text is a line name that merely mentions a unit. {@code Rs. In Lacs} and
+     * {@code (Amt. in Rs.)} are banners. {@code Food cost} and a bare {@code Rs.}
+     * are not.
+     */
+    static CellScale blockBanner(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        String inner = text.trim().replaceAll("\\s+", " ");
+        if (inner.length() > 40) {
+            return null;
+        }
+        inner = inner.replaceAll("^[\\(\\[]\\s*", "").replaceAll("\\s*[\\)\\]]$", "").trim();
+        if (!inner.matches(
+                "(?i)^(?:(?:amt\\.?|amount|rs\\.?)\\s+)?(?:in\\s+)?"
+                        + "(?:rs\\.?\\s+)?(?:in\\s+)?"
+                        + "(?:lakhs?|lacs?|crores?|millions?|billions?|thousands?|rupees?|rs\\.?)$")) {
+            return null;
+        }
+        if (inner.matches("(?i)^rs\\.?$")) {
+            return null;
+        }
+        CellScale named = fromText(inner);
+        return named != null ? named : UNIT;
+    }
+
     /** The scale named by the text, or {@code null} when none is stated. */
     static CellScale fromText(String text) {
         if (text == null || text.isBlank()) {

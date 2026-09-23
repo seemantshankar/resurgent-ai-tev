@@ -213,6 +213,51 @@ class TypePropagationTest {
     }
 
     @Test
+    void aBlockBannerIsTheScaleOfEveryAmountBeneathIt() {
+        label("A1", 1, 1, "(Rs. in Lacs)");
+        label("A2", 2, 1, "Project cost");
+        long lakhs = literal("B2", 2, 2, "2700");
+        label("A5", 5, 1, "(Amt. in Rs.)");
+        label("A6", 6, 1, "Fee");
+        long rupees = literal("B6", 6, 2, "150000");
+        long fee = formula("B7", 7, 2, "=B2*100000*0.005", "1350000");
+        edge(fee, 0, "B2");
+        long total = formula("B8", 8, 2, "=B6+B7", "1500000");
+        edge(total, 0, "B6");
+        edge(total, 1, "B7");
+
+        CellTypes types = resolve();
+
+        assertThat(types.unitOf(lakhs).orElseThrow().scale()).isEqualTo(CellScale.LAKH);
+        assertThat(types.scaleProvenanceOf(lakhs)).contains(ScaleProvenance.STATED);
+        assertThat(types.unitOf(fee).orElseThrow().scale())
+                .as("the rupee banner is the unit; 100000 only bridges the lakh block")
+                .isEqualTo(CellScale.UNIT);
+        assertThat(types.unitOf(rupees).orElseThrow().scale()).isEqualTo(CellScale.UNIT);
+        assertThat(types.refusalOf(total)).isEmpty();
+        assertThat(types.unitOf(total).orElseThrow().scale()).isEqualTo(CellScale.UNIT);
+    }
+
+    @Test
+    void amountsUnderDifferentBannersStillConflict() {
+        label("A1", 1, 1, "Rs. In Lacs");
+        label("A2", 2, 1, "Civil works");
+        long lakhs = literal("B2", 2, 2, "2700");
+        label("A4", 4, 1, "(Amt. in Rs.)");
+        label("A5", 5, 1, "Fees");
+        long rupees = literal("B5", 5, 2, "150000");
+        long mixed = formula("B6", 6, 2, "=B2+B5", "0");
+        edge(mixed, 0, "B2");
+        edge(mixed, 1, "B5");
+
+        CellTypes types = resolve();
+
+        assertThat(types.unitOf(lakhs).orElseThrow().scale()).isEqualTo(CellScale.LAKH);
+        assertThat(types.unitOf(rupees).orElseThrow().scale()).isEqualTo(CellScale.UNIT);
+        assertThat(types.refusalOf(mixed)).contains(UnboundReason.SCALE_CONFLICT);
+    }
+
+    @Test
     void aRateLiteralDoesNotUndoAScaleConversion() {
         label("A2", 2, 1, "Rs. in Lacs");
         long lakhs = literal("B2", 2, 2, "2700");
