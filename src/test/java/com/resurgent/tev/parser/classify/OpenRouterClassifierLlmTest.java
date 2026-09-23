@@ -115,6 +115,7 @@ class OpenRouterClassifierLlmTest {
                 .contains("capex_detail")
                 .contains("profit_and_loss")
                 .contains("project_summary")
+                .contains("none")
                 .doesNotContain("depreciation");
         assertThat(root.path("provider").path("require_parameters").asBoolean()).isTrue();
         assertThat(root.path("provider").path("data_collection").asText()).isEqualTo("deny");

@@ -11,4 +11,14 @@ public record LayerAPrompt(
         Packet packet,
         OntologySlice ontologySlice,
         LayerAJudgment parentDisposition,
-        boolean cheapPass) {}
+        boolean cheapPass,
+        java.util.List<String> scheduleFamilies) {
+
+    public LayerAPrompt(
+            Packet packet,
+            OntologySlice ontologySlice,
+            LayerAJudgment parentDisposition,
+            boolean cheapPass) {
+        this(packet, ontologySlice, parentDisposition, cheapPass, ScheduleFamily.seeds());
+    }
+}

@@ -9,6 +9,7 @@ import com.resurgent.tev.parser.discover.PacketRangeRef;
 import com.resurgent.tev.parser.nomenclature.NomenclatureAlias;
 import com.resurgent.tev.parser.nomenclature.NomenclatureNode;
 import com.resurgent.tev.parser.nomenclature.OntologySlice;
+import java.util.List;
 /** Assembles the Layer A system/user messages sent through the LLM port. */
 final class LayerAPromptAssembler {
 
@@ -18,13 +19,16 @@ final class LayerAPromptAssembler {
             Optional ProjectFacts (identity/ops, never under Project Cost): facts array of
             {coord?, verbatim, factPath} using projectFactFields from the ontology slice.
             Return a single JSON object with keys:
-              scheduleFamily: one of capex_detail | means_of_finance | profit_and_loss |
-                balance_sheet | cash_flow | assumptions | project_summary
+              scheduleFamily: one of the names in scheduleFamilies on the user message.
+                If none of them fits, set scheduleFamily to "none" and suggestedFamily
+                to a new short snake_case category (for example manpower). Do not invent
+                a name when a listed family fits.
               triage: main | scratch | orphan
               relevance: primary | supporting | noise
               rowLabels: array of distinct row-axis labels you can see (empty if none)
               columnHeaders: array of distinct column-axis headers you can see (empty if none)
               packetDefaultHead: optional nomenclature path from the ontology slice, or null
+              suggestedFamily: a new category when scheduleFamily is "none", otherwise null
               facts: optional array as above (empty if none)
             When triage is scratch or orphan, relevance MUST be noise (soft-triage leftovers).
             If cheapPass is true this is a coverage-parent overview: broad sheet meaning only,
@@ -41,6 +45,13 @@ final class LayerAPromptAssembler {
         try {
             ObjectNode root = MAPPER.createObjectNode();
             root.put("cheapPass", prompt.cheapPass());
+            ArrayNode families = root.putArray("scheduleFamilies");
+            List<String> offered = prompt.scheduleFamilies() == null || prompt.scheduleFamilies().isEmpty()
+                    ? ScheduleFamily.seeds()
+                    : prompt.scheduleFamilies();
+            for (String family : offered) {
+                families.add(family);
+            }
             Packet packet = prompt.packet();
             ObjectNode packetNode = root.putObject("packet");
             packetNode.put("candidateId", packet.candidateId());

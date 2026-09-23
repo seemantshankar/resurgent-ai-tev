@@ -334,6 +334,30 @@ class CellGraphBuilderTest {
     }
 
     @Test
+    void aRateBetweenTwoTextsNamesTheRowFromTheFarText() {
+        label("A33", 33, 1, "Line name");
+        literal("B33", 33, 2, "0.4");
+        label("C33", 33, 3, "Driver note");
+        long year = formula("E33", 33, 5, "=B33*E23", "141");
+
+        CellGraph graph = build();
+
+        assertThat(graph.cell(year).orElseThrow().rowLabel()).isEqualTo("Line name");
+    }
+
+    @Test
+    void anAmountAboveOneDoesNotSplitTheRowName() {
+        label("A7", 7, 1, "Section");
+        label("B7", 7, 2, "Line name");
+        literal("C7", 7, 3, "12");
+        long year = formula("E7", 7, 5, "=C7*12", "144");
+
+        CellGraph graph = build();
+
+        assertThat(graph.cell(year).orElseThrow().rowLabel()).isEqualTo("Line name");
+    }
+
+    @Test
     void theRowLabelIsTheNearestTextToTheLeftAndNeverACoordinate() {
         label("A45", 45, 1, "Insurance Premium");
         long premium = literal("J45", 45, 10, "125000");

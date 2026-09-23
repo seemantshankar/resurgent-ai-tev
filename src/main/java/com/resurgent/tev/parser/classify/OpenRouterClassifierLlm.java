@@ -44,7 +44,10 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
         String system = LayerAPromptAssembler.SYSTEM;
         String user = LayerAPromptAssembler.userMessage(prompt);
         long started = System.nanoTime();
-        CompletionResult first = client.completeDetailed(system, user);
+        List<String> families = prompt.scheduleFamilies() == null
+                ? ScheduleFamily.seeds()
+                : prompt.scheduleFamilies();
+        CompletionResult first = client.completeDetailed(system, user, families);
         try {
             rejectIfTruncated("A", first);
             LayerAJudgment judgment = LayerAResponseParser.parse(first.content());
@@ -325,6 +328,11 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
             return completeDetailed(system, user);
         }
 
+        default CompletionResult completeDetailed(
+                String system, String user, List<String> scheduleFamilies) {
+            return completeDetailed(system, user);
+        }
+
         default String completeLayerB(String system, String user) {
             return complete(system, user);
         }
@@ -452,6 +460,17 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
                     user,
                     layerAResponseFormat(),
                     maxCompletionTokens,
+                    0);
+        }
+
+        @Override
+        public CompletionResult completeDetailed(
+                String system, String user, List<String> scheduleFamilies) {
+            return completeWithFormat(
+                    system,
+                    user,
+                    layerAResponseFormat(scheduleFamilies),
+                    LAYER_A_MAX_COMPLETION_TOKENS,
                     0);
         }
 
@@ -700,7 +719,25 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
             return MAPPER.writeValueAsString(root);
         }
 
+        private static String[] familyEnum(List<String> families) {
+            List<String> offered = new java.util.ArrayList<>();
+            if (families != null) {
+                offered.addAll(families);
+            }
+            if (offered.isEmpty()) {
+                offered.addAll(ScheduleFamily.seeds());
+            }
+            if (!offered.contains(ScheduleFamily.NONE)) {
+                offered.add(ScheduleFamily.NONE);
+            }
+            return offered.toArray(String[]::new);
+        }
+
         private static ObjectNode layerAResponseFormat() {
+            return layerAResponseFormat(ScheduleFamily.seeds());
+        }
+
+        private static ObjectNode layerAResponseFormat(List<String> families) {
             ObjectNode format = MAPPER.createObjectNode();
             format.put("type", "json_schema");
             ObjectNode jsonSchema = format.putObject("json_schema");
@@ -711,15 +748,9 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
             schema.put("additionalProperties", false);
             ObjectNode properties = schema.putObject("properties");
             enumProperty(properties, "scheduleFamily",
-                    "one of the seven schedule families; depreciation worksheets must pick "
-                            + "among these rather than inventing a family name",
-                    ScheduleFamily.CAPEX_DETAIL,
-                    ScheduleFamily.MEANS_OF_FINANCE,
-                    ScheduleFamily.PROFIT_AND_LOSS,
-                    ScheduleFamily.BALANCE_SHEET,
-                    ScheduleFamily.CASH_FLOW,
-                    ScheduleFamily.ASSUMPTIONS,
-                    ScheduleFamily.PROJECT_SUMMARY);
+                    "one of the offered schedule families, or none when a new category "
+                            + "is named in suggestedFamily",
+                    familyEnum(families));
             enumProperty(properties, "triage",
                     "main keeps the Packet on the main schedule; scratch is a working paper; "
                             + "orphan is unattached",
@@ -741,7 +772,14 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm, FormulaGlos
             headType.add("null");
             head.put("description", "nomenclature path from the ontology slice, or null");
             ArrayNode required = schema.putArray("required");
+            ObjectNode suggested = properties.putObject("suggestedFamily");
+            ArrayNode suggestedType = suggested.putArray("type");
+            suggestedType.add("string");
+            suggestedType.add("null");
+            suggested.put("description",
+                    "a new short snake_case category when scheduleFamily is none; otherwise null");
             required.add("scheduleFamily");
+            required.add("suggestedFamily");
             required.add("triage");
             required.add("relevance");
             required.add("rowLabels");

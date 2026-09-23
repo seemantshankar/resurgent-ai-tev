@@ -127,6 +127,8 @@ public final class ClassifyService {
             OntologySlice slice = catalog.withoutPaths(
                     catalog.sliceForMandate(mandateId), orphanSoftLeafPaths);
             List<CandidateRow> candidates = repo.selectCandidatesForParseRun(parseRunId);
+            ScheduleFamilyCatalog families = ScheduleFamilyCatalog.seeded();
+            families.restore(repo.selectScheduleFamilies());
             if (candidates.isEmpty()) {
                 throw new ClassifyException("no Candidates for parse run " + parseRunId
                         + "; run discover first");
@@ -157,7 +159,8 @@ public final class ClassifyService {
             }
 
             long classifyDeadlineNanos = System.nanoTime() + limits.classifyDeadline().toNanos();
-            LlmPhaseResult llmPhase = runLlmPhase(slice, parseRunId, prepared, classifyDeadlineNanos);
+            LlmPhaseResult llmPhase = runLlmPhase(
+                    slice, parseRunId, prepared, classifyDeadlineNanos, families);
             LayerBBindingStats layerBStats = new LayerBBindingStats();
 
             List<PacketDisposition> dispositions = llmPhase.dispositions();
@@ -203,6 +206,9 @@ public final class ClassifyService {
                 repo.deleteProjectFactBindingsForParseRun(parseRunId);
                 repo.deleteNomenclatureBindingsForParseRun(parseRunId);
                 repo.deletePacketDispositionsForParseRun(parseRunId);
+                for (String family : families.admitted()) {
+                    repo.insertScheduleFamily(family);
+                }
                 for (PacketDisposition disposition : dispositions) {
                     repo.insertPacketDisposition(disposition);
                 }
@@ -304,13 +310,15 @@ public final class ClassifyService {
             PreparedPacket prepared,
             LayerAJudgment parent,
             ScheduledExecutorService watchdog,
-            long deadlineNanos) throws ClassifyException {
+            long deadlineNanos,
+            ScheduleFamilyCatalog families) throws ClassifyException {
         CandidateRow candidate = prepared.candidate();
-        LayerAJudgment raw = callLayerAWithRetry(slice, prepared, parent, watchdog, deadlineNanos);
+        LayerAJudgment raw = callLayerAWithRetry(
+                slice, prepared, parent, watchdog, deadlineNanos, families);
         if (raw == null) {
             return null;
         }
-        LayerAJudgment judgment = requireJudgment(raw, candidate.candidateId());
+        LayerAJudgment judgment = requireJudgment(raw, candidate.candidateId(), families);
         PacketDisposition disposition = new PacketDisposition(
                 candidate.candidateId(),
                 parseRunId,
@@ -342,10 +350,12 @@ public final class ClassifyService {
             PreparedPacket prepared,
             LayerAJudgment parent,
             ScheduledExecutorService watchdog,
-            long deadlineNanos) throws ClassifyException {
+            long deadlineNanos,
+            ScheduleFamilyCatalog families) throws ClassifyException {
         try {
             return callLayerAOnce(
-                    slice, prepared, parent, watchdog, deadlineNanos, limits.attemptDeadline());
+                    slice, prepared, parent, watchdog, deadlineNanos,
+                    limits.attemptDeadline(), families);
         } catch (AttemptDeadlineException firstMiss) {
             System.err.println("Layer A candidate " + prepared.candidate().candidateId()
                     + " exceeded the " + limits.attemptDeadline().toMillis()
@@ -355,7 +365,7 @@ public final class ClassifyService {
         try {
             return callLayerAOnce(
                     slice, prepared, parent, watchdog, deadlineNanos,
-                    limits.retryAttemptDeadline());
+                    limits.retryAttemptDeadline(), families);
         } catch (AttemptDeadlineException secondMiss) {
             System.err.println("Layer A candidate " + prepared.candidate().candidateId()
                     + " missed the retry deadline too; leaving it unclassified");
@@ -369,11 +379,13 @@ public final class ClassifyService {
             LayerAJudgment parent,
             ScheduledExecutorService watchdog,
             long deadlineNanos,
-            Duration attemptDeadline) throws ClassifyException {
+            Duration attemptDeadline,
+            ScheduleFamilyCatalog families) throws ClassifyException {
         try {
             return callLlm(
                     () -> llm.classifyLayerA(new LayerAPrompt(
-                            prepared.redacted(), slice, parent, prepared.cheapPass())),
+                            prepared.redacted(), slice, parent, prepared.cheapPass(),
+                            families.names())),
                     "Layer A candidate " + prepared.candidate().candidateId(),
                     watchdog,
                     deadlineNanos,
@@ -389,6 +401,14 @@ public final class ClassifyService {
             return new LayerAJudgment(
                     family, Triage.ORPHAN, Relevance.NOISE,
                     List.of(), List.of(), null);
+        } catch (RuntimeException invalid) {
+            if (invalid.getMessage() != null
+                    && invalid.getMessage().contains("scheduleFamily none without a category")) {
+                System.err.println("Layer A candidate " + prepared.candidate().candidateId()
+                        + " named no family and no new category; leaving it unclassified");
+                return null;
+            }
+            throw invalid;
         }
     }
 
@@ -404,7 +424,11 @@ public final class ClassifyService {
     }
 
     private LlmPhaseResult runLlmPhase(
-            OntologySlice slice, long parseRunId, List<PreparedPacket> prepared, long deadlineNanos)
+            OntologySlice slice,
+            long parseRunId,
+            List<PreparedPacket> prepared,
+            long deadlineNanos,
+            ScheduleFamilyCatalog families)
             throws ClassifyException {
         Map<Long, LayerAJudgment> judged = new ConcurrentHashMap<>();
         Map<Long, LayerAJudgment> coverageByWorksheet = new ConcurrentHashMap<>();
@@ -442,7 +466,8 @@ public final class ClassifyService {
                         LayerAJudgment parent = parentContext(
                                 packet.candidate(), judged, coverageByWorksheet);
                         LayerAWork work = layerAWork(
-                                slice, parseRunId, packet, parent, watchdog, deadlineNanos);
+                                slice, parseRunId, packet, parent, watchdog, deadlineNanos,
+                                families);
                         if (work == null) {
                             unclassified.add(id);
                         } else {
@@ -1023,12 +1048,21 @@ public final class ClassifyService {
                 }
             }
         });
+        List<NomenclatureCatalog.PendingSoftLeaf> pendingSoftLeaves = new ArrayList<>();
         Map<String, LayerBLineJudgment> answers;
         try {
             answers = filler.fill(
                     queued,
                     slice,
-                    candidateId -> layerA.get(candidateId));
+                    candidateId -> layerA.get(candidateId),
+                    (current, lines) -> {
+                        OntologySlice next = current;
+                        for (LayerBLineJudgment line : lines) {
+                            next = admitCategoryForNextCell(
+                                    catalog, mandateId, next, line, pendingSoftLeaves);
+                        }
+                        return next;
+                    });
         } finally {
             watchdog.shutdownNow();
         }
@@ -1039,8 +1073,7 @@ public final class ClassifyService {
         List<NomenclatureBinding> bindings = new ArrayList<>();
         Map<Long, UnboundReason> reasons = new LinkedHashMap<>();
         List<BindingPeerWriter.PendingPeerLine> pendingPeers = new ArrayList<>();
-        List<NomenclatureCatalog.PendingSoftLeaf> pendingSoftLeaves = new ArrayList<>();
-        OntologySlice currentSlice = slice;
+        OntologySlice currentSlice = filler.currentSlice() != null ? filler.currentSlice() : slice;
         Map<String, MaterializeResult> minted = new LinkedHashMap<>();
         for (Map.Entry<String, List<DeterministicBinder.QueuedGroup>> entry : byLabel.entrySet()) {
             LayerBLineJudgment answer = answers.get(entry.getKey());
@@ -1148,6 +1181,43 @@ public final class ClassifyService {
         stats.addLabelBindings(bindings.size());
         return new GapFillResult(
                 bindings, reasons, filler.failures(), pendingPeers, pendingSoftLeaves);
+    }
+
+    /**
+     * A category the model just named is on the slice before the next label is
+     * asked. The seed catalog is unchanged. A transcribed row is not a category.
+     */
+    private static OntologySlice admitCategoryForNextCell(
+            NomenclatureCatalog catalog,
+            long mandateId,
+            OntologySlice slice,
+            LayerBLineJudgment line,
+            List<NomenclatureCatalog.PendingSoftLeaf> pending) {
+        if (line.path() == null || slice.node(line.path().trim()).isPresent()) {
+            return slice;
+        }
+        String path = line.path().trim();
+        int sep = path.lastIndexOf(" > ");
+        if (sep <= 0) {
+            return slice;
+        }
+        String parentPath = path.substring(0, sep);
+        String leafName = path.substring(sep + 3).trim();
+        if (TranscribedLeaf.isTranscribed(leafName)) {
+            return slice;
+        }
+        NomenclatureNode parent = slice.node(parentPath).orElse(null);
+        if (parent == null || parent.leaf()) {
+            return slice;
+        }
+        try {
+            NomenclatureCatalog.StagedSoftLeaf staged = catalog.stagePendingSoftLeaf(
+                    slice, mandateId, parentPath, leafName, line.aliases());
+            pending.add(staged.pending());
+            return staged.slice();
+        } catch (NomenclatureException e) {
+            return slice;
+        }
     }
 
     private static String mintSoftLeaf(
@@ -1281,10 +1351,14 @@ public final class ClassifyService {
         return coverageByWorksheet.get(candidate.worksheetId());
     }
 
-    private static LayerAJudgment requireJudgment(LayerAJudgment judgment, long candidateId)
+    private static LayerAJudgment requireJudgment(
+            LayerAJudgment judgment, long candidateId, ScheduleFamilyCatalog families)
             throws ClassifyException {
+        if (judgment != null) {
+            families.admit(judgment.scheduleFamily());
+        }
         if (judgment == null
-                || !ScheduleFamily.isKnown(judgment.scheduleFamily())
+                || !families.contains(judgment.scheduleFamily())
                 || !Triage.isKnown(judgment.triage())
                 || !Relevance.isKnown(judgment.relevance())) {
             throw new ClassifyException(

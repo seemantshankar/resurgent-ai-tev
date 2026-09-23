@@ -37,6 +37,7 @@ final class LabelGapFiller {
     private final ClassifierLlm llm;
     private final Map<String, LayerBLineJudgment> answers = new LinkedHashMap<>();
     private final List<String> failures = new ArrayList<>();
+    private OntologySlice currentSlice;
 
     LabelGapFiller(ClassifierLlm llm) {
         this.llm = Objects.requireNonNull(llm, "llm");
@@ -50,16 +51,33 @@ final class LabelGapFiller {
             long candidateId,
             long parseRunId) {}
 
+    /**
+     * Adds categories the model just named to the slice the next label will see.
+     * The seed catalog stays; a new leaf is what carries forward.
+     */
+    @FunctionalInterface
+    interface CategoryAdmission {
+        OntologySlice admit(OntologySlice slice, List<LayerBLineJudgment> lines);
+    }
+
     /** Ask for every label not already answered. Returns the answers by label key. */
     Map<String, LayerBLineJudgment> fill(
             List<Queued> queued, OntologySlice slice, LayerAJudgment layerA) {
-        return fill(queued, slice, candidateId -> layerA);
+        return fill(queued, slice, candidateId -> layerA, null);
     }
 
     Map<String, LayerBLineJudgment> fill(
             List<Queued> queued,
             OntologySlice slice,
             java.util.function.LongFunction<LayerAJudgment> layerAOf) {
+        return fill(queued, slice, layerAOf, null);
+    }
+
+    Map<String, LayerBLineJudgment> fill(
+            List<Queued> queued,
+            OntologySlice slice,
+            java.util.function.LongFunction<LayerAJudgment> layerAOf,
+            CategoryAdmission admission) {
         Map<String, Queued> representatives = new LinkedHashMap<>();
         for (Queued item : queued) {
             representatives.putIfAbsent(item.label().key(), item);
@@ -67,6 +85,8 @@ final class LabelGapFiller {
         List<Queued> distinct = new ArrayList<>(representatives.values());
         distinct.sort(Comparator.comparing(item -> item.label().key()));
 
+        OntologySlice current = slice;
+        currentSlice = slice;
         for (int start = 0; start < distinct.size(); start += BATCH_SIZE) {
             int end = Math.min(start + BATCH_SIZE, distinct.size());
             Map<Long, List<Queued>> byCandidate = new LinkedHashMap<>();
@@ -74,7 +94,15 @@ final class LabelGapFiller {
                 byCandidate.computeIfAbsent(item.candidateId(), id -> new ArrayList<>()).add(item);
             }
             for (List<Queued> group : byCandidate.values()) {
-                ask(group, slice, layerAOf.apply(group.get(0).candidateId()));
+                List<LayerBLineJudgment> accepted =
+                        ask(group, current, layerAOf.apply(group.get(0).candidateId()));
+                if (admission != null && !accepted.isEmpty()) {
+                    OntologySlice grown = admission.admit(current, accepted);
+                    if (grown != null) {
+                        current = grown;
+                        currentSlice = grown;
+                    }
+                }
             }
         }
         return Map.copyOf(answers);
@@ -84,7 +112,13 @@ final class LabelGapFiller {
         return List.copyOf(failures);
     }
 
-    private void ask(List<Queued> group, OntologySlice slice, LayerAJudgment layerA) {
+    /** The slice after categories admitted during this fill, or null if fill has not run. */
+    OntologySlice currentSlice() {
+        return currentSlice;
+    }
+
+    private List<LayerBLineJudgment> ask(
+            List<Queued> group, OntologySlice slice, LayerAJudgment layerA) {
         Packet packet = PacketRedactor.redact(synthesise(group), false);
         List<LayerBLineJudgment> lines;
         try {
@@ -93,22 +127,26 @@ final class LabelGapFiller {
             // A group the model cannot answer costs that group's names, not the run.
             failures.add("label gap fill candidate " + group.get(0).candidateId()
                     + ": " + e.getMessage());
-            return;
+            return List.of();
         }
         if (lines == null) {
-            return;
+            return List.of();
         }
         Map<String, Queued> byCoord = new LinkedHashMap<>();
         for (Queued item : group) {
             byCoord.put(item.cell().coord(), item);
         }
+        List<LayerBLineJudgment> accepted = new ArrayList<>();
         for (LayerBLineJudgment line : lines) {
             Queued item = byCoord.get(line.coord());
             if (item == null) {
                 continue;
             }
-            answers.putIfAbsent(item.label().key(), line);
+            if (answers.putIfAbsent(item.label().key(), line) == null) {
+                accepted.add(line);
+            }
         }
+        return accepted;
     }
 
     /** One Packet per Candidate: the representative cells plus the labels naming them. */

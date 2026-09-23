@@ -972,36 +972,75 @@ final class CellGraphBuilder {
         }
 
         /**
-         * The nearest label to the left on the same row, with no coordinate fallback:
-         * a coordinate is not a name, and feeding one into path resolution is how
-         * {@code J45} came to be bound to a Civil Works asset.
+         * The line name on this row. A driver note sitting between a rate and the
+         * year amounts ({@code Food & Beverages Cost | 0.4 | F & B sales | 141})
+         * is not the name: the name is the text on the far side of that rate.
+         * With no rate in between, the nearest text to the left is the name.
+         * A coordinate is never a name.
          */
         private static String nearestRowLabel(
                 InterpretationCellView cell,
                 Map<Long, Map<Long, InterpretationCellView>> rowIndex) {
             Map<Long, InterpretationCellView> sheet =
                     rowIndex.getOrDefault(cell.worksheetId(), Map.of());
+            String beforeRate = null;
+            boolean crossedRate = false;
             for (int col = cell.colNum() - 1; col >= 1; col--) {
                 InterpretationCellView candidate = sheet.get(key(cell.rowNum(), col));
                 if (candidate == null) {
                     continue;
                 }
-                String label = LabelText.of(
-                        candidate.textValue(),
-                        candidate.displayValue(),
-                        candidate.numericValue(),
-                        candidate.valueType(),
-                        candidate.formulaText());
+                String label = labelOf(candidate);
                 if (label != null) {
-                    return label;
+                    if (isDriverNote(label)) {
+                        continue;
+                    }
+                    if (crossedRate) {
+                        return label;
+                    }
+                    if (beforeRate == null) {
+                        beforeRate = label;
+                    }
+                    continue;
+                }
+                if (isRate(candidate)) {
+                    crossedRate = true;
                 }
             }
+            if (beforeRate != null) {
+                return beforeRate;
+            }
+            return labelOf(cell);
+        }
+
+        private static String labelOf(InterpretationCellView candidate) {
             return LabelText.of(
-                    cell.textValue(),
-                    cell.displayValue(),
-                    cell.numericValue(),
-                    cell.valueType(),
-                    cell.formulaText());
+                    candidate.textValue(),
+                    candidate.displayValue(),
+                    candidate.numericValue(),
+                    candidate.valueType(),
+                    candidate.formulaText());
+        }
+
+        /** {@code APPENDIX 7} points at another sheet. It is not this row's name. */
+        private static boolean isDriverNote(String label) {
+            return label.matches("(?i).*\\bappendix\\b.*");
+        }
+
+        private static boolean isRate(InterpretationCellView candidate) {
+            if (candidate.formulaText() != null && !candidate.formulaText().isBlank()) {
+                return false;
+            }
+            String numeric = candidate.numericValue();
+            if (numeric == null || numeric.isBlank()) {
+                return false;
+            }
+            try {
+                double value = Double.parseDouble(numeric.trim());
+                return Math.abs(value) <= 1d && value != 0d;
+            } catch (NumberFormatException e) {
+                return false;
+            }
         }
     }
 }

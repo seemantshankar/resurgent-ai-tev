@@ -207,9 +207,13 @@ final class TypePropagation {
     }
 
     /**
-     * One formula cell's unit from its operands. A barrier or a refused operand is
-     * fatal: the chain is not trustworthy, so the cell refuses with that reason
-     * rather than typing from whatever else it could still reach.
+     * One formula cell's unit from its operands. A barrier on a factor or divisor is
+     * fatal: a product is never typed from a subset of its factors. A kind-conflict
+     * summand is not: a sum takes the kind its typed members already agree on, the
+     * same rule an aggregation uses, so one refused member does not poison every
+     * total downstream. A blank or untyped summand contributes nothing. Any other
+     * barrier (a broken link, an external workbook, a scale conflict, a cycle, a
+     * truncated range) still refuses the formula.
      */
     private Outcome derive(
             CellGraph graph,
@@ -251,6 +255,9 @@ final class TypePropagation {
             UnboundReason refused = refusals.get(operandId);
             if (refused != null) {
                 if (isBarrier(refused)) {
+                    if (dependency.role().isSummand() && refused == UnboundReason.KIND_CONFLICT) {
+                        continue;
+                    }
                     return Outcome.refused(refused);
                 }
                 if (dependency.role().isDriver()) {

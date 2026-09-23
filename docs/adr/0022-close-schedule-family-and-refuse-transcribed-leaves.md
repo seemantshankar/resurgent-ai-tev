@@ -9,14 +9,17 @@ not whether a leaf was a category.
 
 **Decision.**
 
-1. **`schedule_family` is a closed set of seven values**: `capex_detail`,
+1. **`schedule_family` starts from seven seed values**: `capex_detail`,
    `means_of_finance`, `profit_and_loss`, `balance_sheet`, `cash_flow`,
    `assumptions`, `project_summary`. The Layer A JSON schema enumerates them;
    the parser returns null for any other name and the existing retry asks again.
-   Depreciation is not an eighth family. The depreciation expense is a line on
-   the profit and loss; the sheet that calculates it asset by asset is a working
-   paper. The pipeline does not rename `depreciation_schedule` onto one of the
-   seven — the model must choose.
+   Depreciation is not forced in as an eighth seed. The depreciation expense is a
+   line on the profit and loss; the sheet that calculates it asset by asset is a
+   working paper when one of the seven fits. When none of the names currently on
+   the list fits, the model sets `scheduleFamily` to `none` and `suggestedFamily`
+   to a short snake_case category (`manpower`). That name is admitted, stored,
+   and offered to later packets and later runs. A listed family always wins over
+   a suggestion. A free-form sentence is refused.
 
 2. **A soft leaf is a category, never the row.** When materialising a Layer B
    binding, the proposed leaf segment is resolved against the ontology aliases

@@ -19,7 +19,9 @@ final class LayerAResponseParser {
         }
         try {
             JsonNode root = MAPPER.readTree(extractJsonObject(completion));
-            String family = normalizeFamily(text(root, "scheduleFamily", "schedule_family"));
+            String family = resolveFamily(
+                    text(root, "scheduleFamily", "schedule_family"),
+                    text(root, "suggestedFamily", "suggested_family"));
             String triage = normalizeTriage(text(root, "triage"));
             String relevance = normalizeRelevance(text(root, "relevance"));
             if (Triage.isSoft(triage)) {
@@ -119,6 +121,31 @@ final class LayerAResponseParser {
             }
         }
         return List.of();
+    }
+
+    /**
+     * A seed family wins. Otherwise a new slug in {@code scheduleFamily}, or in
+     * {@code suggestedFamily} when the model reports {@code none}, is the category
+     * to add. An unrecognised free-form value is refused.
+     */
+    static String resolveFamily(String rawFamily, String suggested) {
+        String seeded = normalizeFamily(rawFamily);
+        if (seeded != null) {
+            return seeded;
+        }
+        String direct = ScheduleFamily.newFamily(rawFamily);
+        if (direct != null) {
+            return direct;
+        }
+        if (rawFamily != null && ScheduleFamily.NONE.equals(snake(rawFamily))) {
+            String admitted = ScheduleFamily.newFamily(suggested);
+            if (admitted != null) {
+                return admitted;
+            }
+            throw new IllegalStateException(
+                    "scheduleFamily none without a category name");
+        }
+        return null;
     }
 
     static String normalizeFamily(String raw) {

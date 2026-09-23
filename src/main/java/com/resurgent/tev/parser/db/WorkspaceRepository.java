@@ -1331,6 +1331,29 @@ public final class WorkspaceRepository {
         }
     }
 
+    public List<String> selectScheduleFamilies() throws SQLException {
+        List<String> names = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT name FROM schedule_family ORDER BY name")) {
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    names.add(rs.getString("name"));
+                }
+            }
+        }
+        return names;
+    }
+
+    public void insertScheduleFamily(String name) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO schedule_family (name, created_at) VALUES (?, ?)"
+                        + " ON CONFLICT(name) DO NOTHING")) {
+            ps.setString(1, name);
+            ps.setString(2, java.time.Instant.now().toString());
+            ps.executeUpdate();
+        }
+    }
+
     public long insertPacketDisposition(PacketDisposition row) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO packet_disposition (parse_run_id, candidate_id, schedule_family,"

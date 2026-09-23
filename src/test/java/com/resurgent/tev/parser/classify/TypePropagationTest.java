@@ -559,4 +559,57 @@ class TypePropagationTest {
                 .isEmpty();
         assertThat(types.refusalOf(product)).contains(UnboundReason.KIND_CONFLICT);
     }
+
+    @Test
+    void aSumOfAgreeingMoneyIgnoresAKindConflictSummand() {
+        label("A1", 1, 1, "Construction cost");
+        long cost = literal("B1", 1, 2, "100");
+        label("A2", 2, 1, "No. of Rooms");
+        long rooms = literal("B2", 2, 2, "40");
+        long mixed = formula("B3", 3, 2, "=B1+B2", "140");
+        edge(mixed, 0, "B1");
+        edge(mixed, 1, "B2");
+        label("A4", 4, 1, "Civil works");
+        long civil = literal("B4", 4, 2, "250");
+        long total = formula("B5", 5, 2, "=B3+B4", "390");
+        edge(total, 0, "B3");
+        edge(total, 1, "B4");
+        label("A6", 6, 1, "Contingency %");
+        long rate = literalWithDisplay("B6", 6, 2, "0.03", "3.00%");
+        long product = formula("B7", 7, 2, "=B3*B6", "4.2");
+        edge(product, 0, "B3");
+        edge(product, 1, "B6");
+
+        CellTypes types = resolve();
+
+        assertThat(types.refusalOf(mixed)).contains(UnboundReason.KIND_CONFLICT);
+        assertThat(types.unitOf(total).orElseThrow().kind()).isEqualTo(CellKind.MONEY);
+        assertThat(types.refusalOf(total)).isEmpty();
+        assertThat(types.unitOf(product))
+                .as("a product still refuses while a factor is a kind conflict")
+                .isEmpty();
+        assertThat(types.refusalOf(product)).contains(UnboundReason.KIND_CONFLICT);
+        assertThat(types.unitOf(cost)).isPresent();
+        assertThat(types.unitOf(rooms)).isPresent();
+        assertThat(types.unitOf(civil)).isPresent();
+        assertThat(types.unitOf(rate).orElseThrow().kind()).isEqualTo(CellKind.PERCENT);
+    }
+
+    @Test
+    void aMoneyRemainderSurvivesSubtractingAnUntypableBlankLeg() {
+        label("A1", 1, 1, "Building cost");
+        long building = literal("B1", 1, 2, "500");
+        long land = formula("B2", 2, 2, "=Z99", null);
+        edge(land, 0, "Z99");
+        long net = formula("B3", 3, 2, "=B1-B2", "500");
+        edge(net, 0, "B1");
+        edge(net, 1, "B2");
+
+        CellTypes types = resolve();
+
+        assertThat(types.refusalOf(land)).contains(UnboundReason.NO_LABEL);
+        assertThat(types.unitOf(net).orElseThrow().kind()).isEqualTo(CellKind.MONEY);
+        assertThat(types.refusalOf(net)).isEmpty();
+        assertThat(types.unitOf(building)).isPresent();
+    }
 }

@@ -79,9 +79,25 @@ class LayerAResponseParserTest {
     }
 
     @Test
-    void rejectsUnknownScheduleFamilyAfterNormalization() {
+    void admitsANewCategoryWhenNoSeedFamilyFits() {
+        LayerAJudgment judgment = LayerAResponseParser.parse("""
+                {"scheduleFamily":"none","suggestedFamily":"Manpower","triage":"main","relevance":"primary"}
+                """);
+        assertThat(judgment.scheduleFamily()).isEqualTo("manpower");
+    }
+
+    @Test
+    void aListedFamilyWinsOverASuggestion() {
+        LayerAJudgment judgment = LayerAResponseParser.parse("""
+                {"scheduleFamily":"profit_and_loss","suggestedFamily":"manpower","triage":"main","relevance":"primary"}
+                """);
+        assertThat(judgment.scheduleFamily()).isEqualTo(ScheduleFamily.PROFIT_AND_LOSS);
+    }
+
+    @Test
+    void rejectsAFreeFormScheduleFamily() {
         assertThatThrownBy(() -> LayerAResponseParser.parse("""
-                {"scheduleFamily":"depreciation_schedule","triage":"main","relevance":"primary"}
+                {"scheduleFamily":"this is a whole sentence about depreciation","triage":"main","relevance":"primary"}
                 """))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("family=null");

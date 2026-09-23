@@ -69,6 +69,45 @@ class LabelGapFillerTest {
     }
 
     @Test
+    void aCategoryAdmittedForOneLabelIsOfferedToTheNext() {
+        ClassifyServiceTest.FakeClassifierLlm llm = new ClassifyServiceTest.FakeClassifierLlm();
+        llm.layerBFactory = prompt -> prompt.packet().cells().stream()
+                .filter(cell -> "number".equals(cell.valueType()))
+                .map(cell -> new LayerBLineJudgment(
+                        cell.coord(), "Civil",
+                        "Project Cost > Civil Works > Structure",
+                        AmountRole.ADD, List.of(), 0.9))
+                .toList();
+        com.resurgent.tev.parser.nomenclature.NomenclatureNode added =
+                new com.resurgent.tev.parser.nomenclature.NomenclatureNode(
+                        "Project Cost > Civil Works > Structure",
+                        "Structure",
+                        "Project Cost > Civil Works",
+                        com.resurgent.tev.parser.nomenclature.NomenclatureNode.LAYER_MANDATE_SOFT,
+                        false,
+                        true,
+                        null,
+                        1L);
+
+        new LabelGapFiller(llm).fill(
+                List.of(queued("Alpha", 40L, "B2"), queued("Beta", 41L, "C3")),
+                SLICE,
+                candidateId -> LAYER_A,
+                (slice, lines) -> new OntologySlice(
+                        slice.industry(),
+                        java.util.stream.Stream.concat(
+                                slice.nodes().stream(), java.util.stream.Stream.of(added))
+                                .toList(),
+                        slice.aliases()));
+
+        assertThat(llm.layerBPrompts).hasSize(2);
+        assertThat(llm.layerBPrompts.get(0).ontologySlice().nodes()).isEmpty();
+        assertThat(llm.layerBPrompts.get(1).ontologySlice().nodes())
+                .extracting(com.resurgent.tev.parser.nomenclature.NomenclatureNode::name)
+                .contains("Structure");
+    }
+
+    @Test
     void aPacketIsNeverMixedAcrossCandidates() {
         ClassifyServiceTest.FakeClassifierLlm llm = new ClassifyServiceTest.FakeClassifierLlm();
 
