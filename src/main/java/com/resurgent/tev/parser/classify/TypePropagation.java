@@ -172,16 +172,20 @@ final class TypePropagation {
     }
 
     /**
-     * The banner above each numeric cell. A banner is a cell whose whole text is a
-     * unit ({@code Rs. In Lacs}, {@code (Amt. in Rs.)}). It covers every amount
-     * below it on that sheet until the next banner. The formula then explains the
-     * number; it does not choose a second unit for the block.
+     * The unit of each numeric cell from the table frame. A banner on its own row
+     * ({@code (Rs. in Lacs)}) covers every amount below it until the next banner.
+     * A unit phrase inside a header row ({@code Amount in Rs} beside {@code Floor}
+     * and {@code Rate}) covers only that column. The formula explains the number.
      */
     private static Map<Long, CellScale> blockScales(CellGraph graph) {
         Set<Long> rowsWithAmount = new HashSet<>();
+        Map<Long, Integer> textOnRow = new HashMap<>();
         for (GraphCell cell : graph.cells().values()) {
+            long rowKey = cell.worksheetId() * 1_000_000L + cell.rowNum();
             if (cell.numeric()) {
-                rowsWithAmount.add(cell.worksheetId() * 1_000_000L + cell.rowNum());
+                rowsWithAmount.add(rowKey);
+            } else if (cell.displayValue() != null && !cell.displayValue().isBlank()) {
+                textOnRow.merge(rowKey, 1, Integer::sum);
             }
         }
         Map<Long, List<Banner>> banners = new HashMap<>();
@@ -189,30 +193,39 @@ final class TypePropagation {
             if (cell.numeric() || cell.isFormula()) {
                 continue;
             }
-            if (rowsWithAmount.contains(cell.worksheetId() * 1_000_000L + cell.rowNum())) {
+            long rowKey = cell.worksheetId() * 1_000_000L + cell.rowNum();
+            if (rowsWithAmount.contains(rowKey)) {
                 continue;
             }
             CellScale scale = CellScale.blockBanner(cell.displayValue());
             if (scale == null) {
                 continue;
             }
+            boolean columnOnly = textOnRow.getOrDefault(rowKey, 0) >= 3;
             banners.computeIfAbsent(cell.worksheetId(), id -> new ArrayList<>())
-                    .add(new Banner(cell.rowNum(), scale));
+                    .add(new Banner(cell.rowNum(), cell.colNum(), scale, columnOnly));
         }
         Map<Long, CellScale> inherited = new HashMap<>();
         for (GraphCell cell : graph.cells().values()) {
             if (!cell.numeric()) {
                 continue;
             }
-            Banner governing = null;
+            Banner block = null;
+            Banner column = null;
             for (Banner banner : banners.getOrDefault(cell.worksheetId(), List.of())) {
                 if (banner.row() >= cell.rowNum()) {
                     continue;
                 }
-                if (governing == null || banner.row() > governing.row()) {
-                    governing = banner;
+                if (banner.columnOnly()) {
+                    if (banner.col() == cell.colNum()
+                            && (column == null || banner.row() > column.row())) {
+                        column = banner;
+                    }
+                } else if (block == null || banner.row() > block.row()) {
+                    block = banner;
                 }
             }
+            Banner governing = column != null ? column : block;
             if (governing != null) {
                 inherited.put(cell.cellId(), governing.scale());
             }
@@ -239,7 +252,7 @@ final class TypePropagation {
                 ScaleProvenance.STATED);
     }
 
-    private record Banner(int row, CellScale scale) {}
+    private record Banner(int row, int col, CellScale scale, boolean columnOnly) {}
 
     private record Outcome(
             ResolvedUnit unit,

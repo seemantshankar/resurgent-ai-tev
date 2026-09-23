@@ -239,6 +239,31 @@ class TypePropagationTest {
     }
 
     @Test
+    void aColumnHeaderUnitDoesNotRetypeTheRestOfTheBlock() {
+        label("D1", 1, 4, "(Rs. in Lacs)");
+        label("A3", 3, 1, "Sl.No");
+        label("B3", 3, 2, "Floor");
+        label("C3", 3, 3, "Amount in Rs");
+        label("A4", 4, 1, "Basement");
+        long working = literal("C4", 4, 3, "63763632");
+        label("A9", 9, 1, "Civil works");
+        long above = literal("D9", 9, 4, "2423");
+        label("A12", 12, 1, "Furniture");
+        long below = literal("D12", 12, 4, "291");
+        long total = formula("D14", 14, 4, "=D9+D12", "2714");
+        edge(total, 0, "D9");
+        edge(total, 1, "D12");
+
+        CellTypes types = resolve();
+
+        assertThat(types.unitOf(working).orElseThrow().scale()).isEqualTo(CellScale.UNIT);
+        assertThat(types.unitOf(above).orElseThrow().scale()).isEqualTo(CellScale.LAKH);
+        assertThat(types.unitOf(below).orElseThrow().scale()).isEqualTo(CellScale.LAKH);
+        assertThat(types.refusalOf(total)).isEmpty();
+        assertThat(types.unitOf(total).orElseThrow().scale()).isEqualTo(CellScale.LAKH);
+    }
+
+    @Test
     void amountsUnderDifferentBannersStillConflict() {
         label("A1", 1, 1, "Rs. In Lacs");
         label("A2", 2, 1, "Civil works");
