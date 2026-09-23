@@ -679,11 +679,11 @@ final class TypePropagation {
     private static ResolvedUnit combineProduct(List<Operand> factors, List<Operand> divisors) {
         CellKind kind = null;
         CellScale typedScale = null;
-        double factorConstantMove = 1d;
+        List<Double> factorConstants = new ArrayList<>();
 
         for (Operand factor : factors) {
             if (factor.isConstant()) {
-                factorConstantMove *= factor.constant();
+                factorConstants.add(factor.constant());
                 continue;
             }
             if (!factor.unit().isResolved()) {
@@ -700,13 +700,17 @@ final class TypePropagation {
                 return ResolvedUnit.unresolved();
             }
         }
-        // Every constant factor moves the scale together, applied once against the
-        // typed base: a leading and a trailing constant must move it the same way.
-        // One that lands on none of the named scales (2, 0.5, ...) is an ordinary
-        // quantity multiplier, not a unit conversion, so it leaves the scale alone.
+        // Each literal is tried on its own. A scale step (100000, 0.00001) moves the
+        // unit. A rate (0.005) is not a step, so it must not be folded into the step
+        // first: 100000*0.005 is 500, and 500 is not a unit. Order does not matter
+        // because a non-step leaves the scale where the last step put it.
         CellScale scale = typedScale == null ? CellScale.UNIT : typedScale;
-        CellScale movedByFactors = CellScale.multipliedBy(scale, factorConstantMove);
-        scale = movedByFactors == null ? scale : movedByFactors;
+        for (double factor : factorConstants) {
+            CellScale moved = CellScale.multipliedBy(scale, factor);
+            if (moved != null) {
+                scale = moved;
+            }
+        }
 
         for (Operand divisor : divisors) {
             if (divisor.isConstant()) {

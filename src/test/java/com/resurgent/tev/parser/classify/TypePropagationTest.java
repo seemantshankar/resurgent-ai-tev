@@ -213,6 +213,29 @@ class TypePropagationTest {
     }
 
     @Test
+    void aRateLiteralDoesNotUndoAScaleConversion() {
+        label("A2", 2, 1, "Rs. in Lacs");
+        long lakhs = literal("B2", 2, 2, "2700");
+        label("A3", 3, 1, "Amt. in Rs.");
+        long rupees = literal("B3", 3, 2, "150000");
+        long fee = formula("B4", 4, 2, "=B2*100000*0.005", "1350000");
+        edge(fee, 0, "B2");
+        long total = formula("B5", 5, 2, "=B3+B4", "1500000");
+        edge(total, 0, "B3");
+        edge(total, 1, "B4");
+
+        CellTypes types = resolve();
+
+        assertThat(types.unitOf(lakhs).orElseThrow().scale()).isEqualTo(CellScale.LAKH);
+        assertThat(types.unitOf(fee).orElseThrow().scale())
+                .as("100000 converts lakhs to rupees; 0.005 is the rate and leaves the scale")
+                .isEqualTo(CellScale.UNIT);
+        assertThat(types.refusalOf(total)).isEmpty();
+        assertThat(types.unitOf(total).orElseThrow().scale()).isEqualTo(CellScale.UNIT);
+        assertThat(types.unitOf(rupees).orElseThrow().scale()).isEqualTo(CellScale.UNIT);
+    }
+
+    @Test
     void aConstantFactorMovesTheScaleRegardlessOfOperandOrder() {
         label("A1", 1, 1, "Power cost");
         long rupees = literal("B1", 1, 2, "500000");
