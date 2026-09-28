@@ -36,7 +36,9 @@ public record NormalizedCell(
         boolean rowHidden,
         boolean colHidden,
         boolean sheetHidden,
-        CellStyle cellStyle) {
+        CellStyle cellStyle,
+        String commentAuthor,
+        String commentBody) {
 
     /**
      * Compatibility constructor for callers that do not yet attach style or
@@ -52,7 +54,7 @@ public record NormalizedCell(
         this(coord, rowNum, colNum, rawValue, rawType, valueType, textValue, displayValue,
                 numericValue, boolValue, dateValue, formulaText, null, formulaState, cachedValue,
                 cacheState, coercedFromText, isError, errorType, isMergedAnchor, isMergedParticipant,
-                mergedRange, valueSource, rowHidden, colHidden, sheetHidden, null);
+                mergedRange, valueSource, rowHidden, colHidden, sheetHidden, null, null, null);
     }
 
     NormalizedCell withCellStyle(CellStyle cellStyle) {
@@ -61,7 +63,7 @@ public record NormalizedCell(
                 numericValue, boolValue, dateValue, formulaText, formulaNormalized, formulaState,
                 cachedValue, cacheState, coercedFromText, isError, errorType, isMergedAnchor,
                 isMergedParticipant, mergedRange, valueSource, rowHidden, colHidden, sheetHidden,
-                cellStyle);
+                cellStyle, commentAuthor, commentBody);
     }
 
     NormalizedCell withFormulaState(String formulaState) {
@@ -70,6 +72,15 @@ public record NormalizedCell(
                 numericValue, boolValue, dateValue, formulaText, formulaNormalized, formulaState,
                 cachedValue, cacheState, coercedFromText, isError, errorType, isMergedAnchor,
                 isMergedParticipant, mergedRange, valueSource, rowHidden, colHidden, sheetHidden,
-                cellStyle);
+                cellStyle, commentAuthor, commentBody);
+    }
+
+    NormalizedCell withComment(String commentAuthor, String commentBody) {
+        return new NormalizedCell(
+                coord, rowNum, colNum, rawValue, rawType, valueType, textValue, displayValue,
+                numericValue, boolValue, dateValue, formulaText, formulaNormalized, formulaState,
+                cachedValue, cacheState, coercedFromText, isError, errorType, isMergedAnchor,
+                isMergedParticipant, mergedRange, valueSource, rowHidden, colHidden, sheetHidden,
+                cellStyle, commentAuthor, commentBody);
     }
 }

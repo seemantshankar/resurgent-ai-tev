@@ -3,118 +3,63 @@ package com.resurgent.tev.parser.classify;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.util.List;
 import org.junit.jupiter.api.Test;
 
-class LayerAResponseParserTest {
+final class LayerAResponseParserTest {
 
     @Test
-    void parsesCanonicalJson() {
+    void parsesAboutWithStructuredFields() {
         LayerAJudgment judgment = LayerAResponseParser.parse("""
                 {
                   "scheduleFamily": "capex_detail",
+                  "suggestedFamily": null,
                   "triage": "main",
                   "relevance": "primary",
-                  "rowLabels": ["Particulars"],
+                  "rowLabels": ["Civil Works"],
                   "columnHeaders": ["Amount"],
-                  "packetDefaultHead": "Project Cost"
+                  "packetDefaultHead": null,
+                  "about": "Floor-by-floor civil cost table with section totals in Lacs."
                 }
                 """);
-        assertThat(judgment.scheduleFamily()).isEqualTo(ScheduleFamily.CAPEX_DETAIL);
-        assertThat(judgment.triage()).isEqualTo(Triage.MAIN);
-        assertThat(judgment.relevance()).isEqualTo(Relevance.PRIMARY);
-        assertThat(judgment.rowLabels()).containsExactly("Particulars");
-        assertThat(judgment.columnHeaders()).containsExactly("Amount");
-        assertThat(judgment.packetDefaultHead()).isEqualTo("Project Cost");
+        assertThat(judgment.scheduleFamily()).isEqualTo("capex_detail");
+        assertThat(judgment.triage()).isEqualTo("main");
+        assertThat(judgment.relevance()).isEqualTo("primary");
+        assertThat(judgment.rowLabels()).containsExactly("Civil Works");
+        assertThat(judgment.about()).contains("civil cost");
     }
 
     @Test
-    void extractsJsonFromMarkdownFenceAndNormalizesAliases() {
-        LayerAJudgment judgment = LayerAResponseParser.parse("""
-                ```json
-                {"schedule_family":"CapEx Detail","triage":"main","relevance":"Secondary"}
-                ```
-                """);
-        assertThat(judgment.scheduleFamily()).isEqualTo(ScheduleFamily.CAPEX_DETAIL);
-        assertThat(judgment.triage()).isEqualTo(Triage.MAIN);
-        assertThat(judgment.relevance()).isEqualTo(Relevance.SUPPORTING);
-        assertThat(judgment.rowLabels()).isEqualTo(List.of());
-        assertThat(judgment.packetDefaultHead()).isNull();
-    }
-
-    @Test
-    void normalizesScratchpadAliasAndForcesNoise() {
-        LayerAJudgment judgment = LayerAResponseParser.parse("""
-                {"scheduleFamily":"assumptions","triage":"Scratchpad","relevance":"Secondary"}
-                """);
-        assertThat(judgment.triage()).isEqualTo(Triage.SCRATCH);
-        assertThat(judgment.relevance()).isEqualTo(Relevance.NOISE);
-    }
-
-    @Test
-    void rejectsUnknownTriageAfterNormalization() {
+    void rejectsMissingAbout() {
         assertThatThrownBy(() -> LayerAResponseParser.parse("""
-                {"scheduleFamily":"capex_detail","triage":"maybe","relevance":"primary"}
+                {
+                  "scheduleFamily": "capex_detail",
+                  "suggestedFamily": null,
+                  "triage": "main",
+                  "relevance": "primary",
+                  "rowLabels": [],
+                  "columnHeaders": [],
+                  "packetDefaultHead": null
+                }
                 """))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("triage=maybe");
+                .hasMessageContaining("about=");
     }
 
     @Test
-    void rejectsUncertainRelevanceInsteadOfMappingToNoise() {
-        assertThatThrownBy(() -> LayerAResponseParser.parse("""
-                {"scheduleFamily":"capex_detail","triage":"main","relevance":"unknown"}
-                """))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("relevance=unknown");
-    }
-
-    @Test
-    void softTriageForcesRelevanceNoise() {
+    void softTriageForcesNoiseRelevance() {
         LayerAJudgment judgment = LayerAResponseParser.parse("""
-                {"scheduleFamily":"assumptions","triage":"scratch","relevance":"primary"}
+                {
+                  "scheduleFamily": "assumptions",
+                  "suggestedFamily": null,
+                  "triage": "scratch",
+                  "relevance": "primary",
+                  "rowLabels": [],
+                  "columnHeaders": [],
+                  "packetDefaultHead": null,
+                  "about": "Floating check figure outside the main schedule."
+                }
                 """);
-        assertThat(judgment.triage()).isEqualTo(Triage.SCRATCH);
-        assertThat(judgment.relevance()).isEqualTo(Relevance.NOISE);
-    }
-
-    @Test
-    void admitsANewCategoryWhenNoSeedFamilyFits() {
-        LayerAJudgment judgment = LayerAResponseParser.parse("""
-                {"scheduleFamily":"none","suggestedFamily":"Manpower","triage":"main","relevance":"primary"}
-                """);
-        assertThat(judgment.scheduleFamily()).isEqualTo("manpower");
-    }
-
-    @Test
-    void aListedFamilyWinsOverASuggestion() {
-        LayerAJudgment judgment = LayerAResponseParser.parse("""
-                {"scheduleFamily":"profit_and_loss","suggestedFamily":"manpower","triage":"main","relevance":"primary"}
-                """);
-        assertThat(judgment.scheduleFamily()).isEqualTo(ScheduleFamily.PROFIT_AND_LOSS);
-    }
-
-    @Test
-    void rejectsAFreeFormScheduleFamily() {
-        assertThatThrownBy(() -> LayerAResponseParser.parse("""
-                {"scheduleFamily":"this is a whole sentence about depreciation","triage":"main","relevance":"primary"}
-                """))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("family=null");
-    }
-
-    @Test
-    void normalizesCapExDetailSynonymOntoSeedFamily() {
-        LayerAJudgment judgment = LayerAResponseParser.parse("""
-                {"schedule_family":"CapEx Detail","triage":"main","relevance":"primary"}
-                """);
-        assertThat(judgment.scheduleFamily()).isEqualTo(ScheduleFamily.CAPEX_DETAIL);
-    }
-
-    @Test
-    void rejectsCompletionWithoutJsonObject() {
-        assertThatThrownBy(() -> LayerAResponseParser.parse("no json here"))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("JSON object");
+        assertThat(judgment.triage()).isEqualTo("scratch");
+        assertThat(judgment.relevance()).isEqualTo("noise");
     }
 }

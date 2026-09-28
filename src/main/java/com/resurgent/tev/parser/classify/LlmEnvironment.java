@@ -8,12 +8,13 @@ import java.util.Map;
 
 /**
  * Loads OpenRouter settings from process env, then an optional {@code .env}
- * file ({@code //} and {@code #} comments). Never logs secret values.
+ * file ({@code //} and {@code #} comments). Prefers Model2 when set.
  */
 public final class LlmEnvironment {
 
     static final String API_KEY = "OPENROUTER_API_KEY";
     static final String MODEL_ID = "Excel_Enrichment_Model_id";
+    static final String MODEL2_ID = "Excel_Enrichment_Model2_id";
 
     private LlmEnvironment() {}
 
@@ -25,6 +26,7 @@ public final class LlmEnvironment {
         Map<String, String> values = new LinkedHashMap<>();
         putIfPresent(values, API_KEY, System.getenv(API_KEY));
         putIfPresent(values, MODEL_ID, System.getenv(MODEL_ID));
+        putIfPresent(values, MODEL2_ID, System.getenv(MODEL2_ID));
         if (dotenv != null && Files.isRegularFile(dotenv)) {
             try {
                 for (String line : Files.readAllLines(dotenv)) {
@@ -40,25 +42,23 @@ public final class LlmEnvironment {
     public static ClassifierLlm classifierOrUnconfigured() {
         Map<String, String> env = load();
         String key = env.get(API_KEY);
-        String model = env.get(MODEL_ID);
+        String model = env.get(MODEL2_ID);
+        if (model == null || model.isBlank()) {
+            model = env.get(MODEL_ID);
+        }
         if (key == null || key.isBlank() || model == null || model.isBlank()) {
             return new UnconfiguredClassifierLlm();
         }
         return new OpenRouterClassifierLlm(key, model);
     }
 
-    public static FormulaGlossLlm formulaGlossOrNoOp() {
-        ClassifierLlm classifier = classifierOrUnconfigured();
-        if (classifier instanceof FormulaGlossLlm gloss) {
-            return gloss;
-        }
-        return new NoOpFormulaGlossLlm();
-    }
-
     public static boolean liveConfigured() {
         Map<String, String> env = load();
         String key = env.get(API_KEY);
-        String model = env.get(MODEL_ID);
+        String model = env.get(MODEL2_ID);
+        if (model == null || model.isBlank()) {
+            model = env.get(MODEL_ID);
+        }
         return key != null && !key.isBlank() && model != null && !model.isBlank();
     }
 

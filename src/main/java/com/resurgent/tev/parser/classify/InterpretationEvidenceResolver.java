@@ -2,6 +2,7 @@ package com.resurgent.tev.parser.classify;
 
 import com.resurgent.tev.parser.db.CandidateRow;
 import com.resurgent.tev.parser.db.InterpretationCellView;
+import com.resurgent.tev.parser.db.NomenclatureBinding;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -161,7 +162,42 @@ final class InterpretationEvidenceResolver {
                         withParent);
             }
         }
+        if (binding != null && "helper".equals(binding.amountRole()) && isForeignRestatement(target)) {
+            out = clearResolvedRowHeaders(parseRunId, target.cellId(), out);
+        }
         return List.copyOf(out);
+    }
+
+    private static boolean isForeignRestatement(InterpretationCellView target) {
+        String formula = target.formulaText();
+        if (formula == null || formula.isBlank()) {
+            return false;
+        }
+        String stripped = formula.trim();
+        if (stripped.startsWith("=")) {
+            stripped = stripped.substring(1).trim();
+        }
+        return stripped.indexOf('!') >= 0;
+    }
+
+    private static List<InterpretationEvidence> clearResolvedRowHeaders(
+            long parseRunId, long cellId, List<InterpretationEvidence> evidence) {
+        List<InterpretationEvidence> out = new ArrayList<>();
+        boolean sawRow = false;
+        for (InterpretationEvidence item : evidence) {
+            if (EvidenceRole.ROW_HEADER.equals(item.role())) {
+                if (!sawRow) {
+                    out.add(missing(parseRunId, cellId, EvidenceRole.ROW_HEADER, 0));
+                    sawRow = true;
+                }
+                continue;
+            }
+            out.add(item);
+        }
+        if (!sawRow) {
+            out.add(0, missing(parseRunId, cellId, EvidenceRole.ROW_HEADER, 0));
+        }
+        return out;
     }
 
     private static List<InterpretationEvidence> resolveWithPeers(
@@ -655,6 +691,9 @@ final class InterpretationEvidenceResolver {
             String token = scale.group().trim();
             cues.get(EvidenceRole.SCALE)
                     .add(new Cue(sourceCellId, token, normalizeScale(token), "scale_token"));
+        } else if (text.matches("(?i).*\\b(?:amt\\.?\\s*in\\s+rs\\.?|in\\s+rs\\.?)\\b.*")) {
+            cues.get(EvidenceRole.SCALE)
+                    .add(new Cue(sourceCellId, text.trim(), "unit", "amt_in_rs_unit"));
         }
         Matcher unit = KindTokens.UNIT.matcher(text);
         if (unit.find()) {

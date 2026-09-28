@@ -290,12 +290,14 @@ public final class XlsxAdapter {
 
         SheetBbox.Bbox bbox = SheetBbox.computeBbox(formulaSheet, baseCells, mergedRegions,
                 commentAddresses(formulaSheet));
+        SheetCapture.addCommentOnlyCells(formulaSheet, cells, sheetHidden);
         int realContentRows = SheetBbox.countContentRows(cells);
         String dimensionsDeclared = dimensionsDeclared(formulaSheet);
 
         return new XlsxSheet(formulaSheet.getSheetName(), index, state, cells,
                 bbox.minRow(), bbox.minCol(), bbox.maxRow(), bbox.maxCol(),
-                dimensionsDeclared, realContentRows, mergedRegions.size());
+                dimensionsDeclared, realContentRows, mergedRegions.size(),
+                SheetCapture.columnWidths(formulaSheet, cells));
     }
 
     private static NormalizedCell normalizeCell(Cell formulaCell, Cell valueCell,
@@ -334,7 +336,8 @@ public final class XlsxAdapter {
     }
 
     private static NormalizedCell withStyle(Cell styleSource, NormalizedCell cell) {
-        return NormalizedCellFactory.attachStyle(cell, CellStyleExtractor.extract(styleSource));
+        return SheetCapture.attachComment(styleSource,
+                NormalizedCellFactory.attachStyle(cell, CellStyleExtractor.extract(styleSource)));
     }
 
     private static String dimensionsDeclared(Sheet formulaSheet) {

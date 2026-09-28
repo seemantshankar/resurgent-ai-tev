@@ -1,19 +1,13 @@
 package com.resurgent.tev.parser.classify;
 
-import com.resurgent.tev.parser.discover.Packet;
-import com.resurgent.tev.parser.nomenclature.OntologySlice;
-import java.util.Objects;
+import java.util.List;
 
-/** Inputs for Layer B money-line binding on one Packet. */
+/** One Candidate's still-unbound cells, with Layer A about as the region brief. */
 public record LayerBPrompt(
-        Packet packet,
-        OntologySlice ontologySlice,
-        LayerAJudgment layerA,
-        LayerAJudgment parentDisposition) {
-
-    public LayerBPrompt {
-        Objects.requireNonNull(packet, "packet");
-        Objects.requireNonNull(ontologySlice, "ontologySlice");
-        Objects.requireNonNull(layerA, "layerA");
-    }
+        String sheetName,
+        String scheduleFamily,
+        String about,
+        String grid,
+        List<String> allowedPaths,
+        boolean retry) {
 }

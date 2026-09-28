@@ -1,154 +1,107 @@
 package com.resurgent.tev.parser.classify;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.resurgent.tev.parser.discover.Packet;
-import com.resurgent.tev.parser.discover.PacketCell;
-import com.resurgent.tev.parser.nomenclature.NomenclatureAlias;
-import com.resurgent.tev.parser.nomenclature.NomenclatureNode;
-import com.resurgent.tev.parser.nomenclature.OntologySlice;
-import java.util.ArrayList;
+import com.resurgent.tev.parser.db.BindCellRow;
+import com.resurgent.tev.parser.redact.DummyValueMapper;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
+import java.util.Set;
 
-/**
- * Assembles Layer B messages. Input is amount cells (literal + formula) with
- * row/column labels plus bounded nearby context; the model returns compact
- * indices resolved locally by {@link LayerBResponseParser}.
- */
+/** Assembles the one-per-Candidate Layer B prompt. Numbers are redacted. */
 final class LayerBPromptAssembler {
 
     static final String SYSTEM = """
-            You bind money lines in one financial-model Packet at Layer B only.
-            Do not invent mid-level nomenclature paths. Bind to an indexed ontology leaf,
-            or propose a soft leaf under a known mid-level parent index.
+            You bind the remaining cells of one financial-model island.
+            Layer A already decided what the island is. Read the about paragraph
+            first: it is the region brief that tells you what this island is for
+            and how its cells should be read.
+            Prefer an existing catalog leaf whenever the about and the row fit
+            one. Add a new leaf only when none of the offered paths fits. A new
+            leaf must sit under a known parent already in the catalog, for
+            example "Cash Flow > Drawings". The leaf is a short category, not a
+            supplier name, a person's name, a formula error, or a coordinate.
             Return a single JSON object:
-              lines: array of [cellIndex, pathIndex, roleCode]
-              soft: array of {c, pp, n, a, r} for new soft leaves only
-            cellIndex indexes amounts[]; pathIndex / pp index paths[].
-            roleCode: 0=add, 1=deduct, 2=total, 3=helper.
-            soft fields: c=cellIndex, pp=parentPathIndex (mid-level), n=new leaf name,
-            a=aliases (empty if none), r=roleCode.
-            pp must come from ontologySlice.softParents[]; any other index is not a parent.
-            If the closest match is already a leaf, bind it in lines, do not nest under it.
-            Each amounts[] entry has kind: money | quantity | rate | percent | unknown.
-            Only kind=money may use roleCode 0=add, 1=deduct, or 2=total.
-            quantity/rate/percent may use 3=helper only (supporting drivers), never cost roles.
-            Formula=true cells may only use 2=total or 3=helper.
-            Prefer lines over soft when a leaf already exists. Empty lines/soft allowed.
-            soft n is a short category name, never the row text, a rate, a supplier,
-            a quantity, a specification, or a formula error (#REF!).
-            Use context[] (headers, units, section labels) to disambiguate quantity/rate/total.
-            Optional peers on a line: peers:[{coord,reason}] with reason=anti_double_count only.
-            Peer coords may be sheet-qualified (SHEET!F31) and may sit outside this Packet.
-            Deduct lines use the economic leaf path (same as the add), not a geometric Civil leaf.
-            Numeric literals are dummy stand-ins; labels/formulas are real.
-            When amounts[] is a chunk of a larger Packet, bind only the listed amounts.
+              {"rows":[{"row":11,"root":"economic","path":"Profit & Loss"}],
+               "cells":[{"coord":"E5","root":"frame","path":"Frame > Schedule Title"}]}
+            root is economic, identity, or frame.
+            Rules:
+            - One path per cell. A row entry covers every still-unbound cell on
+              that row: the label and the amounts.
+            - A row label shares the path of the amounts it names.
+            - Period headers are already bound. Do not put amounts on
+              Frame > Period. Amounts keep their own economic path.
+            - A formula that only copies one fact from another sheet keeps that
+              fact's economic path. The graph will mark it helper.
+            - A formula that places the firm name into an address is the address,
+              Project Identity > Address. It is not a second legal name.
+            - Identity is only legal name, constitution, partners, and address.
+            - Frame paths are only: Frame > Schedule Title, Frame > Annexure,
+              Frame > Section Banner, Frame > Period, Frame > Scale,
+              Frame > Field Mark, Frame > Blank.
+            - Section banners, the schedule title, an annexure locator, and a
+              scale marker are frame. They are not money lines.
+            - Rows marked kept already have a path. Return paths for rows and
+              cells marked bind. A row entry applies only to bind cells.
+            Numeric literals are dummy stand-ins. Formulas and labels are real.
+            Respond with the JSON object only.
             """;
-
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private LayerBPromptAssembler() {}
 
-    static LayerBPromptIndex index(LayerBPrompt prompt) {
-        Packet packet = prompt.packet();
-        List<LayerBPromptIndex.AmountRow> amounts = new ArrayList<>();
-        int i = 0;
-        for (PacketCell cell : LayerBAmountSupport.amountCells(packet)) {
-            amounts.add(new LayerBPromptIndex.AmountRow(
-                    i++,
-                    cell,
-                    LayerBAmountSupport.resolveRowLabel(packet, cell),
-                    LayerBAmountSupport.resolveColumnHeader(packet, cell),
-                    LayerBAmountSupport.isFormulaNumeric(cell),
-                    LayerBAmountSupport.classifyKind(packet, cell)));
-        }
-        return new LayerBPromptIndex(amounts, prompt.ontologySlice().nodes());
-    }
-
     static String userMessage(LayerBPrompt prompt) {
-        return assemble(prompt).userMessage();
+        StringBuilder body = new StringBuilder();
+        body.append("sheet: ").append(prompt.sheetName()).append('\n');
+        if (prompt.scheduleFamily() != null) {
+            body.append("scheduleFamily: ").append(prompt.scheduleFamily()).append('\n');
+        }
+        body.append("about: ").append(prompt.about()).append('\n');
+        body.append(
+                "Choose an existing catalog path when the about and the row fit one."
+                        + " Mint a new leaf under a known parent only when none fits.\n");
+        if (prompt.retry()) {
+            body.append("These coords are still unbound. Bind every one of them.\n");
+        }
+        body.append("catalog:\n");
+        for (String path : prompt.allowedPaths()) {
+            body.append("- ").append(path).append('\n');
+        }
+        body.append("grid:\n");
+        body.append(prompt.grid());
+        return body.toString();
     }
 
-    static Assembled assemble(LayerBPrompt prompt) {
-        LayerBPromptIndex index = index(prompt);
-        try {
-            ObjectNode root = MAPPER.createObjectNode();
-            Packet packet = prompt.packet();
-            ObjectNode packetNode = root.putObject("packet");
-            packetNode.put("candidateId", packet.candidateId());
-            packetNode.put("candidateKind", packet.candidateKind());
-            ArrayNode amounts = packetNode.putArray("amounts");
-            for (LayerBPromptIndex.AmountRow row : index.amounts()) {
-                ObjectNode node = amounts.addObject();
-                node.put("i", row.index());
-                node.put("coord", row.coord());
-                node.put("label", row.label());
-                putIfPresent(node, "colHeader", row.columnHeader());
-                node.put("kind", row.kind().name().toLowerCase(Locale.ROOT));
-                node.put("formula", row.formula());
-                putIfPresent(node, "numeric", row.cell().numericValue());
-                if (row.formula()) {
-                    putIfPresent(node, "formulaText", row.cell().formulaText());
-                }
+    static String grid(List<BindCellRow> cells, Set<String> unbound) {
+        StringBuilder grid = new StringBuilder();
+        for (BindCellRow cell : cells) {
+            if (cell.error()) {
+                continue;
             }
-            ArrayNode context = packetNode.putArray("context");
-            for (PacketCell cell : LayerBAmountSupport.contextCells(packet)) {
-                ObjectNode node = context.addObject();
-                node.put("coord", cell.coord());
-                node.put("row", cell.rowNum());
-                node.put("col", cell.colNum());
-                putIfPresent(node, "text", LayerBAmountSupport.labelText(cell));
-                putIfPresent(node, "role", cell.role());
-            }
-            OntologySlice slice = prompt.ontologySlice();
-            ObjectNode ontology = root.putObject("ontologySlice");
-            ontology.put("industryTag", slice.industry().industryTag());
-            ArrayNode paths = ontology.putArray("paths");
-            ArrayNode softParents = ontology.putArray("softParents");
-            int pathIndex = 0;
-            for (NomenclatureNode node : index.paths()) {
-                ObjectNode pathNode = paths.addObject();
-                pathNode.put("i", pathIndex);
-                pathNode.put("path", node.path());
-                pathNode.put("leaf", node.leaf());
-                if (!node.leaf()) {
-                    softParents.add(pathIndex);
-                }
-                pathIndex++;
-            }
-            ArrayNode aliases = ontology.putArray("aliases");
-            for (NomenclatureAlias alias : slice.aliases()) {
-                aliases.add(alias.aliasText() + " -> " + alias.leafPath());
-            }
-            ObjectNode layerA = root.putObject("layerA");
-            layerA.put("scheduleFamily", prompt.layerA().scheduleFamily());
-            layerA.put("triage", prompt.layerA().triage());
-            layerA.put("relevance", prompt.layerA().relevance());
-            if (prompt.parentDisposition() != null) {
-                ObjectNode parent = root.putObject("parentLayerA");
-                parent.put("scheduleFamily", prompt.parentDisposition().scheduleFamily());
-                parent.put("triage", prompt.parentDisposition().triage());
-                parent.put("relevance", prompt.parentDisposition().relevance());
-            }
-            return new Assembled(MAPPER.writeValueAsString(root), index);
-        } catch (Exception e) {
-            throw new IllegalStateException("failed to assemble Layer B prompt: " + e.getMessage(), e);
+            String coord = cell.coord().toUpperCase(Locale.ROOT);
+            grid.append(unbound.contains(coord) ? "bind" : "kept")
+                    .append('\t')
+                    .append(cell.coord())
+                    .append('\t')
+                    .append(cell.rowNum())
+                    .append('\t')
+                    .append(shown(cell))
+                    .append('\n');
         }
+        return grid.toString();
     }
 
-    record Assembled(String userMessage, LayerBPromptIndex index) {
-        Assembled {
-            Objects.requireNonNull(userMessage, "userMessage");
-            Objects.requireNonNull(index, "index");
+    private static String shown(BindCellRow cell) {
+        if (cell.formulaText() != null && !cell.formulaText().isBlank()) {
+            String formula = cell.formulaText().trim();
+            return formula.startsWith("=") ? formula : "=" + formula;
         }
-    }
-
-    private static void putIfPresent(ObjectNode node, String field, String value) {
-        if (value != null && !value.isBlank()) {
-            node.put(field, value);
+        if (cell.textValue() != null && !cell.textValue().isBlank()) {
+            String text = cell.textValue().replace('\n', ' ').trim();
+            return text.length() > 120 ? text.substring(0, 120) : text;
         }
+        if ("number".equals(cell.valueType())) {
+            double dummy = DummyValueMapper.dummyNumeric(1.0d, cell.coord());
+            return BigDecimal.valueOf(dummy).stripTrailingZeros().toPlainString();
+        }
+        return "<" + (cell.valueType() != null ? cell.valueType() : "empty") + ">";
     }
 }

@@ -15,7 +15,7 @@ import java.util.Objects;
  * <p>Packets and Candidate links are built one Candidate at a time, but the Cells and
  * reference edges they read are fixed for the whole run. Without this cache every
  * Candidate re-ran the whole-run reference join and every unresolved formula edge
- * re-read its entire target worksheet from SQLite, which dominated discover and classify
+ * re-read its entire target worksheet from SQLite, which dominated discover
  * on large workbooks.
  *
  * <p>Not thread-safe. Valid only while the cell graph is unchanged: create one per

@@ -8,5 +8,6 @@ import java.util.List;
 public record XlsxSheet(String sheetName, int sheetIndex, String sheetState,
         List<NormalizedCell> cells,
         Integer bboxMinRow, Integer bboxMinCol, Integer bboxMaxRow, Integer bboxMaxCol,
-        String dimensionsDeclared, Integer realContentRows, Integer declaredMerged) {
+        String dimensionsDeclared, Integer realContentRows, Integer declaredMerged,
+        List<ColumnWidth> columnWidths) {
 }

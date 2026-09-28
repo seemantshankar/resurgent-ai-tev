@@ -278,6 +278,7 @@ public final class IngestService {
                     sheet.declaredMerged());
             sheetNameToId.put(sheetLookupKey(sheet.sheetName()), worksheetId);
             worksheetIdToSheetName.put(worksheetId, sheet.sheetName());
+            repo.insertColumnWidths(worksheetId, sheet.columnWidths());
             Map<String, Long> coordMap = new HashMap<>();
             cellCoordMap.put(sheetLookupKey(sheet.sheetName()), coordMap);
 
@@ -297,6 +298,10 @@ public final class IngestService {
                 Long styleId = resolveStyleId(repo, styleIds, cellToInsert.cellStyle());
                 long cellId = repo.insertCell(worksheetId, cellToInsert, styleId,
                         cellToInsert.formulaNormalized());
+                if (cellToInsert.commentBody() != null) {
+                    repo.insertCellComment(cellId, cellToInsert.commentAuthor(),
+                            cellToInsert.commentBody());
+                }
                 coordMap.put(cellToInsert.coord(), cellId);
                 recordCellProvenance(repo, cellId, sourceFileId, parseRunId, sheet.sheetName(),
                         cellToInsert);
@@ -337,6 +342,7 @@ public final class IngestService {
             resolver.resolveAndPersist(pct.cellId(), pct.worksheetId(), pct.tokens(), refCtx,
                     refStats);
         }
+        new FormulaGraphBuilder().build(repo, parseRunId, sheetNameToId, metadata.definedNames());
 
         repo.updateWorkbookCalcMetadata(workbookId, metadata.calculationMode(),
                 metadata.fullCalcOnLoad(), metadata.calcChainPresent(), metadata.iterativeCalc(),
@@ -445,7 +451,7 @@ public final class IngestService {
                 value.coercedFromText(),
                 value.isError(),
                 value.errorType(),
-                false, false, null, "cell", false, false, false, null);
+                false, false, null, "cell", false, false, false, null, null, null);
     }
 
     private String rawMetadataJson(Path input, FileType fileType, XlsxWorkbook workbook)

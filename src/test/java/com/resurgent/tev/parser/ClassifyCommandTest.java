@@ -5,15 +5,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.resurgent.tev.parser.classify.ClassifierLlm;
 import com.resurgent.tev.parser.classify.LayerAJudgment;
 import com.resurgent.tev.parser.classify.LayerAPrompt;
-import com.resurgent.tev.parser.classify.LayerBLineJudgment;
-import com.resurgent.tev.parser.classify.LayerBPrompt;
+import com.resurgent.tev.parser.classify.RegionLayoutPrompt;
+import com.resurgent.tev.parser.classify.RegionProposal;
 import com.resurgent.tev.parser.classify.Relevance;
 import com.resurgent.tev.parser.classify.ScheduleFamily;
 import com.resurgent.tev.parser.classify.Triage;
 import com.resurgent.tev.parser.cli.ClassifyCommand;
+import com.resurgent.tev.parser.discover.DiscoverService;
 import com.resurgent.tev.parser.ingest.IngestService;
 import com.resurgent.tev.parser.ingest.IngestSummary;
-import com.resurgent.tev.parser.discover.DiscoverService;
 import java.io.FileOutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -48,14 +48,40 @@ class ClassifyCommandTest {
         return run(Main.commandLine(), args);
     }
 
+    private ClassifierLlm fake() {
+        return new ClassifierLlm() {
+            @Override
+            public List<RegionProposal> proposeRegions(RegionLayoutPrompt prompt) {
+                // One main covering the tiny synthetic sheet so Layer A has work.
+                return List.of(new RegionProposal(
+                        "main", "A1:C6", "synthetic_main", "unit-test region"));
+            }
+
+            @Override
+            public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
+                return new LayerAJudgment(
+                        ScheduleFamily.CAPEX_DETAIL,
+                        Triage.MAIN,
+                        Relevance.PRIMARY,
+                        List.of(),
+                        List.of(),
+                        null,
+                        "Small cost table for the sheet.");
+            }
+        };
+    }
+
     @Test
     void classifyPrintsDispositionCountsWithoutPacketDump() throws Exception {
         Path xlsx = tempDir.resolve("cli.xlsx");
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Sheet1");
-            Row row = sheet.createRow(0);
-            row.createCell(0).setCellValue("Civil");
-            row.createCell(1).setCellValue(100.0);
+            for (int r = 0; r < 6; r++) {
+                Row row = sheet.createRow(r);
+                row.createCell(0).setCellValue("Civil " + r);
+                row.createCell(1).setCellValue(100.0 + r);
+                row.createCell(2).setCellValue(10.0);
+            }
             try (FileOutputStream out = new FileOutputStream(xlsx.toFile())) {
                 workbook.write(out);
             }
@@ -64,26 +90,13 @@ class ClassifyCommandTest {
         IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
         new DiscoverService().discover(db, ingest.parseRunId());
 
-        ClassifierLlm fake = new ClassifierLlm() {
-            @Override
-            public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
-                return new LayerAJudgment(
-                        ScheduleFamily.CAPEX_DETAIL, Triage.MAIN, Relevance.PRIMARY,
-                        List.of(), List.of(), null);
-            }
-
-            @Override
-            public List<LayerBLineJudgment> classifyLayerB(LayerBPrompt prompt) {
-                return List.of();
-            }
-        };
-        CommandLine commandLine = new CommandLine(new ClassifyCommand(fake));
+        CommandLine commandLine = new CommandLine(new ClassifyCommand(fake()));
         RunResult result = run(commandLine,
                 "--db", db.toString(),
                 "--parse-run", Long.toString(ingest.parseRunId()));
 
         assertThat(result.exitCode()).isZero();
-        assertThat(result.stdout()).contains("dispositions").contains("coverage parents");
+        assertThat(result.stdout()).contains("dispositions").contains("eligible").contains("skipped");
         assertThat(result.stdout()).doesNotContain("\"core\"").doesNotContain("{");
     }
 
@@ -103,20 +116,7 @@ class ClassifyCommandTest {
         IngestSummary ingest = new IngestService().ingest(xlsx, 1L, db);
         new DiscoverService().discover(db, ingest.parseRunId());
 
-        ClassifierLlm fake = new ClassifierLlm() {
-            @Override
-            public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
-                return new LayerAJudgment(
-                        ScheduleFamily.CAPEX_DETAIL, Triage.MAIN, Relevance.PRIMARY,
-                        List.of(), List.of(), null);
-            }
-
-            @Override
-            public List<LayerBLineJudgment> classifyLayerB(LayerBPrompt prompt) {
-                return List.of();
-            }
-        };
-        CommandLine commandLine = new CommandLine(new ClassifyCommand(fake));
+        CommandLine commandLine = new CommandLine(new ClassifyCommand(fake()));
         RunResult result = run(commandLine,
                 "--db", db.toString(),
                 "--parse-run", Long.toString(ingest.parseRunId()),

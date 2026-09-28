@@ -4,9 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.resurgent.tev.parser.db.CandidateRow;
 import com.resurgent.tev.parser.db.InterpretationCellView;
+import com.resurgent.tev.parser.db.WorkspaceDatabase;
+import com.resurgent.tev.parser.db.WorkspaceRepository;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -152,6 +157,48 @@ class InterpretationEvidenceResolverTest {
                         && "lakh".equals(e.normalizedValue()));
     }
 
+    @Test
+    void assetsF30UsesTheSameResolver() throws Exception {
+        Path db = Path.of("Project Docs/om_arham_xlsx_output/workspace-om-arham-visible-layer-a.db");
+        Assumptions.assumeTrue(Files.isRegularFile(db));
+        try (WorkspaceDatabase database = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(database.connection());
+            long assets = repo.selectWorksheetsForParseRun(1L).stream()
+                    .filter(sheet -> "ASSETS".equals(sheet.sheetName()))
+                    .findFirst()
+                    .orElseThrow()
+                    .worksheetId();
+            List<InterpretationCellView> cells = repo.selectInterpretationCellsForParseRun(1L);
+            Map<Long, InterpretationCellView> byId = InterpretationEvidenceResolver.indexCells(cells);
+            InterpretationCellView target = null;
+            for (InterpretationCellView cell : cells) {
+                if (cell.worksheetId() == assets && "F30".equals(cell.coord())) {
+                    target = cell;
+                }
+            }
+            assertThat(target).isNotNull();
+            List<CandidateRow> candidates = repo.selectCandidatesForParseRun(1L);
+            Map<Long, Set<Long>> members = InterpretationEvidenceResolver.indexMembers(
+                    repo.selectCandidateMembersForParseRun(1L));
+            Map<Long, List<CandidateRow>> owners =
+                    InterpretationEvidenceResolver.indexOwners(candidates, members);
+            Map<Long, CandidateRow> byCandidate = new java.util.HashMap<>();
+            for (CandidateRow candidate : candidates) {
+                byCandidate.put(candidate.candidateId(), candidate);
+            }
+            List<InterpretationEvidence> evidence = InterpretationEvidenceResolver.resolve(
+                    1L, target, byId, owners, members, byCandidate, null);
+            assertThat(evidenceOfRole(evidence, EvidenceRole.ROW_HEADER))
+                    .filteredOn(e -> EvidenceResolution.RESOLVED.equals(e.resolution()))
+                    .extracting(InterpretationEvidence::sourceText)
+                    .containsExactly("97650 Sqft@ 600 Rs/ Sqft");
+            assertThat(evidenceOfRole(evidence, EvidenceRole.COLUMN_HEADER))
+                    .filteredOn(e -> EvidenceResolution.RESOLVED.equals(e.resolution()))
+                    .extracting(InterpretationEvidence::sourceText)
+                    .containsExactly("Amount in Rs");
+        }
+    }
+
     private static List<InterpretationEvidence> evidenceOfRole(
             List<InterpretationEvidence> evidence, String role) {
         return evidence.stream().filter(e -> role.equals(e.role())).toList();
@@ -178,6 +225,6 @@ class InterpretationEvidenceResolverTest {
         return new CandidateRow(
                 id, PARSE_RUN, WORKSHEET, kind, parentId,
                 minRow, minCol, maxRow, maxCol,
-                null, null, null, false, null, null, null, "2026-01-01T00:00:00Z");
+                null, null, null, false, null, null, null, "2026-01-01T00:00:00Z", null);
     }
 }

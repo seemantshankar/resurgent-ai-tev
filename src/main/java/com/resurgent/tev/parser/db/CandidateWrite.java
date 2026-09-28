@@ -18,5 +18,6 @@ public record CandidateWrite(
         boolean isolatedHiddenWorksheet,
         Double structuralConfidence,
         String structuralConfidenceRationale,
-        String explanation) {
+        String explanation,
+        String structuralRole) {
 }

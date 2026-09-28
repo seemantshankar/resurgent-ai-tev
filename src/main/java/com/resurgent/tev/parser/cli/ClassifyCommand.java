@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.cli;
 
+import com.resurgent.tev.parser.classify.BindSummary;
 import com.resurgent.tev.parser.classify.ClassifierLlm;
 import com.resurgent.tev.parser.classify.ClassifyException;
 import com.resurgent.tev.parser.classify.ClassifyLimits;
@@ -7,17 +8,20 @@ import com.resurgent.tev.parser.classify.ClassifyService;
 import com.resurgent.tev.parser.classify.ClassifySummary;
 import com.resurgent.tev.parser.classify.LlmEnvironment;
 import com.resurgent.tev.parser.discover.DiscoverService;
-import java.time.Duration;
 import java.io.PrintWriter;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.Callable;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Spec;
 
-/** {@code tev-parse classify}: Layer A Packet disposition for an ingested parse run. */
-@Command(name = "classify", description = "Classify Packets (Layer A disposition) for a parse run")
+/** {@code tev-parse classify}: Layer A disposition + about for main/helper Candidates. */
+@Command(
+        name = "classify",
+        description = "Classify main/helper Packets (Layer A disposition + about)")
 public final class ClassifyCommand implements Callable<Integer> {
 
     @Option(names = "--db", required = true, description = "Path to the SQLite workspace database")
@@ -26,15 +30,23 @@ public final class ClassifyCommand implements Callable<Integer> {
     @Option(names = "--parse-run", required = true, description = "Parse run id to classify")
     long parseRunId;
 
-    @Option(names = "--parallelism",
+    @Option(
+            names = "--sheet",
+            description = "Bind Layer B on this sheet (repeatable). Skips region layout and Layer A.")
+    List<String> sheets;
+
+    @Option(
+            names = "--parallelism",
             description = "Concurrent LLM calls (default: " + ClassifyLimits.DEFAULT_PARALLELISM + ")")
     Integer parallelism;
 
-    @Option(names = "--attempt-deadline-seconds",
+    @Option(
+            names = "--attempt-deadline-seconds",
             description = "Per-call hang budget in seconds (default: 180)")
     Long attemptDeadlineSeconds;
 
-    @Option(names = "--classify-deadline-minutes",
+    @Option(
+            names = "--classify-deadline-minutes",
             description = "Whole-run abort budget in minutes (default: 15)")
     Long classifyDeadlineMinutes;
 
@@ -52,7 +64,9 @@ public final class ClassifyCommand implements Callable<Integer> {
     }
 
     private ClassifyLimits limits() {
-        if (parallelism == null && attemptDeadlineSeconds == null && classifyDeadlineMinutes == null) {
+        if (parallelism == null
+                && attemptDeadlineSeconds == null
+                && classifyDeadlineMinutes == null) {
             return ClassifyLimits.defaults();
         }
         return new ClassifyLimits(
@@ -77,23 +91,23 @@ public final class ClassifyCommand implements Callable<Integer> {
             return 2;
         }
         try {
-            ClassifySummary summary = new ClassifyService(llm, new DiscoverService(), limits)
-                    .classify(db, parseRunId);
+            ClassifyService service = new ClassifyService(llm, new DiscoverService(), limits);
+            if (sheets != null && !sheets.isEmpty()) {
+                BindSummary bound = service.bindSheets(db, parseRunId, sheets);
+                out.printf(
+                        "Bound parse_run %d: %d cells with a path, %d left unbound (errors and scratch).%n",
+                        bound.parseRunId(),
+                        bound.boundCells(),
+                        bound.skippedCells());
+                return 0;
+            }
+            ClassifySummary summary = service.classify(db, parseRunId);
             out.printf(
-                    "Classified parse_run %d: %d dispositions (%d coverage parents),"
-                            + " %d Layer B bindings (%s), %d interpretations.%n",
+                    "Classified parse_run %d: %d dispositions (%d eligible, %d skipped).%n",
                     summary.parseRunId(),
                     summary.dispositionCount(),
-                    summary.coverageParentCount(),
-                    summary.bindingCount(),
-                    summary.layerBStats().summaryLine(),
-                    summary.interpretationCount());
-            if (!summary.unclassifiedCandidateIds().isEmpty()) {
-                out.printf(
-                        "Unclassified candidates (%d): %s%n",
-                        summary.unclassifiedCandidateIds().size(),
-                        summary.unclassifiedCandidateIds());
-            }
+                    summary.eligibleCount(),
+                    summary.skippedCount());
             return 0;
         } catch (ClassifyException e) {
             err.println("classify rejected: " + e.getMessage());

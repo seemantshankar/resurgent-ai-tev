@@ -21,13 +21,12 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Region discovery application service: reads one parse run from SQLite and writes
- * Candidates. Coverage parent plus local/related structure; Packets on demand (#93).
+ * Coverage-only discovery: one coverage-parent Candidate per worksheet. Narrow
+ * main/helper/scratch Candidates are produced later by classify's LLM region
+ * layout — fully deterministic local structure was abandoned.
  */
 public final class DiscoverService {
 
-    private final LocalStructureDiscoverer localStructure = new LocalStructureDiscoverer();
-    private final RelatedCandidateLinker relatedLinker = new RelatedCandidateLinker();
     private final PacketBuilder packetBuilder = new PacketBuilder();
 
     public DiscoverSummary discover(Path dbPath, long parseRunId) throws DiscoverException {
@@ -49,11 +48,7 @@ public final class DiscoverService {
 
             db.connection().setAutoCommit(false);
             try {
-                repo.deleteInterpretationsForParseRun(parseRunId);
-                // The cell graph's typing and aggregations are classify output too,
-                // so a successful rediscovery invalidates them with the rest.
-                repo.deleteAggregationsForParseRun(parseRunId);
-                repo.deleteCellTypesForParseRun(parseRunId);
+                // Narrow LLM regions + Layer A rows fall with Candidates (CASCADE).
                 repo.deleteCandidatesForParseRun(parseRunId);
 
                 int sheetProgress = 0;
@@ -68,44 +63,11 @@ public final class DiscoverService {
                     }
                     CandidateWithMembers coverage = coverageParent(
                             parseRunId, worksheet, evidence, isolated);
-                    long coverageId = repo.insertCandidate(coverage.write(), coverage.memberCellIds());
+                    repo.insertCandidate(coverage.write(), coverage.memberCellIds());
                     candidateCount++;
-
-                    Set<Long> coverageMembers = new HashSet<>(coverage.memberCellIds());
-                    for (LocalStructureDiscoverer.NarrowCandidate narrow :
-                            localStructure.discover(evidence)) {
-                        boolean sameAsCoverage = narrow.memberCellIds().size() == coverageMembers.size()
-                                && coverageMembers.containsAll(narrow.memberCellIds());
-                        // Overlap may share coverage membership when the sheet is only the
-                        // parallel bands — still keep it so wide + narrow both remain.
-                        if (sameAsCoverage && !"overlap".equals(narrow.kind())) {
-                            continue;
-                        }
-                        CandidateWrite write = new CandidateWrite(
-                                parseRunId,
-                                worksheet.worksheetId(),
-                                narrow.kind(),
-                                coverageId,
-                                narrow.bboxMinRow(),
-                                narrow.bboxMinCol(),
-                                narrow.bboxMaxRow(),
-                                narrow.bboxMaxCol(),
-                                narrow.internalWhitespaceJson(),
-                                narrow.anchorsJson(),
-                                narrow.structuralSignaturesJson(),
-                                false,
-                                narrow.structuralConfidence(),
-                                narrow.structuralConfidenceRationale(),
-                                narrow.explanation());
-                        repo.insertCandidate(write, narrow.memberCellIds());
-                        candidateCount++;
-                    }
                 }
 
-                Progress.phase("discover", "linking related candidates");
-                relatedLinker.link(repo, parseRunId, new CellViewCache(repo));
                 Progress.phase("discover", "verifying coverage");
-
                 boolean coverageOk = verifyCoverage(repo, parseRunId, worksheets);
                 if (!coverageOk) {
                     throw new DiscoverException(
@@ -158,10 +120,7 @@ public final class DiscoverService {
 
     /**
      * Open a packet-building pass over one parse run. Cell views and reference edges are
-     * read once and shared across every Candidate built through the session, so callers
-     * that build a Packet per Candidate must use one session rather than repeated
-     * {@link #buildPacket} calls. A session is only valid while the cell graph is
-     * unchanged; do not hold one across writes.
+     * read once and shared across every Candidate built through the session.
      */
     public PacketSession packetSession(WorkspaceRepository repo) {
         return new PacketSession(Objects.requireNonNull(repo, "repo"));
@@ -189,7 +148,7 @@ public final class DiscoverService {
 
     /**
      * Default Packet selection for a parse run after discover: every non-coverage Candidate;
-     * coverage-parent Packet only when sole Candidate on that sheet or a child fails closure.
+     * coverage-parent Packet only when sole Candidate on that worksheet or a child fails closure.
      */
     public List<Packet> selectDefaultPackets(Path dbPath, long parseRunId) throws DiscoverException {
         Objects.requireNonNull(dbPath, "dbPath");
@@ -261,7 +220,8 @@ public final class DiscoverService {
                 isolatedHidden,
                 1.0,
                 "mandatory coverage parent for every persisted cell on the worksheet",
-                explanation);
+                explanation,
+                null);
         return new CandidateWithMembers(write, memberIds);
     }
 
