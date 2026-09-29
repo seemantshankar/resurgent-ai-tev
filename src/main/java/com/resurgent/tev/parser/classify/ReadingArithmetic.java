@@ -537,6 +537,13 @@ final class ReadingArithmetic {
         if (isQuantity(right.kind) && ReadingOutcome.RATE.equals(left.kind)) {
             return money(right, left);
         }
+        // Money × Rate = Money (e.g., principal × interest rate, or any money × dimensionless multiplier)
+        if (ReadingOutcome.MONEY.equals(left.kind) && ReadingOutcome.RATE.equals(right.kind)) {
+            return left;
+        }
+        if (ReadingOutcome.MONEY.equals(right.kind) && ReadingOutcome.RATE.equals(left.kind)) {
+            return right;
+        }
         return Val.refused(ReadingOutcome.KIND_CONFLICT);
     }
 
