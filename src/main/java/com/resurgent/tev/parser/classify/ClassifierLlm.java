@@ -11,6 +11,15 @@ public interface ClassifierLlm {
      */
     List<RegionProposal> proposeRegions(RegionLayoutPrompt prompt);
 
+    /**
+     * Batch propose regions for multiple worksheets. Default returns empty map
+     * so existing code stays valid; batch regions falls back to individual calls.
+     */
+    default java.util.Map<String, List<RegionProposal>> proposeRegionsBatch(
+            java.util.List<RegionLayoutPrompt> prompts) {
+        return java.util.Collections.emptyMap();
+    }
+
     LayerAJudgment classifyLayerA(LayerAPrompt prompt);
 
     /**

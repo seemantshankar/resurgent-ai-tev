@@ -166,55 +166,94 @@ public final class ClassifyService {
                 coverageBySheet.put(c.worksheetId(), c);
             }
         }
-        boolean anySheetProposals = false;
-        Map<Long, List<RegionProposal>> bySheet = new HashMap<>();
-        for (int i = 0; i < sheets.size(); i++) {
-            WorksheetRef sheet = sheets.get(i);
-            System.err.println(
-                    "[region-layout] Processing sheet " + (i + 1) + "/" + sheets.size() + ": "
-                            + sheet.sheetName() + " (id=" + sheet.worksheetId() + ")");
-            System.err.flush();
 
-            long cellQueryStart = System.nanoTime();
+        // Load all cell dumps upfront for batching
+        Map<Long, List<com.resurgent.tev.parser.db.CellPacketView>> cellsBySheet =
+                new HashMap<>();
+        for (WorksheetRef sheet : sheets) {
             List<com.resurgent.tev.parser.db.CellPacketView> cellViews =
                     repo.selectCellPacketViewsForWorksheet(sheet.worksheetId());
-            long cellQueryMs =
-                    (System.nanoTime() - cellQueryStart) / 1_000_000;
+            cellsBySheet.put(sheet.worksheetId(), cellViews);
+        }
+
+        boolean anySheetProposals = false;
+        Map<Long, List<RegionProposal>> bySheet = new HashMap<>();
+
+        // Batch sheets 12 at a time (1.1M token context window allows large batches)
+        // This reduces 48 sheets to ~4 LLM calls instead of ~10, approaching 10x speedup
+        int batchSize = 12;
+        for (int batchStart = 0; batchStart < sheets.size(); batchStart += batchSize) {
+            int batchEnd = Math.min(batchStart + batchSize, sheets.size());
+            List<WorksheetRef> batchSheets = sheets.subList(batchStart, batchEnd);
+
             System.err.println(
-                    "[region-layout] Sheet " + sheet.sheetName() + ": " + cellViews.size()
-                            + " cells loaded in " + cellQueryMs + "ms");
+                    "[region-layout] Processing sheets " + (batchStart + 1) + "-" + batchEnd
+                            + " / " + sheets.size() + " (batch of " + (batchEnd - batchStart)
+                            + ")");
             System.err.flush();
 
-            String dump = cellDump(cellViews);
-            System.err.println(
-                    "[region-layout] Sheet " + sheet.sheetName() + ": " + dump.length()
-                            + " char dump, calling LLM...");
-            System.err.flush();
+            // Build batch prompts
+            List<RegionLayoutPrompt> batchPrompts = new ArrayList<>();
+            Map<String, Long> sheetNameToId = new LinkedHashMap<>();
+            for (WorksheetRef sheet : batchSheets) {
+                List<com.resurgent.tev.parser.db.CellPacketView> cellViews =
+                        cellsBySheet.get(sheet.worksheetId());
+                String dump = cellDump(cellViews);
+                batchPrompts.add(new RegionLayoutPrompt(sheet.sheetName(), dump));
+                sheetNameToId.put(sheet.sheetName(), sheet.worksheetId());
+            }
 
             long llmStart = System.nanoTime();
             try {
-                List<RegionProposal> proposals = llm.proposeRegions(
-                        new RegionLayoutPrompt(sheet.sheetName(), dump));
-                long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
-                System.err.println(
-                        "[region-layout] Sheet " + sheet.sheetName() + ": LLM returned "
-                                + proposals.size() + " regions in " + llmMs + "ms");
+                System.err.println("[region-layout] Calling LLM for " + batchPrompts.size()
+                        + " sheets in batch...");
                 System.err.flush();
-                if (!proposals.isEmpty()) {
-                    anySheetProposals = true;
+
+                Map<String, List<RegionProposal>> batchResults = llm.proposeRegionsBatch(batchPrompts);
+
+                long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
+                System.err.println("[region-layout] Batch LLM returned in " + llmMs + "ms");
+                System.err.flush();
+
+                if (batchResults.isEmpty()) {
+                    // Batch not supported, fall back to individual calls
+                    System.err.println("[region-layout] Batch not supported, falling back to individual calls");
+                    System.err.flush();
+                    for (WorksheetRef sheet : batchSheets) {
+                        callRegionLayoutIndividual(repo, sheet, cellsBySheet, bySheet);
+                        anySheetProposals = true;
+                    }
+                } else {
+                    // Process batch results
+                    for (Map.Entry<String, List<RegionProposal>> entry : batchResults.entrySet()) {
+                        Long worksheetId = sheetNameToId.get(entry.getKey());
+                        if (worksheetId != null) {
+                            if (!entry.getValue().isEmpty()) {
+                                anySheetProposals = true;
+                            }
+                            bySheet.put(worksheetId, entry.getValue());
+                        }
+                    }
+                    // For sheets not in batch results, fall back to individual
+                    for (WorksheetRef sheet : batchSheets) {
+                        if (!bySheet.containsKey(sheet.worksheetId())) {
+                            callRegionLayoutIndividual(repo, sheet, cellsBySheet, bySheet);
+                        }
+                    }
                 }
-                bySheet.put(sheet.worksheetId(), proposals);
             } catch (Exception e) {
                 long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
-                System.err.println(
-                        "[region-layout] Sheet " + sheet.sheetName() + ": LLM call FAILED after "
-                                + llmMs + "ms: " + e.getClass().getSimpleName() + ": "
-                                + e.getMessage());
+                System.err.println("[region-layout] Batch LLM call FAILED after " + llmMs
+                        + "ms: " + e.getClass().getSimpleName() + ": " + e.getMessage());
                 System.err.flush();
-                throw new ClassifyException(
-                        "LLM region layout failed for sheet " + sheet.sheetName() + ": "
-                                + e.getMessage(),
-                        e);
+
+                // Fall back to individual calls for this batch
+                System.err.println("[region-layout] Falling back to individual calls for batch");
+                System.err.flush();
+                for (WorksheetRef sheet : batchSheets) {
+                    callRegionLayoutIndividual(repo, sheet, cellsBySheet, bySheet);
+                    anySheetProposals = true;
+                }
             }
         }
         if (!anySheetProposals) {
@@ -271,6 +310,38 @@ public final class ClassifyService {
                         proposal.structuralRole());
                 repo.insertCandidate(write, members);
             }
+        }
+    }
+
+    private void callRegionLayoutIndividual(
+            WorkspaceRepository repo,
+            WorksheetRef sheet,
+            Map<Long, List<com.resurgent.tev.parser.db.CellPacketView>> cellsBySheet,
+            Map<Long, List<RegionProposal>> bySheet) {
+        try {
+            List<com.resurgent.tev.parser.db.CellPacketView> cellViews =
+                    cellsBySheet.get(sheet.worksheetId());
+            String dump = cellDump(cellViews);
+
+            System.err.println("[region-layout] Calling LLM individually for sheet: "
+                    + sheet.sheetName());
+            System.err.flush();
+
+            long llmStart = System.nanoTime();
+            List<RegionProposal> proposals =
+                    llm.proposeRegions(new RegionLayoutPrompt(sheet.sheetName(), dump));
+            long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
+
+            System.err.println("[region-layout] Sheet " + sheet.sheetName() + ": LLM returned "
+                    + proposals.size() + " regions in " + llmMs + "ms");
+            System.err.flush();
+
+            bySheet.put(sheet.worksheetId(), proposals);
+        } catch (Exception e) {
+            System.err.println("[region-layout] Individual call for sheet " + sheet.sheetName()
+                    + " FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            System.err.flush();
+            throw new RuntimeException(e);
         }
     }
 
