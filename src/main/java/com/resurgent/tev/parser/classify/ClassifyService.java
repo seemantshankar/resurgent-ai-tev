@@ -79,6 +79,15 @@ public final class ClassifyService {
                         "no Candidates for parse run " + parseRunId + "; run discover first");
             }
 
+            // Check if classify already completed (idempotency)
+            List<PacketDisposition> existingDispositions = repo.selectPacketDispositionsForParseRun(parseRunId);
+            if (!existingDispositions.isEmpty()) {
+                System.err.println("[classify] Resuming from prior run: " + existingDispositions.size() + " dispositions already present");
+                System.err.flush();
+                // Layer A and region layout already done, skip to Layer B (cell reading)
+                return resumeFromLayerB(repo, parseRunId, existingDispositions, db);
+            }
+
             Progress.phase("classify", "LLM region layout");
             materializeLlmRegions(repo, parseRunId);
 
@@ -157,6 +166,34 @@ public final class ClassifyService {
      * Replace narrow Candidates with LLM-proposed regions. Empty proposal list
      * leaves discover geometry unchanged (test fakes).
      */
+    private ClassifySummary resumeFromLayerB(
+            WorkspaceRepository repo, long parseRunId, List<PacketDisposition> dispositions, WorkspaceDatabase db)
+            throws SQLException, ClassifyException {
+        System.err.println("[classify] Skipping region layout and Layer A (already completed)");
+        System.err.flush();
+
+        // Restore schedule families from DB
+        ScheduleFamilyCatalog families = ScheduleFamilyCatalog.seeded();
+        families.restore(repo.selectScheduleFamilies());
+
+        // Run Layer B (cell reading/classification)
+        db.connection().setAutoCommit(false);
+        try {
+            System.err.println("[classify] Running Layer B (cell type classification) with batching...");
+            System.err.flush();
+            new CellReadingWriter().replace(repo, parseRunId, llm);
+            db.connection().commit();
+        } catch (Exception e) {
+            db.connection().rollback();
+            throw new ClassifyException("Layer B failed: " + e.getMessage(), e);
+        } finally {
+            db.connection().setAutoCommit(true);
+        }
+
+        return new ClassifySummary(
+                parseRunId, dispositions.size(), 0, dispositions.size());
+    }
+
     void materializeLlmRegions(WorkspaceRepository repo, long parseRunId)
             throws SQLException, ClassifyException {
         List<WorksheetRef> sheets = repo.selectWorksheetsForParseRun(parseRunId);
