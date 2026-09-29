@@ -267,12 +267,10 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             ObjectNode root = MAPPER.createObjectNode();
             root.put("model", model);
             root.put("temperature", 0.05);
-            root.put("max_tokens", maxCompletionTokens);
+            root.put("max_completion_tokens", maxCompletionTokens);
             ObjectNode reasoning = root.putObject("reasoning");
-            reasoning.put("exclude", true);
             reasoning.put("effort", "low");
             ObjectNode provider = root.putObject("provider");
-            provider.put("require_parameters", true);
             provider.put("data_collection", "deny");
             if (responseFormat != null) {
                 root.set("response_format", responseFormat);
