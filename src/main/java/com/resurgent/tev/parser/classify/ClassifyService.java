@@ -1,5 +1,8 @@
 package com.resurgent.tev.parser.classify;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.resurgent.tev.parser.Progress;
 import com.resurgent.tev.parser.db.BindCellRow;
 import com.resurgent.tev.parser.db.CandidateRow;
@@ -10,6 +13,7 @@ import com.resurgent.tev.parser.db.WorkspaceRepository;
 import com.resurgent.tev.parser.db.WorksheetRef;
 import com.resurgent.tev.parser.discover.DiscoverService;
 import com.resurgent.tev.parser.discover.Packet;
+import com.resurgent.tev.parser.discover.PacketCell;
 import com.resurgent.tev.parser.nomenclature.NomenclatureAlias;
 import com.resurgent.tev.parser.nomenclature.NomenclatureCatalog;
 import com.resurgent.tev.parser.nomenclature.NomenclatureNode;
@@ -303,6 +307,8 @@ public final class ClassifyService {
             return List.of();
         }
 
+        System.err.println("[classify] Layer A (packet disposition) - batching " + prepared.size() + " candidates");
+        System.err.flush();
         List<PacketDisposition> dispositions = new ArrayList<>(prepared.size());
 
         // Batch candidates: 10 per LLM call instead of 1
@@ -365,6 +371,9 @@ public final class ClassifyService {
             throw new ClassifyException("classify deadline exceeded");
         }
 
+        System.err.println("[layer-a-batch] Batch of " + batch.size() + " candidates, calling LLM...");
+        System.err.flush();
+
         List<String> offered;
         synchronized (families) {
             offered = families.names();
@@ -374,36 +383,60 @@ public final class ClassifyService {
         long llmStart = System.nanoTime();
         String jsonResponse = llm.classifyLayerAJson(userMessage, 4096);
         long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
-        System.err.println("[layer-a] Batch of " + batch.size() + " candidates: LLM responded in " + llmMs + "ms");
+        System.err.println("[layer-a-batch] LLM responded in " + llmMs + "ms");
+        System.err.flush();
 
-        return parseBatchLayerAResponse(jsonResponse, batch.size());
+        List<LayerAJudgment> judgments = parseBatchLayerAResponse(jsonResponse, batch.size());
+        System.err.println("[layer-a-batch] Parsed " + judgments.size() + " judgments from batch response");
+        System.err.flush();
+        return judgments;
     }
 
     private String formatBatchLayerAPrompt(List<PreparedPacket> batch, List<String> scheduleFamilies) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("Classify the following ").append(batch.size()).append(" regions/candidates:\n\n");
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            ObjectNode root = mapper.createObjectNode();
+            root.put("scheduleFamilies", String.join(", ", scheduleFamilies));
+            ArrayNode candidates = root.putArray("candidates");
 
-        for (int i = 0; i < batch.size(); i++) {
-            PreparedPacket item = batch.get(i);
-            sb.append("Candidate ").append(i + 1).append(":\n");
-            sb.append("Sheet: ").append(item.sheetName()).append("\n");
-            sb.append("Structural Role: ").append(item.candidate().structuralRole()).append("\n");
-            sb.append("Content:\n").append(item.redacted().displayText()).append("\n");
-            sb.append("\n");
+            for (int i = 0; i < batch.size(); i++) {
+                PreparedPacket item = batch.get(i);
+                Packet packet = item.redacted();
+                ObjectNode candidate = candidates.addObject();
+                candidate.put("index", i + 1);
+                candidate.put("sheetName", item.sheetName());
+                candidate.put("structuralRole", item.candidate().structuralRole());
+                candidate.put("candidateKind", packet.candidateKind());
+
+                ArrayNode cells = candidate.putArray("cells");
+                for (PacketCell cell : packet.cells()) {
+                    ObjectNode cellNode = cells.addObject();
+                    cellNode.put("coord", cell.coord());
+                    cellNode.put("role", cell.role());
+                    if (cell.valueType() != null) cellNode.put("type", cell.valueType());
+                    if (cell.displayValue() != null) cellNode.put("display", cell.displayValue());
+                    if (cell.textValue() != null) cellNode.put("text", cell.textValue());
+                }
+            }
+
+            String userMsg = mapper.writeValueAsString(root);
+            StringBuilder sb = new StringBuilder();
+            sb.append("Classify the following ").append(batch.size()).append(" regions/candidates:\n\n");
+            sb.append(userMsg).append("\n\n");
+            sb.append("For each candidate (by index), determine:\n");
+            sb.append("1. scheduleFamily: one of {").append(String.join(", ", scheduleFamilies)).append("}\n");
+            sb.append("2. triage: one of {MAIN, HELPER}\n");
+            sb.append("3. relevance: one of {PRIMARY, SECONDARY, TERTIARY}\n");
+            sb.append("4. rowLabels: list of row labels\n");
+            sb.append("5. columnHeaders: list of column headers\n");
+            sb.append("6. packetDefaultHead: main header for this region\n");
+            sb.append("7. about: brief description (1-2 sentences)\n");
+            sb.append("\nReturn a JSON array with one object per candidate (in same order):\n");
+            sb.append("[{\"scheduleFamily\":\"...\",\"triage\":\"...\",\"relevance\":\"...\",\"rowLabels\":[],\"columnHeaders\":[],\"packetDefaultHead\":\"...\",\"about\":\"...\"}, ...]\n");
+            return sb.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("failed to format batch Layer A prompt: " + e.getMessage(), e);
         }
-
-        sb.append("For each candidate, determine:\n");
-        sb.append("1. scheduleFamily: one of {").append(String.join(", ", scheduleFamilies)).append("}\n");
-        sb.append("2. triage: one of {MAIN, HELPER}\n");
-        sb.append("3. relevance: one of {PRIMARY, SECONDARY, TERTIARY}\n");
-        sb.append("4. rowLabels: list of row labels\n");
-        sb.append("5. columnHeaders: list of column headers\n");
-        sb.append("6. packetDefaultHead: main header for this region\n");
-        sb.append("7. about: brief description (1-2 sentences)\n");
-        sb.append("\nReturn a JSON array with one object per candidate (in same order):\n");
-        sb.append("[{\"scheduleFamily\":\"...\",\"triage\":\"...\",\"relevance\":\"...\",\"rowLabels\":[],\"columnHeaders\":[],\"packetDefaultHead\":\"...\",\"about\":\"...\"}, ...]\n");
-
-        return sb.toString();
     }
 
     private List<LayerAJudgment> parseBatchLayerAResponse(String jsonResponse, int expectedCount) throws Exception {
