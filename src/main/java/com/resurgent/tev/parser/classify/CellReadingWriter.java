@@ -113,6 +113,10 @@ public final class CellReadingWriter {
         // Post-process: infer types for untypable cells based on structural context
         new CellReadingInferencer(cells).infer(settled);
 
+        // Optional: Use LLM for remaining unclassified cells
+        // new CellTypeClassifierLlm(repo, llm).classifyRemaining(cells, settled);
+        // See: LLM fallback comment below
+
         List<CellReading> rows = new ArrayList<>();
         for (InterpretationCellView cell : cells) {
             ReadingOutcome outcome = settled.get(cell.cellId());
