@@ -368,7 +368,7 @@ public final class ClassifyService {
             Map<String, Long> wanted = new HashMap<>();
             for (String name : sheetNames) {
                 if (name != null && !name.isBlank()) {
-                    wanted.put(name.trim(), null);
+                    wanted.put(name, null);
                 }
             }
             Map<Long, String> sheetById = new HashMap<>();
