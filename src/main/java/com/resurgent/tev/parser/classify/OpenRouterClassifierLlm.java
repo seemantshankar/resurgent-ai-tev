@@ -13,6 +13,8 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.concurrent.atomic.DoubleAdder;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * OpenRouter adapter for region layout + Layer A. Reasoning effort is low.
@@ -32,6 +34,22 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
     OpenRouterClassifierLlm(CompletionsClient client) {
         this.client = Objects.requireNonNull(client, "client");
+    }
+
+    public UsageTotals usageTotals() {
+        return client.usageTotals();
+    }
+
+    /** Sum of OpenRouter {@code usage} across calls made by this client. */
+    public record UsageTotals(
+            long calls, long promptTokens, long completionTokens, double costUsd, long costMissing) {
+        public static UsageTotals empty() {
+            return new UsageTotals(0, 0, 0, 0, 0);
+        }
+
+        public boolean costKnown() {
+            return costMissing == 0;
+        }
     }
 
     @Override
@@ -106,6 +124,10 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         CompletionResult completeJson(String system, String user, int maxCompletionTokens);
 
         CompletionResult completeLayerA(String system, String user, List<String> scheduleFamilies);
+
+        default UsageTotals usageTotals() {
+            return UsageTotals.empty();
+        }
     }
 
     @FunctionalInterface
@@ -121,6 +143,11 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
         private final String model;
         private final HttpExchange exchange;
+        private final LongAdder calls = new LongAdder();
+        private final LongAdder promptTokens = new LongAdder();
+        private final LongAdder completionTokens = new LongAdder();
+        private final DoubleAdder costUsd = new DoubleAdder();
+        private final LongAdder costMissing = new LongAdder();
 
         HttpCompletionsClient(String apiKey, String model, String url) {
             Objects.requireNonNull(apiKey, "apiKey");
@@ -169,6 +196,47 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             }
         }
 
+        @Override
+        public UsageTotals usageTotals() {
+            return new UsageTotals(
+                    calls.sum(),
+                    promptTokens.sum(),
+                    completionTokens.sum(),
+                    costUsd.sum(),
+                    costMissing.sum());
+        }
+
+        private void recordUsage(String body, CompletionResult result) {
+            calls.increment();
+            if (result.promptTokens() != null) {
+                promptTokens.add(result.promptTokens());
+            }
+            if (result.completionTokens() != null) {
+                completionTokens.add(result.completionTokens());
+            }
+            Double cost = costUsd(body);
+            if (cost == null) {
+                costMissing.increment();
+            } else {
+                costUsd.add(cost);
+            }
+        }
+
+        private static Double costUsd(String body) {
+            try {
+                JsonNode usage = MAPPER.readTree(body).path("usage");
+                if (usage.path("cost").isNumber()) {
+                    return usage.path("cost").asDouble();
+                }
+                if (usage.path("total_cost").isNumber()) {
+                    return usage.path("total_cost").asDouble();
+                }
+            } catch (Exception ignored) {
+                return null;
+            }
+            return null;
+        }
+
         private CompletionResult post(String body) {
             try {
                 ExchangeResponse response = exchange.send(body);
@@ -177,7 +245,9 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                             "OpenRouter HTTP " + response.statusCode()
                                     + " " + snippet(response.body()));
                 }
-                return contentWithUsage(response.body());
+                CompletionResult result = contentWithUsage(response.body());
+                recordUsage(response.body(), result);
+                return result;
             } catch (IllegalStateException e) {
                 throw e;
             } catch (HttpTimeoutException e) {

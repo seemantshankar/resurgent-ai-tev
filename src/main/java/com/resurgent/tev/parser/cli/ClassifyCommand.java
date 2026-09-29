@@ -7,11 +7,13 @@ import com.resurgent.tev.parser.classify.ClassifyLimits;
 import com.resurgent.tev.parser.classify.ClassifyService;
 import com.resurgent.tev.parser.classify.ClassifySummary;
 import com.resurgent.tev.parser.classify.LlmEnvironment;
+import com.resurgent.tev.parser.classify.OpenRouterClassifierLlm;
 import com.resurgent.tev.parser.discover.DiscoverService;
 import java.io.PrintWriter;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.Callable;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
@@ -63,6 +65,23 @@ public final class ClassifyCommand implements Callable<Integer> {
         this.llm = llm;
     }
 
+    private void printUsage(PrintWriter out) {
+        if (!(llm instanceof OpenRouterClassifierLlm open)) {
+            return;
+        }
+        OpenRouterClassifierLlm.UsageTotals usage = open.usageTotals();
+        String cost = usage.costKnown()
+                ? String.format(Locale.US, "%.6f", usage.costUsd())
+                : "unknown";
+        out.printf(
+                "LLM_USAGE calls=%d prompt_tokens=%d completion_tokens=%d cost_usd=%s cost_missing=%d%n",
+                usage.calls(),
+                usage.promptTokens(),
+                usage.completionTokens(),
+                cost,
+                usage.costMissing());
+    }
+
     private ClassifyLimits limits() {
         if (parallelism == null
                 && attemptDeadlineSeconds == null
@@ -99,6 +118,7 @@ public final class ClassifyCommand implements Callable<Integer> {
                         bound.parseRunId(),
                         bound.boundCells(),
                         bound.skippedCells());
+                printUsage(out);
                 return 0;
             }
             ClassifySummary summary = service.classify(db, parseRunId);
@@ -108,6 +128,7 @@ public final class ClassifyCommand implements Callable<Integer> {
                     summary.dispositionCount(),
                     summary.eligibleCount(),
                     summary.skippedCount());
+            printUsage(out);
             return 0;
         } catch (ClassifyException e) {
             err.println("classify rejected: " + e.getMessage());
