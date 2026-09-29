@@ -130,6 +130,7 @@ public final class ClassifyService {
                 for (PacketDisposition disposition : dispositions) {
                     repo.insertPacketDisposition(disposition);
                 }
+                new CellReadingWriter().replace(repo, parseRunId);
                 db.connection().commit();
             } catch (Exception e) {
                 db.connection().rollback();
@@ -398,6 +399,7 @@ public final class ClassifyService {
             Map<Long, List<BindCellRow>> cellsByCandidate = new LinkedHashMap<>();
             db.connection().setAutoCommit(false);
             try {
+                new CellReadingWriter().replace(repo, parseRunId);
                 for (CandidateRow candidate : repo.selectCandidatesForParseRun(parseRunId)) {
                     if (!sheetById.containsKey(candidate.worksheetId())) {
                         continue;

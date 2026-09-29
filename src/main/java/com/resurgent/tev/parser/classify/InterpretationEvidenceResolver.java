@@ -829,11 +829,49 @@ final class InterpretationEvidenceResolver {
             Map<Long, List<CandidateRow>> ownersByCell,
             Map<Long, Set<Long>> membersByCandidate,
             Map<Long, CandidateRow> candidatesById) {
+        return resolvedHeader(
+                EvidenceRole.COLUMN_HEADER,
+                parseRunId,
+                target,
+                cache,
+                ownersByCell,
+                membersByCandidate,
+                candidatesById);
+    }
+
+    private static String resolvedHeader(
+            String role,
+            long parseRunId,
+            InterpretationCellView target,
+            ResolveCache cache,
+            Map<Long, List<CandidateRow>> ownersByCell,
+            Map<Long, Set<Long>> membersByCandidate,
+            Map<Long, CandidateRow> candidatesById) {
         List<InterpretationEvidence> evidence = resolve(
                 parseRunId, target, cache, ownersByCell, membersByCandidate, candidatesById, null);
+        return headerText(evidence, role);
+    }
+
+    /** Row and column header text from one resolve, for the cell-reading pass. */
+    static String[] resolvedHeaderTexts(
+            long parseRunId,
+            InterpretationCellView target,
+            ResolveCache cache,
+            Map<Long, List<CandidateRow>> ownersByCell,
+            Map<Long, Set<Long>> membersByCandidate,
+            Map<Long, CandidateRow> candidatesById) {
+        List<InterpretationEvidence> evidence = resolve(
+                parseRunId, target, cache, ownersByCell, membersByCandidate, candidatesById, null);
+        return new String[] {
+            headerText(evidence, EvidenceRole.ROW_HEADER),
+            headerText(evidence, EvidenceRole.COLUMN_HEADER)
+        };
+    }
+
+    private static String headerText(List<InterpretationEvidence> evidence, String role) {
         StringBuilder header = new StringBuilder();
         for (InterpretationEvidence item : evidence) {
-            if (!EvidenceRole.COLUMN_HEADER.equals(item.role())) {
+            if (!role.equals(item.role())) {
                 continue;
             }
             if (EvidenceResolution.AMBIGUOUS.equals(item.resolution())) {

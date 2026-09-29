@@ -13,9 +13,9 @@ import java.util.regex.Pattern;
  */
 final class KindTokens {
 
-    /** Currency and scale symbols: ₹, $, €, £, Rs., INR, USD, EUR. */
+    /** Currency symbols and ISO codes. A bare {@code $} is not an ISO code. */
     static final Pattern CURRENCY = Pattern.compile(
-            "(?i)(₹|\\binr\\b|\\brs\\.?\\b|\\busd\\b|\\beur\\b|\\$|€|£)");
+            "(?i)(₹|\\binr\\b|\\brs\\.?\\b|\\busd\\b|\\baud\\b|\\bcad\\b|\\bsar\\b|\\beur\\b|\\$|€|£)");
 
     /** Measured nouns a column header may claim directly: sqft, Nos., keys, rooms. */
     static final Pattern UNIT = Pattern.compile(
@@ -75,8 +75,17 @@ final class KindTokens {
         if (t.equals("usd")) {
             return "USD";
         }
+        if (t.equals("aud")) {
+            return "AUD";
+        }
+        if (t.equals("cad")) {
+            return "CAD";
+        }
+        if (t.equals("sar")) {
+            return "SAR";
+        }
         if (t.contains("$")) {
-            // Bare $ is USD/CAD/AUD/… — keep source cue without inventing a currency.
+            // Bare $ is USD/CAD/AUD/… — keep the cue and do not invent a currency.
             return null;
         }
         if (t.contains("€") || t.equals("eur")) {

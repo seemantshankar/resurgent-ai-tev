@@ -423,6 +423,122 @@ public final class WorkspaceRepository {
         }
     }
 
+    public List<FormulaLink> selectFormulaLinksForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT l.from_cell_id, l.to_cell_id FROM formula_link l"
+                        + " JOIN cell c ON c.cell_id = l.from_cell_id"
+                        + " JOIN worksheet w ON w.worksheet_id = c.worksheet_id"
+                        + " WHERE w.parse_run_id = ?"
+                        + " ORDER BY l.from_cell_id, l.to_cell_id")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<FormulaLink> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new FormulaLink(rs.getLong(1), rs.getLong(2)));
+                }
+                return rows;
+            }
+        }
+    }
+
+    public List<FormulaGap> selectFormulaGapsForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT g.from_cell_id, g.reason, g.raw_token FROM formula_gap g"
+                        + " JOIN cell c ON c.cell_id = g.from_cell_id"
+                        + " JOIN worksheet w ON w.worksheet_id = c.worksheet_id"
+                        + " WHERE w.parse_run_id = ?"
+                        + " ORDER BY g.from_cell_id, g.reason, g.raw_token")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<FormulaGap> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new FormulaGap(rs.getLong(1), rs.getString(2), rs.getString(3)));
+                }
+                return rows;
+            }
+        }
+    }
+
+    public Map<Long, String> selectNumberFormatsForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT c.cell_id, s.number_format FROM cell c"
+                        + " JOIN worksheet w ON w.worksheet_id = c.worksheet_id"
+                        + " JOIN cell_style s ON s.style_id = c.style_id"
+                        + " WHERE w.parse_run_id = ? AND s.number_format IS NOT NULL")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                Map<Long, String> formats = new HashMap<>();
+                while (rs.next()) {
+                    formats.put(rs.getLong(1), rs.getString(2));
+                }
+                return formats;
+            }
+        }
+    }
+
+    public void replaceCellReadings(long parseRunId, List<CellReading> readings) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM cell_reading WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.executeUpdate();
+        }
+        if (readings.isEmpty()) {
+            return;
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cell_reading (parse_run_id, cell_id, kind, scale, unit, currency,"
+                        + " absolute_amount, type_source, refusal)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            for (CellReading row : readings) {
+                ps.setLong(1, parseRunId);
+                ps.setLong(2, row.cellId());
+                setNullableString(ps, 3, row.kind());
+                setNullableString(ps, 4, row.scale());
+                ps.setString(5, row.unit() == null ? "" : row.unit());
+                ps.setString(6, row.currency() == null ? "" : row.currency());
+                setNullableString(ps, 7, row.absoluteAmount());
+                setNullableString(ps, 8, row.typeSource());
+                setNullableString(ps, 9, row.refusal());
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
+    }
+
+    public List<CellReading> selectCellReadingsForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT parse_run_id, cell_id, kind, scale, unit, currency, absolute_amount,"
+                        + " type_source, refusal FROM cell_reading WHERE parse_run_id = ?"
+                        + " ORDER BY cell_id")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<CellReading> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new CellReading(
+                            rs.getLong("parse_run_id"),
+                            rs.getLong("cell_id"),
+                            rs.getString("kind"),
+                            rs.getString("scale"),
+                            rs.getString("unit"),
+                            rs.getString("currency"),
+                            rs.getString("absolute_amount"),
+                            rs.getString("type_source"),
+                            rs.getString("refusal")));
+                }
+                return rows;
+            }
+        }
+    }
+
+    private static void setNullableString(PreparedStatement ps, int index, String value)
+            throws SQLException {
+        if (value == null) {
+            ps.setNull(index, Types.VARCHAR);
+        } else {
+            ps.setString(index, value);
+        }
+    }
+
     /** True when a persisted cell's row and column fall inside an A1 range. */
     public static boolean rangeContains(String targetRange, int rowNum, int colNum) {
         if (targetRange == null || targetRange.isBlank()) {
