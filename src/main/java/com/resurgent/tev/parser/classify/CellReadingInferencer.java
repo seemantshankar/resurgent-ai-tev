@@ -34,14 +34,19 @@ import java.util.stream.Collectors;
  * @see CellReadingWriter#replace(com.resurgent.tev.parser.db.WorkspaceRepository, long)
  */
 public final class CellReadingInferencer {
-    private final Map<Integer, List<InterpretationCellView>> cellsByRow;
-    private final Map<Integer, List<InterpretationCellView>> cellsByCol;
+    // Bug fix: Group by (worksheetId, rowNum) not just rowNum to handle same row in different worksheets
+    private final java.util.concurrent.ConcurrentMap<Long, java.util.concurrent.ConcurrentMap<Integer, List<InterpretationCellView>>> cellsByWorksheetAndRow;
+    private final java.util.concurrent.ConcurrentMap<Long, java.util.concurrent.ConcurrentMap<Integer, List<InterpretationCellView>>> cellsByWorksheetAndCol;
 
     public CellReadingInferencer(List<InterpretationCellView> cells) {
-        this.cellsByRow = cells.stream()
-                .collect(Collectors.groupingByConcurrent(InterpretationCellView::rowNum));
-        this.cellsByCol = cells.stream()
-                .collect(Collectors.groupingByConcurrent(InterpretationCellView::colNum));
+        this.cellsByWorksheetAndRow = cells.stream()
+                .collect(Collectors.groupingByConcurrent(
+                    InterpretationCellView::worksheetId,
+                    Collectors.groupingByConcurrent(InterpretationCellView::rowNum)));
+        this.cellsByWorksheetAndCol = cells.stream()
+                .collect(Collectors.groupingByConcurrent(
+                    InterpretationCellView::worksheetId,
+                    Collectors.groupingByConcurrent(InterpretationCellView::colNum)));
     }
 
     /**
@@ -50,30 +55,47 @@ public final class CellReadingInferencer {
      */
     public void infer(Map<Long, ReadingOutcome> settled) {
         // Rule 1: Total rows - if row is labeled "Total" and has typed neighbors, infer from them
-        for (List<InterpretationCellView> rowCells : cellsByRow.values()) {
-            if (isLabeledAsTotal(rowCells)) {
-                inferTotalRow(rowCells, settled);
+        for (Map<Integer, List<InterpretationCellView>> rowsByNum : cellsByWorksheetAndRow.values()) {
+            for (List<InterpretationCellView> rowCells : rowsByNum.values()) {
+                if (isLabeledAsTotal(rowCells)) {
+                    int rowNum = rowCells.isEmpty() ? -1 : rowCells.get(0).rowNum();
+                    System.err.println("[inference] Total row detected: row " + rowNum);
+                    inferTotalRow(rowCells, settled);
+                }
             }
         }
 
         // Rule 2: Column consensus - if column has strong type majority, infer untypable cells
-        for (List<InterpretationCellView> colCells : cellsByCol.values()) {
-            inferColumnConsensus(colCells, settled);
+        for (Map<Integer, List<InterpretationCellView>> colsByNum : cellsByWorksheetAndCol.values()) {
+            for (List<InterpretationCellView> colCells : colsByNum.values()) {
+                inferColumnConsensus(colCells, settled);
+            }
         }
     }
 
     private boolean isLabeledAsTotal(List<InterpretationCellView> rowCells) {
-        return rowCells.stream()
+        int rowNum = rowCells.isEmpty() ? -1 : rowCells.get(0).rowNum();
+        boolean hasTotal = rowCells.stream()
                 .filter(c -> c.colNum() <= 10)  // Check columns A-J for labels
                 .anyMatch(c -> {
                     String text = c.textValue();
                     if (text == null) return false;
                     String lower = text.toLowerCase();
-                    return lower.contains("total") || lower.contains("subtotal") || lower.contains("sum");
+                    boolean matches = lower.contains("total") || lower.contains("subtotal") || lower.contains("sum");
+                    if (matches || rowNum == 28) {  // Debug: log row 28 and any total matches
+                        System.err.println("[inference] Row " + rowNum + " col " + c.colNum() +
+                            " text='" + text + "' matches=" + matches);
+                    }
+                    return matches;
                 });
+        if (hasTotal) {
+            System.err.println("[inference] Row " + rowNum + " HAS TOTAL LABEL");
+        }
+        return hasTotal;
     }
 
     private void inferTotalRow(List<InterpretationCellView> rowCells, Map<Long, ReadingOutcome> settled) {
+        long worksheetId = rowCells.isEmpty() ? -1L : rowCells.get(0).worksheetId();
         for (InterpretationCellView cell : rowCells) {
             long cellId = cell.cellId();
             ReadingOutcome outcome = settled.get(cellId);
@@ -87,42 +109,66 @@ public final class CellReadingInferencer {
             }
 
             if (outcome == null || !ReadingOutcome.UNTYPABLE.equals(outcome.refusal)) {
+                System.err.println("[inference] Row " + cell.rowNum() + " col " + cell.colNum() +
+                    " (" + cell.coord() + "): outcome=" + (outcome == null ? "null" : outcome.refusal));
                 continue;
             }
 
-            ReadingOutcome inferred = inferFromColumnNeighbors(cell, settled);
+            System.err.println("[inference] Attempting to infer total row cell: " + cell.coord());
+            ReadingOutcome inferred = inferFromColumnNeighbors(cell, worksheetId, settled);
             if (inferred != null) {
+                System.err.println("[inference] ✓ Inferred " + cell.coord() + " as " + inferred.kind);
                 settled.put(cellId, inferred);
+            } else {
+                System.err.println("[inference] ✗ Could not infer " + cell.coord());
             }
         }
     }
 
-    private ReadingOutcome inferFromColumnNeighbors(InterpretationCellView untypable, Map<Long, ReadingOutcome> settled) {
+    private ReadingOutcome inferFromColumnNeighbors(InterpretationCellView untypable, long worksheetId, Map<Long, ReadingOutcome> settled) {
         int col = untypable.colNum();
         int row = untypable.rowNum();
         int range = 5;
 
-        List<ReadingOutcome> typedOutcomes = cellsByCol.getOrDefault(col, List.of()).stream()
+        List<InterpretationCellView> candidates = cellsByWorksheetAndCol
+                .getOrDefault(worksheetId, new java.util.concurrent.ConcurrentHashMap<>())
+                .getOrDefault(col, List.of()).stream()
                 .filter(c -> Math.abs(c.rowNum() - row) <= range && c.rowNum() != row)
-                .map(c -> settled.get(c.cellId()))
+                .collect(Collectors.toList());
+
+        System.err.println("[inference] Looking for neighbors of " + untypable.coord() +
+            " (col " + col + ", row " + row + ") in range ±" + range +
+            ": found " + candidates.size() + " candidates");
+
+        List<ReadingOutcome> typedOutcomes = candidates.stream()
+                .map(c -> {
+                    ReadingOutcome o = settled.get(c.cellId());
+                    if (o != null && o.typed()) {
+                        System.err.println("[inference]   - " + c.coord() + " (row " + c.rowNum() + "): " + o.kind);
+                    }
+                    return o;
+                })
                 .filter(o -> o != null && o.typed())
                 .collect(Collectors.toList());
 
         if (typedOutcomes.isEmpty()) {
+            System.err.println("[inference]   No typed neighbors found");
             return null;
         }
 
         ReadingOutcome first = typedOutcomes.get(0);
         boolean allAgree = typedOutcomes.stream()
-                .allMatch(o -> first.kind.equals(o.kind) && 
+                .allMatch(o -> first.kind.equals(o.kind) &&
                                (first.scale == null ? o.scale == null : first.scale.equals(o.scale)) &&
                                first.currency.equals(o.currency));
 
         if (allAgree) {
+            System.err.println("[inference]   All " + typedOutcomes.size() + " neighbors agree on " + first.kind);
             return ReadingOutcome.typed(
                     first.kind, first.scale, first.unit, first.currency, ReadingOutcome.DERIVED);
         }
 
+        System.err.println("[inference]   Neighbors disagree: cannot infer");
         return null;
     }
 
