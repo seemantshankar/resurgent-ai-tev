@@ -181,6 +181,8 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         @Override
         public CompletionResult completeJson(String system, String user, int maxCompletionTokens) {
             try {
+                System.err.println("[http-client] completeJson: model=" + model + ", maxTokens=" + maxCompletionTokens + ", userLen=" + user.length());
+                System.err.flush();
                 return post(requestBody(model, system, user, null, maxCompletionTokens));
             } catch (Exception e) {
                 throw new IllegalStateException("OpenRouter request build failed: " + e.getMessage(), e);
@@ -244,8 +246,14 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         }
 
         private CompletionResult post(String body) {
+            long startNanos = System.nanoTime();
             try {
+                System.err.println("[http-client] Sending request to OpenRouter...");
+                System.err.flush();
                 ExchangeResponse response = exchange.send(body);
+                long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000;
+                System.err.println("[http-client] Got response HTTP " + response.statusCode() + " after " + elapsedMs + "ms");
+                System.err.flush();
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
                     throw new IllegalStateException(
                             "OpenRouter HTTP " + response.statusCode()
@@ -257,8 +265,14 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             } catch (IllegalStateException e) {
                 throw e;
             } catch (HttpTimeoutException e) {
-                throw new IllegalStateException("OpenRouter call timed out", e);
+                long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000;
+                System.err.println("[http-client] HTTP TIMEOUT after " + elapsedMs + "ms");
+                System.err.flush();
+                throw new IllegalStateException("OpenRouter call timed out after " + elapsedMs + "ms", e);
             } catch (Exception e) {
+                long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000;
+                System.err.println("[http-client] HTTP ERROR after " + elapsedMs + "ms: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+                System.err.flush();
                 throw new IllegalStateException("OpenRouter call failed: " + e.getMessage(), e);
             }
         }

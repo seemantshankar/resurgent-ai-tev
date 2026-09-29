@@ -66,6 +66,8 @@ public class CellTypeClassifierLlm {
      * @param settled map of cellId → ReadingOutcome, modified in-place
      */
     public void classifyRemaining(List<InterpretationCellView> cells, Map<Long, ReadingOutcome> settled) {
+        System.err.println("[cell-classifier] Starting classifyRemaining, total cells=" + cells.size());
+        System.err.flush();
         List<InterpretationCellView> unclassified = new ArrayList<>();
         Map<Long, InterpretationCellView> cellIndex = new HashMap<>();
         for (InterpretationCellView cell : cells) {
@@ -79,10 +81,13 @@ public class CellTypeClassifierLlm {
         }
 
         if (unclassified.isEmpty()) {
+            System.err.println("[cell-classifier] No unclassified cells found, skipping LLM");
+            System.err.flush();
             return;
         }
 
-        System.err.println("[llm-fallback] Classifying " + unclassified.size() + " untyped cells via LLM");
+        System.err.println("[cell-classifier] Classifying " + unclassified.size() + " untyped cells via LLM");
+        System.err.flush();
 
         // Group by worksheet for context coherence
         Map<Long, List<InterpretationCellView>> byWorksheet = new HashMap<>();
@@ -186,7 +191,13 @@ public class CellTypeClassifierLlm {
 
     private CellTypeResponse classifyCell(CellTypeRequest request) throws Exception {
         String userMessage = formatUserMessage(request);
+        long llmStart = System.nanoTime();
         String jsonResponse = llm.classifyCellJson(SYSTEM_PROMPT, userMessage, 2048);
+        long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
+        if (jsonResponse == null || jsonResponse.isEmpty()) {
+            throw new IllegalStateException("LLM returned empty response for cell " + request.coord);
+        }
+        System.err.println("[cell-llm] Cell " + request.coord + ": LLM responded in " + llmMs + "ms");
         return parseCellTypeResponse(jsonResponse);
     }
 

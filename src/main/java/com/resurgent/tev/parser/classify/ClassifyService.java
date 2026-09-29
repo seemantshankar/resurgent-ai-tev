@@ -164,14 +164,54 @@ public final class ClassifyService {
         }
         boolean anySheetProposals = false;
         Map<Long, List<RegionProposal>> bySheet = new HashMap<>();
-        for (WorksheetRef sheet : sheets) {
-            String dump = cellDump(repo.selectCellPacketViewsForWorksheet(sheet.worksheetId()));
-            List<RegionProposal> proposals =
-                    llm.proposeRegions(new RegionLayoutPrompt(sheet.sheetName(), dump));
-            if (!proposals.isEmpty()) {
-                anySheetProposals = true;
+        for (int i = 0; i < sheets.size(); i++) {
+            WorksheetRef sheet = sheets.get(i);
+            System.err.println(
+                    "[region-layout] Processing sheet " + (i + 1) + "/" + sheets.size() + ": "
+                            + sheet.sheetName() + " (id=" + sheet.worksheetId() + ")");
+            System.err.flush();
+
+            long cellQueryStart = System.nanoTime();
+            List<com.resurgent.tev.parser.db.CellPacketView> cellViews =
+                    repo.selectCellPacketViewsForWorksheet(sheet.worksheetId());
+            long cellQueryMs =
+                    (System.nanoTime() - cellQueryStart) / 1_000_000;
+            System.err.println(
+                    "[region-layout] Sheet " + sheet.sheetName() + ": " + cellViews.size()
+                            + " cells loaded in " + cellQueryMs + "ms");
+            System.err.flush();
+
+            String dump = cellDump(cellViews);
+            System.err.println(
+                    "[region-layout] Sheet " + sheet.sheetName() + ": " + dump.length()
+                            + " char dump, calling LLM...");
+            System.err.flush();
+
+            long llmStart = System.nanoTime();
+            try {
+                List<RegionProposal> proposals = llm.proposeRegions(
+                        new RegionLayoutPrompt(sheet.sheetName(), dump));
+                long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
+                System.err.println(
+                        "[region-layout] Sheet " + sheet.sheetName() + ": LLM returned "
+                                + proposals.size() + " regions in " + llmMs + "ms");
+                System.err.flush();
+                if (!proposals.isEmpty()) {
+                    anySheetProposals = true;
+                }
+                bySheet.put(sheet.worksheetId(), proposals);
+            } catch (Exception e) {
+                long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
+                System.err.println(
+                        "[region-layout] Sheet " + sheet.sheetName() + ": LLM call FAILED after "
+                                + llmMs + "ms: " + e.getClass().getSimpleName() + ": "
+                                + e.getMessage());
+                System.err.flush();
+                throw new ClassifyException(
+                        "LLM region layout failed for sheet " + sheet.sheetName() + ": "
+                                + e.getMessage(),
+                        e);
             }
-            bySheet.put(sheet.worksheetId(), proposals);
         }
         if (!anySheetProposals) {
             return;
