@@ -50,6 +50,8 @@ final class KindTokens {
                     + "capital|principal|equity|dividend|profit|loss|"
                     + "interest|margin|markup|discount|rebate|fund|funding|"
                     + "borrowed|borrowing|repayment|balance|asset|liability|"
+                    + "loan|loans|debt|debts|advance|advances|credit|credits|facility|"
+                    + "guarantee|mortgage|collateral|amortization|disbursement|drawdown|"
                     + "capex|opex|expense|outlay|investment|lac|lakh|crore|less\\s*:|"
                     + "total\\s+cost|project\\s+cost|means\\s+of\\s+finance|"
                     + "depreciation|\\bdep\\.?\\b)");
