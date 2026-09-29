@@ -110,6 +110,17 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         return result.content();
     }
 
+    @Override
+    public String classifyLayerAJson(String userPrompt, int maxTokens) {
+        String systemPrompt = """
+                You are a financial document region classifier. Classify each candidate region/table.
+                For each region, determine: scheduleFamily, triage (MAIN/HELPER), relevance (PRIMARY/SECONDARY/TERTIARY),
+                row labels, column headers, packet default head, and a brief description.
+                Return a JSON array with one object per candidate.""";
+        CompletionResult result = client.completeJson(systemPrompt, userPrompt, maxTokens);
+        return result.content();
+    }
+
     record CompletionResult(
             String content,
             Integer promptTokens,

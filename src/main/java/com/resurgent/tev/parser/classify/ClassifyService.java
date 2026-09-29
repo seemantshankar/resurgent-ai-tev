@@ -302,36 +302,164 @@ public final class ClassifyService {
         if (prepared.isEmpty()) {
             return List.of();
         }
-        ExecutorService pool = Executors.newFixedThreadPool(
-                Math.min(limits.parallelism(), prepared.size()));
-        try {
-            List<Future<PacketDisposition>> futures = new ArrayList<>();
-            for (PreparedPacket item : prepared) {
-                futures.add(pool.submit(() -> classifyOne(item, families, deadlineNanos)));
-            }
-            List<PacketDisposition> dispositions = new ArrayList<>(prepared.size());
-            int done = 0;
-            for (Future<PacketDisposition> future : futures) {
-                Progress.step("classify", "layer-a", ++done, futures.size(), 10);
-                long remainingMs = Math.max(1L, (deadlineNanos - System.nanoTime()) / 1_000_000L);
-                try {
-                    dispositions.add(future.get(remainingMs, TimeUnit.MILLISECONDS));
-                } catch (TimeoutException e) {
-                    future.cancel(true);
-                    throw new ClassifyException(
-                            "classify deadline exceeded after " + done + " of " + futures.size()
-                                    + " Layer A calls",
-                            e);
-                } catch (Exception e) {
-                    Throwable cause = e.getCause() != null ? e.getCause() : e;
-                    String msg = cause.getMessage() != null ? cause.getMessage() : cause.toString();
-                    throw new ClassifyException("Layer A failed: " + msg, cause);
+
+        List<PacketDisposition> dispositions = new ArrayList<>(prepared.size());
+
+        // Batch candidates: 10 per LLM call instead of 1
+        for (int i = 0; i < prepared.size(); i += 10) {
+            int end = Math.min(i + 10, prepared.size());
+            List<PreparedPacket> batch = prepared.subList(i, end);
+
+            try {
+                List<LayerAJudgment> judgments = classifyBatchLayerA(batch, families, deadlineNanos);
+                for (int j = 0; j < batch.size(); j++) {
+                    PreparedPacket item = batch.get(j);
+                    LayerAJudgment judgment = judgments.get(j);
+
+                    synchronized (families) {
+                        if (!ScheduleFamily.isKnown(judgment.scheduleFamily())) {
+                            families.admit(judgment.scheduleFamily());
+                        }
+                    }
+
+                    dispositions.add(new PacketDisposition(
+                            item.candidate().candidateId(),
+                            item.candidate().parseRunId(),
+                            judgment.scheduleFamily(),
+                            judgment.triage(),
+                            judgment.relevance(),
+                            judgment.rowLabels(),
+                            judgment.columnHeaders(),
+                            judgment.packetDefaultHead(),
+                            judgment.about(),
+                            item.candidate().parentCandidateId(),
+                            false));
+                }
+
+                Progress.step("classify", "layer-a", dispositions.size(), prepared.size(), 10);
+            } catch (Exception e) {
+                // Fall back to individual classification for this batch on failure
+                System.err.println("[layer-a] Batch failed, falling back to individual: " + e.getMessage());
+                for (PreparedPacket item : batch) {
+                    try {
+                        dispositions.add(classifyOne(item, families, deadlineNanos));
+                        Progress.step("classify", "layer-a", dispositions.size(), prepared.size(), 10);
+                    } catch (Exception ex) {
+                        Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                        String msg = cause.getMessage() != null ? cause.getMessage() : cause.toString();
+                        throw new ClassifyException("Layer A failed: " + msg, cause);
+                    }
                 }
             }
-            return dispositions;
-        } finally {
-            pool.shutdownNow();
         }
+
+        return dispositions;
+    }
+
+    private List<LayerAJudgment> classifyBatchLayerA(
+            List<PreparedPacket> batch,
+            ScheduleFamilyCatalog families,
+            long deadlineNanos)
+            throws Exception {
+        if (System.nanoTime() > deadlineNanos) {
+            throw new ClassifyException("classify deadline exceeded");
+        }
+
+        List<String> offered;
+        synchronized (families) {
+            offered = families.names();
+        }
+
+        String userMessage = formatBatchLayerAPrompt(batch, offered);
+        long llmStart = System.nanoTime();
+        String jsonResponse = llm.classifyLayerAJson(userMessage, 4096);
+        long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
+        System.err.println("[layer-a] Batch of " + batch.size() + " candidates: LLM responded in " + llmMs + "ms");
+
+        return parseBatchLayerAResponse(jsonResponse, batch.size());
+    }
+
+    private String formatBatchLayerAPrompt(List<PreparedPacket> batch, List<String> scheduleFamilies) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Classify the following ").append(batch.size()).append(" regions/candidates:\n\n");
+
+        for (int i = 0; i < batch.size(); i++) {
+            PreparedPacket item = batch.get(i);
+            sb.append("Candidate ").append(i + 1).append(":\n");
+            sb.append("Sheet: ").append(item.sheetName()).append("\n");
+            sb.append("Structural Role: ").append(item.candidate().structuralRole()).append("\n");
+            sb.append("Content:\n").append(item.redacted().displayText()).append("\n");
+            sb.append("\n");
+        }
+
+        sb.append("For each candidate, determine:\n");
+        sb.append("1. scheduleFamily: one of {").append(String.join(", ", scheduleFamilies)).append("}\n");
+        sb.append("2. triage: one of {MAIN, HELPER}\n");
+        sb.append("3. relevance: one of {PRIMARY, SECONDARY, TERTIARY}\n");
+        sb.append("4. rowLabels: list of row labels\n");
+        sb.append("5. columnHeaders: list of column headers\n");
+        sb.append("6. packetDefaultHead: main header for this region\n");
+        sb.append("7. about: brief description (1-2 sentences)\n");
+        sb.append("\nReturn a JSON array with one object per candidate (in same order):\n");
+        sb.append("[{\"scheduleFamily\":\"...\",\"triage\":\"...\",\"relevance\":\"...\",\"rowLabels\":[],\"columnHeaders\":[],\"packetDefaultHead\":\"...\",\"about\":\"...\"}, ...]\n");
+
+        return sb.toString();
+    }
+
+    private List<LayerAJudgment> parseBatchLayerAResponse(String jsonResponse, int expectedCount) throws Exception {
+        List<LayerAJudgment> judgments = new ArrayList<>();
+        com.fasterxml.jackson.databind.JsonNode root = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode().get("stub");
+
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.JsonNode nodes = mapper.readTree(jsonResponse);
+
+        // Handle multiple formats: [...], {"results": [...]}, etc.
+        if (!nodes.isArray()) {
+            if (nodes.isObject()) {
+                if (nodes.has("results")) nodes = nodes.get("results");
+                else if (nodes.has("candidates")) nodes = nodes.get("candidates");
+                else if (nodes.has("data")) nodes = nodes.get("data");
+                else {
+                    // Find first array in object
+                    for (com.fasterxml.jackson.databind.JsonNode field : nodes) {
+                        if (field.isArray()) {
+                            nodes = field;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!nodes.isArray()) {
+                throw new IllegalArgumentException("Expected JSON array or object with array");
+            }
+        }
+
+        for (int i = 0; i < nodes.size(); i++) {
+            com.fasterxml.jackson.databind.JsonNode node = nodes.get(i);
+            String scheduleFamily = node.get("scheduleFamily").asText();
+            String triage = node.get("triage").asText();
+            String relevance = node.get("relevance").asText();
+            String packetDefaultHead = node.get("packetDefaultHead").asText("");
+            String about = node.get("about").asText("");
+
+            java.util.List<String> rowLabels = new java.util.ArrayList<>();
+            if (node.has("rowLabels") && node.get("rowLabels").isArray()) {
+                for (com.fasterxml.jackson.databind.JsonNode label : node.get("rowLabels")) {
+                    rowLabels.add(label.asText());
+                }
+            }
+
+            java.util.List<String> columnHeaders = new java.util.ArrayList<>();
+            if (node.has("columnHeaders") && node.get("columnHeaders").isArray()) {
+                for (com.fasterxml.jackson.databind.JsonNode header : node.get("columnHeaders")) {
+                    columnHeaders.add(header.asText());
+                }
+            }
+
+            judgments.add(new LayerAJudgment(scheduleFamily, triage, relevance, rowLabels, columnHeaders, packetDefaultHead, about));
+        }
+
+        return judgments;
     }
 
     private PacketDisposition classifyOne(

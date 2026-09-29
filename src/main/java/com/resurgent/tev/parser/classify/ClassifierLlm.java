@@ -28,4 +28,12 @@ public interface ClassifierLlm {
     default String classifyCellJson(String systemPrompt, String userPrompt, int maxTokens) {
         return "";
     }
+
+    /**
+     * Batch classify Layer A candidates (multiple regions). Default returns empty string
+     * so Layer A fakes stay valid; batch classification falls back to individual.
+     */
+    default String classifyLayerAJson(String userPrompt, int maxTokens) {
+        return "";
+    }
 }
