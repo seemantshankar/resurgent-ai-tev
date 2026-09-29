@@ -8,12 +8,30 @@ import java.util.stream.Collectors;
 
 /**
  * Post-processor that infers types for untypable cells based on structural context.
- * 
- * Rules:
- * 1. Total rows: If a row contains "Total" label and neighbors in the same column
- *    are typed (money/quantity/etc), infer the same type.
- * 2. Column consensus: If 70%+ of typed cells in a column share the same kind+scale,
- *    infer untypable cells in that column as the same.
+ *
+ * Runs after formula arithmetic resolution in {@link CellReadingWriter}. Applies two rules
+ * to improve cell type coverage without modifying input or formula-derived types.
+ *
+ * <h2>Rule 1: Total Row Inference (HIGH confidence)</h2>
+ * When a row contains a "Total"/"Subtotal"/"Sum" label (in columns A-J), untypable numeric
+ * cells in that row are inferred from typed neighbors in the same column (within 5-row range).
+ * Only infers if all neighbors agree on kind, scale, and currency.
+ *
+ * <h2>Rule 2: Column Consensus (MEDIUM confidence)</h2>
+ * When a column has 50%+ typed cells and 70%+ of those typed cells share the same
+ * kind+scale+currency, untypable numeric cells in that column are inferred as the majority type.
+ *
+ * <h2>Auditability</h2>
+ * All inferred types are marked with {@code typeSource="derived"} to distinguish them from
+ * input types (from labels/format) and formula-derived types (from arithmetic).
+ *
+ * <h2>Safety</h2>
+ * - Does not overwrite already-typed cells
+ * - Does not infer text cells (only numeric)
+ * - Does not infer cells with formula errors
+ * - Both rules are conservative: require multiple neighbors/consensus before inferring
+ *
+ * @see CellReadingWriter#replace(com.resurgent.tev.parser.db.WorkspaceRepository, long)
  */
 public final class CellReadingInferencer {
     private final Map<Integer, List<InterpretationCellView>> cellsByRow;
