@@ -34,6 +34,11 @@ public final class IngestService {
 
     private static final String PARSER_VERSION = "0.1.2-SNAPSHOT";
 
+    static boolean isVisibleSheet(XlsxSheet sheet) {
+        String state = sheet.sheetState();
+        return state == null || "visible".equals(state);
+    }
+
     /**
      * POI sometimes emits barrier function names as NameX "external" tokens instead of
      * AbstractFunctionPtg. Strip those before persisting reference edges.
@@ -60,6 +65,16 @@ public final class IngestService {
 
     public IngestSummary ingest(Path input, long mandateId, Path dbPath, ParserConfig config,
             WorkspaceDatabase.OpenOptions openOptions) throws IOException, SQLException {
+        return ingest(input, mandateId, dbPath, config, openOptions, false);
+    }
+
+    /**
+     * @param visibleSheetsOnly when true, hidden and veryHidden worksheets are
+     *     not written. Formula references into those sheets become gaps.
+     */
+    public IngestSummary ingest(Path input, long mandateId, Path dbPath, ParserConfig config,
+            WorkspaceDatabase.OpenOptions openOptions, boolean visibleSheetsOnly)
+            throws IOException, SQLException {
         if (!Files.isRegularFile(input)) {
             throw new IOException("input file not found: " + input);
         }
@@ -101,7 +116,7 @@ public final class IngestService {
 
                 return switch (fileType) {
                     case FM_XLSX, FM_XLS -> ingestXlsx(xlsxWorkbook, mandateId, dbPath,
-                            fileName, fileHash, sourceFileId, repo, now, config);
+                            fileName, fileHash, sourceFileId, repo, now, config, visibleSheetsOnly);
                     case FM_CSV -> ingestCsv(input, mandateId, dbPath,
                             fileName, fileHash, sourceFileId, repo, now, config);
                 };
@@ -227,8 +242,15 @@ public final class IngestService {
 
     private IngestSummary ingestXlsx(XlsxWorkbook workbook, long mandateId, Path dbPath,
             String fileName, String fileHash, long sourceFileId,
-            WorkspaceRepository repo, String now, ParserConfig config) throws IOException, SQLException {
+            WorkspaceRepository repo, String now, ParserConfig config, boolean visibleSheetsOnly)
+            throws IOException, SQLException {
         List<XlsxSheet> sheets = workbook.sheets();
+        if (visibleSheetsOnly) {
+            int fileSheets = sheets.size();
+            sheets = sheets.stream().filter(IngestService::isVisibleSheet).toList();
+            Progress.phase("ingest",
+                    "visible worksheets " + sheets.size() + " of " + fileSheets);
+        }
         WorkbookMetadata metadata = workbook.metadata();
         int rowCount = sheets.stream().mapToInt(IngestService::maxPopulatedRowNum).sum();
         int cellCount = sheets.stream().mapToInt(s -> s.cells().size()).sum();
