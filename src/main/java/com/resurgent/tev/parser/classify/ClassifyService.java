@@ -577,11 +577,28 @@ public final class ClassifyService {
 
         for (int i = 0; i < nodes.size(); i++) {
             com.fasterxml.jackson.databind.JsonNode node = nodes.get(i);
-            String scheduleFamily = node.get("scheduleFamily").asText();
-            String triage = node.get("triage").asText();
-            String relevance = node.get("relevance").asText();
-            String packetDefaultHead = node.get("packetDefaultHead").asText("");
-            String about = node.get("about").asText("");
+
+            // Extract fields with null-safety
+            String scheduleFamily = getTextField(node, "scheduleFamily");
+            String suggestedFamily = getTextField(node, "suggestedFamily", "suggested_family");
+            String triage = getTextField(node, "triage");
+            String relevance = getTextField(node, "relevance");
+            String packetDefaultHead = getTextField(node, "packetDefaultHead", "packet_default_head");
+            String about = getTextField(node, "about");
+
+            // Resolve family using same logic as individual parser
+            String resolvedFamily = scheduleFamily;
+            if (scheduleFamily == null || scheduleFamily.isBlank()) {
+                resolvedFamily = suggestedFamily;
+            }
+
+            // Normalize triage and relevance
+            if (triage != null) {
+                triage = triage.toLowerCase(java.util.Locale.ROOT);
+            }
+            if (relevance != null) {
+                relevance = relevance.toLowerCase(java.util.Locale.ROOT);
+            }
 
             java.util.List<String> rowLabels = new java.util.ArrayList<>();
             if (node.has("rowLabels") && node.get("rowLabels").isArray()) {
@@ -597,10 +614,38 @@ public final class ClassifyService {
                 }
             }
 
-            judgments.add(new LayerAJudgment(scheduleFamily, triage, relevance, rowLabels, columnHeaders, packetDefaultHead, about));
+            // Validate required fields
+            if (resolvedFamily == null || resolvedFamily.isBlank()
+                    || !Triage.isKnown(triage)
+                    || !Relevance.isKnown(relevance)
+                    || about == null || about.isBlank()) {
+                System.err.println("[layer-a-batch] Candidate " + i + " has invalid fields: family=" + resolvedFamily
+                    + " triage=" + triage + " relevance=" + relevance + " about=" + (about == null ? "null" : about.substring(0, Math.min(50, about.length()))));
+                // Skip this candidate and continue with next, or throw?
+                // For now, use defaults to avoid breaking
+                if (resolvedFamily == null) resolvedFamily = "unknown";
+                if (triage == null) triage = "helper";
+                if (relevance == null) relevance = "tertiary";
+                if (about == null) about = "Unclassified";
+            }
+
+            judgments.add(new LayerAJudgment(resolvedFamily, triage, relevance, rowLabels, columnHeaders, packetDefaultHead, about.trim()));
         }
 
         return judgments;
+    }
+
+    private static String getTextField(com.fasterxml.jackson.databind.JsonNode node, String... fieldNames) {
+        for (String fieldName : fieldNames) {
+            if (node.has(fieldName)) {
+                com.fasterxml.jackson.databind.JsonNode field = node.get(fieldName);
+                if (field != null && !field.isNull()) {
+                    String text = field.asText().trim();
+                    return text.isBlank() ? null : text;
+                }
+            }
+        }
+        return null;
     }
 
     private PacketDisposition classifyOne(
