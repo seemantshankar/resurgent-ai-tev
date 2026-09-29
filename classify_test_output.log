@@ -1,0 +1,386 @@
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::load has been called by org.sqlite.SQLiteJDBCLoader in an unnamed module (file:/Users/seemantshankar/Documents/Projects/Resurgent%20AI%20-%20TEV/target/tev-parser-0.1.0-SNAPSHOT.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+[classify] LLM region layout
+[region-layout] Processing sheet 1/48: Req_PNB (id=1)
+[region-layout] Sheet Req_PNB: 740 cells loaded in 8ms
+[region-layout] Sheet Req_PNB: 11474 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=11617
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4087ms
+[region-layout] Sheet Req_PNB: LLM returned 6 regions in 4126ms
+[region-layout] Processing sheet 2/48: IRR_CASE_II (id=2)
+[region-layout] Sheet IRR_CASE_II: 328 cells loaded in 2ms
+[region-layout] Sheet IRR_CASE_II: 4732 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=4879
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 2832ms
+[region-layout] Sheet IRR_CASE_II: LLM returned 4 regions in 2835ms
+[region-layout] Processing sheet 3/48: BEP ANAYSIS_II (id=3)
+[region-layout] Sheet BEP ANAYSIS_II: 140 cells loaded in 2ms
+[region-layout] Sheet BEP ANAYSIS_II: 3631 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=3781
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 3904ms
+[region-layout] Sheet BEP ANAYSIS_II: LLM returned 3 regions in 3907ms
+[region-layout] Processing sheet 4/48: P  L _Case_II (id=4)
+[region-layout] Sheet P  L _Case_II: 589 cells loaded in 4ms
+[region-layout] Sheet P  L _Case_II: 10455 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=10604
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4898ms
+[region-layout] Sheet P  L _Case_II: LLM returned 10 regions in 4902ms
+[region-layout] Processing sheet 5/48: IRR_CASE_III (id=5)
+[region-layout] Sheet IRR_CASE_III: 327 cells loaded in 4ms
+[region-layout] Sheet IRR_CASE_III: 4729 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=4877
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 3286ms
+[region-layout] Sheet IRR_CASE_III: LLM returned 7 regions in 3290ms
+[region-layout] Processing sheet 6/48: P  L _Case_III (id=6)
+[region-layout] Sheet P  L _Case_III: 589 cells loaded in 6ms
+[region-layout] Sheet P  L _Case_III: 10605 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=10755
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 7692ms
+[region-layout] Sheet P  L _Case_III: LLM returned 10 regions in 7697ms
+[region-layout] Processing sheet 7/48: BEP ANAYSIS_IV (id=7)
+[region-layout] Sheet BEP ANAYSIS_IV: 140 cells loaded in 3ms
+[region-layout] Sheet BEP ANAYSIS_IV: 3631 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=3781
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4167ms
+[region-layout] Sheet BEP ANAYSIS_IV: LLM returned 3 regions in 4169ms
+[region-layout] Processing sheet 8/48: IRR_CASE_IV (id=8)
+[region-layout] Sheet IRR_CASE_IV: 328 cells loaded in 4ms
+[region-layout] Sheet IRR_CASE_IV: 4730 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=4877
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 3407ms
+[region-layout] Sheet IRR_CASE_IV: LLM returned 8 regions in 3410ms
+[region-layout] Processing sheet 9/48: P  L _Case_IV (id=9)
+[region-layout] Sheet P  L _Case_IV: 589 cells loaded in 6ms
+[region-layout] Sheet P  L _Case_IV: 10548 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=10697
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4092ms
+[region-layout] Sheet P  L _Case_IV: LLM returned 10 regions in 4095ms
+[region-layout] Processing sheet 10/48: Pages (id=10)
+[region-layout] Sheet Pages: 117 cells loaded in 2ms
+[region-layout] Sheet Pages: 1755 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=1896
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 3776ms
+[region-layout] Sheet Pages: LLM returned 3 regions in 3779ms
+[region-layout] Processing sheet 11/48: AT GLANCE (id=11)
+[region-layout] Sheet AT GLANCE: 65 cells loaded in 2ms
+[region-layout] Sheet AT GLANCE: 1158 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=1303
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4501ms
+[region-layout] Sheet AT GLANCE: LLM returned 5 regions in 4503ms
+[region-layout] Processing sheet 12/48: PROJECT_COST (id=12)
+[region-layout] Sheet PROJECT_COST: 95 cells loaded in 1ms
+[region-layout] Sheet PROJECT_COST: 1599 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=1747
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4679ms
+[region-layout] Sheet PROJECT_COST: LLM returned 4 regions in 4681ms
+[region-layout] Processing sheet 13/48: CAPITAL COST (id=13)
+[region-layout] Sheet CAPITAL COST: 162 cells loaded in 2ms
+[region-layout] Sheet CAPITAL COST: 2742 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=2890
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 5515ms
+[region-layout] Sheet CAPITAL COST: LLM returned 5 regions in 5517ms
+[region-layout] Processing sheet 14/48:  wORKING CAPITAL (id=14)
+[region-layout] Sheet  wORKING CAPITAL: 350 cells loaded in 3ms
+[region-layout] Sheet  wORKING CAPITAL: 5518 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=5670
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 5195ms
+[region-layout] Sheet  wORKING CAPITAL: LLM returned 4 regions in 5197ms
+[region-layout] Processing sheet 15/48: BN_2 (id=15)
+[region-layout] Sheet BN_2: 272 cells loaded in 3ms
+[region-layout] Sheet BN_2: 4328 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=4468
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 5670ms
+[region-layout] Sheet BN_2: LLM returned 4 regions in 5673ms
+[region-layout] Processing sheet 16/48: P  L  (id=16)
+[region-layout] Sheet P  L : 720 cells loaded in 8ms
+[region-layout] Sheet P  L : 12944 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=13085
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 8136ms
+[region-layout] Sheet P  L : LLM returned 9 regions in 8138ms
+[region-layout] Processing sheet 17/48: B  S  (id=17)
+[region-layout] Sheet B  S : 472 cells loaded in 6ms
+[region-layout] Sheet B  S : 7966 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=8107
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4415ms
+[region-layout] Sheet B  S : LLM returned 7 regions in 4418ms
+[region-layout] Processing sheet 18/48: Finanacials (id=18)
+[region-layout] Sheet Finanacials: 171 cells loaded in 3ms
+[region-layout] Sheet Finanacials: 2818 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=2965
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 3401ms
+[region-layout] Sheet Finanacials: LLM returned 1 regions in 3404ms
+[region-layout] Processing sheet 19/48: CASH FLOW (id=19)
+[region-layout] Sheet CASH FLOW: 383 cells loaded in 5ms
+[region-layout] Sheet CASH FLOW: 6778 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=6923
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 5239ms
+[region-layout] Sheet CASH FLOW: LLM returned 5 regions in 5241ms
+[region-layout] Processing sheet 20/48: ASSETS (id=20)
+[region-layout] Sheet ASSETS: 263 cells loaded in 3ms
+[region-layout] Sheet ASSETS: 5370 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=5512
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 9732ms
+[region-layout] Sheet ASSETS: LLM returned 9 regions in 9733ms
+[region-layout] Processing sheet 21/48: details of fixed assets   (id=21)
+[region-layout] Sheet details of fixed assets  : 857 cells loaded in 7ms
+[region-layout] Sheet details of fixed assets  : 12577 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=12738
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 6134ms
+[region-layout] Sheet details of fixed assets  : LLM returned 7 regions in 6135ms
+[region-layout] Processing sheet 22/48: PREOPERATIVE EXP (id=22)
+[region-layout] Sheet PREOPERATIVE EXP: 40 cells loaded in 0ms
+[region-layout] Sheet PREOPERATIVE EXP: 885 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=1037
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 5258ms
+[region-layout] Sheet PREOPERATIVE EXP: LLM returned 3 regions in 5259ms
+[region-layout] Processing sheet 23/48: SALESPROJECTION (id=23)
+[region-layout] Sheet SALESPROJECTION: 321 cells loaded in 4ms
+[region-layout] Sheet SALESPROJECTION: 5406 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=5557
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 5007ms
+[region-layout] Sheet SALESPROJECTION: LLM returned 6 regions in 5008ms
+[region-layout] Processing sheet 24/48: Interest (id=24)
+[region-layout] Sheet Interest: 1314 cells loaded in 11ms
+[region-layout] Sheet Interest: 17217 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=17361
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4452ms
+[region-layout] Sheet Interest: LLM returned 6 regions in 4455ms
+[region-layout] Processing sheet 25/48: depreciation (2) (id=25)
+[region-layout] Sheet depreciation (2): 624 cells loaded in 7ms
+[region-layout] Sheet depreciation (2): 11176 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=11328
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 5660ms
+[region-layout] Sheet depreciation (2): LLM returned 13 regions in 5661ms
+[region-layout] Processing sheet 26/48: depreciation (id=26)
+[region-layout] Sheet depreciation: 624 cells loaded in 7ms
+[region-layout] Sheet depreciation: 11208 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=11356
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 7423ms
+[region-layout] Sheet depreciation: LLM returned 11 regions in 7425ms
+[region-layout] Processing sheet 27/48: iNCOME tAX cOMPUTATION (id=27)
+[region-layout] Sheet iNCOME tAX cOMPUTATION: 174 cells loaded in 3ms
+[region-layout] Sheet iNCOME tAX cOMPUTATION: 2592 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=2750
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 2284ms
+[region-layout] Sheet iNCOME tAX cOMPUTATION: LLM returned 3 regions in 2285ms
+[region-layout] Processing sheet 28/48: area statement & civil cost (id=28)
+[region-layout] Sheet area statement & civil cost: 382 cells loaded in 1ms
+[region-layout] Sheet area statement & civil cost: 6366 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=6529
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 2726ms
+[region-layout] Sheet area statement & civil cost: LLM returned 4 regions in 2727ms
+[region-layout] Processing sheet 29/48: cma_FNL (id=29)
+[region-layout] Sheet cma_FNL: 3190 cells loaded in 20ms
+[region-layout] Sheet cma_FNL: 50250 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=50393
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 5405ms
+[region-layout] Sheet cma_FNL: LLM returned 13 regions in 5406ms
+[region-layout] Processing sheet 30/48: OP_STATEMENT (id=30)
+[region-layout] Sheet OP_STATEMENT: 744 cells loaded in 3ms
+[region-layout] Sheet OP_STATEMENT: 10707 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=10855
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 7341ms
+[region-layout] Sheet OP_STATEMENT: LLM returned 7 regions in 7342ms
+[region-layout] Processing sheet 31/48: BS_ANLYSIS (id=31)
+[region-layout] Sheet BS_ANLYSIS: 1485 cells loaded in 11ms
+[region-layout] Sheet BS_ANLYSIS: 21575 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=21721
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 11554ms
+[region-layout] Sheet BS_ANLYSIS: LLM returned 19 regions in 11555ms
+[region-layout] Processing sheet 32/48: CA_CL (id=32)
+[region-layout] Sheet CA_CL: 751 cells loaded in 7ms
+[region-layout] Sheet CA_CL: 12237 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=12378
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 5412ms
+[region-layout] Sheet CA_CL: LLM returned 7 regions in 5413ms
+[region-layout] Processing sheet 33/48: MPBF (id=33)
+[region-layout] Sheet MPBF: 405 cells loaded in 3ms
+[region-layout] Sheet MPBF: 6191 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=6331
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4882ms
+[region-layout] Sheet MPBF: LLM returned 2 regions in 4884ms
+[region-layout] Processing sheet 34/48: FUND_FLOW (id=34)
+[region-layout] Sheet FUND_FLOW: 718 cells loaded in 6ms
+[region-layout] Sheet FUND_FLOW: 12063 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=12208
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 7446ms
+[region-layout] Sheet FUND_FLOW: LLM returned 8 regions in 7447ms
+[region-layout] Processing sheet 35/48: Sheet2 (id=35)
+[region-layout] Sheet Sheet2: 42 cells loaded in 0ms
+[region-layout] Sheet Sheet2: 496 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=638
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4012ms
+[region-layout] Sheet Sheet2: LLM returned 1 regions in 4013ms
+[region-layout] Processing sheet 36/48: Sheet3 (id=36)
+[region-layout] Sheet Sheet3: 64 cells loaded in 2ms
+[region-layout] Sheet Sheet3: 1395 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=1537
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 3121ms
+[region-layout] Sheet Sheet3: LLM returned 1 regions in 3123ms
+[region-layout] Processing sheet 37/48: Sheet4 (id=37)
+[region-layout] Sheet Sheet4: 124 cells loaded in 2ms
+[region-layout] Sheet Sheet4: 2883 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=3025
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 3567ms
+[region-layout] Sheet Sheet4: LLM returned 2 regions in 3568ms
+[region-layout] Processing sheet 38/48: Sheet5 (id=38)
+[region-layout] Sheet Sheet5: 181 cells loaded in 2ms
+[region-layout] Sheet Sheet5: 2739 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=2881
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 3197ms
+[region-layout] Sheet Sheet5: LLM returned 2 regions in 3198ms
+[region-layout] Processing sheet 39/48: Sheet6 (id=39)
+[region-layout] Sheet Sheet6: 144 cells loaded in 2ms
+[region-layout] Sheet Sheet6: 3059 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=3201
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 2622ms
+[region-layout] Sheet Sheet6: LLM returned 1 regions in 2623ms
+[region-layout] Processing sheet 40/48: BALANCESHEET (id=40)
+[region-layout] Sheet BALANCESHEET: 370 cells loaded in 5ms
+[region-layout] Sheet BALANCESHEET: 5614 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=5762
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 6404ms
+[region-layout] Sheet BALANCESHEET: LLM returned 7 regions in 6405ms
+[region-layout] Processing sheet 41/48: Land Calcn (id=41)
+[region-layout] Sheet Land Calcn: 188 cells loaded in 2ms
+[region-layout] Sheet Land Calcn: 2443 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=2589
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 6347ms
+[region-layout] Sheet Land Calcn: LLM returned 5 regions in 6349ms
+[region-layout] Processing sheet 42/48: Sheet1 (id=42)
+[region-layout] Sheet Sheet1: 81 cells loaded in 2ms
+[region-layout] Sheet Sheet1: 1291 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=1433
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 1721ms
+[region-layout] Sheet Sheet1: LLM returned 1 regions in 1722ms
+[region-layout] Processing sheet 43/48: Prof. assumptions (id=43)
+[region-layout] Sheet Prof. assumptions: 137 cells loaded in 2ms
+[region-layout] Sheet Prof. assumptions: 3435 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=3588
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4095ms
+[region-layout] Sheet Prof. assumptions: LLM returned 4 regions in 4097ms
+[region-layout] Processing sheet 44/48: Manpower (id=44)
+[region-layout] Sheet Manpower: 54 cells loaded in 2ms
+[region-layout] Sheet Manpower: 832 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=976
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 2874ms
+[region-layout] Sheet Manpower: LLM returned 1 regions in 2876ms
+[region-layout] Processing sheet 45/48: Power (id=45)
+[region-layout] Sheet Power: 225 cells loaded in 3ms
+[region-layout] Sheet Power: 3876 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=4017
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 3360ms
+[region-layout] Sheet Power: LLM returned 3 regions in 3362ms
+[region-layout] Processing sheet 46/48: Floor area (id=46)
+[region-layout] Sheet Floor area: 81 cells loaded in 1ms
+[region-layout] Sheet Floor area: 1354 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=1500
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 3182ms
+[region-layout] Sheet Floor area: LLM returned 2 regions in 3184ms
+[region-layout] Processing sheet 47/48: power cost (id=47)
+[region-layout] Sheet power cost: 134 cells loaded in 2ms
+[region-layout] Sheet power cost: 2483 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=2629
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4914ms
+[region-layout] Sheet power cost: LLM returned 6 regions in 4916ms
+[region-layout] Processing sheet 48/48: Details (id=48)
+[region-layout] Sheet Details: 1394 cells loaded in 11ms
+[region-layout] Sheet Details: 24681 char dump, calling LLM...
+[http-client] completeJson: model=openai/gpt-6-luna, maxTokens=32768, userLen=24824
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 8128ms
+[region-layout] Sheet Details: LLM returned 15 regions in 8129ms
+[classify] building packets for 227 candidates
+[classify] packets 25/227
+[classify] packets 50/227
+[classify] packets 75/227
+[classify] packets 100/227
+[classify] packets 125/227
+[classify] packets 150/227
+[classify] packets 175/227
+[classify] packets 200/227
+[classify] packets 225/227
+[classify] packets 227/227
+[http-client] Sending request to OpenRouter...
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4098ms
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 5702ms
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 3194ms
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4664ms
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4187ms
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 3048ms
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 5263ms
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 3300ms
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4670ms
+[classify] layer-a 10/227
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4644ms
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4454ms
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4802ms
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4945ms
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 4702ms
+[http-client] Sending request to OpenRouter...
+[http-client] Got response HTTP 200 after 5892ms
+[http-client] Sending request to OpenRouter...

@@ -95,9 +95,38 @@ public class CellTypeClassifierLlm {
             byWorksheet.computeIfAbsent(cell.worksheetId(), k -> new ArrayList<>()).add(cell);
         }
 
+        // Batch cells for efficiency: classify 15 cells per LLM call instead of 1
         for (List<InterpretationCellView> worksheetCells : byWorksheet.values()) {
-            for (InterpretationCellView cell : worksheetCells) {
-                CellTypeRequest request = buildCellTypeRequest(cell, cells, settled);
+            for (int i = 0; i < worksheetCells.size(); i += 15) {
+                int end = Math.min(i + 15, worksheetCells.size());
+                List<InterpretationCellView> batch = worksheetCells.subList(i, end);
+                classifyBatch(batch, cells, settled);
+            }
+        }
+    }
+
+    private void classifyBatch(List<InterpretationCellView> batch, List<InterpretationCellView> allCells, Map<Long, ReadingOutcome> settled) {
+        List<CellTypeRequest> requests = new ArrayList<>();
+        for (InterpretationCellView cell : batch) {
+            requests.add(buildCellTypeRequest(cell, allCells, settled));
+        }
+
+        try {
+            List<CellTypeResponse> responses = classifyBatchCells(requests);
+            for (int i = 0; i < batch.size(); i++) {
+                CellTypeResponse response = responses.get(i);
+                if (response.confidence >= MIN_CONFIDENCE) {
+                    InterpretationCellView cell = batch.get(i);
+                    CellScale scale = CellScale.fromWire(response.scale);
+                    settled.put(cell.cellId(), ReadingOutcome.typed(
+                            response.kind, scale, response.unit, response.currency, "llm_fallback"));
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[llm-fallback] Failed to classify batch: " + e.getMessage());
+            // Fall back to individual classification on batch failure
+            for (InterpretationCellView cell : batch) {
+                CellTypeRequest request = buildCellTypeRequest(cell, allCells, settled);
                 try {
                     CellTypeResponse response = classifyCell(request);
                     if (response.confidence >= MIN_CONFIDENCE) {
@@ -105,11 +134,117 @@ public class CellTypeClassifierLlm {
                         settled.put(cell.cellId(), ReadingOutcome.typed(
                                 response.kind, scale, response.unit, response.currency, "llm_fallback"));
                     }
-                } catch (Exception e) {
-                    System.err.println("[llm-fallback] Failed to classify " + cell.coord() + ": " + e.getMessage());
+                } catch (Exception ex) {
+                    System.err.println("[llm-fallback] Failed to classify " + cell.coord() + ": " + ex.getMessage());
                 }
             }
         }
+    }
+
+    private List<CellTypeResponse> classifyBatchCells(List<CellTypeRequest> requests) throws Exception {
+        String userMessage = formatBatchUserMessage(requests);
+        long llmStart = System.nanoTime();
+        String jsonResponse = llm.classifyCellJson(SYSTEM_PROMPT, userMessage, 4096);
+        long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
+        System.err.println("[cell-llm] Batch of " + requests.size() + " cells: LLM responded in " + llmMs + "ms");
+        return parseBatchCellTypeResponse(jsonResponse, requests.size());
+    }
+
+    private String formatBatchUserMessage(List<CellTypeRequest> requests) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Classify the following ").append(requests.size()).append(" cells:\n\n");
+
+        for (int i = 0; i < requests.size(); i++) {
+            CellTypeRequest request = requests.get(i);
+            sb.append("Cell ").append(i + 1).append(": ").append(request.coord)
+                    .append(" (display: \"").append(request.displayValue).append("\"");
+            if (!request.formulaText.isBlank()) {
+                sb.append(", formula: \"").append(request.formulaText).append("\"");
+            }
+            sb.append(")\n");
+
+            if (!request.rowLabel.isBlank()) {
+                sb.append("  Row Label: ").append(request.rowLabel).append("\n");
+            }
+            if (!request.columnLabel.isBlank()) {
+                sb.append("  Column Label: ").append(request.columnLabel).append("\n");
+            }
+
+            if (!request.neighbors.isEmpty()) {
+                sb.append("  Context:");
+                for (NeighborCell neighbor : request.neighbors) {
+                    sb.append(" ").append(neighbor.direction).append("=").append(neighbor.displayValue)
+                            .append("(").append(neighbor.type).append(")");
+                }
+                sb.append("\n");
+            }
+            sb.append("\n");
+        }
+
+        sb.append("Return a JSON array with one object per cell (in same order):\n");
+        sb.append("[{\"kind\":\"...\",\"scale\":\"...\",\"unit\":\"...\",\"currency\":\"...\",\"confidence\":...}, ...]\n");
+
+        return sb.toString();
+    }
+
+    private List<CellTypeResponse> parseBatchCellTypeResponse(String jsonResponse, int expectedCount) throws Exception {
+        List<CellTypeResponse> responses = new ArrayList<>();
+        JsonNode root = MAPPER.readTree(jsonResponse);
+
+        // Handle multiple formats: [...], {"cells": [...]}, {"array": [...]}, or any object containing an array
+        JsonNode nodes;
+        if (root.isArray()) {
+            nodes = root;
+        } else if (root.isObject()) {
+            // Try common wrapper keys first
+            if (root.has("cells")) {
+                nodes = root.get("cells");
+            } else if (root.has("array")) {
+                nodes = root.get("array");
+            } else if (root.has("results")) {
+                nodes = root.get("results");
+            } else if (root.has("data")) {
+                nodes = root.get("data");
+            } else {
+                // Find first array in the object
+                nodes = null;
+                for (JsonNode field : root) {
+                    if (field.isArray()) {
+                        nodes = field;
+                        break;
+                    }
+                }
+                if (nodes == null) {
+                    throw new IllegalArgumentException("No array found in response object");
+                }
+            }
+            if (!nodes.isArray()) {
+                throw new IllegalArgumentException("Expected array value, got: " + nodes.getNodeType());
+            }
+        } else {
+            throw new IllegalArgumentException("Expected JSON array or object with array, got: " + jsonResponse.substring(0, Math.min(100, jsonResponse.length())));
+        }
+
+        for (int i = 0; i < nodes.size(); i++) {
+            JsonNode node = nodes.get(i);
+            String kind = node.get("kind").asText();
+            String scale = node.get("scale").asText();
+            String unit = node.get("unit").asText("");
+            String currency = node.get("currency").asText("");
+            double confidence = node.get("confidence").asDouble(0.0);
+
+            if (!List.of("money", "quantity", "rate", "percent", "count", "ratio").contains(kind)) {
+                throw new IllegalArgumentException("Invalid kind at index " + i + ": " + kind);
+            }
+
+            responses.add(new CellTypeResponse(kind, scale, unit, currency, confidence));
+        }
+
+        if (responses.size() != expectedCount) {
+            System.err.println("[llm-fallback] Warning: expected " + expectedCount + " responses, got " + responses.size());
+        }
+
+        return responses;
     }
 
     private CellTypeRequest buildCellTypeRequest(
