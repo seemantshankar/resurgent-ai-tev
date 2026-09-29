@@ -104,6 +104,12 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         return LayerBResponseParser.parse(result.content());
     }
 
+    @Override
+    public String classifyCellJson(String systemPrompt, String userPrompt, int maxTokens) {
+        CompletionResult result = client.completeJson(systemPrompt, userPrompt, maxTokens);
+        return result.content();
+    }
+
     record CompletionResult(
             String content,
             Integer promptTokens,

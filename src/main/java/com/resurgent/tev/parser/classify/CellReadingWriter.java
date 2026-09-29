@@ -27,6 +27,10 @@ import java.util.Set;
 public final class CellReadingWriter {
 
     public void replace(WorkspaceRepository repo, long parseRunId) throws SQLException {
+        replace(repo, parseRunId, null);
+    }
+
+    void replace(WorkspaceRepository repo, long parseRunId, ClassifierLlm llm) throws SQLException {
         List<InterpretationCellView> cells = repo.selectInterpretationCellsForParseRun(parseRunId);
         Map<Long, InterpretationCellView> byId = InterpretationEvidenceResolver.indexCells(cells);
         Map<Long, Set<Long>> members = InterpretationEvidenceResolver.indexMembers(
@@ -113,9 +117,10 @@ public final class CellReadingWriter {
         // Post-process: infer types for untypable cells based on structural context
         new CellReadingInferencer(cells).infer(settled);
 
-        // Optional: Use LLM for remaining unclassified cells
-        // new CellTypeClassifierLlm(repo, llm).classifyRemaining(cells, settled);
-        // See: LLM fallback comment below
+        // Use LLM for remaining unclassified cells (if LLM is provided)
+        if (llm != null) {
+            new CellTypeClassifierLlm(repo, llm).classifyRemaining(cells, settled);
+        }
 
         List<CellReading> rows = new ArrayList<>();
         for (InterpretationCellView cell : cells) {
