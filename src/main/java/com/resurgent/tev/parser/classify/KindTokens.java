@@ -47,6 +47,9 @@ final class KindTokens {
     static final Pattern MONEY_TOKEN = Pattern.compile(
             "(?i)(?:\\brs\\.?\\b|\\binr\\b|₹|\\$|€|£|amount|cost|price|value|fee|payment|"
                     + "revenue|sales|receipts?|income|turnover|tariff|charges?|"
+                    + "capital|principal|equity|dividend|profit|loss|"
+                    + "interest|margin|markup|discount|rebate|fund|funding|"
+                    + "borrowed|borrowing|repayment|balance|asset|liability|"
                     + "capex|opex|expense|outlay|investment|lac|lakh|crore|less\\s*:|"
                     + "total\\s+cost|project\\s+cost|means\\s+of\\s+finance|"
                     + "depreciation|\\bdep\\.?\\b)");
