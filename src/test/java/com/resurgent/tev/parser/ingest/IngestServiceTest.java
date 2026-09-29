@@ -16,6 +16,7 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.usermodel.Name;
 import org.apache.poi.ss.usermodel.Row;
@@ -214,6 +215,13 @@ class IngestServiceTest {
                     assertThat(rs.next()).isTrue();
                     assertThat(rs.getString("formula_text")).isEqualTo("[1]Other!A1");
                 }
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT reason FROM formula_gap")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("reason")).isEqualTo("external");
+                    assertThat(rs.next()).isFalse();
+                }
+                assertThat(count(c, "formula_link")).isZero();
             }
         }
     }
@@ -266,6 +274,15 @@ class IngestServiceTest {
                     assertThat(rs.next()).isTrue();
                     assertThat(rs.getString("ref_kind")).isEqualTo("defined_name");
                     assertThat(rs.getString("unresolved_reason")).isNull();
+                    assertThat(rs.next()).isFalse();
+                }
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT tc.coord FROM formula_link fl"
+                                + " JOIN cell fc ON fc.cell_id = fl.from_cell_id"
+                                + " JOIN cell tc ON tc.cell_id = fl.to_cell_id"
+                                + " WHERE fc.coord = 'B1'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("coord")).isEqualTo("A1");
                     assertThat(rs.next()).isFalse();
                 }
                 try (ResultSet rs = c.createStatement().executeQuery(
@@ -704,6 +721,92 @@ class IngestServiceTest {
                     assertThat(rs.next()).isTrue();
                     assertThat(rs.getString("unresolved_reason")).isNotBlank();
                 }
+            }
+        }
+    }
+
+    @Test
+    void ingestStoresWhatAFormulaCalculatesAndWhatACellReaches() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet model = workbook.createSheet("Model");
+            Row inputs = model.createRow(0);
+            inputs.createCell(0).setCellValue(10.0); // A1
+            inputs.createCell(1).setCellValue(20.0); // B1
+            model.createRow(1).createCell(0).setCellFormula("SUM(B1:B10)+A1"); // A2
+            model.createRow(2).createCell(0).setCellFormula("A2*2"); // A3
+            Sheet interest = workbook.createSheet("Interest");
+            interest.createRow(153).createCell(8).setCellFormula("Model!A1"); // I154
+
+            Path xlsx = writeWorkbook(workbook, "formula-graph.xlsx");
+            Path db = tempDir.resolve("formula-graph.db");
+            IngestSummary summary = new IngestService().ingest(xlsx, 1L, db);
+            assertThat(summary.status()).isEqualTo("success");
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                assertThat(count(c, "cell")).isEqualTo(5); // A1 B1 A2 A3 I154 — not the blank B2:B10
+                assertThat(precedents(c, "Model", "A2")).containsExactlyInAnyOrder("A1@1", "B1@1");
+                assertThat(precedents(c, "Model", "A3"))
+                        .containsExactlyInAnyOrder("A2@1", "A1@2", "B1@2");
+                assertThat(dependents(c, "Model", "A1"))
+                        .containsExactlyInAnyOrder("A2@1", "A3@2", "I154@1");
+                assertThat(count(c, "formula_gap")).isZero();
+            }
+        }
+    }
+
+    @Test
+    void circularFormulasAreStoredAndTheWalkStops() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Sheet1");
+            sheet.createRow(0).createCell(0).setCellFormula("B1");
+            sheet.getRow(0).createCell(1).setCellFormula("A1");
+
+            Path xlsx = writeWorkbook(workbook, "cycle.xlsx");
+            Path db = tempDir.resolve("cycle.db");
+            new IngestService().ingest(xlsx, 1L, db);
+
+            try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+                assertThat(precedents(c, "Sheet1", "A1")).containsExactlyInAnyOrder("B1@1", "A1@2");
+                assertThat(precedents(c, "Sheet1", "B1")).containsExactlyInAnyOrder("A1@1", "B1@2");
+                try (ResultSet rs = c.createStatement().executeQuery(
+                        "SELECT COUNT(*) FROM formula_gap WHERE reason = 'cycle'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).isEqualTo(2);
+                }
+            }
+        }
+    }
+
+    private static Set<String> precedents(Connection c, String sheet, String coord) throws Exception {
+        return reach(c, sheet, coord, true);
+    }
+
+    private static Set<String> dependents(Connection c, String sheet, String coord) throws Exception {
+        return reach(c, sheet, coord, false);
+    }
+
+    private static Set<String> reach(Connection c, String sheet, String coord, boolean precedents)
+            throws Exception {
+        String sql = precedents
+                ? "SELECT other.coord, r.depth FROM formula_reach r"
+                        + " JOIN cell origin ON origin.cell_id = r.from_cell_id"
+                        + " JOIN worksheet ow ON ow.worksheet_id = origin.worksheet_id"
+                        + " JOIN cell other ON other.cell_id = r.to_cell_id"
+                        + " WHERE ow.sheet_name = ? AND origin.coord = ?"
+                : "SELECT other.coord, r.depth FROM formula_reach r"
+                        + " JOIN cell origin ON origin.cell_id = r.to_cell_id"
+                        + " JOIN worksheet ow ON ow.worksheet_id = origin.worksheet_id"
+                        + " JOIN cell other ON other.cell_id = r.from_cell_id"
+                        + " WHERE ow.sheet_name = ? AND origin.coord = ?";
+        try (var ps = c.prepareStatement(sql)) {
+            ps.setString(1, sheet);
+            ps.setString(2, coord);
+            try (ResultSet rs = ps.executeQuery()) {
+                Set<String> rows = new java.util.LinkedHashSet<>();
+                while (rs.next()) {
+                    rows.add(rs.getString("coord") + "@" + rs.getInt("depth"));
+                }
+                return rows;
             }
         }
     }

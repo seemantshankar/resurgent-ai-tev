@@ -7,6 +7,10 @@ package com.resurgent.tev.parser.classify;
  */
 final class AttemptDeadlineException extends ClassifyException {
 
+    AttemptDeadlineException(String message) {
+        super(message);
+    }
+
     AttemptDeadlineException(String message, Throwable cause) {
         super(message, cause);
     }

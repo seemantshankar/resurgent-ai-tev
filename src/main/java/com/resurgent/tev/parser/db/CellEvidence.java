@@ -9,8 +9,13 @@ public record CellEvidence(
         int rowNum,
         int colNum,
         String valueType,
+        String textValue,
+        String formulaText,
+        boolean hasNumeric,
         Long styleId,
         Boolean isBold,
+        boolean hasBorder,
+        boolean hasBottomBorder,
         boolean isMergedAnchor,
         boolean isMergedParticipant,
         String mergedRange) {

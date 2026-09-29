@@ -22,6 +22,11 @@ final class PacketBuilder {
 
     Packet build(WorkspaceRepository repo, long candidateId)
             throws SQLException, DiscoverException {
+        return build(repo, candidateId, new CellViewCache(repo));
+    }
+
+    Packet build(WorkspaceRepository repo, long candidateId, CellViewCache cache)
+            throws SQLException, DiscoverException {
         CandidateRow candidate = repo.selectCandidate(candidateId);
         if (candidate == null) {
             throw new DiscoverException("candidate not found: " + candidateId);
@@ -35,8 +40,8 @@ final class PacketBuilder {
             cells.put(view.cellId(), toPacketCell(view, PacketCell.ROLE_CORE));
         }
 
-        boolean contextClosure = appendInheritedContext(repo, candidate, memberSet, cells);
-        appendFormulaContext(repo, candidate, memberSet, cells, largeRanges);
+        boolean contextClosure = appendInheritedContext(repo, candidate, memberSet, cells, cache);
+        appendFormulaContext(candidate, memberSet, cells, largeRanges, cache);
 
         return new Packet(
                 candidate.candidateId(),
@@ -62,6 +67,7 @@ final class PacketBuilder {
                     .add(candidate);
         }
         List<Packet> packets = new ArrayList<>();
+        CellViewCache cache = new CellViewCache(repo);
         for (List<CandidateRow> sheetCandidates : byWorksheet.values()) {
             List<CandidateRow> narrower = sheetCandidates.stream()
                     .filter(c -> !"coverage_parent".equals(c.candidateKind()))
@@ -73,7 +79,7 @@ final class PacketBuilder {
 
             boolean anyChildFailsClosure = false;
             for (CandidateRow narrow : narrower) {
-                Packet packet = build(repo, narrow.candidateId());
+                Packet packet = build(repo, narrow.candidateId(), cache);
                 packets.add(packet);
                 if (!packet.contextClosureSucceeded()) {
                     anyChildFailsClosure = true;
@@ -81,7 +87,7 @@ final class PacketBuilder {
             }
             if (coverage != null
                     && (narrower.isEmpty() || anyChildFailsClosure)) {
-                packets.add(build(repo, coverage.candidateId()));
+                packets.add(build(repo, coverage.candidateId(), cache));
             }
         }
         return packets;
@@ -91,7 +97,8 @@ final class PacketBuilder {
             WorkspaceRepository repo,
             CandidateRow candidate,
             Set<Long> memberSet,
-            Map<Long, PacketCell> cells)
+            Map<Long, PacketCell> cells,
+            CellViewCache cache)
             throws SQLException {
         if ("coverage_parent".equals(candidate.candidateKind())) {
             return true;
@@ -108,7 +115,7 @@ final class PacketBuilder {
         if (parentId != null) {
             pool = repo.selectCellPacketViews(repo.selectCandidateMemberCellIds(parentId));
         } else {
-            pool = repo.selectCellPacketViewsForWorksheet(candidate.worksheetId());
+            pool = cache.worksheet(candidate.worksheetId());
         }
 
         boolean found = false;
@@ -134,21 +141,20 @@ final class PacketBuilder {
     }
 
     private static void appendFormulaContext(
-            WorkspaceRepository repo,
             CandidateRow candidate,
             Set<Long> memberSet,
             Map<Long, PacketCell> cells,
-            List<PacketRangeRef> largeRanges)
+            List<PacketRangeRef> largeRanges,
+            CellViewCache cache)
             throws SQLException {
-        List<PersistedCellReference> edges =
-                repo.selectPersistedCellReferencesForParseRun(candidate.parseRunId());
+        List<PersistedCellReference> edges = cache.edgesForParseRun(candidate.parseRunId());
         for (PersistedCellReference persisted : edges) {
             CellReferenceEdge edge = persisted.edge();
             if (!memberSet.contains(edge.fromCellId())) {
                 continue;
             }
             if (edge.resolvedCellId() != null) {
-                addContextCell(repo, edge.resolvedCellId(), cells);
+                addContextCell(cache, edge.resolvedCellId(), cells);
                 continue;
             }
             Long targetWs = edge.targetWorksheetId();
@@ -157,7 +163,7 @@ final class PacketBuilder {
                 continue;
             }
             // Other-sheet context only via reference edge (always true here).
-            List<CellPacketView> targets = repo.selectCellsInTargetRange(targetWs, range);
+            List<CellPacketView> targets = cache.targetRange(targetWs, range);
             if (targets.size() > INLINE_FORMULA_CELL_CAP) {
                 largeRanges.add(new PacketRangeRef(
                         edge.fromCellId(),
@@ -176,14 +182,14 @@ final class PacketBuilder {
     }
 
     private static void addContextCell(
-            WorkspaceRepository repo, long cellId, Map<Long, PacketCell> cells)
+            CellViewCache cache, long cellId, Map<Long, PacketCell> cells)
             throws SQLException {
         if (cells.containsKey(cellId)) {
             return;
         }
-        List<CellPacketView> views = repo.selectCellPacketViews(List.of(cellId));
-        if (!views.isEmpty()) {
-            cells.put(cellId, toPacketCell(views.get(0), PacketCell.ROLE_CONTEXT));
+        CellPacketView view = cache.cell(cellId);
+        if (view != null) {
+            cells.put(cellId, toPacketCell(view, PacketCell.ROLE_CONTEXT));
         }
     }
 

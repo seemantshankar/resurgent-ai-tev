@@ -231,11 +231,13 @@ public final class XlsAdapter {
         }
 
         SheetBbox.Bbox bbox = SheetBbox.computeBbox(sheet, baseCells, mergedRegions, List.of());
+        SheetCapture.addCommentOnlyCells(sheet, cells, sheetHidden);
         int realContentRows = SheetBbox.countContentRows(cells);
 
         return new XlsxSheet(sheet.getSheetName(), index, state, cells,
                 bbox.minRow(), bbox.minCol(), bbox.maxRow(), bbox.maxCol(),
-                null, realContentRows, mergedRegions.size());
+                null, realContentRows, mergedRegions.size(),
+                SheetCapture.columnWidths(sheet, cells));
     }
 
     private static NormalizedCell normalizeCell(Cell cell, boolean rowHidden, boolean colHidden,
@@ -271,7 +273,8 @@ public final class XlsAdapter {
     }
 
     private static NormalizedCell withStyle(Cell styleSource, NormalizedCell cell) {
-        return NormalizedCellFactory.attachStyle(cell, CellStyleExtractor.extract(styleSource));
+        return SheetCapture.attachComment(styleSource,
+                NormalizedCellFactory.attachStyle(cell, CellStyleExtractor.extract(styleSource)));
     }
 
     /**

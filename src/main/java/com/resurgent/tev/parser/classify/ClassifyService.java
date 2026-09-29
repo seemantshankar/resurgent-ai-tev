@@ -1,110 +1,61 @@
 package com.resurgent.tev.parser.classify;
 
+import com.resurgent.tev.parser.Progress;
+import com.resurgent.tev.parser.db.BindCellRow;
 import com.resurgent.tev.parser.db.CandidateRow;
+import com.resurgent.tev.parser.db.CandidateWrite;
+import com.resurgent.tev.parser.db.NomenclatureBinding;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
+import com.resurgent.tev.parser.db.WorksheetRef;
 import com.resurgent.tev.parser.discover.DiscoverService;
 import com.resurgent.tev.parser.discover.Packet;
-import com.resurgent.tev.parser.discover.PacketCell;
+import com.resurgent.tev.parser.nomenclature.NomenclatureAlias;
 import com.resurgent.tev.parser.nomenclature.NomenclatureCatalog;
-import com.resurgent.tev.parser.nomenclature.NomenclatureException;
 import com.resurgent.tev.parser.nomenclature.NomenclatureNode;
 import com.resurgent.tev.parser.nomenclature.OntologySlice;
+import com.resurgent.tev.parser.nomenclature.ProjectFactField;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
-import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.Callable;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Phaser;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.regex.Pattern;
 
 /**
- * Packet classification application service: Layer A disposition and Layer B
- * nomenclature bindings for one parse run. Consumes derived Packets; does not
- * rewrite Candidate geometry. Peers, ProjectFacts, and Cell interpretations
- * persist in separate tables.
+ * Classify: (1) LLM proposes main/helper/scratch regions and replaces narrow
+ * Candidates, (2) Layer A + about on main/helper only.
  */
 public final class ClassifyService {
 
-    private static final Pattern COORD_SHAPED = Pattern.compile("[A-Z]{1,3}[0-9]{1,7}");
-
     private final ClassifierLlm llm;
     private final DiscoverService discover;
-    private final InterpretationWriter interpretationWriter;
-    private final FormulaGlossLlm formulaGlossLlm;
     private final ClassifyLimits limits;
 
     public ClassifyService(ClassifierLlm llm) {
-        this(llm, new DiscoverService(), new InterpretationWriter(),
-                glossPortFor(llm), ClassifyLimits.defaults());
+        this(llm, new DiscoverService(), ClassifyLimits.defaults());
     }
 
     public ClassifyService(ClassifierLlm llm, DiscoverService discover) {
-        this(llm, discover, new InterpretationWriter(),
-                glossPortFor(llm), ClassifyLimits.defaults());
+        this(llm, discover, ClassifyLimits.defaults());
     }
 
     public ClassifyService(ClassifierLlm llm, DiscoverService discover, ClassifyLimits limits) {
-        this(llm, discover, new InterpretationWriter(), glossPortFor(llm), limits);
-    }
-
-    public ClassifyService(
-            ClassifierLlm llm, DiscoverService discover, FormulaGlossLlm formulaGlossLlm) {
-        this(llm, discover, new InterpretationWriter(), formulaGlossLlm, ClassifyLimits.defaults());
-    }
-
-    public ClassifyService(
-            ClassifierLlm llm, DiscoverService discover, InterpretationWriter interpretationWriter) {
-        this(llm, discover, interpretationWriter, glossPortFor(llm),
-                ClassifyLimits.defaults());
-    }
-
-    public ClassifyService(
-            ClassifierLlm llm,
-            DiscoverService discover,
-            InterpretationWriter interpretationWriter,
-            ClassifyLimits limits) {
-        this(llm, discover, interpretationWriter, glossPortFor(llm), limits);
-    }
-
-    public ClassifyService(
-            ClassifierLlm llm,
-            DiscoverService discover,
-            InterpretationWriter interpretationWriter,
-            FormulaGlossLlm formulaGlossLlm,
-            ClassifyLimits limits) {
         this.llm = Objects.requireNonNull(llm, "llm");
         this.discover = Objects.requireNonNull(discover, "discover");
-        this.interpretationWriter =
-                Objects.requireNonNull(interpretationWriter, "interpretationWriter");
-        this.formulaGlossLlm = Objects.requireNonNull(formulaGlossLlm, "formulaGlossLlm");
         this.limits = Objects.requireNonNull(limits, "limits");
-    }
-
-    /** Live OpenRouter (and other dual-port adapters) carry gloss; fakes stay no-op. */
-    private static FormulaGlossLlm glossPortFor(ClassifierLlm llm) {
-        if (llm instanceof FormulaGlossLlm gloss) {
-            return gloss;
-        }
-        return new NoOpFormulaGlossLlm();
     }
 
     public ClassifySummary classify(Path dbPath, long parseRunId) throws ClassifyException {
@@ -118,113 +69,78 @@ public final class ClassifyService {
             if (!repo.parseRunExists(parseRunId)) {
                 throw new ClassifyException("parse run not found: " + parseRunId);
             }
-            long mandateId = repo.selectParseRunMandateId(parseRunId);
-            NomenclatureCatalog catalog = new NomenclatureCatalog(repo);
-            OntologySlice slice = catalog.sliceForMandate(mandateId);
-            List<CandidateRow> candidates = repo.selectCandidatesForParseRun(parseRunId);
-            if (candidates.isEmpty()) {
-                throw new ClassifyException("no Candidates for parse run " + parseRunId
-                        + "; run discover first");
+            List<CandidateRow> existing = repo.selectCandidatesForParseRun(parseRunId);
+            if (existing.isEmpty()) {
+                throw new ClassifyException(
+                        "no Candidates for parse run " + parseRunId + "; run discover first");
             }
 
-            // LLM calls stay outside the write transaction so long classify runs do not
-            // hold a SQLite write lock. Packets are built serially; Layer A/B run
-            // concurrently with parent-before-child and A→B pipelining; bindings
-            // materialize serially after all LLM work completes or the run is incomplete.
-            List<PreparedPacket> prepared = new ArrayList<>();
-            int coverageParents = 0;
-            for (CandidateRow candidate : candidates) {
-                boolean cheapPass = "coverage_parent".equals(candidate.candidateKind());
-                if (cheapPass) {
-                    coverageParents++;
+            Progress.phase("classify", "LLM region layout");
+            materializeLlmRegions(repo, parseRunId);
+
+            List<CandidateRow> all = repo.selectCandidatesForParseRun(parseRunId);
+            Map<Long, String> sheetNames = new HashMap<>();
+            for (WorksheetRef sheet : repo.selectWorksheetsForParseRun(parseRunId)) {
+                sheetNames.put(sheet.worksheetId(), sheet.sheetName());
+            }
+
+            List<CandidateRow> eligible = new ArrayList<>();
+            int skipped = 0;
+            for (CandidateRow candidate : all) {
+                if (isEligible(candidate)) {
+                    eligible.add(candidate);
+                } else {
+                    skipped++;
                 }
-                Packet packet = discover.buildPacket(repo, candidate.candidateId());
-                Packet redacted = PacketRedactor.redact(packet, cheapPass);
-                prepared.add(new PreparedPacket(candidate, packet, redacted, cheapPass));
             }
 
-            LlmPhaseResult llmPhase = runLlmPhase(slice, parseRunId, prepared);
-            LayerBBindingStats layerBStats = new LayerBBindingStats();
-            for (String failed : llmPhase.layerBFailures()) {
-                layerBStats.addFailedCall(failed);
+            ScheduleFamilyCatalog families = ScheduleFamilyCatalog.seeded();
+            families.restore(repo.selectScheduleFamilies());
+
+            DiscoverService.PacketSession packetSession = discover.packetSession(repo);
+            Progress.phase("classify", "building packets for " + eligible.size() + " candidates");
+            List<PreparedPacket> prepared = new ArrayList<>();
+            int progress = 0;
+            for (CandidateRow candidate : eligible) {
+                Progress.step("classify", "packets", ++progress, eligible.size(), 25);
+                Packet packet = packetSession.build(candidate.candidateId());
+                Packet redacted = PacketRedactor.redact(packet, false);
+                prepared.add(new PreparedPacket(
+                        candidate,
+                        redacted,
+                        sheetNames.getOrDefault(candidate.worksheetId(), "")));
             }
-            LayerBMaterializeResult layerB = materializeLayerB(
-                    catalog,
-                    mandateId,
-                    slice,
-                    parseRunId,
-                    llmPhase.jobs(),
-                    llmPhase.judgments(),
-                    layerBStats);
-            List<PacketDisposition> dispositions = llmPhase.dispositions();
-            List<ProjectFactBinding> factBindings = llmPhase.facts();
-            List<NomenclatureBinding> bindings = layerB.bindings();
-            List<BindingPeer> bindingPeers;
-            try {
-                bindingPeers = BindingPeerWriter.buildPeers(
-                        repo, parseRunId, bindings, layerB.pendingPeers());
-            } catch (PeerCoordResolver.PeerCoordException e) {
-                throw new ClassifyException(e.getMessage(), e);
-            }
+
+            long deadlineNanos = System.nanoTime() + limits.classifyDeadline().toNanos();
+            List<PacketDisposition> dispositions =
+                    runLayerA(prepared, families, deadlineNanos);
 
             db.connection().setAutoCommit(false);
-            int interpretationCount;
             try {
                 List<CandidateRow> current = repo.selectCandidatesForParseRun(parseRunId);
-                if (!sameCandidateIds(candidates, current)) {
+                if (!sameCandidateIds(all, current)) {
                     throw new ClassifyException(
                             "Candidates changed during classify for parse run " + parseRunId
                                     + "; re-run discover then classify");
                 }
-                repo.deleteBindingPeersForParseRun(parseRunId);
-                repo.deleteProjectFactBindingsForParseRun(parseRunId);
-                repo.deleteNomenclatureBindingsForParseRun(parseRunId);
                 repo.deletePacketDispositionsForParseRun(parseRunId);
+                for (String admitted : families.admitted()) {
+                    repo.insertScheduleFamily(admitted);
+                }
                 for (PacketDisposition disposition : dispositions) {
                     repo.insertPacketDisposition(disposition);
                 }
-                for (ProjectFactBinding fact : factBindings) {
-                    repo.insertProjectFactBinding(fact);
-                }
-                for (NomenclatureBinding binding : bindings) {
-                    repo.insertNomenclatureBinding(binding);
-                }
-                for (BindingPeer peer : bindingPeers) {
-                    repo.insertBindingPeer(peer);
-                }
-                interpretationCount = interpretationWriter.write(repo, parseRunId, bindings);
-                repo.commit();
-            } catch (ClassifyException e) {
-                repo.rollback();
+                new CellReadingWriter().replace(repo, parseRunId);
+                db.connection().commit();
+            } catch (Exception e) {
+                db.connection().rollback();
                 throw e;
-            } catch (Exception e) {
-                repo.rollback();
-                throw new ClassifyException("classify failed: " + e.getMessage(), e);
-            } finally {
-                db.connection().setAutoCommit(true);
-            }
-
-            // Gloss LLM stays after the interpretation/annotation commit so a
-            // provider failure cannot roll back bindings. Lifecycle still follows
-            // annotation presence: only formula cells with annotations are glossed.
-            try {
-                db.connection().setAutoCommit(false);
-                new FormulaGlossWriter(formulaGlossLlm).write(repo, parseRunId);
-                repo.commit();
-            } catch (Exception e) {
-                repo.rollback();
-                // Gloss is optional explanation; do not fail classify after A/B succeeded.
             } finally {
                 db.connection().setAutoCommit(true);
             }
 
             return new ClassifySummary(
-                    parseRunId,
-                    dispositions.size(),
-                    coverageParents,
-                    bindings.size(),
-                    interpretationCount,
-                    layerBStats);
+                    parseRunId, dispositions.size(), skipped, eligible.size());
         } catch (ClassifyException e) {
             throw e;
         } catch (Exception e) {
@@ -234,740 +150,582 @@ public final class ClassifyService {
     }
 
     /**
-     * Layer B LLM calls are submitted as each Packet's Layer A finishes so A and B
-     * overlap. Soft leaves created by earlier packets are <em>not</em> visible to
-     * concurrent prompts; reconciliation happens here during serial materialize:
-     * reload the slice after each accept, and if {@code putSoftLeaf} races on an
-     * already-created path, treat it as an existing leaf.
+     * Replace narrow Candidates with LLM-proposed regions. Empty proposal list
+     * leaves discover geometry unchanged (test fakes).
      */
-    private record LayerBMaterializeResult(
-            List<NomenclatureBinding> bindings,
-            List<BindingPeerWriter.PendingPeerLine> pendingPeers) {}
-
-    private LayerBMaterializeResult materializeLayerB(
-            NomenclatureCatalog catalog,
-            long mandateId,
-            OntologySlice slice,
-            long parseRunId,
-            List<LayerBJob> jobs,
-            List<List<LayerBLineJudgment>> judgmentsByJob,
-            LayerBBindingStats stats) {
-        if (jobs.isEmpty()) {
-            return new LayerBMaterializeResult(List.of(), List.of());
-        }
-        List<NomenclatureBinding> bindings = new ArrayList<>();
-        List<BindingPeerWriter.PendingPeerLine> pendingPeers = new ArrayList<>();
-        Set<Long> boundCells = new HashSet<>();
-        OntologySlice currentSlice = slice;
-        for (int i = 0; i < jobs.size(); i++) {
-            LayerBJob job = jobs.get(i);
-            List<LayerBLineJudgment> lines = judgmentsByJob.get(i);
-            stats.addProposed(lines.size());
-            for (LayerBLineJudgment line : lines) {
-                MaterializeResult result = tryMaterializeBinding(
-                        catalog,
-                        mandateId,
-                        currentSlice,
-                        job.packet(),
-                        job.candidate(),
-                        parseRunId,
-                        line);
-                if (result.binding() == null) {
-                    stats.addRejected(result.rejectReason());
-                    continue;
-                }
-                if (!boundCells.add(result.binding().cellId())) {
-                    stats.addDuplicate();
-                    continue;
-                }
-                bindings.add(result.binding());
-                if (!line.peers().isEmpty()) {
-                    pendingPeers.add(new BindingPeerWriter.PendingPeerLine(
-                            result.binding().cellId(),
-                            job.candidate().worksheetId(),
-                            result.binding().path(),
-                            line.peers()));
-                }
-                stats.addAccepted();
-                recordLeafSelection(stats, result.leafSelection());
-                currentSlice = catalog.sliceForMandate(mandateId);
+    void materializeLlmRegions(WorkspaceRepository repo, long parseRunId)
+            throws SQLException, ClassifyException {
+        List<WorksheetRef> sheets = repo.selectWorksheetsForParseRun(parseRunId);
+        Map<Long, CandidateRow> coverageBySheet = new HashMap<>();
+        for (CandidateRow c : repo.selectCandidatesForParseRun(parseRunId)) {
+            if ("coverage_parent".equals(c.candidateKind())) {
+                coverageBySheet.put(c.worksheetId(), c);
             }
         }
-        return new LayerBMaterializeResult(bindings, pendingPeers);
+        boolean anySheetProposals = false;
+        Map<Long, List<RegionProposal>> bySheet = new HashMap<>();
+        for (WorksheetRef sheet : sheets) {
+            String dump = cellDump(repo.selectCellPacketViewsForWorksheet(sheet.worksheetId()));
+            List<RegionProposal> proposals =
+                    llm.proposeRegions(new RegionLayoutPrompt(sheet.sheetName(), dump));
+            if (!proposals.isEmpty()) {
+                anySheetProposals = true;
+            }
+            bySheet.put(sheet.worksheetId(), proposals);
+        }
+        if (!anySheetProposals) {
+            return;
+        }
+
+        repo.deletePacketDispositionsForParseRun(parseRunId);
+        repo.deleteNarrowCandidatesForParseRun(parseRunId);
+        for (WorksheetRef sheet : sheets) {
+            CandidateRow coverage = coverageBySheet.get(sheet.worksheetId());
+            if (coverage == null) {
+                throw new ClassifyException(
+                        "missing coverage parent for worksheet " + sheet.sheetName());
+            }
+            List<RegionProposal> proposals = bySheet.getOrDefault(sheet.worksheetId(), List.of());
+            for (RegionProposal proposal : proposals) {
+                A1Bbox.Bounds bounds;
+                try {
+                    bounds = A1Bbox.parse(proposal.bbox());
+                } catch (IllegalArgumentException e) {
+                    throw new ClassifyException(
+                            "invalid region bbox '" + proposal.bbox() + "': " + e.getMessage(), e);
+                }
+                List<Long> members = repo.selectCellIdsInBbox(
+                        sheet.worksheetId(),
+                        bounds.minRow(),
+                        bounds.minCol(),
+                        bounds.maxRow(),
+                        bounds.maxCol());
+                if (members.isEmpty()) {
+                    throw new ClassifyException(
+                            "region " + proposal.bbox() + " on " + sheet.sheetName()
+                                    + " matched no cells");
+                }
+                String label = proposal.label() != null ? proposal.label() : proposal.bbox();
+                String why = proposal.why() != null ? proposal.why() : "";
+                CandidateWrite write = new CandidateWrite(
+                        parseRunId,
+                        sheet.worksheetId(),
+                        "child",
+                        coverage.candidateId(),
+                        bounds.minRow(),
+                        bounds.minCol(),
+                        bounds.maxRow(),
+                        bounds.maxCol(),
+                        null,
+                        null,
+                        null,
+                        false,
+                        0.9,
+                        "llm region layout",
+                        "LLM region (" + proposal.structuralRole() + ") " + label
+                                + (why.isBlank() ? "" : ": " + why),
+                        proposal.structuralRole());
+                repo.insertCandidate(write, members);
+            }
+        }
     }
 
-    private record LayerBJob(CandidateRow candidate, Packet packet, LayerBPrompt prompt) {}
+    private static String cellDump(List<com.resurgent.tev.parser.db.CellPacketView> cells) {
+        StringBuilder sb = new StringBuilder();
+        for (var cell : cells) {
+            String val;
+            if (cell.formulaText() != null && !cell.formulaText().isBlank()) {
+                String ft = cell.formulaText();
+                val = ft.startsWith("=") ? ft : "=" + ft;
+            } else if (cell.textValue() != null && !cell.textValue().isBlank()) {
+                val = cell.textValue().replace('\n', ' ');
+                if (val.length() > 80) {
+                    val = val.substring(0, 80);
+                }
+            } else if (cell.numericValue() != null && !cell.numericValue().isBlank()) {
+                val = cell.numericValue();
+            } else if (cell.displayValue() != null && !cell.displayValue().isBlank()) {
+                val = cell.displayValue();
+            } else {
+                val = "<" + (cell.valueType() != null ? cell.valueType() : "empty") + ">";
+            }
+            sb.append(cell.coord()).append('\t').append(val).append('\n');
+        }
+        return sb.toString();
+    }
 
-    private record PreparedPacket(
-            CandidateRow candidate, Packet packet, Packet redacted, boolean cheapPass) {}
+    private List<PacketDisposition> runLayerA(
+            List<PreparedPacket> prepared,
+            ScheduleFamilyCatalog families,
+            long deadlineNanos)
+            throws ClassifyException {
+        if (prepared.isEmpty()) {
+            return List.of();
+        }
+        ExecutorService pool = Executors.newFixedThreadPool(
+                Math.min(limits.parallelism(), prepared.size()));
+        try {
+            List<Future<PacketDisposition>> futures = new ArrayList<>();
+            for (PreparedPacket item : prepared) {
+                futures.add(pool.submit(() -> classifyOne(item, families, deadlineNanos)));
+            }
+            List<PacketDisposition> dispositions = new ArrayList<>(prepared.size());
+            int done = 0;
+            for (Future<PacketDisposition> future : futures) {
+                Progress.step("classify", "layer-a", ++done, futures.size(), 10);
+                long remainingMs = Math.max(1L, (deadlineNanos - System.nanoTime()) / 1_000_000L);
+                try {
+                    dispositions.add(future.get(remainingMs, TimeUnit.MILLISECONDS));
+                } catch (TimeoutException e) {
+                    future.cancel(true);
+                    throw new ClassifyException(
+                            "classify deadline exceeded after " + done + " of " + futures.size()
+                                    + " Layer A calls",
+                            e);
+                } catch (Exception e) {
+                    Throwable cause = e.getCause() != null ? e.getCause() : e;
+                    String msg = cause.getMessage() != null ? cause.getMessage() : cause.toString();
+                    throw new ClassifyException("Layer A failed: " + msg, cause);
+                }
+            }
+            return dispositions;
+        } finally {
+            pool.shutdownNow();
+        }
+    }
 
-    private record LayerAWork(
-            PreparedPacket prepared,
-            LayerAJudgment judgment,
-            PacketDisposition disposition,
-            List<ProjectFactBinding> facts) {}
-
-    private LayerAWork layerAWork(
-            OntologySlice slice,
-            long parseRunId,
-            PreparedPacket prepared,
-            LayerAJudgment parent,
-            ScheduledExecutorService watchdog,
-            long deadlineNanos) throws ClassifyException {
-        CandidateRow candidate = prepared.candidate();
-        LayerAJudgment judgment = requireJudgment(
-                callLlm(
-                        () -> llm.classifyLayerA(new LayerAPrompt(
-                                prepared.redacted(), slice, parent, prepared.cheapPass())),
-                        "Layer A candidate " + candidate.candidateId(),
-                        watchdog,
-                        deadlineNanos),
-                candidate.candidateId());
-        PacketDisposition disposition = new PacketDisposition(
-                candidate.candidateId(),
-                parseRunId,
+    private PacketDisposition classifyOne(
+            PreparedPacket item, ScheduleFamilyCatalog families, long deadlineNanos)
+            throws Exception {
+        if (System.nanoTime() > deadlineNanos) {
+            throw new ClassifyException("classify deadline exceeded");
+        }
+        List<String> offered;
+        synchronized (families) {
+            offered = families.names();
+        }
+        LayerAPrompt prompt = new LayerAPrompt(
+                item.redacted(),
+                item.candidate().structuralRole(),
+                item.sheetName(),
+                offered);
+        Callable<LayerAJudgment> call = () -> llm.classifyLayerA(prompt);
+        LayerAJudgment judgment;
+        ExecutorService one = Executors.newSingleThreadExecutor();
+        try {
+            Future<LayerAJudgment> future = one.submit(call);
+            judgment = future.get(limits.attemptDeadline().toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            throw new AttemptDeadlineException(
+                    "Layer A attempt deadline exceeded for candidate "
+                            + item.candidate().candidateId());
+        } finally {
+            one.shutdownNow();
+        }
+        synchronized (families) {
+            if (!ScheduleFamily.isKnown(judgment.scheduleFamily())) {
+                families.admit(judgment.scheduleFamily());
+            }
+        }
+        return new PacketDisposition(
+                item.candidate().candidateId(),
+                item.candidate().parseRunId(),
                 judgment.scheduleFamily(),
                 judgment.triage(),
                 judgment.relevance(),
                 judgment.rowLabels(),
                 judgment.columnHeaders(),
                 judgment.packetDefaultHead(),
-                candidate.parentCandidateId(),
-                prepared.cheapPass());
-        List<ProjectFactBinding> facts = new ArrayList<>();
-        for (ProjectFactJudgment fact : judgment.facts()) {
-            materializeFact(slice, candidate, parseRunId, prepared.packet(), fact)
-                    .ifPresent(facts::add);
-        }
-        return new LayerAWork(prepared, judgment, disposition, facts);
+                judgment.about(),
+                item.candidate().parentCandidateId(),
+                false);
     }
 
-    private record LlmPhaseResult(
-            List<PacketDisposition> dispositions,
-            List<ProjectFactBinding> facts,
-            List<LayerBJob> jobs,
-            List<List<LayerBLineJudgment>> judgments,
-            List<String> layerBFailures) {}
-
-    @FunctionalInterface
-    private interface ClassifyTask {
-        void run() throws ClassifyException;
-    }
-
-    private LlmPhaseResult runLlmPhase(
-            OntologySlice slice, long parseRunId, List<PreparedPacket> prepared)
+    /**
+     * Layer B for the named sheets only. Uses the Layer A about already stored
+     * on each main/helper Candidate. Does not redo region layout. Unbound cells
+     * are a successful result — the living ontology grows only when a new leaf
+     * fits under a known root.
+     */
+    public BindSummary bindSheets(Path dbPath, long parseRunId, List<String> sheetNames)
             throws ClassifyException {
-        long deadlineNanos = System.nanoTime() + limits.classifyDeadline().toNanos();
-        Map<Long, LayerAJudgment> judged = new ConcurrentHashMap<>();
-        Map<Long, LayerAJudgment> coverageByWorksheet = new ConcurrentHashMap<>();
-        Map<Long, PacketDisposition> dispositions = new ConcurrentHashMap<>();
-        Map<Long, List<ProjectFactBinding>> facts = new ConcurrentHashMap<>();
-        Map<Long, LayerBJob> jobs = new ConcurrentHashMap<>();
-        Map<Long, List<LayerBLineJudgment>> judgments = new ConcurrentHashMap<>();
-        Queue<String> layerBFailures = new ConcurrentLinkedQueue<>();
-        Set<Long> submittedA = ConcurrentHashMap.newKeySet();
-        AtomicReference<ClassifyException> failure = new AtomicReference<>();
-        Object scheduleLock = new Object();
-
-        ExecutorService pool = Executors.newFixedThreadPool(limits.parallelism());
-        ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread thread = new Thread(r, "classify-watchdog");
-            thread.setDaemon(true);
-            return thread;
-        });
-        Phaser phaser = new Phaser(1);
-        Runnable[] submitReady = new Runnable[1];
-        submitReady[0] = () -> {
-            synchronized (scheduleLock) {
-                for (PreparedPacket packet : prepared) {
-                    long id = packet.candidate().candidateId();
-                    if (!submittedA.add(id)) {
+        Objects.requireNonNull(dbPath, "dbPath");
+        if (sheetNames == null || sheetNames.isEmpty()) {
+            throw new ClassifyException("bind requires at least one sheet");
+        }
+        Path absolute = dbPath.toAbsolutePath().normalize();
+        if (!Files.isRegularFile(absolute)) {
+            throw new ClassifyException("database not found: " + absolute);
+        }
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(absolute)) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            if (!repo.parseRunExists(parseRunId)) {
+                throw new ClassifyException("parse run not found: " + parseRunId);
+            }
+            long mandateId = repo.selectParseRunMandateId(parseRunId);
+            NomenclatureCatalog catalog = new NomenclatureCatalog(repo);
+            OntologySlice slice = catalog.sliceForMandate(mandateId);
+            Map<String, Long> wanted = new HashMap<>();
+            for (String name : sheetNames) {
+                if (name != null && !name.isBlank()) {
+                    wanted.put(name, null);
+                }
+            }
+            Map<Long, String> sheetById = new HashMap<>();
+            for (WorksheetRef sheet : repo.selectWorksheetsForParseRun(parseRunId)) {
+                if (wanted.containsKey(sheet.sheetName())) {
+                    wanted.put(sheet.sheetName(), sheet.worksheetId());
+                    sheetById.put(sheet.worksheetId(), sheet.sheetName());
+                }
+            }
+            List<String> missingSheets = new ArrayList<>();
+            for (Map.Entry<String, Long> entry : wanted.entrySet()) {
+                if (entry.getValue() == null) {
+                    missingSheets.add(entry.getKey());
+                }
+            }
+            if (!missingSheets.isEmpty()) {
+                throw new ClassifyException("sheet not in parse run: " + String.join(", ", missingSheets));
+            }
+            Map<Long, PacketDisposition> aboutByCandidate = new HashMap<>();
+            for (PacketDisposition disposition : repo.selectPacketDispositionsForParseRun(parseRunId)) {
+                aboutByCandidate.put(disposition.candidateId(), disposition);
+            }
+            LivingOntology living = LivingOntology.from(slice);
+            int bound = 0;
+            int skipped = 0;
+            List<CandidateRow> boundCandidates = new ArrayList<>();
+            Map<Long, List<LayerBBinder.Draft>> draftsByCandidate = new LinkedHashMap<>();
+            Map<Long, List<BindCellRow>> cellsByCandidate = new LinkedHashMap<>();
+            db.connection().setAutoCommit(false);
+            try {
+                new CellReadingWriter().replace(repo, parseRunId);
+                for (CandidateRow candidate : repo.selectCandidatesForParseRun(parseRunId)) {
+                    if (!sheetById.containsKey(candidate.worksheetId())) {
                         continue;
                     }
-                    if (!packet.cheapPass()
-                            && parentContext(packet.candidate(), judged, coverageByWorksheet)
-                                    == null) {
-                        submittedA.remove(id);
+                    if (!isBindEligible(candidate, aboutByCandidate.get(candidate.candidateId()))) {
+                        if ("scratch".equals(candidate.structuralRole())
+                                || isSoftTriage(aboutByCandidate.get(candidate.candidateId()))) {
+                            skipped += repo.selectBindCells(candidate.candidateId()).size();
+                            repo.deleteNomenclatureBindings(parseRunId, candidate.candidateId());
+                        }
                         continue;
                     }
-                    submitTask(phaser, pool, failure, deadlineNanos, () -> {
-                        LayerAJudgment parent = parentContext(
-                                packet.candidate(), judged, coverageByWorksheet);
-                        LayerAWork work = layerAWork(
-                                slice, parseRunId, packet, parent, watchdog, deadlineNanos);
-                        judged.put(id, work.judgment());
-                        if (packet.cheapPass()) {
-                            coverageByWorksheet.put(
-                                    packet.candidate().worksheetId(), work.judgment());
+                    List<BindCellRow> cells = repo.selectBindCells(candidate.candidateId());
+                    for (BindCellRow cell : cells) {
+                        if (cell.error()) {
+                            skipped++;
                         }
-                        dispositions.put(id, work.disposition());
-                        facts.put(id, work.facts());
-                        if (!packet.cheapPass()
-                                && LayerBAmountSupport.hasAmountCells(packet.redacted())) {
-                            LayerBJob job = new LayerBJob(
-                                    packet.candidate(),
-                                    packet.packet(),
-                                    new LayerBPrompt(
-                                            packet.redacted(),
-                                            slice,
-                                            work.judgment(),
-                                            parent));
-                            jobs.put(id, job);
-                            submitTask(phaser, pool, failure, deadlineNanos, () -> {
-                                List<LayerBLineJudgment> lines = new ArrayList<>();
-                                List<LayerBPrompt> chunks = LayerBJobSplitter.chunks(job.prompt());
-                                for (int i = 0; i < chunks.size(); i++) {
-                                    LayerBPrompt chunk = chunks.get(i);
-                                    String label = chunks.size() == 1
-                                            ? "Layer B candidate " + id
-                                            : "Layer B candidate " + id
-                                                    + " chunk " + (i + 1) + "/" + chunks.size();
-                                    try {
-                                        lines.addAll(callLlm(
-                                                () -> llm.classifyLayerB(chunk),
-                                                label,
-                                                watchdog,
-                                                deadlineNanos));
-                                    } catch (AttemptDeadlineException | RuntimeException e) {
-                                        // A chunk the model cannot answer in time, or at all,
-                                        // costs that chunk's bindings and not the run. The
-                                        // run-level classify deadline stays fatal.
-                                        layerBFailures.add(label + ": " + e.getMessage());
-                                    }
-                                }
-                                judgments.put(id, List.copyOf(lines));
-                            });
-                        }
-                        submitReady[0].run();
-                    });
+                    }
+                    PacketDisposition disposition = aboutByCandidate.get(candidate.candidateId());
+                    String about = disposition != null ? disposition.about() : "";
+                    String family = disposition != null ? disposition.scheduleFamily() : "";
+                    String sheetName = sheetById.get(candidate.worksheetId());
+                    BindResult result = bindCandidate(
+                            cells, sheetName, family, about, living, catalog, mandateId);
+                    living = result.living();
+                    skipped += result.unbound();
+                    repo.deleteNomenclatureBindings(parseRunId, candidate.candidateId());
+                    for (LayerBBinder.Draft draft : result.drafts()) {
+                        repo.insertNomenclatureBinding(new NomenclatureBinding(
+                                parseRunId,
+                                candidate.candidateId(),
+                                draft.cellId(),
+                                draft.coord(),
+                                draft.pathRoot(),
+                                draft.path(),
+                                draft.amountRole(),
+                                draft.verbatim()));
+                        bound++;
+                    }
+                    draftsByCandidate.put(candidate.candidateId(), result.drafts());
+                    cellsByCandidate.put(candidate.candidateId(), cells);
+                    boundCandidates.add(candidate);
                 }
-            }
-        };
-        try {
-            submitReady[0].run();
-            long remaining = deadlineNanos - System.nanoTime();
-            if (remaining <= 0) {
-                throw new ClassifyException("incomplete: classify deadline exceeded");
-            }
-            int phase = phaser.arrive();
-            try {
-                phaser.awaitAdvanceInterruptibly(phase, remaining, TimeUnit.NANOSECONDS);
-            } catch (TimeoutException e) {
-                failure.compareAndSet(
-                        null, new ClassifyException("incomplete: classify deadline exceeded"));
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new ClassifyException("classify interrupted", e);
-            }
-            if (failure.get() != null) {
-                throw failure.get();
-            }
-            return assemblePhase(
-                    prepared, dispositions, facts, jobs, judgments, List.copyOf(layerBFailures));
-        } finally {
-            pool.shutdownNow();
-            watchdog.shutdownNow();
-        }
-    }
-
-    private static void submitTask(
-            Phaser phaser,
-            ExecutorService pool,
-            AtomicReference<ClassifyException> failure,
-            long deadlineNanos,
-            ClassifyTask task) {
-        if (failure.get() != null) {
-            return;
-        }
-        if (System.nanoTime() >= deadlineNanos) {
-            failure.compareAndSet(
-                    null, new ClassifyException("incomplete: classify deadline exceeded"));
-            return;
-        }
-        phaser.register();
-        pool.submit(() -> {
-            try {
-                if (failure.get() != null) {
-                    return;
-                }
-                if (System.nanoTime() >= deadlineNanos) {
-                    failure.compareAndSet(
-                            null,
-                            new ClassifyException("incomplete: classify deadline exceeded"));
-                    return;
-                }
-                task.run();
-            } catch (ClassifyException e) {
-                failure.compareAndSet(null, e);
-            } catch (RuntimeException e) {
-                failure.compareAndSet(
-                        null, new ClassifyException("classify failed: " + e.getMessage(), e));
+                int helpers = applyCrossSheetHelpers(
+                        repo, parseRunId, boundCandidates, cellsByCandidate, draftsByCandidate);
+                bound += helpers;
+                HeaderBindingWriter.write(repo, parseRunId, boundCandidates);
+                db.connection().commit();
+            } catch (Exception e) {
+                db.connection().rollback();
+                throw e;
             } finally {
-                phaser.arriveAndDeregister();
+                db.connection().setAutoCommit(true);
             }
-        });
-    }
-
-    private <T> T callLlm(
-            Callable<T> call,
-            String label,
-            ScheduledExecutorService watchdog,
-            long deadlineNanos) throws ClassifyException {
-        long remainingClassify = deadlineNanos - System.nanoTime();
-        if (remainingClassify <= 0) {
-            throw new ClassifyException("incomplete: classify deadline exceeded");
-        }
-        long attemptNanos = Math.min(limits.attemptDeadline().toNanos(), remainingClassify);
-        Thread worker = Thread.currentThread();
-        ScheduledFuture<?> abort = watchdog.schedule(
-                worker::interrupt, attemptNanos, TimeUnit.NANOSECONDS);
-        try {
-            return call.call();
+            return new BindSummary(parseRunId, bound, skipped);
         } catch (ClassifyException e) {
             throw e;
         } catch (Exception e) {
-            if (interrupted(e)) {
-                Thread.currentThread().interrupt();
-                throw new AttemptDeadlineException(
-                        "incomplete: " + label + " exceeded attempt deadline", e);
-            }
-            if (e instanceof RuntimeException runtime) {
-                throw runtime;
-            }
-            throw new ClassifyException("classify failed: " + e.getMessage(), e);
-        } finally {
-            abort.cancel(false);
-            Thread.interrupted();
+            String msg = e.getMessage() != null ? e.getMessage() : e.toString();
+            throw new ClassifyException("bind failed: " + msg, e);
         }
     }
 
-    private static boolean interrupted(Throwable error) {
-        if (Thread.currentThread().isInterrupted()) {
-            return true;
+    private BindResult bindCandidate(
+            List<BindCellRow> cells,
+            String sheetName,
+            String family,
+            String about,
+            LivingOntology living,
+            NomenclatureCatalog catalog,
+            long mandateId)
+            throws ClassifyException {
+        Map<String, String> aliases = living.aliases();
+        List<String> paths = living.paths();
+        List<LayerBBinder.Draft> proved = LayerBBinder.bind(cells, List.of(), aliases);
+        List<BindCellRow> missing = LayerBBinder.unbound(cells, proved);
+        List<LayerBAssignment> assignments = new ArrayList<>();
+        if (!missing.isEmpty()) {
+            List<LayerBAssignment> first =
+                    askLayerB(sheetName, family, about, cells, missing, paths, false);
+            living = absorbNewLeaves(living, catalog, mandateId, first);
+            aliases = living.aliases();
+            paths = living.paths();
+            assignments.addAll(first);
+            proved = LayerBBinder.bind(cells, assignments, aliases);
+            missing = LayerBBinder.unbound(cells, proved);
         }
-        Throwable cursor = error;
-        while (cursor != null) {
-            if (cursor instanceof InterruptedException) {
-                return true;
-            }
-            cursor = cursor.getCause();
+        if (!missing.isEmpty()) {
+            List<LayerBAssignment> second =
+                    askLayerB(sheetName, family, about, cells, missing, paths, true);
+            living = absorbNewLeaves(living, catalog, mandateId, second);
+            aliases = living.aliases();
+            assignments.addAll(second);
+            proved = LayerBBinder.bind(cells, assignments, aliases);
+            missing = LayerBBinder.unbound(cells, proved);
         }
-        return false;
+        return new BindResult(proved, missing.size(), living);
     }
 
-    private static LlmPhaseResult assemblePhase(
-            List<PreparedPacket> prepared,
-            Map<Long, PacketDisposition> dispositions,
-            Map<Long, List<ProjectFactBinding>> facts,
-            Map<Long, LayerBJob> jobs,
-            Map<Long, List<LayerBLineJudgment>> judgments,
-            List<String> layerBFailures) throws ClassifyException {
-        List<PacketDisposition> orderedDispositions = new ArrayList<>();
-        List<ProjectFactBinding> orderedFacts = new ArrayList<>();
-        List<LayerBJob> orderedJobs = new ArrayList<>();
-        List<List<LayerBLineJudgment>> orderedJudgments = new ArrayList<>();
-        for (PreparedPacket packet : prepared) {
-            long id = packet.candidate().candidateId();
-            PacketDisposition disposition = dispositions.get(id);
-            if (disposition == null) {
-                throw new ClassifyException(
-                        "incomplete: missing Layer A for candidate " + id);
-            }
-            orderedDispositions.add(disposition);
-            orderedFacts.addAll(facts.getOrDefault(id, List.of()));
-            LayerBJob job = jobs.get(id);
-            if (job != null) {
-                List<LayerBLineJudgment> lines = judgments.get(id);
-                if (lines == null) {
-                    throw new ClassifyException(
-                            "incomplete: missing Layer B for candidate " + id);
-                }
-                orderedJobs.add(job);
-                orderedJudgments.add(lines);
-            }
-        }
-        return new LlmPhaseResult(
-                orderedDispositions, orderedFacts, orderedJobs, orderedJudgments, layerBFailures);
-    }
-
-    private record MaterializeResult(
-            NomenclatureBinding binding,
-            String rejectReason,
-            LeafSelectionOutcome leafSelection) {
-        static MaterializeResult ok(NomenclatureBinding binding, LeafSelectionOutcome leafSelection) {
-            return new MaterializeResult(binding, null, leafSelection);
-        }
-
-        static MaterializeResult reject(String reason) {
-            return new MaterializeResult(null, reason, LeafSelectionOutcome.NONE);
-        }
-    }
-
-    enum LeafSelectionOutcome {
-        NONE,
-        CATALOG_PREFERRED,
-        SOFT_GENERIC_KEPT,
-        LEAF_AMBIGUOUS
-    }
-
-    private static MaterializeResult tryMaterializeBinding(
+    private LivingOntology absorbNewLeaves(
+            LivingOntology living,
             NomenclatureCatalog catalog,
             long mandateId,
-            OntologySlice slice,
-            Packet packet,
-            CandidateRow candidate,
-            long parseRunId,
-            LayerBLineJudgment line) {
-        try {
-            return materializeBinding(
-                    catalog, mandateId, slice, packet, candidate, parseRunId, line);
-        } catch (ClassifyException e) {
-            return MaterializeResult.reject(e.getMessage());
-        }
-    }
-
-    private static MaterializeResult materializeBinding(
-            NomenclatureCatalog catalog,
-            long mandateId,
-            OntologySlice slice,
-            Packet packet,
-            CandidateRow candidate,
-            long parseRunId,
-            LayerBLineJudgment line) throws ClassifyException {
-        String role = line.amountRole() == null
-                ? null
-                : line.amountRole().trim().toLowerCase(Locale.ROOT);
-        if (!AmountRole.isKnown(role)) {
-            throw new ClassifyException(
-                    "invalid amount_role '" + line.amountRole()
-                            + "' for coord " + line.coord());
-        }
-        PacketCell cell = findCell(packet, line.coord())
-                .orElseThrow(() -> new ClassifyException(
-                        "Layer B coord not in Packet: " + line.coord()));
-        if (!LayerBAmountSupport.isBindableForRole(packet, cell, role)) {
-            NumericKind kind = LayerBAmountSupport.classifyKind(packet, cell);
-            if (!kind.allowsCostRole()
-                    && (AmountRole.ADD.equals(role)
-                            || AmountRole.DEDUCT.equals(role)
-                            || AmountRole.TOTAL.equals(role))) {
-                throw new ClassifyException(
-                        "non_money_numeric kind=" + kind.name().toLowerCase(Locale.ROOT)
-                                + " at " + line.coord()
-                                + " cannot use cost role " + role);
+            List<LayerBAssignment> assignments) {
+        LivingOntology next = living;
+        for (LayerBAssignment assignment : assignments) {
+            if (assignment == null || assignment.path() == null || assignment.pathRoot() == null) {
+                continue;
             }
-            if (LayerBAmountSupport.isFormulaNumeric(cell)) {
-                throw new ClassifyException(
-                        "formula amount at " + line.coord()
-                                + " requires helper|total role, got " + role);
+            if (!"economic".equals(assignment.pathRoot()) && !"identity".equals(assignment.pathRoot())) {
+                continue;
             }
-            throw new ClassifyException(
-                    "Layer B binding requires an amount cell at " + line.coord());
-        }
-        String path = line.path().trim();
-        boolean derivedLeaf = false;
-        LeafSelectionOutcome leafSelection = LeafSelectionOutcome.NONE;
-        HardLeafChoice evidenceLeaf = hardCatalogLeafFromEvidence(slice, packet, cell, line);
-        Optional<NomenclatureNode> midLevel = slice.node(path);
-        if (midLevel.isPresent() && !midLevel.get().leaf()) {
-            if (evidenceLeaf.kind() == HardLeafChoice.Kind.UNIQUE) {
-                path = evidenceLeaf.path();
-                leafSelection = LeafSelectionOutcome.CATALOG_PREFERRED;
-            } else {
-                // The model placed the amount under a mid-level because no leaf fits it.
-                // Name a leaf from the row's own label so the amount still rolls up under
-                // the mid-level it was assigned, instead of discarding the line.
-                String derived = softLeafNameFrom(line.verbatim());
-                if (derived == null) {
-                    throw new ClassifyException(
-                            "Layer B path must be a leaf join key, not mid-level: '" + path + "'");
-                }
-                path = path + " > " + derived;
-                derivedLeaf = true;
-                leafSelection = evidenceLeaf.kind() == HardLeafChoice.Kind.AMBIGUOUS
-                        ? LeafSelectionOutcome.LEAF_AMBIGUOUS
-                        : LeafSelectionOutcome.SOFT_GENERIC_KEPT;
+            String path = assignment.path();
+            if (next.contains(path) || !LayerBBinder.allowed(assignment.pathRoot(), path)) {
+                continue;
             }
-        } else if (wouldBindAsSoft(slice, path)) {
-            if (evidenceLeaf.kind() == HardLeafChoice.Kind.UNIQUE) {
-                path = evidenceLeaf.path();
-                derivedLeaf = false;
-                leafSelection = LeafSelectionOutcome.CATALOG_PREFERRED;
-            } else if (evidenceLeaf.kind() == HardLeafChoice.Kind.AMBIGUOUS) {
-                leafSelection = LeafSelectionOutcome.LEAF_AMBIGUOUS;
-            } else {
-                leafSelection = LeafSelectionOutcome.SOFT_GENERIC_KEPT;
-            }
-        }
-        String resolvedPath = path;
-        boolean viaAlias = slice.aliases().stream()
-                .anyMatch(alias -> OntologySlice.normalize(alias.aliasText())
-                        .equals(OntologySlice.normalize(line.verbatim()))
-                        && alias.leafPath().equals(resolvedPath));
-        if (!viaAlias && evidenceLeaf.kind() == HardLeafChoice.Kind.UNIQUE
-                && path.equals(evidenceLeaf.path())) {
-            viaAlias = evidenceMatchedViaAlias(slice, packet, cell, line, path);
-        }
-        boolean softLeaf = false;
-        Optional<NomenclatureNode> existing = slice.node(path);
-        if (existing.isPresent()) {
-            if (!existing.get().leaf()) {
-                throw new ClassifyException(
-                        "Layer B path must be a leaf join key, not mid-level: '" + path + "'");
-            }
-            softLeaf = NomenclatureNode.LAYER_MANDATE_SOFT.equals(existing.get().layer());
-        } else {
             int sep = path.lastIndexOf(" > ");
             if (sep <= 0) {
-                throw new ClassifyException(
-                        "cannot invent mid-level path for Layer B binding: '" + path + "'");
+                continue;
             }
-            String parentPath = path.substring(0, sep);
-            String leafName = path.substring(sep + 3).trim();
-            NomenclatureNode parent = slice.node(parentPath).orElse(null);
-            if (parent == null || parent.leaf()) {
-                throw new ClassifyException(
-                        "cannot invent mid-level '" + parentPath
-                                + "'; soft leaves attach under known mid-levels");
-            }
+            String parent = path.substring(0, sep);
+            String leaf = path.substring(sep + 3);
             try {
-                // A derived leaf takes no aliases: the model's aliases described the
-                // mid-level it asked for, not this row.
-                catalog.putSoftLeaf(mandateId, parentPath, leafName,
-                        derivedLeaf ? List.of() : line.aliases());
-                softLeaf = true;
-            } catch (NomenclatureException e) {
-                // Parallel Layer B may have already created this soft leaf serially earlier.
-                OntologySlice refreshed = catalog.sliceForMandate(mandateId);
-                Optional<NomenclatureNode> raced = refreshed.node(path);
-                if (raced.isPresent() && raced.get().leaf()) {
-                    softLeaf = NomenclatureNode.LAYER_MANDATE_SOFT.equals(raced.get().layer());
-                } else {
-                    throw new ClassifyException(e.getMessage(), e);
+                catalog.putSoftLeaf(mandateId, parent, leaf, List.of(leaf));
+                next = next.withLeaf(path, leaf);
+            } catch (RuntimeException ignored) {
+                // Parent missing or alias collision — keep the assignment for this
+                // run when LayerBBinder.allowed already accepted it, without
+                // growing the master set.
+            }
+        }
+        return next;
+    }
+
+    private int applyCrossSheetHelpers(
+            WorkspaceRepository repo,
+            long parseRunId,
+            List<CandidateRow> candidates,
+            Map<Long, List<BindCellRow>> cellsByCandidate,
+            Map<Long, List<LayerBBinder.Draft>> draftsByCandidate)
+            throws SQLException {
+        Map<String, LayerBBinder.Draft> bySheetCoord = new HashMap<>();
+        Map<Long, String> sheetByCandidate = new HashMap<>();
+        for (CandidateRow candidate : candidates) {
+            for (WorksheetRef sheet : repo.selectWorksheetsForParseRun(parseRunId)) {
+                if (sheet.worksheetId() == candidate.worksheetId()) {
+                    sheetByCandidate.put(candidate.candidateId(), sheet.sheetName());
+                }
+            }
+            for (LayerBBinder.Draft draft : draftsByCandidate.getOrDefault(candidate.candidateId(), List.of())) {
+                String sheet = sheetByCandidate.get(candidate.candidateId());
+                if (sheet != null) {
+                    bySheetCoord.put(sheet + "!" + draft.coord(), draft);
                 }
             }
         }
-        return MaterializeResult.ok(
-                new NomenclatureBinding(
+        int added = 0;
+        for (CandidateRow candidate : candidates) {
+            String sheet = sheetByCandidate.get(candidate.candidateId());
+            if (sheet == null) {
+                continue;
+            }
+            Map<String, LayerBBinder.Draft> local = new LinkedHashMap<>();
+            for (LayerBBinder.Draft draft :
+                    draftsByCandidate.getOrDefault(candidate.candidateId(), List.of())) {
+                local.put(draft.coord(), draft);
+            }
+            for (BindCellRow cell : cellsByCandidate.getOrDefault(candidate.candidateId(), List.of())) {
+                if (cell.error() || local.containsKey(cell.coord().toUpperCase(Locale.ROOT))) {
+                    continue;
+                }
+                String formula = cell.formulaText() == null ? "" : cell.formulaText().trim();
+                if (formula.startsWith("=")) {
+                    formula = formula.substring(1).trim();
+                }
+                if (!formula.matches("(?i)\\+?(?:'[^']+'|[A-Za-z][A-Za-z0-9_ ]*)!\\$?[A-Z]{1,3}\\$?\\d+")) {
+                    continue;
+                }
+                int bang = formula.indexOf('!');
+                String sourceSheet = formula.substring(0, bang).replace("'", "").replace("+", "").trim();
+                String sourceCoord = formula.substring(bang + 1).replace("$", "").toUpperCase(Locale.ROOT);
+                LayerBBinder.Draft source = bySheetCoord.get(sourceSheet + "!" + sourceCoord);
+                if (source == null || !"economic".equals(source.pathRoot())) {
+                    continue;
+                }
+                String verbatim = cell.textValue() != null ? cell.textValue() : cell.formulaText();
+                LayerBBinder.Draft helper = new LayerBBinder.Draft(
                         cell.cellId(),
+                        cell.coord().toUpperCase(Locale.ROOT),
+                        source.pathRoot(),
+                        source.path(),
+                        "helper",
+                        verbatim);
+                repo.insertNomenclatureBinding(new NomenclatureBinding(
                         parseRunId,
                         candidate.candidateId(),
-                        line.verbatim(),
-                        path,
-                        role,
-                        softLeaf,
-                        viaAlias,
-                        line.confidence()),
-                leafSelection);
+                        helper.cellId(),
+                        helper.coord(),
+                        helper.pathRoot(),
+                        helper.path(),
+                        helper.amountRole(),
+                        helper.verbatim()));
+                local.put(helper.coord(), helper);
+                bySheetCoord.put(sheet + "!" + helper.coord(), helper);
+                added++;
+            }
+            draftsByCandidate.put(candidate.candidateId(), List.copyOf(local.values()));
+        }
+        return added;
     }
 
-    private static void recordLeafSelection(
-            LayerBBindingStats stats, LeafSelectionOutcome outcome) {
-        if (outcome == null) {
-            return;
+    private List<LayerBAssignment> askLayerB(
+            String sheetName,
+            String family,
+            String about,
+            List<BindCellRow> cells,
+            List<BindCellRow> missing,
+            List<String> catalog,
+            boolean retry)
+            throws ClassifyException {
+        Set<String> unbound = new HashSet<>();
+        for (BindCellRow cell : missing) {
+            unbound.add(cell.coord().toUpperCase(Locale.ROOT));
         }
-        switch (outcome) {
-            case CATALOG_PREFERRED -> stats.addCatalogPreferred();
-            case SOFT_GENERIC_KEPT -> stats.addSoftGenericKept();
-            case LEAF_AMBIGUOUS -> stats.addLeafAmbiguous();
-            case NONE -> {
-            }
+        LayerBPrompt prompt = new LayerBPrompt(
+                sheetName,
+                family,
+                about == null || about.isBlank() ? "No Layer A about stored." : about,
+                LayerBPromptAssembler.grid(cells, unbound),
+                catalog,
+                retry);
+        try {
+            List<LayerBAssignment> assignments = llm.bindLayerB(prompt);
+            return assignments == null ? List.of() : assignments;
+        } catch (RuntimeException e) {
+            String msg = e.getMessage() != null ? e.getMessage() : e.toString();
+            throw new ClassifyException("Layer B failed on " + sheetName + ": " + msg, e);
         }
+    }
+
+    static boolean isEligible(CandidateRow candidate) {
+        String role = candidate.structuralRole();
+        return "main".equals(role) || "helper".equals(role);
     }
 
     /**
-     * Soft/generic proposals (invented soft leaves, existing mandate soft leaves, or
-     * mid-level recovery that would invent one) yield to an unambiguous hard catalog
-     * leaf when row/header evidence supports it.
+     * Layer B bind eligibility. Structural main/helper still qualify for Layer A,
+     * but a helper bbox Layer A triaged as scratch or orphan is not bound.
      */
-    private static boolean wouldBindAsSoft(OntologySlice slice, String path) {
-        Optional<NomenclatureNode> existing = slice.node(path);
-        if (existing.isPresent()) {
-            return existing.get().leaf()
-                    && NomenclatureNode.LAYER_MANDATE_SOFT.equals(existing.get().layer());
+    static boolean isBindEligible(CandidateRow candidate, PacketDisposition disposition) {
+        if (!isEligible(candidate)) {
+            return false;
         }
-        return true;
+        return !isSoftTriage(disposition);
     }
 
-    private static HardLeafChoice hardCatalogLeafFromEvidence(
-            OntologySlice slice,
-            Packet packet,
-            PacketCell cell,
-            LayerBLineJudgment line) {
-        LinkedHashSet<String> hardLeaves = new LinkedHashSet<>();
-        for (String evidence : evidenceTexts(packet, cell, line)) {
-            Optional<String> resolved = slice.resolve(evidence);
-            if (resolved.isEmpty()) {
-                continue;
-            }
-            Optional<NomenclatureNode> node = slice.node(resolved.get());
-            if (node.isEmpty() || !node.get().leaf()) {
-                continue;
-            }
-            if (NomenclatureNode.LAYER_MANDATE_SOFT.equals(node.get().layer())) {
-                continue;
-            }
-            hardLeaves.add(resolved.get());
-        }
-        if (hardLeaves.isEmpty()) {
-            return HardLeafChoice.none();
-        }
-        if (hardLeaves.size() > 1) {
-            return HardLeafChoice.ambiguous();
-        }
-        return HardLeafChoice.unique(hardLeaves.iterator().next());
-    }
-
-    private static List<String> evidenceTexts(
-            Packet packet, PacketCell cell, LayerBLineJudgment line) {
-        LinkedHashSet<String> texts = new LinkedHashSet<>();
-        String rowLabel = LayerBAmountSupport.resolveRowLabel(packet, cell);
-        if (rowLabel != null && !rowLabel.isBlank()) {
-            texts.add(rowLabel.trim());
-        }
-        if (line.verbatim() != null && !line.verbatim().isBlank()) {
-            texts.add(line.verbatim().trim());
-        }
-        return List.copyOf(texts);
-    }
-
-    private static boolean evidenceMatchedViaAlias(
-            OntologySlice slice,
-            Packet packet,
-            PacketCell cell,
-            LayerBLineJudgment line,
-            String path) {
-        for (String evidence : evidenceTexts(packet, cell, line)) {
-            String needle = OntologySlice.normalize(evidence);
-            boolean matched = slice.aliases().stream()
-                    .anyMatch(alias -> OntologySlice.normalize(alias.aliasText()).equals(needle)
-                            && alias.leafPath().equals(path));
-            if (matched) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private record HardLeafChoice(Kind kind, String path) {
-        enum Kind { NONE, UNIQUE, AMBIGUOUS }
-
-        static HardLeafChoice none() {
-            return new HardLeafChoice(Kind.NONE, null);
-        }
-
-        static HardLeafChoice unique(String path) {
-            return new HardLeafChoice(Kind.UNIQUE, path);
-        }
-
-        static HardLeafChoice ambiguous() {
-            return new HardLeafChoice(Kind.AMBIGUOUS, null);
-        }
-    }
-
-    /**
-     * A leaf name for an amount the model placed on a mid-level, taken from the
-     * row's own label. Returns null when the label cannot name a leaf: blank, a
-     * bare coord (the parser's fallback when label resolution found nothing), a
-     * path separator that would invent a mid-level, or implausibly long prose.
-     */
-    private static String softLeafNameFrom(String verbatim) {
-        if (verbatim == null) {
-            return null;
-        }
-        String name = verbatim.trim();
-        if (name.isEmpty() || name.contains(">") || name.length() > 120) {
-            return null;
-        }
-        return COORD_SHAPED.matcher(name).matches() ? null : name;
-    }
-
-    private static Optional<ProjectFactBinding> materializeFact(
-            OntologySlice slice,
-            CandidateRow candidate,
-            long parseRunId,
-            Packet packet,
-            ProjectFactJudgment fact) {
-        String path = fact.factPath().trim();
-        if (path.startsWith("Project Cost")) {
-            return Optional.empty();
-        }
-        if (slice.projectFactField(path).isEmpty()) {
-            return Optional.empty();
-        }
-        Long cellId = null;
-        if (fact.coord() != null) {
-            cellId = findCell(packet, fact.coord()).map(PacketCell::cellId).orElse(null);
-        }
-        return Optional.of(new ProjectFactBinding(
-                parseRunId, candidate.candidateId(), cellId, fact.verbatim(), path));
-    }
-
-    private static Optional<PacketCell> findCell(Packet packet, String coord) {
-        if (coord == null || coord.isBlank()) {
-            return Optional.empty();
-        }
-        String needle = coord.trim().toUpperCase(Locale.ROOT);
-        for (PacketCell cell : packet.cells()) {
-            if (cell.coord() != null && cell.coord().toUpperCase(Locale.ROOT).equals(needle)) {
-                return Optional.of(cell);
-            }
-        }
-        return Optional.empty();
+    private static boolean isSoftTriage(PacketDisposition disposition) {
+        return disposition != null && Triage.isSoft(disposition.triage());
     }
 
     private static boolean sameCandidateIds(List<CandidateRow> expected, List<CandidateRow> actual) {
-        if (expected.size() != actual.size()) {
-            return false;
-        }
-        Map<Long, CandidateRow> byId = new HashMap<>();
-        for (CandidateRow row : actual) {
-            byId.put(row.candidateId(), row);
-        }
+        Set<Long> left = new HashSet<>();
+        Set<Long> right = new HashSet<>();
         for (CandidateRow row : expected) {
-            CandidateRow current = byId.get(row.candidateId());
-            if (current == null
-                    || !Objects.equals(row.candidateKind(), current.candidateKind())
-                    || !Objects.equals(row.parentCandidateId(), current.parentCandidateId())
-                    || row.worksheetId() != current.worksheetId()) {
-                return false;
-            }
+            left.add(row.candidateId());
         }
-        return true;
+        for (CandidateRow row : actual) {
+            right.add(row.candidateId());
+        }
+        return left.equals(right);
     }
 
-    private static LayerAJudgment parentContext(
-            CandidateRow candidate,
-            Map<Long, LayerAJudgment> judged,
-            Map<Long, LayerAJudgment> coverageByWorksheet) {
-        if (candidate.parentCandidateId() != null) {
-            LayerAJudgment parent = judged.get(candidate.parentCandidateId());
-            if (parent != null) {
-                return parent;
-            }
-        }
-        return coverageByWorksheet.get(candidate.worksheetId());
-    }
+    private record PreparedPacket(CandidateRow candidate, Packet redacted, String sheetName) {}
 
-    private static LayerAJudgment requireJudgment(LayerAJudgment judgment, long candidateId)
-            throws ClassifyException {
-        if (judgment == null
-                || judgment.scheduleFamily() == null || judgment.scheduleFamily().isBlank()
-                || !Triage.isKnown(judgment.triage())
-                || !Relevance.isKnown(judgment.relevance())) {
-            throw new ClassifyException(
-                    "LLM returned an invalid Layer A judgment for candidate " + candidateId);
+    private record BindResult(List<LayerBBinder.Draft> drafts, int unbound, LivingOntology living) {}
+
+    /** In-memory view of the living master ontology for one bind run. */
+    static final class LivingOntology {
+        private final Map<String, String> aliases;
+        private final List<String> paths;
+
+        private LivingOntology(Map<String, String> aliases, List<String> paths) {
+            this.aliases = Map.copyOf(aliases);
+            this.paths = List.copyOf(paths);
         }
-        if (Triage.isSoft(judgment.triage()) && !Relevance.NOISE.equals(judgment.relevance())) {
-            return new LayerAJudgment(
-                    judgment.scheduleFamily(),
-                    judgment.triage(),
-                    Relevance.NOISE,
-                    judgment.rowLabels(),
-                    judgment.columnHeaders(),
-                    judgment.packetDefaultHead(),
-                    judgment.facts());
+
+        static LivingOntology from(OntologySlice slice) {
+            Map<String, String> living = new LinkedHashMap<>();
+            List<String> paths = new ArrayList<>();
+            for (NomenclatureNode node : slice.nodes()) {
+                paths.add(node.path());
+                living.put(node.name(), node.path());
+                living.put(node.path(), node.path());
+            }
+            for (NomenclatureAlias alias : slice.aliases()) {
+                living.put(alias.aliasText(), alias.leafPath());
+            }
+            for (ProjectFactField field : slice.projectFactFields()) {
+                paths.add(field.path());
+                living.put(field.name(), field.path());
+                living.put(field.path(), field.path());
+            }
+            return new LivingOntology(LayerBBinder.aliasIndex(living), LayerBBinder.allowedPaths(paths));
         }
-        return judgment;
+
+        Map<String, String> aliases() {
+            return aliases;
+        }
+
+        List<String> paths() {
+            return paths;
+        }
+
+        boolean contains(String path) {
+            return paths.contains(path);
+        }
+
+        LivingOntology withLeaf(String path, String aliasText) {
+            Map<String, String> nextAliases = new LinkedHashMap<>(aliases);
+            nextAliases.put(LayerBBinder.norm(aliasText), path);
+            nextAliases.put(LayerBBinder.norm(path), path);
+            List<String> nextPaths = new ArrayList<>(paths);
+            if (!nextPaths.contains(path)) {
+                nextPaths.add(path);
+            }
+            return new LivingOntology(nextAliases, nextPaths);
+        }
     }
 }

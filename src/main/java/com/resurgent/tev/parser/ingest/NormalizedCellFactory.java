@@ -36,7 +36,7 @@ final class NormalizedCellFactory {
                 value.errorType(),
                 false, false, null, "cell",
                 rowHidden, colHidden, sheetHidden,
-                null);
+                null, null, null);
     }
 
     static NormalizedCell markAnchor(NormalizedCell cell, CellRangeAddress region) {
@@ -60,7 +60,7 @@ final class NormalizedCellFactory {
                 cell.errorType(),
                 true, false, region.formatAsString(), "cell",
                 cell.rowHidden(), cell.colHidden(), cell.sheetHidden(),
-                cell.cellStyle());
+                cell.cellStyle(), cell.commentAuthor(), cell.commentBody());
     }
 
     static NormalizedCell createParticipant(NormalizedCell anchor, CellRangeAddress region,
@@ -87,7 +87,7 @@ final class NormalizedCellFactory {
                 null,
                 false, true, region.formatAsString(), "merged_anchor",
                 rowHidden, colHidden, sheetHidden,
-                null);
+                null, null, null);
     }
 
     static NormalizedCell attachStyle(NormalizedCell cell, CellStyle style) {
@@ -117,6 +117,6 @@ final class NormalizedCellFactory {
                 null,
                 false, false, null, "cell",
                 rowHidden, colHidden, sheetHidden,
-                style);
+                style, null, null);
     }
 }

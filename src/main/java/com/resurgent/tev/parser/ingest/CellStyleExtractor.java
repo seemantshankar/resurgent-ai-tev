@@ -6,9 +6,11 @@ import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.Color;
 import org.apache.poi.ss.usermodel.FillPatternType;
 import org.apache.poi.ss.usermodel.Font;
+import org.apache.poi.ss.usermodel.FontUnderline;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.xssf.usermodel.XSSFCellStyle;
 import org.apache.poi.xssf.usermodel.XSSFColor;
+import org.apache.poi.xssf.usermodel.XSSFFont;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 /**
@@ -44,7 +46,12 @@ final class CellStyleExtractor {
                 borderStyle(style.getBorderBottom()),
                 borderColor(workbook, style, BorderSide.BOTTOM),
                 borderStyle(style.getBorderLeft()),
-                borderColor(workbook, style, BorderSide.LEFT));
+                borderColor(workbook, style, BorderSide.LEFT),
+                blankToNull(font.getFontName()),
+                font.getFontHeightInPoints() == 0 ? null : (int) font.getFontHeightInPoints(),
+                font.getItalic(),
+                underlineName(font.getUnderline()),
+                fontColor(workbook, font));
     }
 
     /**
@@ -63,6 +70,27 @@ final class CellStyleExtractor {
                 || style.borderRightStyle() != null
                 || style.borderBottomStyle() != null
                 || style.borderLeftStyle() != null;
+    }
+
+    private static String underlineName(byte underline) {
+        if (underline == Font.U_NONE) {
+            return null;
+        }
+        return FontUnderline.valueOf(underline).name();
+    }
+
+    private static String fontColor(Workbook workbook, Font font) {
+        if (font instanceof XSSFFont xssfFont) {
+            String resolved = resolveXssfColor(workbook, xssfFont.getXSSFColor());
+            if (resolved != null) {
+                return resolved;
+            }
+        }
+        return paletteIndex(font.getColor());
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 
     private enum BorderSide {

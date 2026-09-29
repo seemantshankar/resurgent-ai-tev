@@ -12,8 +12,7 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Loads the frozen bank spine and assembles the ontology slice a mandate's
- * Packet classification will send. No LLM calls.
+ * Loads the frozen bank spine and assembles the ontology slice for a mandate.
  */
 public final class NomenclatureCatalog {
 
@@ -65,10 +64,30 @@ public final class NomenclatureCatalog {
 
     public void putSoftLeaf(long mandateId, String parentPath, String leafName,
             List<String> aliases) {
+        OntologySlice current = sliceForMandate(mandateId);
+        ValidatedLeaf validated = validateNewLeaf(current, mandateId, parentPath, leafName, aliases);
+        try {
+            inTransaction(() -> {
+                String now = Timestamps.now();
+                repo.insertNomenclatureNode(validated.node(), now);
+                for (NomenclatureAlias alias : validated.aliasRows()) {
+                    repo.insertNomenclatureAlias(
+                            alias, NomenclatureNode.LAYER_MANDATE_SOFT, null, mandateId, now);
+                }
+            });
+        } catch (SQLException e) {
+            throw new NomenclatureException(
+                    "failed to store soft leaf '" + validated.path() + "' for mandate " + mandateId, e);
+        }
+    }
+
+    private record ValidatedLeaf(String path, NomenclatureNode node, List<NomenclatureAlias> aliasRows) {}
+
+    private static ValidatedLeaf validateNewLeaf(OntologySlice current, long mandateId,
+            String parentPath, String leafName, List<String> aliases) {
         Objects.requireNonNull(parentPath, "parentPath");
         Objects.requireNonNull(leafName, "leafName");
         List<String> aliasTexts = aliases == null ? List.of() : aliases;
-        OntologySlice current = sliceForMandate(mandateId);
         NomenclatureNode parent = current.node(parentPath).orElse(null);
         if (parent == null || parent.leaf()) {
             throw new NomenclatureException(
@@ -80,6 +99,7 @@ public final class NomenclatureCatalog {
             throw new NomenclatureException(
                     "soft leaf path already exists in the ontology slice: '" + path + "'");
         }
+        List<NomenclatureAlias> aliasRows = new ArrayList<>();
         for (String aliasText : aliasTexts) {
             if (aliasText == null || aliasText.isBlank()) {
                 continue;
@@ -89,35 +109,12 @@ public final class NomenclatureCatalog {
                 throw new NomenclatureException(
                         "alias '" + aliasText + "' already maps to '" + bound.get() + "'");
             }
+            aliasRows.add(new NomenclatureAlias(aliasText, path));
         }
-        try {
-            inTransaction(() -> {
-                String now = Timestamps.now();
-                repo.insertNomenclatureNode(new NomenclatureNode(
-                        path,
-                        leafName,
-                        parentPath,
-                        NomenclatureNode.LAYER_MANDATE_SOFT,
-                        false,
-                        true,
-                        null,
-                        mandateId), now);
-                for (String aliasText : aliasTexts) {
-                    if (aliasText == null || aliasText.isBlank()) {
-                        continue;
-                    }
-                    repo.insertNomenclatureAlias(
-                            new NomenclatureAlias(aliasText, path),
-                            NomenclatureNode.LAYER_MANDATE_SOFT,
-                            null,
-                            mandateId,
-                            now);
-                }
-            });
-        } catch (SQLException e) {
-            throw new NomenclatureException(
-                    "failed to store soft leaf '" + path + "' for mandate " + mandateId, e);
-        }
+        NomenclatureNode node = new NomenclatureNode(
+                path, leafName, parentPath, NomenclatureNode.LAYER_MANDATE_SOFT,
+                false, true, null, mandateId);
+        return new ValidatedLeaf(path, node, aliasRows);
     }
 
     private IndustryResolution resolveIndustry(long mandateId, String industryHint)

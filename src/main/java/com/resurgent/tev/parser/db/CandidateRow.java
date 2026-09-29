@@ -21,5 +21,6 @@ public record CandidateRow(
         Double structuralConfidence,
         String structuralConfidenceRationale,
         String explanation,
-        String createdAt) {
+        String createdAt,
+        String structuralRole) {
 }

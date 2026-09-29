@@ -12,8 +12,6 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import java.util.List;
 import java.util.Map;
 
-import com.resurgent.tev.parser.classify.NomenclatureBinding;
-import com.resurgent.tev.parser.classify.PacketDisposition;
 import com.resurgent.tev.parser.ingest.NormalizedCell;
 import com.resurgent.tev.parser.nomenclature.NomenclatureAlias;
 import com.resurgent.tev.parser.nomenclature.NomenclatureCatalog;
@@ -109,10 +107,10 @@ class PersistenceSeamTest {
     void migrationsAreIdempotent() throws Exception {
         Path dbPath = tempDir.resolve("idempotent.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(23);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(34);
         }
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            assertThat(count(db.connection(), "schema_migration")).isEqualTo(23);
+            assertThat(count(db.connection(), "schema_migration")).isEqualTo(34);
         }
     }
 
@@ -123,8 +121,11 @@ class PersistenceSeamTest {
             assertThat(tables).contains(
                     "candidate", "candidate_member", "candidate_related",
                     "nomenclature_node", "nomenclature_alias", "mandate_industry",
-                    "packet_disposition", "nomenclature_binding",
-                    "nomenclature_binding_peer", "project_fact_field", "project_fact_binding");
+                    "project_fact_field", "packet_disposition", "schedule_family");
+            assertThat(tables).contains(
+                    "nomenclature_binding", "cell_interpretation", "cell_interpretation_evidence",
+                    "formula_link", "formula_reach", "formula_gap", "cell_reading");
+            assertThat(tables).doesNotContain("cell_type", "aggregation");
             assertThat(tables).doesNotContain("region", "cost_head");
 
             WorkspaceRepository repo = new WorkspaceRepository(db.connection());
@@ -153,7 +154,7 @@ class PersistenceSeamTest {
                     1, 1, 2, 2,
                     null, null, null,
                     false, 1.0, "sole coverage parent",
-                    "Coverage parent for Sheet1");
+                    "Coverage parent for Sheet1", null);
             long candidateId = repo.insertCandidate(write, List.of(cellA1, cellB2));
 
             CandidateRow row = repo.selectCandidate(candidateId);
@@ -162,32 +163,16 @@ class PersistenceSeamTest {
             assertThat(row.isolatedHiddenWorksheet()).isFalse();
             assertThat(row.bboxMinRow()).isEqualTo(1);
             assertThat(row.bboxMaxCol()).isEqualTo(2);
+            assertThat(row.structuralRole()).isNull();
             assertThat(repo.selectCandidateMemberCellIds(candidateId))
                     .containsExactlyInAnyOrder(cellA1, cellB2);
-
-            repo.insertPacketDisposition(new PacketDisposition(
-                    candidateId, parseRunId, "capex_detail", "main", "primary",
-                    List.of("Item"), List.of("Amount"), "Project Cost", null, true));
-            PacketDisposition disposition = repo.selectPacketDispositionsForParseRun(parseRunId).get(0);
-            assertThat(disposition.scheduleFamily()).isEqualTo("capex_detail");
-            assertThat(disposition.rowLabels()).containsExactly("Item");
-            assertThat(disposition.cheapPass()).isTrue();
-
-            repo.insertNomenclatureBinding(new NomenclatureBinding(
-                    cellB2, parseRunId, candidateId, "Civil Works",
-                    "Project Cost > Civil Works > Structure", "add", true, false, 0.9));
-            NomenclatureBinding binding = repo.selectNomenclatureBindingsForParseRun(parseRunId).get(0);
-            assertThat(binding.path()).isEqualTo("Project Cost > Civil Works > Structure");
-            assertThat(binding.amountRole()).isEqualTo("add");
-            assertThat(repo.sumAddAmountsForPath(parseRunId, "Project Cost > Civil Works > Structure"))
-                    .isEqualTo(10.0);
 
             CandidateWrite replacement = new CandidateWrite(
                     parseRunId, worksheetId, "coverage_parent", null,
                     1, 1, 1, 1,
                     null, null, null,
                     true, 1.0, "isolated hidden",
-                    "Replaced coverage parent");
+                    "Replaced coverage parent", null);
             repo.replaceCandidatesForParseRun(parseRunId, List.of(
                     new CandidateWithMembers(replacement, List.of(cellA1))));
 
@@ -197,12 +182,9 @@ class PersistenceSeamTest {
             assertThat(after.get(0).isolatedHiddenWorksheet()).isTrue();
             assertThat(repo.selectCandidateMemberCellIds(after.get(0).candidateId()))
                     .containsExactly(cellA1);
-            assertThat(repo.selectPacketDispositionsForParseRun(parseRunId)).isEmpty();
-            assertThat(repo.selectNomenclatureBindingsForParseRun(parseRunId)).isEmpty();
         }
     }
 
-    @Test
     void nomenclatureSpinePackAndOverlayRoundTripThroughRepository() throws Exception {
         Path dbPath = tempDir.resolve("nomenclature.db");
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
@@ -456,7 +438,7 @@ class PersistenceSeamTest {
             java.sql.Connection c = db.connection();
             WorkspaceRepository repo = new WorkspaceRepository(c);
 
-            assertThat(count(c, "schema_migration")).isEqualTo(23);
+            assertThat(count(c, "schema_migration")).isEqualTo(34);
             assertThat(tableNames(c)).contains("cell_reference");
             assertThat(tableNames(c)).doesNotContain("cell_error_root");
 
@@ -504,7 +486,7 @@ class PersistenceSeamTest {
     void v15MigrationRestoresAdr0013IngestSignalsWithoutHeuristicStack() throws Exception {
         try (WorkspaceDatabase db = openDb("v15.db")) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(23);
+            assertThat(count(c, "schema_migration")).isEqualTo(34);
             assertThat(tableNames(c)).contains("cell_style", "cell_reference", "candidate");
             assertThat(tableNames(c)).doesNotContain(
                     "region",
@@ -545,7 +527,8 @@ class PersistenceSeamTest {
                     "THIN", "#000000",
                     "THIN", "#000000",
                     "NONE", null,
-                    "MEDIUM", "#ff0000");
+                    "MEDIUM", "#ff0000",
+                    null, null, null, null, null);
             long styleId = repo.insertCellStyle(style);
             assertThat(repo.selectCellStyle(styleId)).isEqualTo(style);
 
@@ -558,7 +541,8 @@ class PersistenceSeamTest {
                     "THIN", "#000000",
                     "NONE", null,
                     "NONE", null,
-                    "MEDIUM", "#ff0000");
+                    "MEDIUM", "#ff0000",
+                    null, null, null, null, null);
             assertThat(repo.insertCellStyle(distinct)).isNotEqualTo(styleId);
             assertThat(repo.countCellStyles()).isEqualTo(2);
 
@@ -676,7 +660,7 @@ class PersistenceSeamTest {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(
                 dbPath, WorkspaceDatabase.OpenOptions.allowDestructiveReset())) {
             java.sql.Connection c = db.connection();
-            assertThat(count(c, "schema_migration")).isEqualTo(23);
+            assertThat(count(c, "schema_migration")).isEqualTo(34);
             assertThat(count(c, "cell")).isZero();
             assertThat(count(c, "source_file")).isZero();
             assertThat(tableNames(c)).doesNotContain("cost_head", "region");
@@ -711,4 +695,5 @@ class PersistenceSeamTest {
         }
         return columns;
     }
+
 }

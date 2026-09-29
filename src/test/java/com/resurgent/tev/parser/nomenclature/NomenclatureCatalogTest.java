@@ -201,7 +201,7 @@ class NomenclatureCatalogTest {
                     1, 1, 1, 1,
                     null, null, null,
                     false, 1.0, "sole coverage parent",
-                    "Coverage parent for Sheet1");
+                    "Coverage parent for Sheet1", null);
             long candidateId = repo.insertCandidate(write, List.of(cellA1));
 
             new NomenclatureCatalog(repo);
@@ -265,8 +265,10 @@ class NomenclatureCatalogTest {
             }
             assertThat(tables).contains(
                     "nomenclature_node", "nomenclature_alias", "mandate_industry",
-                    "packet_disposition",
-                    "candidate", "candidate_member", "candidate_related");
+                    "candidate", "candidate_member", "candidate_related",
+                    "packet_disposition", "schedule_family",
+                    "nomenclature_binding", "cell_interpretation", "cell_interpretation_evidence");
+            assertThat(tables).doesNotContain("cell_type", "aggregation");
             assertThat(tables).doesNotContain("region", "cost_head");
 
             NomenclatureCatalog catalog = new NomenclatureCatalog(

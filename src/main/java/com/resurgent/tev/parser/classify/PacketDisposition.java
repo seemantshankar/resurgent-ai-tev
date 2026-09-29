@@ -12,11 +12,15 @@ public record PacketDisposition(
         List<String> rowLabels,
         List<String> columnHeaders,
         String packetDefaultHead,
+        String about,
         Long parentCandidateId,
         boolean cheapPass) {
 
     public PacketDisposition {
         rowLabels = rowLabels == null ? List.of() : List.copyOf(rowLabels);
         columnHeaders = columnHeaders == null ? List.of() : List.copyOf(columnHeaders);
+        if (about == null || about.isBlank()) {
+            throw new IllegalArgumentException("about must be non-blank");
+        }
     }
 }

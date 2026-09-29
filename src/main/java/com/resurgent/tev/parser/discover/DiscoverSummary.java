@@ -15,8 +15,5 @@ public record DiscoverSummary(
 
     /** Signals absent from the ingest contract (ADR 0013) — discover must not invent them. */
     public static final List<String> UNAVAILABLE_INGEST_SIGNALS = List.of(
-            "column_width",
-            "font",
-            "comments",
             "drawings");
 }

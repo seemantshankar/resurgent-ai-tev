@@ -1,8 +1,8 @@
-# Deterministic Region Discovery Rules
+# Region Discovery Rules
 
-**Status:** Working rules; product decisions locked 2026-09-04 (see PRD §14, `CONTEXT.md`, ADRs 0014–0017)  
-**Scope:** Generic discovery of Candidates in client financial models  
-**Owner of semantic classification:** LLM, followed by analyst review (a later component; this pipeline does not call the LLM)
+**Status:** Partially superseded (2026-09). Fully deterministic narrow-region discovery was abandoned — geometry heuristics mis-tagged layout (e.g. side pads as `main`). Current pipeline: `discover` writes **coverage parents only**; `classify` LLM region layout assigns `main`/`helper`/`scratch` bboxes, then Layer A. Sections below that prescribe deterministic child/parallel/overlap/role tagging are historical design notes, not the live path. See `CONTEXT.md`.  
+**Scope:** Candidate coverage + (via classify) LLM region layout for client financial models  
+**Owner of structural roles and semantic classification:** LLM (region layout + Layer A); analyst review later
 
 ## DB-only constraint
 
@@ -84,10 +84,11 @@ The deterministic system identifies structural Candidates. It does not decide th
 5. Uncertainty must be represented through parent candidates, child candidates, or overlapping candidates.
 6. Every persisted cell on a worksheet must belong to that sheet’s coverage parent. Narrower Candidates may omit a cell; the coverage parent may not.
 7. Raw workbook evidence must remain available regardless of region classification.
-8. No cell should be silently discarded as Scratch or Orphan by deterministic logic alone.
+8. No cell should be silently discarded by deterministic logic. A structural role of `scratch` still persists the Candidate and its members; it is not Layer A triage and does not drop cells.
 9. Candidates must preserve exact cell membership and source provenance, not only an outer bbox. Members never span worksheets.
 10. A bbox is an envelope calculated from region membership; it is not, by itself, a semantic interpretation.
-11. Text labels are opaque values to the deterministic system; matching or positioning text does not mean understanding its business meaning.
+11. Header text may be compared for identity (whitespace-normalized equality) so regions that share a column header can be merged or linked. Matching text does not assign business meaning or a schedule family.
+12. Discovery reads a sheet the way a person does: geometry first (boxes, gutters, merges, borders), then cell kind only when the picture is ambiguous, then column and row headers.
 
 ## 3. Responsibilities of the deterministic system
 
@@ -95,9 +96,11 @@ The deterministic system may:
 
 - consume the persisted workbook and cell evidence from the database;
 - identify persisted cells;
-- detect structural clusters;
+- detect structural clusters from geometry, then cell kind, then header identity;
 - detect layout signatures and discontinuities;
 - identify coverage parent, child, parallel, overlap, and related Candidates;
+- tag a narrow Candidate with structural role `main`, `helper`, or `scratch`;
+- link Candidates that share a column-header identity (`shared_column_header`);
 - preserve blank layout cells inside a candidate envelope as internal whitespace;
 - preserve hidden, formula-bearing, merged, styled, and error cells;
 - attach structural explanations and confidence notes (confidence never drops a Candidate);
@@ -105,10 +108,10 @@ The deterministic system may:
 
 The deterministic system must not:
 
-- assign business meaning to a region;
+- assign business meaning or a schedule family to a region;
 - assume fixed rows, columns, sheet names, or labels;
-- classify a cell as Scratch because it is isolated;
-- classify a cell as Orphan because it was not assigned to the first candidate;
+- drop a cell or Candidate because its structural role is `scratch`;
+- treat structural role as Layer A triage;
 - discard hidden rows, hidden worksheets, formula errors, or apparently unused cells;
 - silently merge alternatives or quotation values;
 - use a fixed number of blank rows as a universal separator;
@@ -264,6 +267,27 @@ Candidate expansion may stop when several signals indicate a discontinuity, such
 - a formula-reference cluster disconnected from the current candidate.
 
 No single signal should be treated as universally decisive.
+
+### 5.10 Tag structural roles
+
+After local children exist, each narrow Candidate receives a structural role from **geometry and persisted formula edges only**. Roles are not Layer A triage. Client workbooks are validation samples, not sources of label dictionaries, sheet-name rules, or fixed coordinates.
+
+Product meaning for the clean financial-model extract (TEV / credit intelligence):
+
+| Role | Model extract | What it covers (detected geometrically) |
+| --- | --- | --- |
+| **main** | **Retain** | Real grids (itemized tables), title/header/unit bands absorbed above them, immediate totals/footers. Multiple mains per sheet are expected when several section tables exist. |
+| **helper** | **Exclude** from core model (keep for audit) | Right-side alternate+difference pads peeled from same-row `A-B` formulas; other non-main regions with a same-sheet formula edge to a main (inline calc / breakout blocks). Excluded to avoid double-counting. |
+| **scratch** | **Omit** from model extract | Floating unlinked orphans and other debris with no formula link to a main. Still persisted via the coverage parent — role never deletes evidence. Unused blank grid is not ingested as cells. |
+
+Universal detection notes:
+
+- Every region that meets the real-grid threshold is tagged `main` (not only the highest-scoring grid on the sheet).
+- A text-only row with two or more labels and no stitch-value amounts, immediately under a valued band, re-anchors a new child (section restart). Occupancy/type geometry only — not parsing of section letters.
+- Same-row subtraction formulas detect comparison pads (alternate + difference peel; primary operand column stays with its region). No assumption of fixed column letters.
+- Soft blank gaps never alone force a split; a blank after a formula footer row may end a child; titles absorb above mains; footers absorb only on the next occupied row.
+
+A title row that spans two side-by-side mains stays a separate small region when its columns cover both bands.
 
 ## 6. Coverage and uncertainty invariants
 

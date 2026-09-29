@@ -2,6 +2,7 @@ package com.resurgent.tev.parser.classify;
 
 import com.resurgent.tev.parser.db.CandidateRow;
 import com.resurgent.tev.parser.db.InterpretationCellView;
+import com.resurgent.tev.parser.db.NomenclatureBinding;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -26,14 +27,8 @@ final class InterpretationEvidenceResolver {
             Pattern.compile("(?i)\\b(?:year|yr|y)\\s*([0-9]{1,2})\\b");
     private static final Pattern YEAR_CALENDAR =
             Pattern.compile("(?i)\\b((?:19|20)\\d{2})\\b");
-    private static final Pattern SCALE =
-            Pattern.compile("(?i)\\b(lakhs?|lacs?|crore|million|billion|thousands?|000s?)\\b");
-    private static final Pattern CURRENCY =
-            Pattern.compile("(?i)(₹|\\binr\\b|\\brs\\.?\\b|\\busd\\b|\\beur\\b|\\$|€|£)");
     private static final Pattern BASIS =
             Pattern.compile("(?i)\\b(projected|projection|actual|budget|forecast|historical)\\b");
-    private static final Pattern UNIT =
-            Pattern.compile("(?i)\\b(sq\\.?\\s*ft|sqft|sqm|nos?\\.?|keys?|rooms?|%|percent)\\b");
     /** Division by INR/display-unit magnitudes (e.g. Om Arham {@code /10^5} → lakh). */
     private static final Pattern FORMULA_DIVISOR_BILLION =
             Pattern.compile("(?i)/\\s*(?:10\\s*\\^\\s*9|10\\s*\\*\\*\\s*9|1e9|1000000000)\\b");
@@ -46,6 +41,43 @@ final class InterpretationEvidenceResolver {
     private static final Pattern FORMULA_DIVISOR_THOUSAND =
             Pattern.compile("(?i)/\\s*(?:10\\s*\\^\\s*3|10\\s*\\*\\*\\s*3|1e3|1000)\\b");
 
+    /** One formula divisor rule: the pattern, the scale it implies, and its rule id. */
+    private record DivisorRule(Pattern pattern, CellScale scale, String normalized, String ruleId) {}
+
+    // Largest magnitude first so /1000000000 is not misread as /1000. The single
+    // source of truth for the scale a formula's own divisor implies, shared by the
+    // reporting evidence and by input typing.
+    private static final List<DivisorRule> FORMULA_DIVISORS = List.of(
+            new DivisorRule(FORMULA_DIVISOR_BILLION, CellScale.BILLION, "billion", "formula_divisor_1e9"),
+            new DivisorRule(FORMULA_DIVISOR_CRORE, CellScale.CRORE, "crore", "formula_divisor_1e7"),
+            new DivisorRule(FORMULA_DIVISOR_MILLION, CellScale.MILLION, "million", "formula_divisor_1e6"),
+            new DivisorRule(FORMULA_DIVISOR_LAKH, CellScale.LAKH, "lakh", "formula_divisor_1e5"),
+            new DivisorRule(FORMULA_DIVISOR_THOUSAND, CellScale.THOUSAND, "thousand", "formula_divisor_1e3"));
+
+    /**
+     * The scale a formula's own divisor implies ({@code /10^5} → lakh), or
+     * {@code null}. A constant-only formula such as {@code 8000*300/100000} hardcodes
+     * a lakh figure; typing it from labels alone loses that. Shared with the
+     * reporting evidence so the two never diverge.
+     */
+    static CellScale formulaDivisorScale(String formulaText) {
+        if (formulaText == null || formulaText.isBlank()) {
+            return null;
+        }
+        // Every rule below matches a division, so a formula without '/' cannot state a
+        // scale. Most formulas are sums and products, and this skips five case-insensitive
+        // regex scans over each of them.
+        if (formulaText.indexOf('/') < 0) {
+            return null;
+        }
+        for (DivisorRule rule : FORMULA_DIVISORS) {
+            if (rule.pattern().matcher(formulaText).find()) {
+                return rule.scale();
+            }
+        }
+        return null;
+    }
+
     private InterpretationEvidenceResolver() {}
 
     static List<InterpretationEvidence> resolve(
@@ -56,8 +88,31 @@ final class InterpretationEvidenceResolver {
             Map<Long, Set<Long>> membersByCandidate,
             Map<Long, CandidateRow> candidatesById,
             NomenclatureBinding binding) {
+        return resolve(
+                parseRunId,
+                target,
+                new ResolveCache(byId),
+                ownersByCell,
+                membersByCandidate,
+                candidatesById,
+                binding);
+    }
+
+    /**
+     * Hot-path entry point. Callers that resolve every Cell in a parse run pass one
+     * {@link ResolveCache} so Candidate scopes and merged anchors are derived once per
+     * Candidate instead of once per Cell.
+     */
+    static List<InterpretationEvidence> resolve(
+            long parseRunId,
+            InterpretationCellView target,
+            ResolveCache cache,
+            Map<Long, List<CandidateRow>> ownersByCell,
+            Map<Long, Set<Long>> membersByCandidate,
+            Map<Long, CandidateRow> candidatesById,
+            NomenclatureBinding binding) {
         Objects.requireNonNull(target, "target");
-        Objects.requireNonNull(byId, "byId");
+        Objects.requireNonNull(cache, "cache");
         Objects.requireNonNull(candidatesById, "candidatesById");
 
         List<CandidateRow> peers = ownershipPeers(target, ownersByCell);
@@ -72,7 +127,7 @@ final class InterpretationEvidenceResolver {
         }
 
         List<InterpretationEvidence> out = resolveWithPeers(
-                parseRunId, target, byId, membersByCandidate, candidatesById, peers);
+                parseRunId, target, cache, membersByCandidate, candidatesById, peers);
         // Formula-/context-bound amounts may sit outside every narrow owner's members;
         // if ownership scope yields no headers, try the binding Candidate's Packet scope.
         if (binding != null && headersAllMissing(out)) {
@@ -82,29 +137,83 @@ final class InterpretationEvidenceResolver {
                 out = resolveWithPeers(
                         parseRunId,
                         target,
-                        byId,
+                        cache,
                         membersByCandidate,
                         candidatesById,
                         List.of(bound));
             }
         }
+        // Discovery can segment a column-header band into its own child Candidate while
+        // the data rows form another, so no narrow owner spans the header row. The
+        // coverage parent does; retry with it as an additional scope before reporting
+        // missing column headers.
+        if (columnHeadersAllMissing(out)) {
+            CandidateRow parent = coverageParentOwner(target, ownersByCell);
+            if (parent != null
+                    && peers.stream().noneMatch(p -> p.candidateId() == parent.candidateId())) {
+                List<CandidateRow> withParent = new ArrayList<>(peers);
+                withParent.add(parent);
+                out = resolveWithPeers(
+                        parseRunId,
+                        target,
+                        cache,
+                        membersByCandidate,
+                        candidatesById,
+                        withParent);
+            }
+        }
+        if (binding != null && "helper".equals(binding.amountRole()) && isForeignRestatement(target)) {
+            out = clearResolvedRowHeaders(parseRunId, target.cellId(), out);
+        }
         return List.copyOf(out);
+    }
+
+    private static boolean isForeignRestatement(InterpretationCellView target) {
+        String formula = target.formulaText();
+        if (formula == null || formula.isBlank()) {
+            return false;
+        }
+        String stripped = formula.trim();
+        if (stripped.startsWith("=")) {
+            stripped = stripped.substring(1).trim();
+        }
+        return stripped.indexOf('!') >= 0;
+    }
+
+    private static List<InterpretationEvidence> clearResolvedRowHeaders(
+            long parseRunId, long cellId, List<InterpretationEvidence> evidence) {
+        List<InterpretationEvidence> out = new ArrayList<>();
+        boolean sawRow = false;
+        for (InterpretationEvidence item : evidence) {
+            if (EvidenceRole.ROW_HEADER.equals(item.role())) {
+                if (!sawRow) {
+                    out.add(missing(parseRunId, cellId, EvidenceRole.ROW_HEADER, 0));
+                    sawRow = true;
+                }
+                continue;
+            }
+            out.add(item);
+        }
+        if (!sawRow) {
+            out.add(0, missing(parseRunId, cellId, EvidenceRole.ROW_HEADER, 0));
+        }
+        return out;
     }
 
     private static List<InterpretationEvidence> resolveWithPeers(
             long parseRunId,
             InterpretationCellView target,
-            Map<Long, InterpretationCellView> byId,
+            ResolveCache cache,
             Map<Long, Set<Long>> membersByCandidate,
             Map<Long, CandidateRow> candidatesById,
             List<CandidateRow> peers) {
         List<HeaderChain> rowChains = new ArrayList<>();
         List<HeaderChain> colChains = new ArrayList<>();
         for (CandidateRow scope : peers) {
-            Set<Long> scopeIds = expandedScope(scope, membersByCandidate, byId, candidatesById);
-            InterpretationCellView focus = focusCell(target, byId, scopeIds);
-            rowChains.add(rowHeaderChain(focus, byId, scopeIds));
-            colChains.add(columnHeaderChain(focus, byId, scopeIds));
+            ScopeIndex scopeIndex = cache.scope(scope, membersByCandidate, candidatesById);
+            InterpretationCellView focus = focusCell(target, cache, scopeIndex);
+            rowChains.add(rowHeaderChain(focus, scopeIndex));
+            colChains.add(columnHeaderChain(focus, scopeIndex));
         }
         List<InterpretationEvidence> out = new ArrayList<>();
         out.addAll(mergeHeaderRole(
@@ -127,6 +236,29 @@ final class InterpretationEvidenceResolver {
             }
         }
         return sawHeader;
+    }
+
+    private static boolean columnHeadersAllMissing(List<InterpretationEvidence> evidence) {
+        boolean sawColumnHeader = false;
+        for (InterpretationEvidence item : evidence) {
+            if (EvidenceRole.COLUMN_HEADER.equals(item.role())) {
+                sawColumnHeader = true;
+                if (!EvidenceResolution.MISSING.equals(item.resolution())) {
+                    return false;
+                }
+            }
+        }
+        return sawColumnHeader;
+    }
+
+    private static CandidateRow coverageParentOwner(
+            InterpretationCellView target, Map<Long, List<CandidateRow>> ownersByCell) {
+        for (CandidateRow owner : ownersByCell.getOrDefault(target.cellId(), List.of())) {
+            if ("coverage_parent".equals(owner.candidateKind())) {
+                return owner;
+            }
+        }
+        return null;
     }
 
     private static List<CandidateRow> ownershipPeers(
@@ -154,7 +286,7 @@ final class InterpretationEvidenceResolver {
     private static Set<Long> expandedScope(
             CandidateRow candidate,
             Map<Long, Set<Long>> membersByCandidate,
-            Map<Long, InterpretationCellView> byId,
+            ResolveCache cache,
             Map<Long, CandidateRow> candidatesById) {
         Set<Long> scope = new HashSet<>(
                 membersByCandidate.getOrDefault(candidate.candidateId(), Set.of()));
@@ -173,15 +305,10 @@ final class InterpretationEvidenceResolver {
                 && membersByCandidate.containsKey(candidate.parentCandidateId())) {
             poolIds = membersByCandidate.get(candidate.parentCandidateId());
         } else {
-            poolIds = new HashSet<>();
-            for (InterpretationCellView cell : byId.values()) {
-                if (cell.worksheetId() == candidate.worksheetId()) {
-                    poolIds.add(cell.cellId());
-                }
-            }
+            poolIds = cache.worksheetCellIds(candidate.worksheetId());
         }
         for (Long id : poolIds) {
-            InterpretationCellView view = byId.get(id);
+            InterpretationCellView view = cache.byId().get(id);
             if (view == null || scope.contains(id)) {
                 continue;
             }
@@ -197,7 +324,8 @@ final class InterpretationEvidenceResolver {
         // Column headers: nearest contiguous header band above the Candidate, not every
         // earlier coverage-parent cell (stacked schedules must not leak upper headers).
         for (InterpretationCellView view :
-                nearestHeaderBand(byId, poolIds, candidate.worksheetId(), minRow, minCol, maxCol)) {
+                nearestHeaderBand(
+                        cache.byId(), poolIds, candidate.worksheetId(), minRow, minCol, maxCol)) {
             scope.add(view.cellId());
         }
         return scope;
@@ -274,41 +402,24 @@ final class InterpretationEvidenceResolver {
     }
 
     private static InterpretationCellView focusCell(
-            InterpretationCellView target,
-            Map<Long, InterpretationCellView> byId,
-            Set<Long> memberIds) {
+            InterpretationCellView target, ResolveCache cache, ScopeIndex scope) {
         if (!target.isMergedParticipant() || target.mergedRange() == null) {
             return target;
         }
         // Prefer the merged anchor inside the same Candidate scope when present.
-        for (InterpretationCellView cell : byId.values()) {
-            if (cell.worksheetId() != target.worksheetId()) {
-                continue;
-            }
-            if (!cell.isMergedAnchor()) {
-                continue;
-            }
-            if (!memberIds.contains(cell.cellId())) {
-                continue;
-            }
-            if (Objects.equals(cell.mergedRange(), target.mergedRange())) {
+        for (InterpretationCellView cell :
+                cache.mergedAnchors(target.worksheetId(), target.mergedRange())) {
+            if (scope.ids().contains(cell.cellId())) {
                 return cell;
             }
         }
         return target;
     }
 
-    private static HeaderChain rowHeaderChain(
-            InterpretationCellView focus,
-            Map<Long, InterpretationCellView> byId,
-            Set<Long> memberIds) {
+    private static HeaderChain rowHeaderChain(InterpretationCellView focus, ScopeIndex scope) {
         List<InterpretationCellView> left = new ArrayList<>();
-        for (Long id : memberIds) {
-            InterpretationCellView cell = byId.get(id);
-            if (cell == null || cell.worksheetId() != focus.worksheetId()) {
-                continue;
-            }
-            if (cell.rowNum() != focus.rowNum() || cell.colNum() >= focus.colNum()) {
+        for (InterpretationCellView cell : scope.row(focus.worksheetId(), focus.rowNum())) {
+            if (cell.colNum() >= focus.colNum()) {
                 continue;
             }
             if (labelText(cell) == null) {
@@ -320,29 +431,17 @@ final class InterpretationEvidenceResolver {
         return HeaderChain.from(left);
     }
 
-    private static HeaderChain columnHeaderChain(
-            InterpretationCellView focus,
-            Map<Long, InterpretationCellView> byId,
-            Set<Long> memberIds) {
-        List<InterpretationCellView> above = new ArrayList<>();
-        for (Long id : memberIds) {
-            InterpretationCellView cell = byId.get(id);
-            if (cell == null || cell.worksheetId() != focus.worksheetId()) {
-                continue;
-            }
-            if (cell.colNum() != focus.colNum() || cell.rowNum() >= focus.rowNum()) {
+    private static HeaderChain columnHeaderChain(InterpretationCellView focus, ScopeIndex scope) {
+        // Nearest header band above focus: skip body/numeric rows until the first header,
+        // then stop at the first gap (stacked upper schedules stay out).
+        Map<Integer, List<InterpretationCellView>> byRow = new HashMap<>();
+        for (InterpretationCellView cell : scope.column(focus.worksheetId(), focus.colNum())) {
+            if (cell.rowNum() >= focus.rowNum()) {
                 continue;
             }
             if (!isColumnHeaderCandidate(cell)) {
                 continue;
             }
-            above.add(cell);
-        }
-        above.sort(Comparator.comparingInt(InterpretationCellView::rowNum));
-        // Nearest header band above focus: skip body/numeric rows until the first header,
-        // then stop at the first gap (stacked upper schedules stay out).
-        Map<Integer, List<InterpretationCellView>> byRow = new HashMap<>();
-        for (InterpretationCellView cell : above) {
             byRow.computeIfAbsent(cell.rowNum(), r -> new ArrayList<>()).add(cell);
         }
         List<InterpretationCellView> band = new ArrayList<>();
@@ -530,30 +629,19 @@ final class InterpretationEvidenceResolver {
             return;
         }
         String formula = target.formulaText();
-        // Longest / largest magnitude first so /1000000000 is not misread as /1000.
-        if (matchDivisor(cues, target, formula, FORMULA_DIVISOR_BILLION, "billion", "formula_divisor_1e9")) {
-            return;
+        for (DivisorRule rule : FORMULA_DIVISORS) {
+            if (matchDivisor(cues, target, formula, rule)) {
+                return;
+            }
         }
-        if (matchDivisor(cues, target, formula, FORMULA_DIVISOR_CRORE, "crore", "formula_divisor_1e7")) {
-            return;
-        }
-        if (matchDivisor(cues, target, formula, FORMULA_DIVISOR_MILLION, "million", "formula_divisor_1e6")) {
-            return;
-        }
-        if (matchDivisor(cues, target, formula, FORMULA_DIVISOR_LAKH, "lakh", "formula_divisor_1e5")) {
-            return;
-        }
-        matchDivisor(cues, target, formula, FORMULA_DIVISOR_THOUSAND, "thousand", "formula_divisor_1e3");
     }
 
     private static boolean matchDivisor(
             Map<String, List<Cue>> cues,
             InterpretationCellView target,
             String formula,
-            Pattern pattern,
-            String normalized,
-            String ruleId) {
-        Matcher matcher = pattern.matcher(formula);
+            DivisorRule rule) {
+        Matcher matcher = rule.pattern().matcher(formula);
         if (!matcher.find()) {
             return false;
         }
@@ -561,8 +649,8 @@ final class InterpretationEvidenceResolver {
                 .add(new Cue(
                         target.cellId(),
                         matcher.group().replaceAll("\\s+", ""),
-                        normalized,
-                        ruleId));
+                        rule.normalized(),
+                        rule.ruleId()));
         return true;
     }
 
@@ -591,67 +679,41 @@ final class InterpretationEvidenceResolver {
             cues.get(EvidenceRole.BASIS)
                     .add(new Cue(sourceCellId, basis.group().trim(), null, "basis_token"));
         }
-        Matcher currency = CURRENCY.matcher(text);
+        Matcher currency = KindTokens.CURRENCY.matcher(text);
         if (currency.find()) {
             String token = currency.group().trim();
-            String normalized = normalizeCurrency(token);
+            String normalized = KindTokens.normalizeCurrency(token);
             cues.get(EvidenceRole.CURRENCY)
                     .add(new Cue(sourceCellId, token, normalized, "currency_token"));
         }
-        Matcher scale = SCALE.matcher(text);
+        Matcher scale = CellScale.SCALE_TOKEN.matcher(text);
         if (scale.find()) {
             String token = scale.group().trim();
             cues.get(EvidenceRole.SCALE)
                     .add(new Cue(sourceCellId, token, normalizeScale(token), "scale_token"));
+        } else if (text.matches("(?i).*\\b(?:amt\\.?\\s*in\\s+rs\\.?|in\\s+rs\\.?)\\b.*")) {
+            cues.get(EvidenceRole.SCALE)
+                    .add(new Cue(sourceCellId, text.trim(), "unit", "amt_in_rs_unit"));
         }
-        Matcher unit = UNIT.matcher(text);
+        Matcher unit = KindTokens.UNIT.matcher(text);
         if (unit.find()) {
             String token = unit.group().trim();
             cues.get(EvidenceRole.UNIT)
-                    .add(new Cue(sourceCellId, token, null, "unit_token"));
+                    .add(new Cue(sourceCellId, token, KindTokens.normalizeUnit(token), "unit_token"));
         }
     }
 
+    /** Canonical scale key so plural spelling variants agree on one conflict key. */
     private static String normalizeScale(String token) {
-        String t = token.toLowerCase(Locale.ROOT);
-        if (t.startsWith("lac")) {
-            return "lakh";
-        }
-        if (t.startsWith("crore")) {
-            return "crore";
-        }
-        if (t.startsWith("thousand") || t.equals("000s") || t.equals("000")) {
-            return "thousand";
-        }
-        if (t.startsWith("million")) {
-            return "million";
-        }
-        if (t.startsWith("billion")) {
-            return "billion";
-        }
-        return t;
-    }
-
-    private static String normalizeCurrency(String token) {
-        String t = token.toLowerCase(Locale.ROOT).replace(".", "");
-        if (t.contains("₹") || t.equals("inr") || t.equals("rs")) {
-            return "INR";
-        }
-        if (t.equals("usd")) {
-            return "USD";
-        }
-        if (t.contains("$")) {
-            // Bare $ is USD/CAD/AUD/… — keep source cue without inventing a currency.
-            return null;
-        }
-        if (t.contains("€") || t.equals("eur")) {
-            return "EUR";
-        }
-        if (t.contains("£")) {
-            return "GBP";
-        }
-        // Ambiguous bare symbol already handled by explicit tokens; leave null if unknown.
-        return null;
+        CellScale scale = CellScale.ofToken(token);
+        return switch (scale) {
+            case LAKH -> "lakh";
+            case CRORE -> "crore";
+            case THOUSAND -> "thousand";
+            case MILLION -> "million";
+            case BILLION -> "billion";
+            case UNIT -> token.toLowerCase(Locale.ROOT);
+        };
     }
 
     private static List<InterpretationEvidence> missingHeaders(long parseRunId, long cellId) {
@@ -752,5 +814,185 @@ final class InterpretationEvidenceResolver {
             byId.put(cell.cellId(), cell);
         }
         return byId;
+    }
+
+    /**
+     * The Candidate-scoped resolved column-header text for typing, or {@code null}
+     * when the header is missing or the scopes disagree. This reuses the exact
+     * scoping the reporting evidence uses, so a note banner cannot be mistaken for a
+     * distant block's header (ADR 0020).
+     */
+    static String resolvedColumnHeader(
+            long parseRunId,
+            InterpretationCellView target,
+            ResolveCache cache,
+            Map<Long, List<CandidateRow>> ownersByCell,
+            Map<Long, Set<Long>> membersByCandidate,
+            Map<Long, CandidateRow> candidatesById) {
+        return resolvedHeader(
+                EvidenceRole.COLUMN_HEADER,
+                parseRunId,
+                target,
+                cache,
+                ownersByCell,
+                membersByCandidate,
+                candidatesById);
+    }
+
+    private static String resolvedHeader(
+            String role,
+            long parseRunId,
+            InterpretationCellView target,
+            ResolveCache cache,
+            Map<Long, List<CandidateRow>> ownersByCell,
+            Map<Long, Set<Long>> membersByCandidate,
+            Map<Long, CandidateRow> candidatesById) {
+        List<InterpretationEvidence> evidence = resolve(
+                parseRunId, target, cache, ownersByCell, membersByCandidate, candidatesById, null);
+        return headerText(evidence, role);
+    }
+
+    /** Row and column header text from one resolve, for the cell-reading pass. */
+    static String[] resolvedHeaderTexts(
+            long parseRunId,
+            InterpretationCellView target,
+            ResolveCache cache,
+            Map<Long, List<CandidateRow>> ownersByCell,
+            Map<Long, Set<Long>> membersByCandidate,
+            Map<Long, CandidateRow> candidatesById) {
+        List<InterpretationEvidence> evidence = resolve(
+                parseRunId, target, cache, ownersByCell, membersByCandidate, candidatesById, null);
+        return new String[] {
+            headerText(evidence, EvidenceRole.ROW_HEADER),
+            headerText(evidence, EvidenceRole.COLUMN_HEADER)
+        };
+    }
+
+    private static String headerText(List<InterpretationEvidence> evidence, String role) {
+        StringBuilder header = new StringBuilder();
+        for (InterpretationEvidence item : evidence) {
+            if (!role.equals(item.role())) {
+                continue;
+            }
+            if (EvidenceResolution.AMBIGUOUS.equals(item.resolution())) {
+                return null;
+            }
+            if (EvidenceResolution.RESOLVED.equals(item.resolution())
+                    && item.sourceText() != null
+                    && !item.sourceText().isBlank()) {
+                if (header.length() > 0) {
+                    header.append(' ');
+                }
+                header.append(item.sourceText().trim());
+            }
+        }
+        return header.length() == 0 ? null : header.toString();
+    }
+
+    /**
+     * A Candidate's expanded scope, with its Cells bucketed by row and by column so a
+     * header chain is a map lookup rather than a scan over every member per target Cell.
+     */
+    private record ScopeIndex(
+            Set<Long> ids,
+            Map<AxisKey, List<InterpretationCellView>> byRow,
+            Map<AxisKey, List<InterpretationCellView>> byCol) {
+
+        List<InterpretationCellView> row(long worksheetId, int rowNum) {
+            return byRow.getOrDefault(new AxisKey(worksheetId, rowNum), List.of());
+        }
+
+        List<InterpretationCellView> column(long worksheetId, int colNum) {
+            return byCol.getOrDefault(new AxisKey(worksheetId, colNum), List.of());
+        }
+
+        static ScopeIndex of(Set<Long> ids, Map<Long, InterpretationCellView> byId) {
+            Map<AxisKey, List<InterpretationCellView>> byRow = new HashMap<>();
+            Map<AxisKey, List<InterpretationCellView>> byCol = new HashMap<>();
+            for (Long id : ids) {
+                InterpretationCellView cell = byId.get(id);
+                if (cell == null) {
+                    continue;
+                }
+                byRow.computeIfAbsent(
+                                new AxisKey(cell.worksheetId(), cell.rowNum()),
+                                k -> new ArrayList<>())
+                        .add(cell);
+                byCol.computeIfAbsent(
+                                new AxisKey(cell.worksheetId(), cell.colNum()),
+                                k -> new ArrayList<>())
+                        .add(cell);
+            }
+            return new ScopeIndex(Set.copyOf(ids), byRow, byCol);
+        }
+    }
+
+    private record AxisKey(long worksheetId, int index) {}
+
+    private record MergeKey(long worksheetId, String mergedRange) {}
+
+    /**
+     * Per-parse-run memo shared across every {@link #resolve} call. Candidate scopes, the
+     * per-worksheet Cell pool and merged anchors depend only on the run and not on the
+     * target Cell, so deriving them once per Candidate keeps resolution linear in Cell
+     * count instead of quadratic.
+     */
+    static final class ResolveCache {
+
+        private final Map<Long, InterpretationCellView> byId;
+        private final Map<Long, ScopeIndex> scopeByCandidate = new HashMap<>();
+        private final Map<Long, Set<Long>> cellIdsByWorksheet = new HashMap<>();
+        private Map<MergeKey, List<InterpretationCellView>> anchorsByMerge;
+
+        ResolveCache(Map<Long, InterpretationCellView> byId) {
+            this.byId = Objects.requireNonNull(byId, "byId");
+        }
+
+        Map<Long, InterpretationCellView> byId() {
+            return byId;
+        }
+
+        ScopeIndex scope(
+                CandidateRow candidate,
+                Map<Long, Set<Long>> membersByCandidate,
+                Map<Long, CandidateRow> candidatesById) {
+            ScopeIndex cached = scopeByCandidate.get(candidate.candidateId());
+            if (cached != null) {
+                return cached;
+            }
+            ScopeIndex built = ScopeIndex.of(
+                    expandedScope(candidate, membersByCandidate, this, candidatesById), byId);
+            scopeByCandidate.put(candidate.candidateId(), built);
+            return built;
+        }
+
+        Set<Long> worksheetCellIds(long worksheetId) {
+            return cellIdsByWorksheet.computeIfAbsent(worksheetId, ws -> {
+                Set<Long> ids = new HashSet<>();
+                for (InterpretationCellView cell : byId.values()) {
+                    if (cell.worksheetId() == ws) {
+                        ids.add(cell.cellId());
+                    }
+                }
+                return ids;
+            });
+        }
+
+        List<InterpretationCellView> mergedAnchors(long worksheetId, String mergedRange) {
+            if (anchorsByMerge == null) {
+                anchorsByMerge = new HashMap<>();
+                for (InterpretationCellView cell : byId.values()) {
+                    if (!cell.isMergedAnchor() || cell.mergedRange() == null) {
+                        continue;
+                    }
+                    anchorsByMerge
+                            .computeIfAbsent(
+                                    new MergeKey(cell.worksheetId(), cell.mergedRange()),
+                                    k -> new ArrayList<>())
+                            .add(cell);
+                }
+            }
+            return anchorsByMerge.getOrDefault(new MergeKey(worksheetId, mergedRange), List.of());
+        }
     }
 }

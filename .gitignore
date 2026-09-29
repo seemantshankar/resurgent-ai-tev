@@ -12,3 +12,9 @@ config.json
 Project Docs/*.xls
 Project Docs/*.xlsx
 Project Docs/*.xlsm
+Project Docs/*.docx
+Project Docs/*.html
+
+# Local tool config (may contain keys) and ad-hoc run output
+.kilo/kilo.jsonc
+reports/

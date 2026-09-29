@@ -39,6 +39,10 @@ public final class IngestCommand implements Callable<Integer> {
             description = "Allow Sprint 3b to erase parser-owned operational data in a populated pre-live workspace")
     boolean allowDestructiveReset;
 
+    @Option(names = "--visible-sheets-only",
+            description = "Skip hidden and veryHidden worksheets")
+    boolean visibleSheetsOnly;
+
     @Spec
     CommandSpec spec;
 
@@ -60,7 +64,8 @@ public final class IngestCommand implements Callable<Integer> {
             WorkspaceDatabase.OpenOptions openOptions = allowDestructiveReset
                     ? WorkspaceDatabase.OpenOptions.allowDestructiveReset()
                     : WorkspaceDatabase.OpenOptions.defaults();
-            IngestSummary summary = new IngestService().ingest(input, mandateId, db, parserConfig, openOptions);
+            IngestSummary summary = new IngestService().ingest(
+                    input, mandateId, db, parserConfig, openOptions, visibleSheetsOnly);
             if (summary.existingRun()) {
                 out.printf("Reused existing parse run for %s (worksheet '%s': %d cells from"
                         + " %d rows; source_file %d, parse_run %d, sha256 %s).%n",

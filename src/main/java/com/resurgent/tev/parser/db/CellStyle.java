@@ -16,5 +16,10 @@ public record CellStyle(
         String borderBottomStyle,
         String borderBottomColor,
         String borderLeftStyle,
-        String borderLeftColor) {
+        String borderLeftColor,
+        String fontName,
+        Integer fontSize,
+        Boolean italic,
+        String underline,
+        String fontColor) {
 }

@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.ingest;
 
+import com.resurgent.tev.parser.Progress;
 import com.resurgent.tev.parser.config.ParserConfig;
 import com.resurgent.tev.parser.db.CellStyle;
 import com.resurgent.tev.parser.db.Jsonb;
@@ -33,6 +34,11 @@ public final class IngestService {
 
     private static final String PARSER_VERSION = "0.1.2-SNAPSHOT";
 
+    static boolean isVisibleSheet(XlsxSheet sheet) {
+        String state = sheet.sheetState();
+        return state == null || "visible".equals(state);
+    }
+
     /**
      * POI sometimes emits barrier function names as NameX "external" tokens instead of
      * AbstractFunctionPtg. Strip those before persisting reference edges.
@@ -59,6 +65,16 @@ public final class IngestService {
 
     public IngestSummary ingest(Path input, long mandateId, Path dbPath, ParserConfig config,
             WorkspaceDatabase.OpenOptions openOptions) throws IOException, SQLException {
+        return ingest(input, mandateId, dbPath, config, openOptions, false);
+    }
+
+    /**
+     * @param visibleSheetsOnly when true, hidden and veryHidden worksheets are
+     *     not written. Formula references into those sheets become gaps.
+     */
+    public IngestSummary ingest(Path input, long mandateId, Path dbPath, ParserConfig config,
+            WorkspaceDatabase.OpenOptions openOptions, boolean visibleSheetsOnly)
+            throws IOException, SQLException {
         if (!Files.isRegularFile(input)) {
             throw new IOException("input file not found: " + input);
         }
@@ -100,7 +116,7 @@ public final class IngestService {
 
                 return switch (fileType) {
                     case FM_XLSX, FM_XLS -> ingestXlsx(xlsxWorkbook, mandateId, dbPath,
-                            fileName, fileHash, sourceFileId, repo, now, config);
+                            fileName, fileHash, sourceFileId, repo, now, config, visibleSheetsOnly);
                     case FM_CSV -> ingestCsv(input, mandateId, dbPath,
                             fileName, fileHash, sourceFileId, repo, now, config);
                 };
@@ -226,8 +242,15 @@ public final class IngestService {
 
     private IngestSummary ingestXlsx(XlsxWorkbook workbook, long mandateId, Path dbPath,
             String fileName, String fileHash, long sourceFileId,
-            WorkspaceRepository repo, String now, ParserConfig config) throws IOException, SQLException {
+            WorkspaceRepository repo, String now, ParserConfig config, boolean visibleSheetsOnly)
+            throws IOException, SQLException {
         List<XlsxSheet> sheets = workbook.sheets();
+        if (visibleSheetsOnly) {
+            int fileSheets = sheets.size();
+            sheets = sheets.stream().filter(IngestService::isVisibleSheet).toList();
+            Progress.phase("ingest",
+                    "visible worksheets " + sheets.size() + " of " + fileSheets);
+        }
         WorkbookMetadata metadata = workbook.metadata();
         int rowCount = sheets.stream().mapToInt(IngestService::maxPopulatedRowNum).sum();
         int cellCount = sheets.stream().mapToInt(s -> s.cells().size()).sum();
@@ -266,7 +289,9 @@ public final class IngestService {
         Map<String, Map<String, Long>> cellCoordMap = new HashMap<>();
         List<PendingCellTokens> pendingTokensList = new ArrayList<>();
 
+        int sheetProgress = 0;
         for (XlsxSheet sheet : sheets) {
+            Progress.step("ingest", "worksheets", ++sheetProgress, sheets.size(), 1);
             long worksheetId = repo.insertWorksheet(parseRunId, sheet.sheetName(),
                     sheetIndex, sheet.sheetState(),
                     sheet.bboxMinRow(), sheet.bboxMinCol(),
@@ -275,6 +300,7 @@ public final class IngestService {
                     sheet.declaredMerged());
             sheetNameToId.put(sheetLookupKey(sheet.sheetName()), worksheetId);
             worksheetIdToSheetName.put(worksheetId, sheet.sheetName());
+            repo.insertColumnWidths(worksheetId, sheet.columnWidths());
             Map<String, Long> coordMap = new HashMap<>();
             cellCoordMap.put(sheetLookupKey(sheet.sheetName()), coordMap);
 
@@ -294,6 +320,10 @@ public final class IngestService {
                 Long styleId = resolveStyleId(repo, styleIds, cellToInsert.cellStyle());
                 long cellId = repo.insertCell(worksheetId, cellToInsert, styleId,
                         cellToInsert.formulaNormalized());
+                if (cellToInsert.commentBody() != null) {
+                    repo.insertCellComment(cellId, cellToInsert.commentAuthor(),
+                            cellToInsert.commentBody());
+                }
                 coordMap.put(cellToInsert.coord(), cellId);
                 recordCellProvenance(repo, cellId, sourceFileId, parseRunId, sheet.sheetName(),
                         cellToInsert);
@@ -334,6 +364,7 @@ public final class IngestService {
             resolver.resolveAndPersist(pct.cellId(), pct.worksheetId(), pct.tokens(), refCtx,
                     refStats);
         }
+        new FormulaGraphBuilder().build(repo, parseRunId, sheetNameToId, metadata.definedNames());
 
         repo.updateWorkbookCalcMetadata(workbookId, metadata.calculationMode(),
                 metadata.fullCalcOnLoad(), metadata.calcChainPresent(), metadata.iterativeCalc(),
@@ -442,7 +473,7 @@ public final class IngestService {
                 value.coercedFromText(),
                 value.isError(),
                 value.errorType(),
-                false, false, null, "cell", false, false, false, null);
+                false, false, null, "cell", false, false, false, null, null, null);
     }
 
     private String rawMetadataJson(Path input, FileType fileType, XlsxWorkbook workbook)

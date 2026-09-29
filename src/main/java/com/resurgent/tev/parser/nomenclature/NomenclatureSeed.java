@@ -7,9 +7,9 @@ import java.util.List;
  * Finance + working-capital margin, with a thin P&amp;L / BS / CF top level.
  * Hotel leaves and aliases sit in the industry pack, not the frozen spine.
  */
-final class NomenclatureSeed {
+public final class NomenclatureSeed {
 
-    static final List<String> SPINE_PATHS = List.of(
+    public static final List<String> SPINE_PATHS = List.of(
             "Project Cost",
             "Project Cost > Land & Site Development",
             "Project Cost > Civil Works",
@@ -28,7 +28,7 @@ final class NomenclatureSeed {
             "Balance Sheet",
             "Cash Flow");
 
-    static final List<NomenclatureAlias> SPINE_ALIASES = List.of(
+    public static final List<NomenclatureAlias> SPINE_ALIASES = List.of(
             new NomenclatureAlias("Building Cost",
                     "Project Cost > Civil Works"),
             new NomenclatureAlias("Civil - Building",
@@ -60,14 +60,14 @@ final class NomenclatureSeed {
 
     static final String HOTEL = "hotel";
 
-    static final List<String> HOTEL_LEAVES = List.of(
+    public static final List<String> HOTEL_LEAVES = List.of(
             "Project Cost > Plant & Machinery > Elevator / Lift",
             "Project Cost > Plant & Machinery > Kitchen Equipments",
             "Project Cost > Plant & Machinery > Wastewater / ETP",
             "Project Cost > Plant & Machinery > Air Conditioning",
             "Profit & Loss > F & B Sales");
 
-    static final List<NomenclatureAlias> HOTEL_ALIASES = List.of(
+    public static final List<NomenclatureAlias> HOTEL_ALIASES = List.of(
             new NomenclatureAlias("Elevator",
                     "Project Cost > Plant & Machinery > Elevator / Lift"),
             new NomenclatureAlias("Lift",
@@ -87,7 +87,7 @@ final class NomenclatureSeed {
 
     private NomenclatureSeed() {}
 
-    static String nameOf(String path) {
+    public static String nameOf(String path) {
         int sep = path.lastIndexOf(" > ");
         return sep < 0 ? path : path.substring(sep + 3);
     }
