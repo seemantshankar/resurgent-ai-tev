@@ -46,7 +46,7 @@ public final class CellReadingInferencer {
 
     private boolean isLabeledAsTotal(List<InterpretationCellView> rowCells) {
         return rowCells.stream()
-                .filter(c -> c.colNum() <= 5)
+                .filter(c -> c.colNum() <= 10)  // Check columns A-J for labels
                 .anyMatch(c -> {
                     String text = c.textValue();
                     if (text == null) return false;
