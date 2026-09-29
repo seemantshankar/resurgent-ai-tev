@@ -110,6 +110,9 @@ public final class CellReadingWriter {
             settled.putIfAbsent(cell.cellId(), ReadingOutcome.refused(ReadingOutcome.UNTYPABLE));
         }
 
+        // Post-process: infer types for untypable cells based on structural context
+        new CellReadingInferencer(cells).infer(settled);
+
         List<CellReading> rows = new ArrayList<>();
         for (InterpretationCellView cell : cells) {
             ReadingOutcome outcome = settled.get(cell.cellId());
