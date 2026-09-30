@@ -78,6 +78,11 @@
             <include>**/*Test.java</include>
             <include>**/*IT.java</include>
           </includes>
+          <!-- Tests must never read or rewrite the developer's real learned
+               dictionary in ~/.tev-parser; point it at the build directory. -->
+          <systemPropertyVariables>
+            <tev.dictionary.dir>${project.build.directory}/test-dictionary</tev.dictionary.dir>
+          </systemPropertyVariables>
         </configuration>
       </plugin>
       <plugin>
