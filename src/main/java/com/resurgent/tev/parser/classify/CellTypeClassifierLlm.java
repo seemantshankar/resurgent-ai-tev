@@ -47,17 +47,27 @@ public class CellTypeClassifierLlm {
             5. confidence: 0.0-1.0 representing your confidence in this classification
 
             Return a JSON object with these fields.
+            Each request may begin with a "Region" line describing the schedule the cells sit in
+            (its family and what it is about). Use it to decide the kind of a label that carries no
+            unit or currency word: a row such as "Firefighting & Misc." inside an expenses schedule
+            is money even though the label never says so.
+
             Respect the "nothing incorrect is written" principle: if unsure, return lower confidence.
             """;
 
     private final WorkspaceRepository repo;
     private final ClassifierLlm llm;
     private final DynamicKindTokens dynamicDict;
+    private CellContext ctx = CellContext.scan(List.of());
 
     public CellTypeClassifierLlm(WorkspaceRepository repo, ClassifierLlm llm) {
+        this(repo, llm, new DynamicKindTokens());
+    }
+
+    CellTypeClassifierLlm(WorkspaceRepository repo, ClassifierLlm llm, DynamicKindTokens dynamicDict) {
         this.repo = repo;
         this.llm = llm;
-        this.dynamicDict = new DynamicKindTokens();
+        this.dynamicDict = dynamicDict;
     }
 
     /**
@@ -68,6 +78,16 @@ public class CellTypeClassifierLlm {
      * @param settled map of cellId → ReadingOutcome, modified in-place
      */
     public void classifyRemaining(List<InterpretationCellView> cells, Map<Long, ReadingOutcome> settled) {
+        classifyRemaining(cells, settled, CellContext.scan(cells));
+    }
+
+    /**
+     * As {@link #classifyRemaining(List, Map)}, with labels and Layer A region supplied by
+     * {@code context} (the candidate-scoped resolver in production).
+     */
+    void classifyRemaining(
+            List<InterpretationCellView> cells, Map<Long, ReadingOutcome> settled, CellContext context) {
+        this.ctx = context;
         System.err.println("[cell-classifier] Starting classifyRemaining, total cells=" + cells.size());
         System.err.flush();
         List<InterpretationCellView> unclassified = new ArrayList<>();
@@ -91,7 +111,7 @@ public class CellTypeClassifierLlm {
         // First pass: try to type using KindTokens dictionary (deterministic)
         List<InterpretationCellView> stillUntyped = new ArrayList<>();
         for (InterpretationCellView cell : unclassified) {
-            ReadingOutcome outcome = tryDictionaryBasedTyping(cell, cells);  // Use all cells for label context
+            ReadingOutcome outcome = tryDictionaryBasedTyping(cell);
             if (outcome != null) {
                 settled.put(cell.cellId(), outcome);
             } else {
@@ -113,18 +133,20 @@ public class CellTypeClassifierLlm {
         System.err.println("[cell-classifier] Classifying " + stillUntyped.size() + " untyped cells via LLM");
         System.err.flush();
 
-        // Group by worksheet for context coherence
-        Map<Long, List<InterpretationCellView>> byWorksheet = new HashMap<>();
+        // Group by owning region (one region description per batch); cells with no known
+        // region fall back to grouping by worksheet.
+        Map<String, List<InterpretationCellView>> byRegion = new java.util.LinkedHashMap<>();
         for (InterpretationCellView cell : stillUntyped) {
-            byWorksheet.computeIfAbsent(cell.worksheetId(), k -> new ArrayList<>()).add(cell);
+            RegionContext region = ctx.region(cell);
+            String groupKey = region.known() ? "c" + region.candidateId() : "w" + cell.worksheetId();
+            byRegion.computeIfAbsent(groupKey, k -> new ArrayList<>()).add(cell);
         }
 
         // Batch cells for efficiency: classify 15 cells per LLM call instead of 1
-        for (List<InterpretationCellView> worksheetCells : byWorksheet.values()) {
-            for (int i = 0; i < worksheetCells.size(); i += 15) {
-                int end = Math.min(i + 15, worksheetCells.size());
-                List<InterpretationCellView> batch = worksheetCells.subList(i, end);
-                classifyBatch(batch, cells, settled);
+        for (List<InterpretationCellView> regionCells : byRegion.values()) {
+            for (int i = 0; i < regionCells.size(); i += 15) {
+                int end = Math.min(i + 15, regionCells.size());
+                classifyBatch(regionCells.subList(i, end), cells, settled);
             }
         }
     }
@@ -143,19 +165,14 @@ public class CellTypeClassifierLlm {
         }
 
         try {
-            List<CellTypeResponse> responses = classifyBatchCells(requests);
+            List<CellTypeResponse> responses = classifyBatchCells(requests, ctx.region(batch.get(0)));
+            if (responses.size() != batch.size()) {
+                // Positions no longer line up with cells; do not guess which answer is whose.
+                throw new IllegalStateException(
+                        "expected " + batch.size() + " responses, got " + responses.size());
+            }
             for (int i = 0; i < batch.size(); i++) {
-                CellTypeResponse response = responses.get(i);
-                if (response.confidence >= MIN_CONFIDENCE) {
-                    InterpretationCellView cell = batch.get(i);
-                    CellScale scale = CellScale.fromWire(response.scale);
-                    settled.put(cell.cellId(), ReadingOutcome.typed(
-                            response.kind, scale, response.unit, response.currency, ReadingOutcome.DERIVED));
-                    // Learn new terms for future workbooks
-                    String rowLabel = extractRowLabel(cell, allCells);
-                    String colLabel = extractColumnLabel(cell, allCells);
-                    dynamicDict.learnTerm(response.kind, rowLabel, colLabel);
-                }
+                applyResponse(batch.get(i), responses.get(i), settled);
             }
         } catch (Exception e) {
             System.err.println("[llm-fallback] Failed to classify batch: " + e.getMessage());
@@ -163,16 +180,7 @@ public class CellTypeClassifierLlm {
             for (InterpretationCellView cell : batch) {
                 CellTypeRequest request = buildCellTypeRequest(cell, allCells, settled);
                 try {
-                    CellTypeResponse response = classifyCell(request);
-                    if (response.confidence >= MIN_CONFIDENCE) {
-                        CellScale scale = CellScale.fromWire(response.scale);
-                        settled.put(cell.cellId(), ReadingOutcome.typed(
-                                response.kind, scale, response.unit, response.currency, ReadingOutcome.DERIVED));
-                        // Learn new terms for future workbooks
-                        String rowLabel = extractRowLabel(cell, allCells);
-                        String colLabel = extractColumnLabel(cell, allCells);
-                        dynamicDict.learnTerm(response.kind, rowLabel, colLabel);
-                    }
+                    applyResponse(cell, classifyCell(request, ctx.region(cell)), settled);
                 } catch (Exception ex) {
                     System.err.println("[llm-fallback] Failed to classify " + cell.coord() + ": " + ex.getMessage());
                 }
@@ -180,8 +188,54 @@ public class CellTypeClassifierLlm {
         }
     }
 
-    private List<CellTypeResponse> classifyBatchCells(List<CellTypeRequest> requests) throws Exception {
-        String userMessage = formatBatchUserMessage(requests);
+    /** Settle one LLM answer and stage it as evidence for the dictionary. */
+    private void applyResponse(
+            InterpretationCellView cell, CellTypeResponse response, Map<Long, ReadingOutcome> settled) {
+        if (response.confidence < MIN_CONFIDENCE) {
+            return;
+        }
+        CellScale scale = parseScale(response.scale);
+        if (scale == null) {
+            System.err.println("[llm-fallback] Unknown scale '" + response.scale + "' for " + cell.coord());
+            return;
+        }
+        settled.put(cell.cellId(), ReadingOutcome.typed(
+                response.kind, scale, response.unit, response.currency, ReadingOutcome.DERIVED));
+        learnFrom(cell, response);
+    }
+
+    private static CellScale parseScale(String wire) {
+        if (wire == null || wire.isBlank()) {
+            return CellScale.UNIT;
+        }
+        try {
+            return CellScale.fromWire(wire);
+        } catch (IllegalArgumentException e) {
+            return CellScale.fromText(wire); // "lacs", "crores" ... or null when it names no scale
+        }
+    }
+
+    /**
+     * Stage the row label as evidence only when the region is a known main packet and the
+     * deterministic pass could not have typed the label itself.
+     */
+    private void learnFrom(InterpretationCellView cell, CellTypeResponse response) {
+        RegionContext region = ctx.region(cell);
+        if (!region.known() || !region.learnable()) {
+            return;
+        }
+        String rowLabel = ctx.rowLabel(cell);
+        String combined = KindTokens.normalizeLabel(rowLabel + " " + ctx.columnLabel(cell));
+        if (staticKind(combined) != null) {
+            return;
+        }
+        dynamicDict.observe(
+                region.scheduleFamily(), rowLabel, response.kind, response.unit,
+                ctx.workbookKey(), region.sheetName(), cell.rowNum());
+    }
+
+    private List<CellTypeResponse> classifyBatchCells(List<CellTypeRequest> requests, RegionContext region) throws Exception {
+        String userMessage = formatBatchUserMessage(requests, region);
         long llmStart = System.nanoTime();
         String jsonResponse = llm.classifyCellJson(SYSTEM_PROMPT, userMessage, 4096);
         long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
@@ -189,8 +243,26 @@ public class CellTypeClassifierLlm {
         return parseBatchCellTypeResponse(jsonResponse, requests.size());
     }
 
-    private String formatBatchUserMessage(List<CellTypeRequest> requests) {
+    private static void appendRegion(StringBuilder sb, RegionContext region) {
+        if (region.scheduleFamily().isBlank() && region.about().isBlank()) {
+            return;
+        }
+        sb.append("Region: family=").append(region.scheduleFamily());
+        if (!region.packetHead().isBlank()) {
+            sb.append("; head=").append(region.packetHead());
+        }
+        if (!region.sheetName().isBlank()) {
+            sb.append("; sheet=").append(region.sheetName());
+        }
+        if (!region.about().isBlank()) {
+            sb.append("; about=").append(region.about());
+        }
+        sb.append("\n\n");
+    }
+
+    private String formatBatchUserMessage(List<CellTypeRequest> requests, RegionContext region) {
         StringBuilder sb = new StringBuilder();
+        appendRegion(sb, region);
         sb.append("Classify the following ").append(requests.size()).append(" cells:\n\n");
 
         for (int i = 0; i < requests.size(); i++) {
@@ -271,7 +343,7 @@ public class CellTypeClassifierLlm {
 
         for (int i = 0; i < nodes.size(); i++) {
             JsonNode node = nodes.get(i);
-            String kind = node.get("kind").asText();
+            String kind = node.get("kind").asText().trim().toLowerCase(java.util.Locale.ROOT);
             String scale = node.get("scale").asText();
             String unit = node.get("unit").asText("");
             String currency = node.get("currency").asText("");
@@ -293,10 +365,8 @@ public class CellTypeClassifierLlm {
 
     private CellTypeRequest buildCellTypeRequest(
             InterpretationCellView cell, List<InterpretationCellView> allCells, Map<Long, ReadingOutcome> settled) {
-        // Extract row label (text from same row, columns 0-3)
-        String rowLabel = extractRowLabel(cell, allCells);
-        // Extract column label (text from header area, same column)
-        String columnLabel = extractColumnLabel(cell, allCells);
+        String rowLabel = ctx.rowLabel(cell);
+        String columnLabel = ctx.columnLabel(cell);
         // Extract neighboring cells with their types
         List<NeighborCell> neighbors = extractNeighbors(cell, allCells, settled);
 
@@ -310,36 +380,6 @@ public class CellTypeClassifierLlm {
                 columnLabel,
                 cell.formulaText() != null ? cell.formulaText() : "",
                 neighbors);
-    }
-
-    private String extractRowLabel(InterpretationCellView cell, List<InterpretationCellView> allCells) {
-        for (InterpretationCellView c : allCells) {
-            if (c.worksheetId() == cell.worksheetId()
-                    && c.rowNum() == cell.rowNum()
-                    && c.colNum() >= 0
-                    && c.colNum() <= 3
-                    && c.textValue() != null
-                    && !c.textValue().isBlank()) {
-                return c.textValue();
-            }
-        }
-        return "";
-    }
-
-    private String extractColumnLabel(InterpretationCellView cell, List<InterpretationCellView> allCells) {
-        // Look in rows 0-5, same column
-        for (int row = 0; row <= 5; row++) {
-            for (InterpretationCellView c : allCells) {
-                if (c.worksheetId() == cell.worksheetId()
-                        && c.rowNum() == row
-                        && c.colNum() == cell.colNum()
-                        && c.textValue() != null
-                        && !c.textValue().isBlank()) {
-                    return c.textValue();
-                }
-            }
-        }
-        return "";
     }
 
     private List<NeighborCell> extractNeighbors(
@@ -368,8 +408,8 @@ public class CellTypeClassifierLlm {
         return neighbors;
     }
 
-    private CellTypeResponse classifyCell(CellTypeRequest request) throws Exception {
-        String userMessage = formatUserMessage(request);
+    private CellTypeResponse classifyCell(CellTypeRequest request, RegionContext region) throws Exception {
+        String userMessage = formatUserMessage(request, region);
         long llmStart = System.nanoTime();
         String jsonResponse = llm.classifyCellJson(SYSTEM_PROMPT, userMessage, 2048);
         long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
@@ -380,8 +420,9 @@ public class CellTypeClassifierLlm {
         return parseCellTypeResponse(jsonResponse);
     }
 
-    private String formatUserMessage(CellTypeRequest request) {
+    private String formatUserMessage(CellTypeRequest request, RegionContext region) {
         StringBuilder sb = new StringBuilder();
+        appendRegion(sb, region);
         sb.append("Cell: ").append(request.coord).append(" (display: \"").append(request.displayValue).append("\"");
         if (!request.formulaText.isBlank()) {
             sb.append(", formula: \"").append(request.formulaText).append("\"");
@@ -411,7 +452,7 @@ public class CellTypeClassifierLlm {
 
     private CellTypeResponse parseCellTypeResponse(String jsonResponse) throws Exception {
         JsonNode node = MAPPER.readTree(jsonResponse);
-        String kind = node.get("kind").asText();
+        String kind = node.get("kind").asText().trim().toLowerCase(java.util.Locale.ROOT);
         String scale = node.get("scale").asText();
         String unit = node.get("unit").asText("");
         String currency = node.get("currency").asText("");
@@ -453,35 +494,66 @@ public class CellTypeClassifierLlm {
 
     record CellTypeResponse(String kind, String scale, String unit, String currency, double confidence) {}
 
-    /**
-     * Try to classify cell using KindTokens dictionary before falling back to LLM.
-     * Checks row/column labels for money, quantity, percent patterns.
-     */
-    private ReadingOutcome tryDictionaryBasedTyping(InterpretationCellView cell, List<InterpretationCellView> allCells) {
-        String rowLabel = extractRowLabel(cell, allCells);
-        String colLabel = extractColumnLabel(cell, allCells);
-        String combined = (rowLabel + " " + colLabel).toLowerCase();
-
-        // Check for money indicators
-        if (KindTokens.MONEY_TOKEN.matcher(combined).find()) {
-            String currency = extractCurrencyFromLabels(rowLabel, colLabel);
-            String scale = extractScaleFromLabels(rowLabel, colLabel);
-            return ReadingOutcome.typed("money", CellScale.valueOf(scale.toUpperCase()), "", currency, ReadingOutcome.INPUT);
+    /** Kind named by the static cue tokens in already-normalized label text, else {@code null}. */
+    private static String staticKind(String normalizedLabels) {
+        if (KindTokens.MONEY_TOKEN.matcher(normalizedLabels).find()) {
+            return ReadingOutcome.MONEY;
         }
-
-        // Check for percent indicators
-        if (KindTokens.PERCENT_TOKEN.matcher(combined).find()) {
-            return ReadingOutcome.typed("percent", CellScale.UNIT, "", "", ReadingOutcome.INPUT);
+        if (KindTokens.PERCENT_TOKEN.matcher(normalizedLabels).find()) {
+            return ReadingOutcome.PERCENT;
         }
-
-        // Check for quantity indicators
-        if (KindTokens.QUANTITY_TOKEN.matcher(combined).find()) {
-            String unit = extractUnitFromLabels(rowLabel, colLabel);
-            return ReadingOutcome.typed("quantity", CellScale.UNIT, unit, "", ReadingOutcome.INPUT);
+        if (KindTokens.QUANTITY_TOKEN.matcher(normalizedLabels).find()) {
+            return ReadingOutcome.QUANTITY;
         }
-
-        // Not deterministically typable
         return null;
+    }
+
+    /**
+     * Type a cell without the LLM: first the static {@link KindTokens} cues, then what the
+     * dictionary has learned about this row label inside this region's schedule family.
+     */
+    private ReadingOutcome tryDictionaryBasedTyping(InterpretationCellView cell) {
+        String rowLabel = KindTokens.normalizeLabel(ctx.rowLabel(cell));
+        String colLabel = KindTokens.normalizeLabel(ctx.columnLabel(cell));
+        String combined = rowLabel + " " + colLabel;
+
+        String kind = staticKind(combined);
+        if (ReadingOutcome.MONEY.equals(kind)) {
+            String scale = extractScaleFromLabels(rowLabel, colLabel);
+            return ReadingOutcome.typed(ReadingOutcome.MONEY, CellScale.valueOf(scale.toUpperCase()), "",
+                    extractCurrencyFromLabels(rowLabel, colLabel), ReadingOutcome.INPUT);
+        }
+        if (ReadingOutcome.PERCENT.equals(kind)) {
+            return ReadingOutcome.typed(ReadingOutcome.PERCENT, CellScale.UNIT, "", "", ReadingOutcome.INPUT);
+        }
+        if (ReadingOutcome.QUANTITY.equals(kind)) {
+            return ReadingOutcome.typed(ReadingOutcome.QUANTITY, CellScale.UNIT,
+                    extractUnitFromLabels(rowLabel, colLabel), "", ReadingOutcome.INPUT);
+        }
+        return tryLearnedTyping(cell, colLabel);
+    }
+
+    private ReadingOutcome tryLearnedTyping(InterpretationCellView cell, String normalizedColumn) {
+        RegionContext region = ctx.region(cell);
+        if (!region.known()) {
+            return null;
+        }
+        var learned = dynamicDict.lookup(region.scheduleFamily(), ctx.rowLabel(cell));
+        if (learned.isEmpty()) {
+            return null;
+        }
+        String kind = learned.get().kind();
+        // Explicit %/quantity cues in the headers were already honoured: the static pass runs first.
+        if (ReadingOutcome.MONEY.equals(kind)) {
+            // Scale varies by sheet, so it is never remembered: no stated scale, ask the LLM.
+            CellScale scale = CellScale.fromText(KindTokens.normalizeLabel(ctx.rowLabel(cell) + " " + normalizedColumn));
+            if (scale == null) {
+                return null;
+            }
+            return ReadingOutcome.typed(kind, scale, "", extractCurrencyFromLabels("", normalizedColumn),
+                    ReadingOutcome.DERIVED);
+        }
+        return ReadingOutcome.typed(kind, CellScale.UNIT, learned.get().unit(), "", ReadingOutcome.DERIVED);
     }
 
     private String extractCurrencyFromLabels(String rowLabel, String colLabel) {

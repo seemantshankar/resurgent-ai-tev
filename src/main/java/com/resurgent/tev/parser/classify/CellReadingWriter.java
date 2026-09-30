@@ -119,10 +119,29 @@ public final class CellReadingWriter {
 
         // Use LLM for remaining unclassified cells (if LLM is provided)
         DynamicKindTokens dynamicDict = null;
-        if (llm != null) {
-            CellTypeClassifierLlm classifier = new CellTypeClassifierLlm(repo, llm);
-            classifier.classifyRemaining(cells, settled);
-            dynamicDict = classifier.getDynamicDictionary();
+        try {
+            if (llm != null) {
+                Map<Long, PacketDisposition> dispositions = new HashMap<>();
+                for (PacketDisposition d : repo.selectPacketDispositionsForParseRun(parseRunId)) {
+                    dispositions.put(d.candidateId(), d);
+                }
+                Map<Long, String> sheetNames = new HashMap<>();
+                for (WorksheetRef sheet : repo.selectWorksheetsForParseRun(parseRunId)) {
+                    sheetNames.put(sheet.worksheetId(), sheet.sheetName());
+                }
+                CellContext context = new ResolverCellContext(
+                        parseRunId, cache, owners, members, candidatesById, dispositions, sheetNames,
+                        repo.selectSourceFileHashForParseRun(parseRunId));
+                CellTypeClassifierLlm classifier = new CellTypeClassifierLlm(repo, llm);
+                dynamicDict = classifier.getDynamicDictionary();
+                classifier.classifyRemaining(cells, settled, context);
+            }
+        } finally {
+            // Keep what was learned even if the LLM pass failed part-way; never fails the parse.
+            if (dynamicDict != null) {
+                dynamicDict.persist();
+                dynamicDict.printReport();
+            }
         }
 
         List<CellReading> rows = new ArrayList<>();
@@ -135,11 +154,6 @@ public final class CellReadingWriter {
         }
         repo.replaceCellReadings(parseRunId, rows);
 
-        // Persist and report learned terms
-        if (dynamicDict != null) {
-            dynamicDict.persist();
-            dynamicDict.printReport();
-        }
     }
 
     private static boolean waiting(Set<Long> preds, Set<Long> numericIds, Map<Long, ReadingOutcome> settled) {

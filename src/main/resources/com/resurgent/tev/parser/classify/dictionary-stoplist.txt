@@ -1,0 +1,24 @@
+# Generic or structural row labels that must never be learned: their meaning is
+# carried by the schedule, not the words. One phrase per line; matched after the
+# same canonicalisation LabelPhrase applies to a learned label.
+total
+sub total
+grand total
+net total
+particular
+description
+other
+misc
+miscellaneous
+item
+items
+note
+remark
+s no
+sr no
+sl no
+year
+month
+amount
+add
+less

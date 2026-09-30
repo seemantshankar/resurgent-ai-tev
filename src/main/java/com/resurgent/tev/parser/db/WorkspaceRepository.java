@@ -1462,6 +1462,19 @@ public final class WorkspaceRepository {
         }
     }
 
+    /** The ingested file's content hash for a parse run, or {@code ""} when unknown. */
+    public String selectSourceFileHashForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT sf.file_hash FROM parse_run pr"
+                        + " JOIN source_file sf ON sf.source_file_id = pr.source_file_id"
+                        + " WHERE pr.parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() && rs.getString(1) != null ? rs.getString(1) : "";
+            }
+        }
+    }
+
     public List<WorksheetRef> selectWorksheetsForParseRun(long parseRunId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT worksheet_id, sheet_name, sheet_index, sheet_state"
