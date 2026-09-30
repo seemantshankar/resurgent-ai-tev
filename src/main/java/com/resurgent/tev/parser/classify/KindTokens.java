@@ -46,16 +46,17 @@ final class KindTokens {
      * without ever writing "Rs." (SALESPROJECTION!A56 "OVERALL REVENUE PROJECTION").
      */
     static final Pattern MONEY_TOKEN = Pattern.compile(
-            "(?i)(?:\\brs\\.?\\b|\\binr\\b|₹|\\$|€|£|amount|cost|price|value|fee|payment|"
-                    + "revenue|sales|receipts?|income|turnover|tariff|charges?|"
-                    + "capital|principal|equity|dividend|profit|loss|"
-                    + "interest|margin|markup|discount|rebate|fund|funding|"
-                    + "borrowed|borrowing|repayment|balance|asset|liability|"
-                    + "loan|loans|debt|debts|advance|advances|credit|credits|facility|"
-                    + "guarantee|mortgage|collateral|amortization|disbursement|drawdown|"
-                    + "capex|opex|expense|outlay|investment|lac|lakh|crore|less\\s*:|"
-                    + "total\\s+cost|project\\s+cost|means\\s+of\\s+finance|"
-                    + "depreciation|\\bdep\\.?\\b)");
+            "(?i)(?:\\brs\\.?\\b|\\binr\\b|₹|\\$|€|£|less\\s*:|\\bdep\\.?\\b|"
+                    // Money words match as whole words (optionally plural), never inside another
+                    // word: "placed", "coffee", "refund", "feeder", "profitability" are not money.
+                    + "(?<![a-z])(?:"
+                    + "amount|cost|price|value|fee|payment|revenue|sales|receipt|income|turnover|tariff|"
+                    + "charge|capital|principal|equity|dividend|profit|loss|interest|margin|markup|"
+                    + "discount(?:ed|ing)?|rebate|fund|funding|borrowed|borrowing|repayment|balance|asset|"
+                    + "liability|loan|debt|advance|credit(?:or)?|facility|guarantee|mortgage|collateral|"
+                    + "amortization|amortisation|disbursement|drawdown|capex|opex|expense|outlay|investment|"
+                    + "lacs?|lakhs?|crores?|depreciation|means\\s+of\\s+finance|project\\s+cost|total\\s+cost"
+                    + ")(?:s|es)?(?![a-z]))");
 
     private static final Pattern ZERO_WIDTH = Pattern.compile("[\\u200B-\\u200D\\uFEFF]");
     private static final Pattern CURRENCY_GLUE = Pattern.compile(
