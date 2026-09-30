@@ -118,8 +118,11 @@ public final class CellReadingWriter {
         new CellReadingInferencer(cells).infer(settled);
 
         // Use LLM for remaining unclassified cells (if LLM is provided)
+        DynamicKindTokens dynamicDict = null;
         if (llm != null) {
-            new CellTypeClassifierLlm(repo, llm).classifyRemaining(cells, settled);
+            CellTypeClassifierLlm classifier = new CellTypeClassifierLlm(repo, llm);
+            classifier.classifyRemaining(cells, settled);
+            dynamicDict = classifier.getDynamicDictionary();
         }
 
         List<CellReading> rows = new ArrayList<>();
@@ -131,6 +134,12 @@ public final class CellReadingWriter {
             rows.add(toRow(parseRunId, cell, outcome));
         }
         repo.replaceCellReadings(parseRunId, rows);
+
+        // Persist and report learned terms
+        if (dynamicDict != null) {
+            dynamicDict.persist();
+            dynamicDict.printReport();
+        }
     }
 
     private static boolean waiting(Set<Long> preds, Set<Long> numericIds, Map<Long, ReadingOutcome> settled) {

@@ -52,10 +52,12 @@ public class CellTypeClassifierLlm {
 
     private final WorkspaceRepository repo;
     private final ClassifierLlm llm;
+    private final DynamicKindTokens dynamicDict;
 
     public CellTypeClassifierLlm(WorkspaceRepository repo, ClassifierLlm llm) {
         this.repo = repo;
         this.llm = llm;
+        this.dynamicDict = new DynamicKindTokens();
     }
 
     /**
@@ -86,12 +88,34 @@ public class CellTypeClassifierLlm {
             return;
         }
 
-        System.err.println("[cell-classifier] Classifying " + unclassified.size() + " untyped cells via LLM");
+        // First pass: try to type using KindTokens dictionary (deterministic)
+        List<InterpretationCellView> stillUntyped = new ArrayList<>();
+        for (InterpretationCellView cell : unclassified) {
+            ReadingOutcome outcome = tryDictionaryBasedTyping(cell, cells);  // Use all cells for label context
+            if (outcome != null) {
+                settled.put(cell.cellId(), outcome);
+            } else {
+                stillUntyped.add(cell);
+            }
+        }
+
+        int typedByDictionary = unclassified.size() - stillUntyped.size();
+        if (typedByDictionary > 0) {
+            System.err.println("[cell-classifier] Typed " + typedByDictionary + " cells via KindTokens dictionary");
+        }
+
+        if (stillUntyped.isEmpty()) {
+            System.err.println("[cell-classifier] All cells typed by dictionary, skipping LLM");
+            System.err.flush();
+            return;
+        }
+
+        System.err.println("[cell-classifier] Classifying " + stillUntyped.size() + " untyped cells via LLM");
         System.err.flush();
 
         // Group by worksheet for context coherence
         Map<Long, List<InterpretationCellView>> byWorksheet = new HashMap<>();
-        for (InterpretationCellView cell : unclassified) {
+        for (InterpretationCellView cell : stillUntyped) {
             byWorksheet.computeIfAbsent(cell.worksheetId(), k -> new ArrayList<>()).add(cell);
         }
 
@@ -103,6 +127,13 @@ public class CellTypeClassifierLlm {
                 classifyBatch(batch, cells, settled);
             }
         }
+    }
+
+    /**
+     * Get the dynamic dictionary. Must be called after classification to persist learned terms.
+     */
+    public DynamicKindTokens getDynamicDictionary() {
+        return dynamicDict;
     }
 
     private void classifyBatch(List<InterpretationCellView> batch, List<InterpretationCellView> allCells, Map<Long, ReadingOutcome> settled) {
@@ -119,7 +150,11 @@ public class CellTypeClassifierLlm {
                     InterpretationCellView cell = batch.get(i);
                     CellScale scale = CellScale.fromWire(response.scale);
                     settled.put(cell.cellId(), ReadingOutcome.typed(
-                            response.kind, scale, response.unit, response.currency, "llm_fallback"));
+                            response.kind, scale, response.unit, response.currency, ReadingOutcome.DERIVED));
+                    // Learn new terms for future workbooks
+                    String rowLabel = extractRowLabel(cell, allCells);
+                    String colLabel = extractColumnLabel(cell, allCells);
+                    dynamicDict.learnTerm(response.kind, rowLabel, colLabel);
                 }
             }
         } catch (Exception e) {
@@ -132,7 +167,11 @@ public class CellTypeClassifierLlm {
                     if (response.confidence >= MIN_CONFIDENCE) {
                         CellScale scale = CellScale.fromWire(response.scale);
                         settled.put(cell.cellId(), ReadingOutcome.typed(
-                                response.kind, scale, response.unit, response.currency, "llm_fallback"));
+                                response.kind, scale, response.unit, response.currency, ReadingOutcome.DERIVED));
+                        // Learn new terms for future workbooks
+                        String rowLabel = extractRowLabel(cell, allCells);
+                        String colLabel = extractColumnLabel(cell, allCells);
+                        dynamicDict.learnTerm(response.kind, rowLabel, colLabel);
                     }
                 } catch (Exception ex) {
                     System.err.println("[llm-fallback] Failed to classify " + cell.coord() + ": " + ex.getMessage());
@@ -181,8 +220,13 @@ public class CellTypeClassifierLlm {
             sb.append("\n");
         }
 
-        sb.append("Return a JSON array with one object per cell (in same order):\n");
-        sb.append("[{\"kind\":\"...\",\"scale\":\"...\",\"unit\":\"...\",\"currency\":\"...\",\"confidence\":...}, ...]\n");
+        sb.append("Return ONLY JSON. Wrap the ").append(requests.size()).append(" classifications in a JSON object with key 'results':\n");
+        sb.append("{\n");
+        sb.append("  \"results\": [\n");
+        sb.append("    {\"kind\":\"money\",\"scale\":\"lakh\",\"unit\":\"\",\"currency\":\"INR\",\"confidence\":0.95},\n");
+        sb.append("    {\"kind\":\"quantity\",\"scale\":\"unit\",\"unit\":\"pieces\",\"currency\":\"\",\"confidence\":0.90}\n");
+        sb.append("  ]\n");
+        sb.append("}\n");
 
         return sb.toString();
     }
@@ -408,4 +452,63 @@ public class CellTypeClassifierLlm {
     record NeighborCell(String direction, String displayValue, String type) {}
 
     record CellTypeResponse(String kind, String scale, String unit, String currency, double confidence) {}
+
+    /**
+     * Try to classify cell using KindTokens dictionary before falling back to LLM.
+     * Checks row/column labels for money, quantity, percent patterns.
+     */
+    private ReadingOutcome tryDictionaryBasedTyping(InterpretationCellView cell, List<InterpretationCellView> allCells) {
+        String rowLabel = extractRowLabel(cell, allCells);
+        String colLabel = extractColumnLabel(cell, allCells);
+        String combined = (rowLabel + " " + colLabel).toLowerCase();
+
+        // Check for money indicators
+        if (KindTokens.MONEY_TOKEN.matcher(combined).find()) {
+            String currency = extractCurrencyFromLabels(rowLabel, colLabel);
+            String scale = extractScaleFromLabels(rowLabel, colLabel);
+            return ReadingOutcome.typed("money", CellScale.valueOf(scale.toUpperCase()), "", currency, ReadingOutcome.INPUT);
+        }
+
+        // Check for percent indicators
+        if (KindTokens.PERCENT_TOKEN.matcher(combined).find()) {
+            return ReadingOutcome.typed("percent", CellScale.UNIT, "", "", ReadingOutcome.INPUT);
+        }
+
+        // Check for quantity indicators
+        if (KindTokens.QUANTITY_TOKEN.matcher(combined).find()) {
+            String unit = extractUnitFromLabels(rowLabel, colLabel);
+            return ReadingOutcome.typed("quantity", CellScale.UNIT, unit, "", ReadingOutcome.INPUT);
+        }
+
+        // Not deterministically typable
+        return null;
+    }
+
+    private String extractCurrencyFromLabels(String rowLabel, String colLabel) {
+        String combined = (rowLabel + " " + colLabel).toLowerCase();
+        java.util.regex.Matcher matcher = KindTokens.CURRENCY.matcher(combined);
+        if (matcher.find()) {
+            String normalized = KindTokens.normalizeCurrency(matcher.group());
+            return normalized != null ? normalized : "";
+        }
+        return "";
+    }
+
+    private String extractScaleFromLabels(String rowLabel, String colLabel) {
+        String combined = (rowLabel + " " + colLabel).toLowerCase();
+        if (combined.contains("crore")) return "crore";
+        if (combined.contains("lakh")) return "lakh";
+        if (combined.contains("million")) return "million";
+        if (combined.contains("thousand")) return "thousand";
+        return "unit";
+    }
+
+    private String extractUnitFromLabels(String rowLabel, String colLabel) {
+        String combined = (rowLabel + " " + colLabel).toLowerCase();
+        java.util.regex.Matcher matcher = KindTokens.UNIT.matcher(combined);
+        if (matcher.find()) {
+            return KindTokens.normalizeUnit(matcher.group());
+        }
+        return "";
+    }
 }

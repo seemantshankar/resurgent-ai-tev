@@ -452,18 +452,10 @@ public final class ClassifyService {
 
                 Progress.step("classify", "layer-a", dispositions.size(), prepared.size(), 10);
             } catch (Exception e) {
-                // Fall back to individual classification for this batch on failure
-                System.err.println("[layer-a] Batch failed, falling back to individual: " + e.getMessage());
-                for (PreparedPacket item : batch) {
-                    try {
-                        dispositions.add(classifyOne(item, families, deadlineNanos));
-                        Progress.step("classify", "layer-a", dispositions.size(), prepared.size(), 10);
-                    } catch (Exception ex) {
-                        Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-                        String msg = cause.getMessage() != null ? cause.getMessage() : cause.toString();
-                        throw new ClassifyException("Layer A failed: " + msg, cause);
-                    }
-                }
+                // Batch failed - do not fall back, throw to expose the issue
+                Throwable cause = e.getCause() != null ? e.getCause() : e;
+                String msg = cause.getMessage() != null ? cause.getMessage() : cause.toString();
+                throw new ClassifyException("Layer A batch failed: " + msg, cause);
             }
         }
 
@@ -495,9 +487,13 @@ public final class ClassifyService {
         System.err.flush();
 
         List<LayerAJudgment> judgments = parseBatchLayerAResponse(jsonResponse, batch.size());
-        System.err.println("[layer-a-batch] Parsed " + judgments.size() + " judgments from batch response");
+        System.err.println("[layer-a-batch] Parsed " + judgments.size() + " judgments from batch response (expected " + batch.size() + ")");
+        if (judgments.size() < batch.size()) {
+            throw new IllegalArgumentException("Expected at least " + batch.size() + " judgments, got " + judgments.size());
+        }
         System.err.flush();
-        return judgments;
+        // Use only the first batch.size() judgments
+        return judgments.subList(0, batch.size());
     }
 
     private String formatBatchLayerAPrompt(List<PreparedPacket> batch, List<String> scheduleFamilies) {
@@ -529,18 +525,25 @@ public final class ClassifyService {
 
             String userMsg = mapper.writeValueAsString(root);
             StringBuilder sb = new StringBuilder();
-            sb.append("Classify the following ").append(batch.size()).append(" regions/candidates:\n\n");
-            sb.append(userMsg).append("\n\n");
-            sb.append("For each candidate (by index), determine:\n");
+            sb.append("BATCH CLASSIFICATION - Classify exactly ").append(batch.size()).append(" regions.\n\n");
+            sb.append("INPUT:\n").append(userMsg).append("\n\n");
+            sb.append("TASK: For each candidate (by index 1-").append(batch.size()).append("), provide:\n");
             sb.append("1. scheduleFamily: one of {").append(String.join(", ", scheduleFamilies)).append("}\n");
-            sb.append("2. triage: one of {MAIN, HELPER}\n");
-            sb.append("3. relevance: one of {PRIMARY, SECONDARY, TERTIARY}\n");
-            sb.append("4. rowLabels: list of row labels\n");
-            sb.append("5. columnHeaders: list of column headers\n");
-            sb.append("6. packetDefaultHead: main header for this region\n");
-            sb.append("7. about: brief description (1-2 sentences)\n");
-            sb.append("\nReturn a JSON array with one object per candidate (in same order):\n");
-            sb.append("[{\"scheduleFamily\":\"...\",\"triage\":\"...\",\"relevance\":\"...\",\"rowLabels\":[],\"columnHeaders\":[],\"packetDefaultHead\":\"...\",\"about\":\"...\"}, ...]\n");
+            sb.append("2. triage: MAIN or HELPER only\n");
+            sb.append("3. relevance: PRIMARY, SECONDARY, or TERTIARY only\n");
+            sb.append("4. rowLabels: array of row label strings (can be empty [])\n");
+            sb.append("5. columnHeaders: array of column header strings (can be empty [])\n");
+            sb.append("6. packetDefaultHead: string or null\n");
+            sb.append("7. about: string (1-2 sentences)\n");
+            sb.append("\nOUTPUT: Return ONLY JSON. No markdown, no text, no explanations.\n");
+            sb.append("Wrap the ").append(batch.size()).append(" classification objects in a JSON object with key 'results':\n");
+            sb.append("{\n");
+            sb.append("  \"results\": [\n");
+            sb.append("    {\"scheduleFamily\":\"assets\",\"triage\":\"MAIN\",\"relevance\":\"PRIMARY\",\"rowLabels\":[\"Fixed Assets\"],\"columnHeaders\":[],\"packetDefaultHead\":\"Assets\",\"about\":\"List of company assets.\"},\n");
+            sb.append("    {\"scheduleFamily\":\"liabilities\",\"triage\":\"HELPER\",\"relevance\":\"SECONDARY\",\"rowLabels\":[],\"columnHeaders\":[],\"packetDefaultHead\":null,\"about\":\"Supporting detail.\"}\n");
+            sb.append("  ]\n");
+            sb.append("}\n\n");
+            sb.append("CRITICAL: Return ONLY the JSON object with 'results' key containing the array. Nothing else.\n");
             return sb.toString();
         } catch (Exception e) {
             throw new IllegalStateException("failed to format batch Layer A prompt: " + e.getMessage(), e);
@@ -553,6 +556,7 @@ public final class ClassifyService {
 
         com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
         com.fasterxml.jackson.databind.JsonNode nodes = mapper.readTree(jsonResponse);
+        System.err.println("[layer-a-batch-debug] Full response: " + jsonResponse.substring(0, Math.min(1000, jsonResponse.length())));
 
         // Handle multiple formats: [...], {"results": [...]}, etc.
         if (!nodes.isArray()) {
@@ -592,12 +596,28 @@ public final class ClassifyService {
                 resolvedFamily = suggestedFamily;
             }
 
-            // Normalize triage and relevance
+            // Normalize and map triage and relevance
             if (triage != null) {
                 triage = triage.toLowerCase(java.util.Locale.ROOT);
+                // Map LLM triage values to database values
+                if (triage.equals("main")) {
+                    triage = "main";
+                } else if (triage.equals("helper")) {
+                    triage = "scratch";
+                } else if (!triage.equals("scratch") && !triage.equals("orphan")) {
+                    triage = "scratch"; // Default unknown values to scratch
+                }
             }
             if (relevance != null) {
                 relevance = relevance.toLowerCase(java.util.Locale.ROOT);
+                // Map LLM relevance values to database values
+                if (relevance.equals("primary")) {
+                    relevance = Relevance.PRIMARY;
+                } else if (relevance.equals("secondary") || relevance.equals("tertiary")) {
+                    relevance = Relevance.SUPPORTING;
+                } else if (relevance.equals("noise")) {
+                    relevance = Relevance.NOISE;
+                }
             }
 
             java.util.List<String> rowLabels = new java.util.ArrayList<>();
@@ -623,9 +643,9 @@ public final class ClassifyService {
                     + " triage=" + triage + " relevance=" + relevance + " about=" + (about == null ? "null" : about.substring(0, Math.min(50, about.length()))));
                 // Skip this candidate and continue with next, or throw?
                 // For now, use defaults to avoid breaking
-                if (resolvedFamily == null) resolvedFamily = "unknown";
-                if (triage == null) triage = "helper";
-                if (relevance == null) relevance = "tertiary";
+                if (resolvedFamily == null) resolvedFamily = "assumptions";
+                if (triage == null) triage = "scratch";
+                if (relevance == null) relevance = "supporting";
                 if (about == null) about = "Unclassified";
             }
 
