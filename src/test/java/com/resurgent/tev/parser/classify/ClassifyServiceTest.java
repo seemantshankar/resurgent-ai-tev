@@ -168,13 +168,13 @@ class ClassifyServiceTest {
                     individualCallCount.incrementAndGet();
                 }
                 
-                // Return valid response for all cells
-                StringBuilder json = new StringBuilder("[");
+                // Return valid response for all cells (wrapped in "results" key)
+                StringBuilder json = new StringBuilder("{\"results\":[");
                 for (int i = 0; i < cellCount; i++) {
                     if (i > 0) json.append(",");
                     json.append("{\"kind\":\"quantity\",\"scale\":\"unit\",\"unit\":\"\",\"currency\":\"\",\"confidence\":0.80}");
                 }
-                json.append("]");
+                json.append("]}");
                 return json.toString();
             }
         };
