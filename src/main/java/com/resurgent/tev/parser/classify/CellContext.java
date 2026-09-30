@@ -1,7 +1,6 @@
 package com.resurgent.tev.parser.classify;
 
 import com.resurgent.tev.parser.db.InterpretationCellView;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
