@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.classify;
 
+import java.text.Normalizer;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
@@ -55,6 +56,45 @@ final class KindTokens {
                     + "capex|opex|expense|outlay|investment|lac|lakh|crore|less\\s*:|"
                     + "total\\s+cost|project\\s+cost|means\\s+of\\s+finance|"
                     + "depreciation|\\bdep\\.?\\b)");
+
+    private static final Pattern ZERO_WIDTH = Pattern.compile("[\\u200B-\\u200D\\uFEFF]");
+    private static final Pattern CURRENCY_GLUE = Pattern.compile(
+            "(?i)\\b(rs\\.?|inr)(?=(?:crores?|cr|lacs?|lakhs?|sq|sqft|sqm|mn|million)\\b|/)");
+    private static final Pattern BRACKET_AFTER_WORD = Pattern.compile("([\\p{L}\\p{N}])([(\\[])");
+    private static final Pattern BRACKET_BEFORE_WORD = Pattern.compile("([)\\]])([\\p{L}\\p{N}])");
+    private static final Pattern JOINER_BETWEEN_WORDS = Pattern.compile("(?<=[\\p{L}\\p{N}])([:@=])(?=[\\p{L}\\p{N}])");
+    private static final Pattern PERCENT_AFTER_LETTER = Pattern.compile("(?<=\\p{L})%");
+    private static final Pattern PERCENT_BEFORE_LETTER = Pattern.compile("%(?=\\p{L})");
+    private static final Pattern CAMEL_BOUNDARY = Pattern.compile("(?<=\\p{Ll})(?=\\p{Lu})");
+    private static final Pattern WHITESPACE = Pattern.compile("\\s+");
+
+    /**
+     * One spelling of a header/label for every matcher: {@code SALES(Rs. In Lacs)} and
+     * {@code Sales ( Rs. in lacs )} must read the same, however the workbook author glued
+     * words, broke lines or pasted non-breaking spaces. Lower-cased, single-spaced,
+     * brackets/colons/percent split from neighbouring words, and a currency word split
+     * from a scale or unit word it was typed against ({@code Rs.crore}). Only that closed
+     * set is split - {@code Others} and {@code Chairs} stay whole - and ALL-CAPS runs
+     * ({@code PBDIT}) are never camel-split.
+     */
+    static String normalizeLabel(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "";
+        }
+        String s = Normalizer.normalize(raw, Normalizer.Form.NFKC);
+        s = ZERO_WIDTH.matcher(s).replaceAll("");
+        s = CURRENCY_GLUE.matcher(s).replaceAll("$1 ");
+        s = CAMEL_BOUNDARY.matcher(s).replaceAll(" ");
+        s = BRACKET_AFTER_WORD.matcher(s).replaceAll("$1 $2");
+        s = BRACKET_BEFORE_WORD.matcher(s).replaceAll("$1 $2");
+        s = JOINER_BETWEEN_WORDS.matcher(s).replaceAll(" $1 ");
+        s = PERCENT_AFTER_LETTER.matcher(s).replaceAll(" %");
+        s = PERCENT_BEFORE_LETTER.matcher(s).replaceAll("% ");
+        // Brackets also separate from a bracket that follows: "( rs" reads the same as "(rs".
+        s = s.replace("(", " ( ").replace(")", " ) ").replace("[", " [ ").replace("]", " ] ");
+        s = s.toLowerCase(Locale.ROOT);
+        return WHITESPACE.matcher(s).replaceAll(" ").trim();
+    }
 
     private KindTokens() {}
 

@@ -495,12 +495,9 @@ public class CellTypeClassifierLlm {
     }
 
     private String extractScaleFromLabels(String rowLabel, String colLabel) {
-        String combined = (rowLabel + " " + colLabel).toLowerCase();
-        if (combined.contains("crore")) return "crore";
-        if (combined.contains("lakh")) return "lakh";
-        if (combined.contains("million")) return "million";
-        if (combined.contains("thousand")) return "thousand";
-        return "unit";
+        // CellScale.fromText is the one scale-word matcher (lakh/lac/lacs/crore/million/thousand/000s).
+        CellScale scale = CellScale.fromText(KindTokens.normalizeLabel(rowLabel + " " + colLabel));
+        return scale == null ? "unit" : scale.name().toLowerCase(java.util.Locale.ROOT);
     }
 
     private String extractUnitFromLabels(String rowLabel, String colLabel) {

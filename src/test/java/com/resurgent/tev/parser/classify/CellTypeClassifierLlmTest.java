@@ -3,6 +3,7 @@ package com.resurgent.tev.parser.classify;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.resurgent.tev.parser.db.InterpretationCellView;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -73,6 +74,53 @@ class CellTypeClassifierLlmTest {
 
         // Cell should remain UNTYPABLE (low confidence, below 0.80 threshold)
         assertThat(settled.get(1L).refusal).isEqualTo(ReadingOutcome.UNTYPABLE);
+    }
+
+    private static InterpretationCellView textCell(long id, int row, int col, String text) {
+        return new InterpretationCellView(
+                id, 1L, "T" + id, row, col, "text", text, text, null, null, null, null, null, null,
+                null, false, null, false, false, null, "input");
+    }
+
+    private static InterpretationCellView numberCell(long id, int row, int col) {
+        return new InterpretationCellView(
+                id, 1L, "N" + id, row, col, "number", "100", "100", "100", null, null, null, null, null,
+                null, false, null, false, false, null, "input");
+    }
+
+    @Test
+    void deterministicPass_readsLacsAsLakhScale() {
+        var classifier = new CellTypeClassifierLlm(null, new FakeClassifierLlm());
+        var cells = List.of(
+                textCell(1L, 2, 1, "Room revenue"),
+                textCell(2L, 1, 2, "TOTAL ROOM SALES(Rs. In Lacs)"),
+                numberCell(3L, 2, 2));
+        var settled = new HashMap<Long, ReadingOutcome>();
+        settled.put(3L, ReadingOutcome.refused(ReadingOutcome.UNTYPABLE));
+
+        classifier.classifyRemaining(cells, settled);
+
+        assertThat(settled.get(3L).kind).isEqualTo(ReadingOutcome.MONEY);
+        assertThat(settled.get(3L).scale).isEqualTo(CellScale.LAKH);
+        assertThat(settled.get(3L).currency).isEqualTo("INR");
+    }
+
+    @Test
+    void deterministicPass_readsLakhsCroreAndMillionScales() {
+        for (var spec : List.of(
+                new String[] {"Amount (Rs. in Lakhs)", "LAKH"},
+                new String[] {"Amount (Rs. Crores)", "CRORE"},
+                new String[] {"Amount (Rs. in Million)", "MILLION"},
+                new String[] {"Amount (Rs.)", "UNIT"})) {
+            var classifier = new CellTypeClassifierLlm(null, new FakeClassifierLlm());
+            var cells = List.of(textCell(1L, 2, 1, "Item"), textCell(2L, 1, 2, spec[0]), numberCell(3L, 2, 2));
+            var settled = new HashMap<Long, ReadingOutcome>();
+            settled.put(3L, ReadingOutcome.refused(ReadingOutcome.UNTYPABLE));
+
+            classifier.classifyRemaining(cells, settled);
+
+            assertThat(settled.get(3L).scale).as(spec[0]).isEqualTo(CellScale.valueOf(spec[1]));
+        }
     }
 
     /** Fake {@link ClassifierLlm} for testing. */
