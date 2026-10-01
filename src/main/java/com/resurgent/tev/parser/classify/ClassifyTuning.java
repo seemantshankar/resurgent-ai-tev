@@ -10,8 +10,8 @@ package com.resurgent.tev.parser.classify;
  */
 public record ClassifyTuning(int cellBatchSize, int layerABatchSize, int concurrency) {
 
-    public static final int DEFAULT_CELL_BATCH_SIZE = 15;
-    public static final int DEFAULT_LAYER_A_BATCH_SIZE = 10;
+    public static final int DEFAULT_CELL_BATCH_SIZE = 50;
+    public static final int DEFAULT_LAYER_A_BATCH_SIZE = 25;
 
     public ClassifyTuning {
         if (cellBatchSize < 1 || layerABatchSize < 1 || concurrency < 1) {
@@ -19,8 +19,8 @@ public record ClassifyTuning(int cellBatchSize, int layerABatchSize, int concurr
         }
     }
 
-    /** One call at a time with the original batch sizes: what library callers and tests get. */
+    /** One call at a time with the original small batches: what library callers and tests get. */
     public static ClassifyTuning sequential() {
-        return new ClassifyTuning(DEFAULT_CELL_BATCH_SIZE, DEFAULT_LAYER_A_BATCH_SIZE, 1);
+        return new ClassifyTuning(15, 10, 1);
     }
 }

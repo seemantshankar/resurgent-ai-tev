@@ -59,7 +59,7 @@ public class CellTypeClassifierLlm {
     private final ClassifierLlm llm;
     private final DynamicKindTokens dynamicDict;
     private CellContext ctx = CellContext.scan(List.of());
-    private int batchSize = ClassifyTuning.DEFAULT_CELL_BATCH_SIZE;
+    private int batchSize = 15;
     private int concurrency = 1;
     private java.util.Set<Long> llmWorksheetIds; // null: every sheet is sent to the model
 
@@ -171,6 +171,7 @@ public class CellTypeClassifierLlm {
 
         // A wave of batches goes out together; their answers are applied in order before the
         // next wave is built, so later prompts still see earlier answers as neighbour hints.
+        int cellsDone = 0;
         for (int start = 0; start < batches.size(); start += concurrency) {
             List<List<InterpretationCellView>> wave =
                     batches.subList(start, Math.min(start + concurrency, batches.size()));
@@ -191,7 +192,12 @@ public class CellTypeClassifierLlm {
             List<ParallelCalls.Outcome<List<CellTypeResponse>>> outcomes = ParallelCalls.run(tasks, concurrency);
             for (int i = 0; i < wave.size(); i++) {
                 applyBatchOutcome(wave.get(i), requestsByBatch.get(i), regionsByBatch.get(i), outcomes.get(i), settled);
+                cellsDone += wave.get(i).size();
             }
+            int batchesDone = Math.min(start + concurrency, batches.size());
+            System.err.println("[cell-classifier] batches " + batchesDone + "/" + batches.size()
+                    + " done (" + cellsDone + "/" + ordered.size() + " cells)");
+            System.err.flush();
         }
     }
 

@@ -15,10 +15,18 @@ public final class Progress {
     private static final boolean ENABLED =
             !"off".equalsIgnoreCase(System.getProperty("tev.progress", "on"));
 
+    private static volatile String current = "starting";
+
     private Progress() {}
+
+    /** The most recent phase announced, for the heartbeat line. */
+    public static String current() {
+        return current;
+    }
 
     /** A phase boundary, e.g. {@code phase("classify", "building packets for 312 candidates")}. */
     public static void phase(String phase, String detail) {
+        current = phase + ": " + detail;
         if (!ENABLED) {
             return;
         }

@@ -126,7 +126,10 @@ public final class ClassifyCommand implements Callable<Integer> {
             err.println("invalid classify limits: " + e.getMessage());
             return 2;
         }
-        try {
+        java.io.PrintStream originalErr = System.err;
+        System.setErr(com.resurgent.tev.parser.TimestampedStream.wrap(originalErr));
+        System.err.println("[classify] models in order: " + LlmEnvironment.describeModels());
+        try (Heartbeat heartbeat = new Heartbeat(30)) {
             ClassifyService service = new ClassifyService(llm, new DiscoverService(), limits)
                     .withTuning(new ClassifyTuning(
                             cellBatchSize != null ? cellBatchSize : ClassifyTuning.DEFAULT_CELL_BATCH_SIZE,
@@ -159,6 +162,8 @@ public final class ClassifyCommand implements Callable<Integer> {
             String msg = e.getMessage() != null ? e.getMessage() : e.toString();
             err.println("classify failed: " + msg);
             return 1;
+        } finally {
+            System.setErr(originalErr);
         }
     }
 }

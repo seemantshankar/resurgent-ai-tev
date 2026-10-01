@@ -436,8 +436,10 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
         private CompletionResult post(String body, Duration deadline) {
             long startNanos = System.nanoTime();
+            long activityId = LlmActivity.GLOBAL.begin(model);
+            boolean succeeded = false;
             try {
-                System.err.println("[http-client] Sending request to OpenRouter...");
+                System.err.println("[http-client] Sending request to " + model + " via OpenRouter...");
                 System.err.flush();
                 ExchangeResponse response = exchange.send(body, deadline);
                 long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000;
@@ -450,6 +452,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                 }
                 CompletionResult result = contentWithUsage(response.body());
                 recordUsage(response.body(), result);
+                succeeded = true;
                 return result;
             } catch (IllegalStateException e) {
                 throw e;
@@ -463,6 +466,8 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                 System.err.println("[http-client] HTTP ERROR after " + elapsedMs + "ms: " + e.getClass().getSimpleName() + ": " + e.getMessage());
                 System.err.flush();
                 throw new IllegalStateException("OpenRouter call failed: " + e.getMessage(), e);
+            } finally {
+                LlmActivity.GLOBAL.end(activityId, succeeded);
             }
         }
 

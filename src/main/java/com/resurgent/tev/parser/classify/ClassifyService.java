@@ -77,6 +77,10 @@ public final class ClassifyService {
         return this;
     }
 
+    private static long secondsSince(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1_000_000_000L;
+    }
+
     /** Resolve and remember the sheet scope for this run. */
     void useScope(WorkspaceRepository repo, long parseRunId) throws SQLException, ClassifyException {
         scopeWorksheetIds = resolveScope(repo, parseRunId);
@@ -194,9 +198,16 @@ public final class ClassifyService {
                 return resumeFromLayerB(repo, parseRunId, existingDispositions, db);
             }
 
+            long runStarted = System.nanoTime();
             useScope(repo, parseRunId);
-            Progress.phase("classify", "LLM region layout");
+            Progress.phase("classify", "settings: " + tuning.cellBatchSize() + " cells per call, "
+                    + tuning.layerABatchSize() + " candidates per call, " + tuning.concurrency()
+                    + " calls at a time; scope: "
+                    + (scopeSheetNames == null ? "whole workbook" : String.join(", ", scopeSheetNames)));
+            Progress.phase("classify", "STAGE 1/3 START - LLM region layout");
+            long stageStarted = System.nanoTime();
             materializeLlmRegions(repo, parseRunId);
+            Progress.phase("classify", "STAGE 1/3 DONE - region layout took " + secondsSince(stageStarted) + "s");
 
             List<CandidateRow> all = repo.selectCandidatesForParseRun(parseRunId);
             Map<Long, String> sheetNames = new HashMap<>();
@@ -232,8 +243,13 @@ public final class ClassifyService {
             }
 
             long deadlineNanos = System.nanoTime() + limits.classifyDeadline().toNanos();
+            Progress.phase("classify", "STAGE 2/3 START - Layer A (what each region is about), "
+                    + prepared.size() + " candidates");
+            stageStarted = System.nanoTime();
             List<PacketDisposition> dispositions =
                     runLayerA(prepared, families, deadlineNanos);
+            Progress.phase("classify", "STAGE 2/3 DONE - Layer A took " + secondsSince(stageStarted) + "s: "
+                    + dispositions.size() + " of " + prepared.size() + " candidates classified");
 
             db.connection().setAutoCommit(false);
             try {
@@ -250,7 +266,11 @@ public final class ClassifyService {
                 for (PacketDisposition disposition : dispositions) {
                     repo.insertPacketDisposition(disposition);
                 }
+                Progress.phase("classify", "STAGE 3/3 START - Layer B (typing every numeric cell)");
+                stageStarted = System.nanoTime();
                 cellReader().replace(repo, parseRunId, llm);
+                Progress.phase("classify", "STAGE 3/3 DONE - Layer B took " + secondsSince(stageStarted)
+                        + "s; saving results");
                 db.connection().commit();
             } catch (Exception e) {
                 db.connection().rollback();
@@ -258,6 +278,7 @@ public final class ClassifyService {
             } finally {
                 db.connection().setAutoCommit(true);
             }
+            Progress.phase("classify", "FINISHED - total " + secondsSince(runStarted) + "s, results saved");
 
             return new ClassifySummary(
                     parseRunId, dispositions.size(), skipped, eligible.size());

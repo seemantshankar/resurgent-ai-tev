@@ -68,6 +68,12 @@ public final class LlmEnvironment {
         return new OpenRouterClassifierLlm(key, models);
     }
 
+    /** The configured model ids in the order they are tried, for the run banner. */
+    public static String describeModels() {
+        List<String> models = modelChain(load());
+        return models.isEmpty() ? "(none configured)" : String.join("  ->  ", models);
+    }
+
     public static boolean liveConfigured() {
         Map<String, String> env = load();
         String key = env.get(API_KEY);

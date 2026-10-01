@@ -112,6 +112,7 @@ final class FallbackCompletionsClient implements CompletionsClient {
             } catch (RuntimeException e) {
                 last = e;
                 recordFailure(i, link.model());
+                LlmActivity.GLOBAL.failover();
                 failures.add(link.model() + ": " + e.getMessage());
                 System.err.println("[llm-fallback] model " + link.model() + " failed: " + e.getMessage()
                         + (n + 1 < order.size() ? " - re-sending this request to " + chain.get(order.get(n + 1)).model() : ""));
