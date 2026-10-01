@@ -5,6 +5,7 @@ import com.resurgent.tev.parser.classify.ClassifierLlm;
 import com.resurgent.tev.parser.classify.ClassifyException;
 import com.resurgent.tev.parser.classify.ClassifyLimits;
 import com.resurgent.tev.parser.classify.ClassifyService;
+import com.resurgent.tev.parser.classify.ClassifyTuning;
 import com.resurgent.tev.parser.classify.ClassifySummary;
 import com.resurgent.tev.parser.classify.LlmEnvironment;
 import com.resurgent.tev.parser.classify.OpenRouterClassifierLlm;
@@ -36,6 +37,22 @@ public final class ClassifyCommand implements Callable<Integer> {
             names = "--sheet",
             description = "Bind Layer B on this sheet (repeatable). Skips region layout and Layer A.")
     List<String> sheets;
+
+    @Option(
+            names = "--only-sheet",
+            description = "Send only this sheet (repeatable) to the model, plus any sheet its formulas"
+                    + " read. All cells and formula links stay loaded so formulas still resolve.")
+    List<String> onlySheets;
+
+    @Option(
+            names = "--cell-batch-size",
+            description = "Cells per Layer B call (default: " + ClassifyTuning.DEFAULT_CELL_BATCH_SIZE + ")")
+    Integer cellBatchSize;
+
+    @Option(
+            names = "--layer-a-batch-size",
+            description = "Candidates per Layer A call (default: " + ClassifyTuning.DEFAULT_LAYER_A_BATCH_SIZE + ")")
+    Integer layerABatchSize;
 
     @Option(
             names = "--parallelism",
@@ -110,7 +127,12 @@ public final class ClassifyCommand implements Callable<Integer> {
             return 2;
         }
         try {
-            ClassifyService service = new ClassifyService(llm, new DiscoverService(), limits);
+            ClassifyService service = new ClassifyService(llm, new DiscoverService(), limits)
+                    .withTuning(new ClassifyTuning(
+                            cellBatchSize != null ? cellBatchSize : ClassifyTuning.DEFAULT_CELL_BATCH_SIZE,
+                            layerABatchSize != null ? layerABatchSize : ClassifyTuning.DEFAULT_LAYER_A_BATCH_SIZE,
+                            limits.parallelism()))
+                    .withSheetScope(onlySheets);
             if (sheets != null && !sheets.isEmpty()) {
                 BindSummary bound = service.bindSheets(db, parseRunId, sheets);
                 out.printf(

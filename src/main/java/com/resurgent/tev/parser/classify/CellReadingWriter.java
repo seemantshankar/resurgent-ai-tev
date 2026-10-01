@@ -26,6 +26,16 @@ import java.util.Set;
  */
 public final class CellReadingWriter {
 
+    private ClassifyTuning tuning = ClassifyTuning.sequential();
+    private Set<Long> llmWorksheetIds; // null: every sheet may go to the model
+
+    /** Batch sizes, concurrency, and the sheets whose untyped cells may be sent to the model. */
+    CellReadingWriter withTuning(ClassifyTuning tuning, Set<Long> llmWorksheetIds) {
+        this.tuning = tuning;
+        this.llmWorksheetIds = llmWorksheetIds;
+        return this;
+    }
+
     public void replace(WorkspaceRepository repo, long parseRunId) throws SQLException {
         replace(repo, parseRunId, null);
     }
@@ -132,7 +142,9 @@ public final class CellReadingWriter {
                 CellContext context = new ResolverCellContext(
                         parseRunId, cache, owners, members, candidatesById, dispositions, sheetNames,
                         repo.selectSourceFileHashForParseRun(parseRunId));
-                CellTypeClassifierLlm classifier = new CellTypeClassifierLlm(repo, llm);
+                CellTypeClassifierLlm classifier = new CellTypeClassifierLlm(repo, llm)
+                        .withBatching(tuning.cellBatchSize(), tuning.concurrency())
+                        .withWorksheetScope(llmWorksheetIds);
                 dynamicDict = classifier.getDynamicDictionary();
                 classifier.classifyRemaining(cells, settled, context);
             }

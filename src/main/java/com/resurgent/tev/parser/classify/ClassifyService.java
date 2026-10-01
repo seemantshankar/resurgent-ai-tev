@@ -54,6 +54,106 @@ public final class ClassifyService {
      */
     long[] regionRetryBackoffMillis = {1_000L, 3_000L};
 
+    private ClassifyTuning tuning = ClassifyTuning.sequential();
+    private java.util.Set<String> scopeSheetNames; // lower-case; null means the whole workbook
+    private java.util.Set<Long> scopeWorksheetIds; // resolved per run; null means every sheet
+
+    /** Batch sizes and concurrency for the LLM stages. */
+    public ClassifyService withTuning(ClassifyTuning tuning) {
+        this.tuning = Objects.requireNonNull(tuning, "tuning");
+        return this;
+    }
+
+    /**
+     * Send only these sheets (plus any sheet their formulas read) to the model. Every cell
+     * and formula link stays loaded, so formulas still resolve against the whole workbook.
+     */
+    public ClassifyService withSheetScope(java.util.Collection<String> sheetNames) {
+        this.scopeSheetNames = sheetNames == null || sheetNames.isEmpty()
+                ? null
+                : sheetNames.stream()
+                        .map(n -> n.trim().toLowerCase(java.util.Locale.ROOT))
+                        .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+        return this;
+    }
+
+    /** Resolve and remember the sheet scope for this run. */
+    void useScope(WorkspaceRepository repo, long parseRunId) throws SQLException, ClassifyException {
+        scopeWorksheetIds = resolveScope(repo, parseRunId);
+    }
+
+    private void deleteDispositions(WorkspaceRepository repo, long parseRunId) throws SQLException {
+        if (scopeWorksheetIds == null) {
+            repo.deletePacketDispositionsForParseRun(parseRunId);
+        } else {
+            repo.deletePacketDispositionsForWorksheets(parseRunId, scopeWorksheetIds);
+        }
+    }
+
+    private CellReadingWriter cellReader() {
+        return new CellReadingWriter().withTuning(tuning, scopeWorksheetIds);
+    }
+
+    private boolean inScope(long worksheetId) {
+        return scopeWorksheetIds == null || scopeWorksheetIds.contains(worksheetId);
+    }
+
+    /**
+     * Resolve the scope to worksheet ids and pull in every sheet the scoped sheets' formulas
+     * read, transitively: a formula over unparsed sheets cannot be typed from labels alone.
+     */
+    java.util.Set<Long> resolveScope(WorkspaceRepository repo, long parseRunId)
+            throws SQLException, ClassifyException {
+        if (scopeSheetNames == null) {
+            return null;
+        }
+        List<WorksheetRef> sheets = repo.selectWorksheetsForParseRun(parseRunId);
+        Map<String, WorksheetRef> byName = new HashMap<>();
+        for (WorksheetRef sheet : sheets) {
+            byName.put(sheet.sheetName().trim().toLowerCase(java.util.Locale.ROOT), sheet);
+        }
+        java.util.Set<Long> scope = new java.util.LinkedHashSet<>();
+        List<String> missing = new ArrayList<>();
+        for (String name : scopeSheetNames) {
+            WorksheetRef sheet = byName.get(name);
+            if (sheet == null) {
+                missing.add(name);
+            } else {
+                scope.add(sheet.worksheetId());
+            }
+        }
+        if (!missing.isEmpty()) {
+            throw new ClassifyException("sheet not in parse run: " + String.join(", ", missing));
+        }
+        Map<Long, Long> sheetOfCell = new HashMap<>();
+        for (var cell : repo.selectInterpretationCellsForParseRun(parseRunId)) {
+            sheetOfCell.put(cell.cellId(), cell.worksheetId());
+        }
+        List<com.resurgent.tev.parser.db.FormulaLink> links = repo.selectFormulaLinksForParseRun(parseRunId);
+        java.util.Set<Long> pulledIn = new java.util.LinkedHashSet<>();
+        boolean grew = true;
+        while (grew) {
+            grew = false;
+            for (var link : links) {
+                Long from = sheetOfCell.get(link.fromCellId());
+                Long to = sheetOfCell.get(link.toCellId());
+                if (from != null && to != null && scope.contains(from) && !scope.contains(to)) {
+                    scope.add(to);
+                    pulledIn.add(to);
+                    grew = true;
+                }
+            }
+        }
+        Map<Long, String> names = new HashMap<>();
+        sheets.forEach(sh -> names.put(sh.worksheetId(), sh.sheetName()));
+        System.err.println("[classify] Scope: " + String.join(", ", scopeSheetNames)
+                + (pulledIn.isEmpty() ? " (no other sheet is read by their formulas)"
+                        : " + " + pulledIn.stream().map(names::get).toList()
+                                + " pulled in because their formulas read them"));
+        System.err.flush();
+        return scope;
+    }
+
     public ClassifyService(ClassifierLlm llm) {
         this(llm, new DiscoverService(), ClassifyLimits.defaults());
     }
@@ -94,6 +194,7 @@ public final class ClassifyService {
                 return resumeFromLayerB(repo, parseRunId, existingDispositions, db);
             }
 
+            useScope(repo, parseRunId);
             Progress.phase("classify", "LLM region layout");
             materializeLlmRegions(repo, parseRunId);
 
@@ -106,7 +207,7 @@ public final class ClassifyService {
             List<CandidateRow> eligible = new ArrayList<>();
             int skipped = 0;
             for (CandidateRow candidate : all) {
-                if (isEligible(candidate)) {
+                if (isEligible(candidate) && inScope(candidate.worksheetId())) {
                     eligible.add(candidate);
                 } else {
                     skipped++;
@@ -142,14 +243,14 @@ public final class ClassifyService {
                             "Candidates changed during classify for parse run " + parseRunId
                                     + "; re-run discover then classify");
                 }
-                repo.deletePacketDispositionsForParseRun(parseRunId);
+                deleteDispositions(repo, parseRunId);
                 for (String admitted : families.admitted()) {
                     repo.insertScheduleFamily(admitted);
                 }
                 for (PacketDisposition disposition : dispositions) {
                     repo.insertPacketDisposition(disposition);
                 }
-                new CellReadingWriter().replace(repo, parseRunId, llm);
+                cellReader().replace(repo, parseRunId, llm);
                 db.connection().commit();
             } catch (Exception e) {
                 db.connection().rollback();
@@ -187,7 +288,7 @@ public final class ClassifyService {
         try {
             System.err.println("[classify] Running Layer B (cell type classification) with batching...");
             System.err.flush();
-            new CellReadingWriter().replace(repo, parseRunId, llm);
+            cellReader().replace(repo, parseRunId, llm);
             db.connection().commit();
         } catch (Exception e) {
             db.connection().rollback();
@@ -202,7 +303,12 @@ public final class ClassifyService {
 
     void materializeLlmRegions(WorkspaceRepository repo, long parseRunId)
             throws SQLException, ClassifyException {
-        List<WorksheetRef> sheets = repo.selectWorksheetsForParseRun(parseRunId);
+        List<WorksheetRef> sheets = new ArrayList<>();
+        for (WorksheetRef sheet : repo.selectWorksheetsForParseRun(parseRunId)) {
+            if (inScope(sheet.worksheetId())) {
+                sheets.add(sheet);
+            }
+        }
         Map<Long, CandidateRow> coverageBySheet = new HashMap<>();
         for (CandidateRow c : repo.selectCandidatesForParseRun(parseRunId)) {
             if ("coverage_parent".equals(c.candidateKind())) {
@@ -223,42 +329,57 @@ public final class ClassifyService {
         int failedSheets = 0;
         Map<Long, List<RegionProposal>> bySheet = new HashMap<>();
 
-        // Batch sheets 12 at a time (1.1M token context window allows large batches)
-        // This reduces 48 sheets to ~4 LLM calls instead of ~10, approaching 10x speedup
+        // Sheets go to the model 12 at a time; a few of those batch calls run at once.
         int batchSize = 12;
-        for (int batchStart = 0; batchStart < sheets.size(); batchStart += batchSize) {
-            int batchEnd = Math.min(batchStart + batchSize, sheets.size());
-            List<WorksheetRef> batchSheets = sheets.subList(batchStart, batchEnd);
-
-            System.err.println(
-                    "[region-layout] Processing sheets " + (batchStart + 1) + "-" + batchEnd
-                            + " / " + sheets.size() + " (batch of " + (batchEnd - batchStart)
-                            + ")");
-            System.err.flush();
-
-            // Build batch prompts
-            List<RegionLayoutPrompt> batchPrompts = new ArrayList<>();
-            Map<String, Long> sheetNameToId = new LinkedHashMap<>();
-            for (WorksheetRef sheet : batchSheets) {
-                List<com.resurgent.tev.parser.db.CellPacketView> cellViews =
-                        cellsBySheet.get(sheet.worksheetId());
-                String dump = cellDump(cellViews);
-                batchPrompts.add(new RegionLayoutPrompt(sheet.sheetName(), dump));
-                sheetNameToId.put(sheet.sheetName(), sheet.worksheetId());
+        List<List<WorksheetRef>> sheetBatches = new ArrayList<>();
+        for (int start = 0; start < sheets.size(); start += batchSize) {
+            sheetBatches.add(sheets.subList(start, Math.min(start + batchSize, sheets.size())));
+        }
+        for (int waveStart = 0; waveStart < sheetBatches.size(); waveStart += tuning.concurrency()) {
+            List<List<WorksheetRef>> wave = sheetBatches.subList(
+                    waveStart, Math.min(waveStart + tuning.concurrency(), sheetBatches.size()));
+            List<List<RegionLayoutPrompt>> promptsByBatch = new ArrayList<>();
+            List<java.util.concurrent.Callable<Map<String, List<RegionProposal>>>> tasks = new ArrayList<>();
+            for (List<WorksheetRef> batchSheets : wave) {
+                List<RegionLayoutPrompt> batchPrompts = new ArrayList<>();
+                for (WorksheetRef sheet : batchSheets) {
+                    batchPrompts.add(new RegionLayoutPrompt(
+                            sheet.sheetName(), cellDump(cellsBySheet.get(sheet.worksheetId()))));
+                }
+                promptsByBatch.add(batchPrompts);
+                tasks.add(() -> llm.proposeRegionsBatch(batchPrompts));
             }
-
+            System.err.println("[region-layout] Sending " + wave.size() + " batch call(s) covering "
+                    + wave.stream().mapToInt(List::size).sum() + " sheets");
+            System.err.flush();
             long llmStart = System.nanoTime();
-            try {
-                System.err.println("[region-layout] Calling LLM for " + batchPrompts.size()
-                        + " sheets in batch...");
-                System.err.flush();
+            List<ParallelCalls.Outcome<Map<String, List<RegionProposal>>>> outcomes =
+                    ParallelCalls.run(tasks, tuning.concurrency());
+            long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
 
-                Map<String, List<RegionProposal>> batchResults = llm.proposeRegionsBatch(batchPrompts);
-
-                long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
+            for (int i = 0; i < wave.size(); i++) {
+                List<WorksheetRef> batchSheets = wave.get(i);
+                Map<String, Long> sheetNameToId = new LinkedHashMap<>();
+                for (WorksheetRef sheet : batchSheets) {
+                    sheetNameToId.put(sheet.sheetName(), sheet.worksheetId());
+                }
+                var outcome = outcomes.get(i);
+                if (!outcome.ok()) {
+                    System.err.println("[region-layout] Batch LLM call FAILED after " + llmMs + "ms: "
+                            + outcome.error().getClass().getSimpleName() + ": " + outcome.error().getMessage());
+                    System.err.println("[region-layout] Falling back to individual calls for batch");
+                    System.err.flush();
+                    for (WorksheetRef sheet : batchSheets) {
+                        if (!callRegionLayoutIndividual(sheet, cellsBySheet, bySheet)) {
+                            failedSheets++;
+                        }
+                        anySheetProposals = true;
+                    }
+                    continue;
+                }
+                Map<String, List<RegionProposal>> batchResults = outcome.value();
                 System.err.println("[region-layout] Batch LLM returned in " + llmMs + "ms");
                 System.err.flush();
-
                 if (batchResults.isEmpty()) {
                     // Batch not supported, fall back to individual calls
                     System.err.println("[region-layout] Batch not supported, falling back to individual calls");
@@ -270,7 +391,6 @@ public final class ClassifyService {
                         anySheetProposals = true;
                     }
                 } else {
-                    // Process batch results
                     for (Map.Entry<String, List<RegionProposal>> entry : batchResults.entrySet()) {
                         Long worksheetId = sheetNameToId.get(entry.getKey());
                         if (worksheetId != null) {
@@ -287,21 +407,6 @@ public final class ClassifyService {
                             failedSheets++;
                         }
                     }
-                }
-            } catch (Exception e) {
-                long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
-                System.err.println("[region-layout] Batch LLM call FAILED after " + llmMs
-                        + "ms: " + e.getClass().getSimpleName() + ": " + e.getMessage());
-                System.err.flush();
-
-                // Fall back to individual calls for this batch
-                System.err.println("[region-layout] Falling back to individual calls for batch");
-                System.err.flush();
-                for (WorksheetRef sheet : batchSheets) {
-                    if (!callRegionLayoutIndividual(sheet, cellsBySheet, bySheet)) {
-                        failedSheets++;
-                    }
-                    anySheetProposals = true;
                 }
             }
         }
@@ -322,8 +427,12 @@ public final class ClassifyService {
                     repo, sheet, bySheet.getOrDefault(sheet.worksheetId(), List.of()), cellsBySheet));
         }
 
-        repo.deletePacketDispositionsForParseRun(parseRunId);
-        repo.deleteNarrowCandidatesForParseRun(parseRunId);
+        deleteDispositions(repo, parseRunId);
+        if (scopeWorksheetIds == null) {
+            repo.deleteNarrowCandidatesForParseRun(parseRunId);
+        } else {
+            repo.deleteNarrowCandidatesForWorksheets(parseRunId, scopeWorksheetIds);
+        }
         for (WorksheetRef sheet : sheets) {
             CandidateRow coverage = coverageBySheet.get(sheet.worksheetId());
             if (coverage == null) {
@@ -523,41 +632,56 @@ public final class ClassifyService {
         List<PacketDisposition> dispositions = new ArrayList<>(prepared.size());
         int skippedCandidates = 0;
 
-        // Batch candidates: 10 per LLM call instead of 1
-        for (int i = 0; i < prepared.size(); i += 10) {
-            int end = Math.min(i + 10, prepared.size());
-            List<PreparedPacket> batch = prepared.subList(i, end);
-
-            try {
-                List<LayerAJudgment> judgments = classifyBatchLayerA(batch, families, deadlineNanos);
-                if (judgments.size() != batch.size()) {
-                    throw new IllegalStateException(
-                            "expected " + batch.size() + " judgments, got " + judgments.size());
+        // Candidates go to the model in batches; a few batch calls run at once.
+        int size = tuning.layerABatchSize();
+        List<List<PreparedPacket>> batches = new ArrayList<>();
+        for (int i = 0; i < prepared.size(); i += size) {
+            batches.add(prepared.subList(i, Math.min(i + size, prepared.size())));
+        }
+        for (int waveStart = 0; waveStart < batches.size(); waveStart += tuning.concurrency()) {
+            List<List<PreparedPacket>> wave =
+                    batches.subList(waveStart, Math.min(waveStart + tuning.concurrency(), batches.size()));
+            List<java.util.concurrent.Callable<List<LayerAJudgment>>> tasks = new ArrayList<>();
+            for (List<PreparedPacket> batch : wave) {
+                tasks.add(() -> classifyBatchLayerA(batch, families, deadlineNanos));
+            }
+            List<ParallelCalls.Outcome<List<LayerAJudgment>>> outcomes =
+                    ParallelCalls.run(tasks, tuning.concurrency());
+            for (int w = 0; w < wave.size(); w++) {
+                List<PreparedPacket> batch = wave.get(w);
+                var outcome = outcomes.get(w);
+                String failure = null;
+                if (!outcome.ok()) {
+                    Throwable cause = outcome.error().getCause() != null
+                            ? outcome.error().getCause() : outcome.error();
+                    failure = cause.getMessage() != null ? cause.getMessage() : cause.toString();
+                } else if (outcome.value().size() != batch.size()) {
+                    failure = "expected " + batch.size() + " judgments, got " + outcome.value().size();
                 }
-                for (int j = 0; j < batch.size(); j++) {
-                    dispositions.add(dispositionFor(batch.get(j), judgments.get(j), families));
-                }
-            } catch (Exception e) {
-                // The batch could not be used. Redo only these candidates one at a time (each
-                // already tries every configured model); a candidate that still fails is
-                // skipped so the rest of the run is never lost.
-                Throwable cause = e.getCause() != null ? e.getCause() : e;
-                String msg = cause.getMessage() != null ? cause.getMessage() : cause.toString();
-                System.err.println("[layer-a] Batch failed (" + msg + "); retrying its "
-                        + batch.size() + " candidates one at a time");
-                System.err.flush();
-                for (PreparedPacket item : batch) {
-                    try {
-                        dispositions.add(classifyOne(item, families, deadlineNanos));
-                    } catch (Exception ex) {
-                        skippedCandidates++;
-                        System.err.println("[layer-a] Skipping candidate " + item.candidate().candidateId()
-                                + " on " + item.sheetName() + ": " + ex.getMessage());
-                        System.err.flush();
+                if (failure == null) {
+                    for (int j = 0; j < batch.size(); j++) {
+                        dispositions.add(dispositionFor(batch.get(j), outcome.value().get(j), families));
+                    }
+                } else {
+                    // The batch could not be used. Redo only these candidates one at a time (each
+                    // already tries every configured model); a candidate that still fails is
+                    // skipped so the rest of the run is never lost.
+                    System.err.println("[layer-a] Batch failed (" + failure + "); retrying its "
+                            + batch.size() + " candidates one at a time");
+                    System.err.flush();
+                    for (PreparedPacket item : batch) {
+                        try {
+                            dispositions.add(classifyOne(item, families, deadlineNanos));
+                        } catch (Exception ex) {
+                            skippedCandidates++;
+                            System.err.println("[layer-a] Skipping candidate " + item.candidate().candidateId()
+                                    + " on " + item.sheetName() + ": " + ex.getMessage());
+                            System.err.flush();
+                        }
                     }
                 }
+                Progress.step("classify", "layer-a", dispositions.size() + skippedCandidates, prepared.size(), 10);
             }
-            Progress.step("classify", "layer-a", dispositions.size() + skippedCandidates, prepared.size(), 10);
         }
         if (skippedCandidates > 0) {
             System.err.println("[layer-a] " + skippedCandidates + " of " + prepared.size()
@@ -900,7 +1024,7 @@ public final class ClassifyService {
             Map<Long, List<BindCellRow>> cellsByCandidate = new LinkedHashMap<>();
             db.connection().setAutoCommit(false);
             try {
-                new CellReadingWriter().replace(repo, parseRunId, llm);
+                cellReader().replace(repo, parseRunId, llm);
                 for (CandidateRow candidate : repo.selectCandidatesForParseRun(parseRunId)) {
                     if (!sheetById.containsKey(candidate.worksheetId())) {
                         continue;

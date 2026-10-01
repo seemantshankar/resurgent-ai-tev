@@ -986,6 +986,48 @@ public final class WorkspaceRepository {
         }
     }
 
+    /** Delete narrow candidates on just these worksheets, leaving other sheets' regions alone. */
+    public void deleteNarrowCandidatesForWorksheets(long parseRunId, java.util.Collection<Long> worksheetIds)
+            throws SQLException {
+        if (worksheetIds.isEmpty()) {
+            return;
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM candidate WHERE parse_run_id = ? AND candidate_kind != 'coverage_parent'"
+                        + " AND worksheet_id IN (" + placeholders(worksheetIds.size()) + ")")) {
+            ps.setLong(1, parseRunId);
+            int index = 2;
+            for (Long id : worksheetIds) {
+                ps.setLong(index++, id);
+            }
+            ps.executeUpdate();
+        }
+    }
+
+    /** Delete Layer A dispositions of candidates on just these worksheets. */
+    public void deletePacketDispositionsForWorksheets(long parseRunId, java.util.Collection<Long> worksheetIds)
+            throws SQLException {
+        if (worksheetIds.isEmpty()) {
+            return;
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM packet_disposition WHERE parse_run_id = ? AND candidate_id IN"
+                        + " (SELECT candidate_id FROM candidate WHERE parse_run_id = ? AND worksheet_id IN ("
+                        + placeholders(worksheetIds.size()) + "))")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, parseRunId);
+            int index = 3;
+            for (Long id : worksheetIds) {
+                ps.setLong(index++, id);
+            }
+            ps.executeUpdate();
+        }
+    }
+
+    private static String placeholders(int n) {
+        return String.join(",", java.util.Collections.nCopies(n, "?"));
+    }
+
     public List<Long> selectCellIdsInBbox(
             long worksheetId, int minRow, int minCol, int maxRow, int maxCol)
             throws SQLException {

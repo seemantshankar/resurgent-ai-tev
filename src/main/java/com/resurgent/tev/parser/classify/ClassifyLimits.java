@@ -6,7 +6,7 @@ import java.util.Objects;
 /** Hang-prevention budgets for one classify run. */
 public record ClassifyLimits(int parallelism, Duration attemptDeadline, Duration classifyDeadline) {
 
-    public static final int DEFAULT_PARALLELISM = 4;
+    public static final int DEFAULT_PARALLELISM = 3;
     public static final Duration DEFAULT_ATTEMPT_DEADLINE = Duration.ofMinutes(3);
     public static final Duration DEFAULT_CLASSIFY_DEADLINE = Duration.ofMinutes(15);
 

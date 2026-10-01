@@ -59,6 +59,9 @@ public class CellTypeClassifierLlm {
     private final ClassifierLlm llm;
     private final DynamicKindTokens dynamicDict;
     private CellContext ctx = CellContext.scan(List.of());
+    private int batchSize = ClassifyTuning.DEFAULT_CELL_BATCH_SIZE;
+    private int concurrency = 1;
+    private java.util.Set<Long> llmWorksheetIds; // null: every sheet is sent to the model
 
     public CellTypeClassifierLlm(WorkspaceRepository repo, ClassifierLlm llm) {
         this(repo, llm, new DynamicKindTokens());
@@ -68,6 +71,19 @@ public class CellTypeClassifierLlm {
         this.repo = repo;
         this.llm = llm;
         this.dynamicDict = dynamicDict;
+    }
+
+    /** Cells per call and calls in flight at once. */
+    CellTypeClassifierLlm withBatching(int batchSize, int concurrency) {
+        this.batchSize = Math.max(1, batchSize);
+        this.concurrency = Math.max(1, concurrency);
+        return this;
+    }
+
+    /** Send only cells on these worksheets to the model; others keep their deterministic result. */
+    CellTypeClassifierLlm withWorksheetScope(java.util.Set<Long> worksheetIds) {
+        this.llmWorksheetIds = worksheetIds;
+        return this;
     }
 
     /**
@@ -96,7 +112,8 @@ public class CellTypeClassifierLlm {
             cellIndex.put(cell.cellId(), cell);
             ReadingOutcome outcome = settled.get(cell.cellId());
             if (outcome != null && ReadingOutcome.UNTYPABLE.equals(outcome.refusal)) {
-                if (isNumeric(cell)) {
+                if (isNumeric(cell)
+                        && (llmWorksheetIds == null || llmWorksheetIds.contains(cell.worksheetId()))) {
                     unclassified.add(cell);
                 }
             }
@@ -133,20 +150,47 @@ public class CellTypeClassifierLlm {
         System.err.println("[cell-classifier] Classifying " + stillUntyped.size() + " untyped cells via LLM");
         System.err.flush();
 
-        // Group by owning region (one region description per batch); cells with no known
-        // region fall back to grouping by worksheet.
+        // Keep cells of one region together (stable order), then fill batches across region
+        // boundaries: a call costs about the same for 1 cell or 15, so small regions must not
+        // each get their own. Each region's description precedes its cells in the prompt.
         Map<String, List<InterpretationCellView>> byRegion = new java.util.LinkedHashMap<>();
         for (InterpretationCellView cell : stillUntyped) {
             RegionContext region = ctx.region(cell);
             String groupKey = region.known() ? "c" + region.candidateId() : "w" + cell.worksheetId();
             byRegion.computeIfAbsent(groupKey, k -> new ArrayList<>()).add(cell);
         }
+        List<InterpretationCellView> ordered = new ArrayList<>(stillUntyped.size());
+        byRegion.values().forEach(ordered::addAll);
+        List<List<InterpretationCellView>> batches = new ArrayList<>();
+        for (int i = 0; i < ordered.size(); i += batchSize) {
+            batches.add(ordered.subList(i, Math.min(i + batchSize, ordered.size())));
+        }
+        System.err.println("[cell-classifier] " + batches.size() + " batches of up to " + batchSize
+                + " cells, " + concurrency + " at a time");
+        System.err.flush();
 
-        // Batch cells for efficiency: classify 15 cells per LLM call instead of 1
-        for (List<InterpretationCellView> regionCells : byRegion.values()) {
-            for (int i = 0; i < regionCells.size(); i += 15) {
-                int end = Math.min(i + 15, regionCells.size());
-                classifyBatch(regionCells.subList(i, end), cells, settled);
+        // A wave of batches goes out together; their answers are applied in order before the
+        // next wave is built, so later prompts still see earlier answers as neighbour hints.
+        for (int start = 0; start < batches.size(); start += concurrency) {
+            List<List<InterpretationCellView>> wave =
+                    batches.subList(start, Math.min(start + concurrency, batches.size()));
+            List<List<CellTypeRequest>> requestsByBatch = new ArrayList<>();
+            List<List<RegionContext>> regionsByBatch = new ArrayList<>();
+            List<java.util.concurrent.Callable<List<CellTypeResponse>>> tasks = new ArrayList<>();
+            for (List<InterpretationCellView> batch : wave) {
+                List<CellTypeRequest> requests = new ArrayList<>();
+                List<RegionContext> regions = new ArrayList<>();
+                for (InterpretationCellView cell : batch) {
+                    requests.add(buildCellTypeRequest(cell, cells, settled));
+                    regions.add(ctx.region(cell));
+                }
+                requestsByBatch.add(requests);
+                regionsByBatch.add(regions);
+                tasks.add(() -> classifyBatchCells(requests, regions));
+            }
+            List<ParallelCalls.Outcome<List<CellTypeResponse>>> outcomes = ParallelCalls.run(tasks, concurrency);
+            for (int i = 0; i < wave.size(); i++) {
+                applyBatchOutcome(wave.get(i), requestsByBatch.get(i), regionsByBatch.get(i), outcomes.get(i), settled);
             }
         }
     }
@@ -158,32 +202,33 @@ public class CellTypeClassifierLlm {
         return dynamicDict;
     }
 
-    private void classifyBatch(List<InterpretationCellView> batch, List<InterpretationCellView> allCells, Map<Long, ReadingOutcome> settled) {
-        List<CellTypeRequest> requests = new ArrayList<>();
-        for (InterpretationCellView cell : batch) {
-            requests.add(buildCellTypeRequest(cell, allCells, settled));
+    private void applyBatchOutcome(
+            List<InterpretationCellView> batch,
+            List<CellTypeRequest> requests,
+            List<RegionContext> regions,
+            ParallelCalls.Outcome<List<CellTypeResponse>> outcome,
+            Map<Long, ReadingOutcome> settled) {
+        String failure = null;
+        if (!outcome.ok()) {
+            failure = outcome.error().getMessage();
+        } else if (outcome.value().size() != batch.size()) {
+            // Positions no longer line up with cells; do not guess which answer is whose.
+            failure = "expected " + batch.size() + " responses, got " + outcome.value().size();
         }
-
-        try {
-            List<CellTypeResponse> responses = classifyBatchCells(requests, ctx.region(batch.get(0)));
-            if (responses.size() != batch.size()) {
-                // Positions no longer line up with cells; do not guess which answer is whose.
-                throw new IllegalStateException(
-                        "expected " + batch.size() + " responses, got " + responses.size());
-            }
+        if (failure == null) {
             for (int i = 0; i < batch.size(); i++) {
-                applyResponse(batch.get(i), responses.get(i), settled);
+                applyResponse(batch.get(i), outcome.value().get(i), settled);
             }
-        } catch (Exception e) {
-            System.err.println("[llm-fallback] Failed to classify batch: " + e.getMessage());
-            // Fall back to individual classification on batch failure
-            for (InterpretationCellView cell : batch) {
-                CellTypeRequest request = buildCellTypeRequest(cell, allCells, settled);
-                try {
-                    applyResponse(cell, classifyCell(request, ctx.region(cell)), settled);
-                } catch (Exception ex) {
-                    System.err.println("[llm-fallback] Failed to classify " + cell.coord() + ": " + ex.getMessage());
-                }
+            return;
+        }
+        System.err.println("[llm-fallback] Failed to classify batch: " + failure);
+        // Redo only this batch's cells one at a time (each already tries every configured model).
+        for (int i = 0; i < batch.size(); i++) {
+            InterpretationCellView cell = batch.get(i);
+            try {
+                applyResponse(cell, classifyCell(requests.get(i), regions.get(i)), settled);
+            } catch (Exception ex) {
+                System.err.println("[llm-fallback] Failed to classify " + cell.coord() + ": " + ex.getMessage());
             }
         }
     }
@@ -234,8 +279,8 @@ public class CellTypeClassifierLlm {
                 ctx.workbookKey(), region.sheetName(), cell.rowNum());
     }
 
-    private List<CellTypeResponse> classifyBatchCells(List<CellTypeRequest> requests, RegionContext region) throws Exception {
-        String userMessage = formatBatchUserMessage(requests, region);
+    private List<CellTypeResponse> classifyBatchCells(List<CellTypeRequest> requests, List<RegionContext> regions) throws Exception {
+        String userMessage = formatBatchUserMessage(requests, regions);
         long llmStart = System.nanoTime();
         String jsonResponse = llm.classifyCellJson(SYSTEM_PROMPT, userMessage, 4096);
         long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
@@ -260,12 +305,15 @@ public class CellTypeClassifierLlm {
         sb.append("\n\n");
     }
 
-    private String formatBatchUserMessage(List<CellTypeRequest> requests, RegionContext region) {
+    private String formatBatchUserMessage(List<CellTypeRequest> requests, List<RegionContext> regions) {
         StringBuilder sb = new StringBuilder();
-        appendRegion(sb, region);
-        sb.append("Classify the following ").append(requests.size()).append(" cells:\n\n");
+        sb.append("Classify the following ").append(requests.size()).append(" cells");
+        sb.append(". A Region line describes every cell after it until the next Region line:\n\n");
 
         for (int i = 0; i < requests.size(); i++) {
+            if (i == 0 || !regions.get(i).equals(regions.get(i - 1))) {
+                appendRegion(sb, regions.get(i));
+            }
             CellTypeRequest request = requests.get(i);
             sb.append("Cell ").append(i + 1).append(": ").append(request.coord)
                     .append(" (display: \"").append(request.displayValue).append("\"");

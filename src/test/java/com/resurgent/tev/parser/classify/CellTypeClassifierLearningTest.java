@@ -123,7 +123,7 @@ class CellTypeClassifierLearningTest {
     }
 
     @Test
-    void cellsFromDifferentRegionsAreNotMixedInOneBatch() {
+    void cellsFromDifferentRegionsShareOneCallWithEachRegionDescribed() {
         var other = new RegionContext(6L, "assets", "Asset list.", "", "ASSETS", true);
         var llm = RecordingLlm.always("money", "lakh");
         var ctx = new TestContext("wb1")
@@ -132,7 +132,105 @@ class CellTypeClassifierLearningTest {
 
         run(new DynamicKindTokens(dir), llm, ctx, 1, 2);
 
-        assertThat(llm.prompts).hasSize(2);
+        assertThat(llm.prompts).hasSize(1);
+        String prompt = llm.prompts.get(0);
+        assertThat(prompt).contains("family=expenses", "family=assets");
+        assertThat(prompt.indexOf("family=expenses")).isLessThan(prompt.indexOf("Fire Fighting Work"));
+        assertThat(prompt.indexOf("Fire Fighting Work")).isLessThan(prompt.indexOf("family=assets"));
+        assertThat(prompt.indexOf("family=assets")).isLessThan(prompt.indexOf("Plumbing Works"));
+    }
+
+    @Test
+    void batchSizeCapsHowManyCellsShareACall() {
+        var llm = RecordingLlm.always("money", "lakh");
+        var ctx = new TestContext("wb1");
+        for (long id = 1; id <= 5; id++) {
+            ctx.cell(id, "Item " + id, "FY23", EXPENSES);
+        }
+        List<InterpretationCellView> cells = new ArrayList<>();
+        for (long id = 1; id <= 5; id++) {
+            cells.add(number(id, (int) id));
+        }
+        var settled = untypable(1, 2, 3, 4, 5);
+
+        new CellTypeClassifierLlm(null, llm, new DynamicKindTokens(dir))
+                .withBatching(2, 1)
+                .classifyRemaining(cells, settled, ctx);
+
+        assertThat(llm.prompts).hasSize(3); // 2 + 2 + 1
+        assertThat(settled.values()).allMatch(o -> "money".equals(o.kind));
+    }
+
+    @Test
+    void wavesOfBatchesRunConcurrentlyAndEveryCellStillGetsItsOwnAnswer() {
+        var inFlight = new java.util.concurrent.atomic.AtomicInteger();
+        var peak = new java.util.concurrent.atomic.AtomicInteger();
+        var llm = new RecordingLlm(n -> {
+            int now = inFlight.incrementAndGet();
+            peak.accumulateAndGet(now, Math::max);
+            try {
+                Thread.sleep(150);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            inFlight.decrementAndGet();
+            return "{\"results\":[" + String.join(",", java.util.Collections.nCopies(n,
+                    RecordingLlm.item("money", "lakh"))) + "]}";
+        });
+        var ctx = new TestContext("wb1");
+        List<InterpretationCellView> cells = new ArrayList<>();
+        for (long id = 1; id <= 6; id++) {
+            ctx.cell(id, "Item " + id, "FY23", EXPENSES);
+            cells.add(number(id, (int) id));
+        }
+        var settled = untypable(1, 2, 3, 4, 5, 6);
+
+        new CellTypeClassifierLlm(null, new RecordingLlmThreadSafe(llm), new DynamicKindTokens(dir))
+                .withBatching(2, 3)
+                .classifyRemaining(cells, settled, ctx);
+
+        assertThat(peak.get()).isGreaterThan(1);
+        assertThat(settled.values()).allMatch(o -> "money".equals(o.kind));
+    }
+
+    /** Wraps a recording fake so concurrent calls can be recorded safely. */
+    static final class RecordingLlmThreadSafe extends CellTypeClassifierLlmTest.FakeClassifierLlm {
+        private final RecordingLlm delegate;
+
+        RecordingLlmThreadSafe(RecordingLlm delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public String classifyCellJson(String systemPrompt, String userPrompt, int maxTokens) {
+            synchronized (delegate.prompts) {
+                delegate.prompts.add(userPrompt);
+            }
+            Matcher m = Pattern.compile("Classify the following (\\d+) cells").matcher(userPrompt);
+            return delegate.answerN.apply(m.find() ? Integer.parseInt(m.group(1)) : 0);
+        }
+    }
+
+    @Test
+    void onlyCellsOnScopedWorksheetsAreSentToTheModel() {
+        var llm = RecordingLlm.always("money", "lakh");
+        var ctx = new TestContext("wb1")
+                .cell(1, "Fire Fighting Work", "FY23", EXPENSES)
+                .cell(2, "Plumbing Works", "FY23", EXPENSES);
+        var inScope = number(1, 1);
+        var outOfScope = new InterpretationCellView(
+                2L, 99L, "C2", 2, 3, "number", "100", "100", "100", null, null, null, null, null,
+                null, false, null, false, false, null, "input");
+        var settled = untypable(1, 2);
+
+        new CellTypeClassifierLlm(null, llm, new DynamicKindTokens(dir))
+                .withWorksheetScope(java.util.Set.of(1L))
+                .classifyRemaining(List.of(inScope, outOfScope), settled, ctx);
+
+        assertThat(settled.get(1L).kind).isEqualTo("money");
+        assertThat(settled.get(2L).refusal).isEqualTo(ReadingOutcome.UNTYPABLE); // untouched
+        assertThat(llm.prompts).hasSize(1);
+        assertThat(llm.prompts.get(0)).doesNotContain("Plumbing Works");
     }
 
     @Test
