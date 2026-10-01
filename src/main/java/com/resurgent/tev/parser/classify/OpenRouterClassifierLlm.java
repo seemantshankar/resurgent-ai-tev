@@ -280,6 +280,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
     static final class HttpCompletionsClient implements CompletionsClient {
         private static final ObjectMapper MAPPER = new ObjectMapper();
         static final Duration HTTP_TIMEOUT = Duration.ofSeconds(180);
+        static final Duration TOTAL_TIMEOUT = Duration.ofSeconds(240);
 
         private final String model;
         private final HttpExchange exchange;
@@ -290,6 +291,15 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         private final LongAdder costMissing = new LongAdder();
 
         HttpCompletionsClient(String apiKey, String model, String url) {
+            this(apiKey, model, url, TOTAL_TIMEOUT);
+        }
+
+        /**
+         * {@code totalTimeout} bounds the whole exchange, response body included. The
+         * request timeout alone only covers waiting for the response to begin: a provider that
+         * sends headers and then goes quiet would otherwise block the run indefinitely.
+         */
+        HttpCompletionsClient(String apiKey, String model, String url, Duration totalTimeout) {
             Objects.requireNonNull(apiKey, "apiKey");
             this.model = Objects.requireNonNull(model, "model");
             URI uri = URI.create(url);
@@ -306,9 +316,27 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                         .header("X-OpenRouter-Title", "TEV Parser")
                         .POST(HttpRequest.BodyPublishers.ofString(body))
                         .build();
-                HttpResponse<String> response =
-                        http.send(request, HttpResponse.BodyHandlers.ofString());
-                return new ExchangeResponse(response.statusCode(), response.body());
+                java.util.concurrent.CompletableFuture<HttpResponse<String>> pending =
+                        http.sendAsync(request, HttpResponse.BodyHandlers.ofString());
+                try {
+                    HttpResponse<String> response =
+                            pending.get(totalTimeout.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+                    return new ExchangeResponse(response.statusCode(), response.body());
+                } catch (java.util.concurrent.TimeoutException e) {
+                    pending.cancel(true);
+                    throw new HttpTimeoutException(
+                            "no complete response within " + totalTimeout.toSeconds() + "s");
+                } catch (java.util.concurrent.ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    if (cause instanceof Exception exception) {
+                        throw exception;
+                    }
+                    throw e;
+                } catch (InterruptedException e) {
+                    pending.cancel(true);
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
             };
         }
 
