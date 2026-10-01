@@ -39,11 +39,35 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
     private static CompletionsClient chainOf(String apiKey, List<String> models) {
         if (models.size() == 1) {
-            return new HttpCompletionsClient(apiKey, models.get(0), DEFAULT_URL);
+            return new HttpCompletionsClient(apiKey, models.get(0), DEFAULT_URL, deadlinesFor(0, 1));
         }
-        return new FallbackCompletionsClient(models.stream()
-                .map(m -> new FallbackCompletionsClient.Link(m, new HttpCompletionsClient(apiKey, m, DEFAULT_URL)))
-                .toList());
+        List<FallbackCompletionsClient.Link> links = new java.util.ArrayList<>();
+        for (int i = 0; i < models.size(); i++) {
+            links.add(new FallbackCompletionsClient.Link(models.get(i),
+                    new HttpCompletionsClient(apiKey, models.get(i), DEFAULT_URL, deadlinesFor(i, models.size()))));
+        }
+        return new FallbackCompletionsClient(links);
+    }
+
+    /**
+     * How long one request may take before the model is given up on. A model with another
+     * behind it fails fast, because a healthy small call answers in a few seconds and waiting
+     * longer only delays the fallback. The last model has nothing behind it, so it is patient.
+     */
+    static Deadlines deadlinesFor(int index, int chainLength) {
+        return index == chainLength - 1 ? Deadlines.LAST_RESORT : Deadlines.FAIL_FAST;
+    }
+
+    /** Whole-exchange limits: {@code small} for ordinary calls, {@code large} for big batches. */
+    record Deadlines(Duration small, Duration large) {
+        static final Deadlines FAIL_FAST = new Deadlines(Duration.ofSeconds(45), Duration.ofSeconds(180));
+        static final Deadlines LAST_RESORT = new Deadlines(Duration.ofSeconds(120), Duration.ofSeconds(240));
+
+        /** Large when the model may write a long answer or the prompt itself is big. */
+        Duration forRequest(int promptChars, int maxCompletionTokens) {
+            boolean large = maxCompletionTokens >= 16_384 || promptChars >= 40_000;
+            return large ? this.large : this.small;
+        }
     }
 
     OpenRouterClassifierLlm(CompletionsClient client) {
@@ -272,15 +296,13 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
     @FunctionalInterface
     interface HttpExchange {
-        ExchangeResponse send(String jsonBody) throws Exception;
+        ExchangeResponse send(String jsonBody, Duration deadline) throws Exception;
     }
 
     record ExchangeResponse(int statusCode, String body) {}
 
     static final class HttpCompletionsClient implements CompletionsClient {
         private static final ObjectMapper MAPPER = new ObjectMapper();
-        static final Duration HTTP_TIMEOUT = Duration.ofSeconds(180);
-        static final Duration TOTAL_TIMEOUT = Duration.ofSeconds(240);
 
         private final String model;
         private final HttpExchange exchange;
@@ -290,25 +312,28 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         private final DoubleAdder costUsd = new DoubleAdder();
         private final LongAdder costMissing = new LongAdder();
 
+        private final Deadlines deadlines;
+
         HttpCompletionsClient(String apiKey, String model, String url) {
-            this(apiKey, model, url, TOTAL_TIMEOUT);
+            this(apiKey, model, url, Deadlines.LAST_RESORT);
         }
 
         /**
-         * {@code totalTimeout} bounds the whole exchange, response body included. The
-         * request timeout alone only covers waiting for the response to begin: a provider that
-         * sends headers and then goes quiet would otherwise block the run indefinitely.
+         * The deadline bounds the whole exchange, response body included. The request
+         * timeout alone only covers waiting for the response to begin: a provider that sends
+         * headers and then goes quiet would otherwise block the run indefinitely.
          */
-        HttpCompletionsClient(String apiKey, String model, String url, Duration totalTimeout) {
+        HttpCompletionsClient(String apiKey, String model, String url, Deadlines deadlines) {
             Objects.requireNonNull(apiKey, "apiKey");
             this.model = Objects.requireNonNull(model, "model");
+            this.deadlines = Objects.requireNonNull(deadlines, "deadlines");
             URI uri = URI.create(url);
             HttpClient http = HttpClient.newBuilder()
                     .connectTimeout(Duration.ofSeconds(20))
                     .build();
-            this.exchange = body -> {
+            this.exchange = (body, deadline) -> {
                 HttpRequest request = HttpRequest.newBuilder(uri)
-                        .timeout(HTTP_TIMEOUT)
+                        .timeout(deadline)
                         .header("Authorization", "Bearer " + apiKey)
                         .header("Content-Type", "application/json")
                         .header("HTTP-Referer",
@@ -320,12 +345,12 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                         http.sendAsync(request, HttpResponse.BodyHandlers.ofString());
                 try {
                     HttpResponse<String> response =
-                            pending.get(totalTimeout.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+                            pending.get(deadline.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
                     return new ExchangeResponse(response.statusCode(), response.body());
                 } catch (java.util.concurrent.TimeoutException e) {
                     pending.cancel(true);
                     throw new HttpTimeoutException(
-                            "no complete response within " + totalTimeout.toSeconds() + "s");
+                            "no complete response within " + deadline.toSeconds() + "s");
                 } catch (java.util.concurrent.ExecutionException e) {
                     Throwable cause = e.getCause();
                     if (cause instanceof Exception exception) {
@@ -345,7 +370,8 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             try {
                 System.err.println("[http-client] completeJson: model=" + model + ", maxTokens=" + maxCompletionTokens + ", userLen=" + user.length());
                 System.err.flush();
-                return post(requestBody(model, system, user, null, maxCompletionTokens));
+                return post(requestBody(model, system, user, null, maxCompletionTokens),
+                        deadlines.forRequest(user.length(), maxCompletionTokens));
             } catch (Exception e) {
                 throw new IllegalStateException("OpenRouter request build failed: " + e.getMessage(), e);
             }
@@ -360,7 +386,8 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                         system,
                         user,
                         layerAResponseFormat(scheduleFamilies),
-                        LAYER_A_MAX_COMPLETION_TOKENS));
+                        LAYER_A_MAX_COMPLETION_TOKENS),
+                        deadlines.forRequest(user.length(), LAYER_A_MAX_COMPLETION_TOKENS));
             } catch (Exception e) {
                 throw new IllegalStateException("OpenRouter request build failed: " + e.getMessage(), e);
             }
@@ -407,12 +434,12 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             return null;
         }
 
-        private CompletionResult post(String body) {
+        private CompletionResult post(String body, Duration deadline) {
             long startNanos = System.nanoTime();
             try {
                 System.err.println("[http-client] Sending request to OpenRouter...");
                 System.err.flush();
-                ExchangeResponse response = exchange.send(body);
+                ExchangeResponse response = exchange.send(body, deadline);
                 long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000;
                 System.err.println("[http-client] Got response HTTP " + response.statusCode() + " after " + elapsedMs + "ms");
                 System.err.flush();

@@ -214,4 +214,55 @@ class FallbackCompletionsClientTest {
 
         assertThat(out).isEqualTo("only:x");
     }
+
+    @Test
+    void aModelThatAlternatesFailuresAndSuccessesIsStillSkipped() {
+        var clock = new AtomicLong(1);
+        int[] n = {0};
+        // fails on every other call: the old "three in a row" rule would never trip
+        var flaky = new FakeClient("flaky", u -> n[0]++ % 2 == 0);
+        var backup = ok("backup");
+        var client = chain(clock, flaky, backup);
+
+        for (int i = 0; i < 6; i++) {
+            client.completeJson("s", "r" + i, 10);
+        }
+        int askedBefore = flaky.received.size();
+        client.completeJson("s", "while-cooling", 10);
+
+        assertThat(askedBefore).isLessThan(6); // it was set aside before the sixth request
+        assertThat(flaky.received).hasSize(askedBefore);
+    }
+
+    @Test
+    void occasionalIsolatedFailuresNeverTripTheSkip() {
+        var clock = new AtomicLong(1);
+        int[] n = {0};
+        var rare = new FakeClient("rare", u -> n[0]++ % 10 == 0); // 1 failure in every 10 calls
+        var backup = ok("backup");
+        var client = chain(clock, rare, backup);
+
+        for (int i = 0; i < 40; i++) {
+            client.completeJson("s", "r" + i, 10);
+        }
+
+        assertThat(rare.received).hasSize(40); // asked every time, never set aside
+    }
+
+    @Test
+    void failuresThatHaveRolledOutOfTheWindowAreForgotten() {
+        var clock = new AtomicLong(1);
+        // two early failures, a long healthy stretch, then one more failure
+        var failAt = java.util.Set.of(0, 1, 12);
+        int[] calls = {0};
+        var scripted = new FakeClient("scripted", u -> failAt.contains(calls[0]++));
+        var backup = ok("backup");
+        var client = chain(clock, scripted, backup);
+
+        for (int i = 0; i < 14; i++) {
+            client.completeJson("s", "r" + i, 10);
+        }
+
+        assertThat(scripted.received).hasSize(14); // 2 old + 1 new failure never counted together
+    }
 }

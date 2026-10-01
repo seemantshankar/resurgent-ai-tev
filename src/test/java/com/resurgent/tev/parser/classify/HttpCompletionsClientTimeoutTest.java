@@ -50,7 +50,7 @@ class HttpCompletionsClientTimeoutTest {
     @Test
     void replyThatStallsAfterTheHeadersFailsAtTheTotalDeadline() throws Exception {
         var client = new OpenRouterClassifierLlm.HttpCompletionsClient(
-                "key", "m", serve(true), Duration.ofSeconds(2));
+                "key", "m", serve(true), new OpenRouterClassifierLlm.Deadlines(Duration.ofSeconds(2), Duration.ofSeconds(2)));
 
         long start = System.nanoTime();
         assertThatThrownBy(() -> client.completeJson("s", "u", 10))
@@ -62,7 +62,7 @@ class HttpCompletionsClientTimeoutTest {
     @Test
     void replyThatNeverStartsFailsAtTheTotalDeadline() throws Exception {
         var client = new OpenRouterClassifierLlm.HttpCompletionsClient(
-                "key", "m", serve(false), Duration.ofSeconds(2));
+                "key", "m", serve(false), new OpenRouterClassifierLlm.Deadlines(Duration.ofSeconds(2), Duration.ofSeconds(2)));
 
         long start = System.nanoTime();
         assertThatThrownBy(() -> client.completeJson("s", "u", 10))
@@ -74,12 +74,56 @@ class HttpCompletionsClientTimeoutTest {
     @Test
     void aStalledModelFallsBackToTheNextOne() throws Exception {
         var stalled = new OpenRouterClassifierLlm.HttpCompletionsClient(
-                "key", "slow", serve(true), Duration.ofSeconds(2));
+                "key", "slow", serve(true), new OpenRouterClassifierLlm.Deadlines(Duration.ofSeconds(2), Duration.ofSeconds(2)));
         var healthy = new FallbackCompletionsClientTest.FakeClient("healthy", u -> false);
         var chain = new FallbackCompletionsClient(java.util.List.of(
                 new FallbackCompletionsClient.Link("slow", stalled),
                 new FallbackCompletionsClient.Link("healthy", healthy)));
 
         assertThat(chain.completeJson("s", "req", 10).content()).isEqualTo("healthy:req");
+    }
+
+    @Test
+    void smallRequestsUseTheShortDeadlineAndLargeOnesTheLongOne() throws Exception {
+        var client = new OpenRouterClassifierLlm.HttpCompletionsClient(
+                "key", "m", serve(true),
+                new OpenRouterClassifierLlm.Deadlines(Duration.ofSeconds(1), Duration.ofSeconds(4)));
+
+        long start = System.nanoTime();
+        assertThatThrownBy(() -> client.completeJson("s", "tiny prompt", 4_096))
+                .hasMessageContaining("timed out");
+        Duration small = Duration.ofNanos(System.nanoTime() - start);
+
+        start = System.nanoTime();
+        assertThatThrownBy(() -> client.completeJson("s", "tiny prompt", 32_768))
+                .hasMessageContaining("timed out");
+        Duration large = Duration.ofNanos(System.nanoTime() - start);
+
+        assertThat(small).isLessThan(Duration.ofMillis(3_000));
+        assertThat(large).isGreaterThan(Duration.ofMillis(3_500));
+    }
+
+    @Test
+    void deadlineClassifiesByCompletionBudgetAndPromptSize() {
+        var d = new OpenRouterClassifierLlm.Deadlines(Duration.ofSeconds(45), Duration.ofSeconds(180));
+
+        assertThat(d.forRequest(600, 4_096)).isEqualTo(Duration.ofSeconds(45));
+        assertThat(d.forRequest(3_900, 2_048)).isEqualTo(Duration.ofSeconds(45));
+        assertThat(d.forRequest(86_680, 4_096)).isEqualTo(Duration.ofSeconds(180));
+        assertThat(d.forRequest(600, 32_768)).isEqualTo(Duration.ofSeconds(180));
+    }
+
+    @Test
+    void onlyTheLastModelInTheChainGetsTheGenerousDeadlines() {
+        var first = OpenRouterClassifierLlm.deadlinesFor(0, 3);
+        var middle = OpenRouterClassifierLlm.deadlinesFor(1, 3);
+        var last = OpenRouterClassifierLlm.deadlinesFor(2, 3);
+        var only = OpenRouterClassifierLlm.deadlinesFor(0, 1);
+
+        assertThat(first.small()).isEqualTo(Duration.ofSeconds(45));
+        assertThat(middle).isEqualTo(first);
+        assertThat(last.small()).isGreaterThan(first.small());
+        assertThat(last.large()).isGreaterThan(first.large());
+        assertThat(only).isEqualTo(last); // nothing to fall back to: be patient
     }
 }

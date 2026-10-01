@@ -17,7 +17,9 @@ import java.util.function.LongSupplier;
  */
 final class FallbackCompletionsClient implements CompletionsClient {
 
-    static final int SKIP_AFTER_CONSECUTIVE_FAILURES = 3;
+    /** A model is set aside when this many of its last {@link #WINDOW} calls failed. */
+    static final int MAX_FAILURES_IN_WINDOW = 3;
+    static final int WINDOW = 10;
     static final long COOL_OFF_NANOS = 5L * 60L * 1_000_000_000L;
 
     /** One model in the chain. */
@@ -25,7 +27,7 @@ final class FallbackCompletionsClient implements CompletionsClient {
 
     private final List<Link> chain;
     private final LongSupplier nanoClock;
-    private final int[] consecutiveFailures;
+    private final java.util.ArrayDeque<Boolean>[] recent;
     private final long[] skipUntil;
 
     FallbackCompletionsClient(List<Link> chain) {
@@ -38,7 +40,12 @@ final class FallbackCompletionsClient implements CompletionsClient {
         }
         this.chain = List.copyOf(chain);
         this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
-        this.consecutiveFailures = new int[chain.size()];
+        @SuppressWarnings("unchecked")
+        java.util.ArrayDeque<Boolean>[] history = new java.util.ArrayDeque[chain.size()];
+        for (int i = 0; i < history.length; i++) {
+            history[i] = new java.util.ArrayDeque<>();
+        }
+        this.recent = history;
         this.skipUntil = new long[chain.size()];
     }
 
@@ -119,17 +126,30 @@ final class FallbackCompletionsClient implements CompletionsClient {
     }
 
     private synchronized void recordSuccess(int i) {
-        consecutiveFailures[i] = 0;
+        remember(i, false);
         skipUntil[i] = 0;
     }
 
+    /**
+     * Judge a model on its recent record, not on an unbroken streak: one that alternates
+     * between answering and failing is still costing a full wait on every failure.
+     */
     private synchronized void recordFailure(int i, String model) {
-        if (++consecutiveFailures[i] >= SKIP_AFTER_CONSECUTIVE_FAILURES) {
+        remember(i, true);
+        long failures = recent[i].stream().filter(failed -> failed).count();
+        if (failures >= MAX_FAILURES_IN_WINDOW) {
             skipUntil[i] = nanoClock.getAsLong() + COOL_OFF_NANOS;
-            consecutiveFailures[i] = 0;
-            System.err.println("[llm-fallback] model " + model + " failed "
-                    + SKIP_AFTER_CONSECUTIVE_FAILURES + " times in a row; skipping it for 5 minutes");
+            recent[i].clear(); // a fresh chance once the cool-off ends
+            System.err.println("[llm-fallback] model " + model + " failed " + failures + " of its last "
+                    + WINDOW + " calls; skipping it for 5 minutes");
             System.err.flush();
+        }
+    }
+
+    private void remember(int i, boolean failed) {
+        recent[i].addLast(failed);
+        while (recent[i].size() > WINDOW) {
+            recent[i].removeFirst();
         }
     }
 }
