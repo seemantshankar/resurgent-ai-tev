@@ -48,6 +48,12 @@ public final class ClassifyService {
     private final DiscoverService discover;
     private final ClassifyLimits limits;
 
+    /**
+     * Pause before each retry of a region-layout call; its length is the number of retries
+     * (so each sheet gets length + 1 attempts). Mutable so tests can retry without waiting.
+     */
+    long[] regionRetryBackoffMillis = {1_000L, 3_000L};
+
     public ClassifyService(ClassifierLlm llm) {
         this(llm, new DiscoverService(), ClassifyLimits.defaults());
     }
@@ -214,6 +220,7 @@ public final class ClassifyService {
         }
 
         boolean anySheetProposals = false;
+        int failedSheets = 0;
         Map<Long, List<RegionProposal>> bySheet = new HashMap<>();
 
         // Batch sheets 12 at a time (1.1M token context window allows large batches)
@@ -257,7 +264,9 @@ public final class ClassifyService {
                     System.err.println("[region-layout] Batch not supported, falling back to individual calls");
                     System.err.flush();
                     for (WorksheetRef sheet : batchSheets) {
-                        callRegionLayoutIndividual(repo, sheet, cellsBySheet, bySheet);
+                        if (!callRegionLayoutIndividual(sheet, cellsBySheet, bySheet)) {
+                            failedSheets++;
+                        }
                         anySheetProposals = true;
                     }
                 } else {
@@ -273,8 +282,9 @@ public final class ClassifyService {
                     }
                     // For sheets not in batch results, fall back to individual
                     for (WorksheetRef sheet : batchSheets) {
-                        if (!bySheet.containsKey(sheet.worksheetId())) {
-                            callRegionLayoutIndividual(repo, sheet, cellsBySheet, bySheet);
+                        if (!bySheet.containsKey(sheet.worksheetId())
+                                && !callRegionLayoutIndividual(sheet, cellsBySheet, bySheet)) {
+                            failedSheets++;
                         }
                     }
                 }
@@ -288,13 +298,28 @@ public final class ClassifyService {
                 System.err.println("[region-layout] Falling back to individual calls for batch");
                 System.err.flush();
                 for (WorksheetRef sheet : batchSheets) {
-                    callRegionLayoutIndividual(repo, sheet, cellsBySheet, bySheet);
+                    if (!callRegionLayoutIndividual(sheet, cellsBySheet, bySheet)) {
+                        failedSheets++;
+                    }
                     anySheetProposals = true;
                 }
             }
         }
+        if (failedSheets > 0) {
+            System.err.println("[region-layout] " + failedSheets + " of " + sheets.size()
+                    + " sheets could not be laid out by the model; they keep their structural regions only");
+            System.err.flush();
+        }
         if (!anySheetProposals) {
             return;
+        }
+
+        // Check every proposal now (retrying only the sheet that needs it) so a bad answer
+        // costs one sheet a retry, and nothing is written until all sheets are settled.
+        Map<Long, List<ValidRegion>> validBySheet = new HashMap<>();
+        for (WorksheetRef sheet : sheets) {
+            validBySheet.put(sheet.worksheetId(), resolveRegions(
+                    repo, sheet, bySheet.getOrDefault(sheet.worksheetId(), List.of()), cellsBySheet));
         }
 
         repo.deletePacketDispositionsForParseRun(parseRunId);
@@ -305,26 +330,10 @@ public final class ClassifyService {
                 throw new ClassifyException(
                         "missing coverage parent for worksheet " + sheet.sheetName());
             }
-            List<RegionProposal> proposals = bySheet.getOrDefault(sheet.worksheetId(), List.of());
-            for (RegionProposal proposal : proposals) {
-                A1Bbox.Bounds bounds;
-                try {
-                    bounds = A1Bbox.parse(proposal.bbox());
-                } catch (IllegalArgumentException e) {
-                    throw new ClassifyException(
-                            "invalid region bbox '" + proposal.bbox() + "': " + e.getMessage(), e);
-                }
-                List<Long> members = repo.selectCellIdsInBbox(
-                        sheet.worksheetId(),
-                        bounds.minRow(),
-                        bounds.minCol(),
-                        bounds.maxRow(),
-                        bounds.maxCol());
-                if (members.isEmpty()) {
-                    throw new ClassifyException(
-                            "region " + proposal.bbox() + " on " + sheet.sheetName()
-                                    + " matched no cells");
-                }
+            for (ValidRegion region : validBySheet.getOrDefault(sheet.worksheetId(), List.of())) {
+                RegionProposal proposal = region.proposal();
+                A1Bbox.Bounds bounds = region.bounds();
+                List<Long> members = region.members();
                 String label = proposal.label() != null ? proposal.label() : proposal.bbox();
                 String why = proposal.why() != null ? proposal.why() : "";
                 CandidateWrite write = new CandidateWrite(
@@ -350,36 +359,130 @@ public final class ClassifyService {
         }
     }
 
-    private void callRegionLayoutIndividual(
-            WorkspaceRepository repo,
+    /**
+     * One sheet's region layout, retried on transient errors. Returns whether the model
+     * answered; on final failure the sheet is left with no proposals (its structural
+     * coverage region still stands) instead of aborting the whole run.
+     */
+    private boolean callRegionLayoutIndividual(
             WorksheetRef sheet,
             Map<Long, List<com.resurgent.tev.parser.db.CellPacketView>> cellsBySheet,
             Map<Long, List<RegionProposal>> bySheet) {
-        try {
-            List<com.resurgent.tev.parser.db.CellPacketView> cellViews =
-                    cellsBySheet.get(sheet.worksheetId());
-            String dump = cellDump(cellViews);
-
-            System.err.println("[region-layout] Calling LLM individually for sheet: "
-                    + sheet.sheetName());
-            System.err.flush();
-
-            long llmStart = System.nanoTime();
-            List<RegionProposal> proposals =
-                    llm.proposeRegions(new RegionLayoutPrompt(sheet.sheetName(), dump));
-            long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
-
-            System.err.println("[region-layout] Sheet " + sheet.sheetName() + ": LLM returned "
-                    + proposals.size() + " regions in " + llmMs + "ms");
-            System.err.flush();
-
-            bySheet.put(sheet.worksheetId(), proposals);
-        } catch (Exception e) {
-            System.err.println("[region-layout] Individual call for sheet " + sheet.sheetName()
-                    + " FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage());
-            System.err.flush();
-            throw new RuntimeException(e);
+        String dump = cellDump(cellsBySheet.get(sheet.worksheetId()));
+        int attempts = regionRetryBackoffMillis.length + 1;
+        for (int attempt = 1; attempt <= attempts; attempt++) {
+            try {
+                System.err.println("[region-layout] Calling LLM individually for sheet: "
+                        + sheet.sheetName() + (attempt > 1 ? " (attempt " + attempt + "/" + attempts + ")" : ""));
+                System.err.flush();
+                long llmStart = System.nanoTime();
+                List<RegionProposal> proposals =
+                        llm.proposeRegions(new RegionLayoutPrompt(sheet.sheetName(), dump));
+                long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
+                System.err.println("[region-layout] Sheet " + sheet.sheetName() + ": LLM returned "
+                        + proposals.size() + " regions in " + llmMs + "ms");
+                System.err.flush();
+                bySheet.put(sheet.worksheetId(), proposals);
+                return true;
+            } catch (Exception e) {
+                System.err.println("[region-layout] Call for sheet " + sheet.sheetName() + " FAILED (attempt "
+                        + attempt + "/" + attempts + "): " + e.getClass().getSimpleName() + ": " + e.getMessage());
+                System.err.flush();
+                if (attempt < attempts) {
+                    pauseBeforeRetry(attempt - 1);
+                }
+            }
         }
+        bySheet.put(sheet.worksheetId(), List.of());
+        return false;
+    }
+
+    private void pauseBeforeRetry(int retryIndex) {
+        long millis = regionRetryBackoffMillis[Math.min(retryIndex, regionRetryBackoffMillis.length - 1)];
+        if (millis <= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private record ValidRegion(RegionProposal proposal, A1Bbox.Bounds bounds, List<Long> members) {}
+
+    private record CheckedRegions(List<ValidRegion> valid, List<String> problems) {}
+
+    /** Split a sheet's proposals into usable regions and human-readable problems. */
+    private CheckedRegions checkRegions(
+            WorkspaceRepository repo, WorksheetRef sheet, List<RegionProposal> proposals) throws SQLException {
+        List<ValidRegion> valid = new ArrayList<>();
+        List<String> problems = new ArrayList<>();
+        for (RegionProposal proposal : proposals) {
+            A1Bbox.Bounds bounds;
+            try {
+                bounds = A1Bbox.parse(proposal.bbox());
+            } catch (IllegalArgumentException e) {
+                problems.add("'" + proposal.bbox() + "' is not a valid A1 range");
+                continue;
+            }
+            List<Long> members = repo.selectCellIdsInBbox(
+                    sheet.worksheetId(), bounds.minRow(), bounds.minCol(), bounds.maxRow(), bounds.maxCol());
+            if (members.isEmpty()) {
+                problems.add(proposal.bbox() + " contains no cells");
+                continue;
+            }
+            valid.add(new ValidRegion(proposal, bounds, members));
+        }
+        return new CheckedRegions(valid, problems);
+    }
+
+    /**
+     * Usable regions for one sheet. Unusable proposals (bad range, no cells) trigger a retry
+     * of just this sheet, telling the model what was wrong; if they persist they are dropped
+     * with a warning while the valid regions are kept.
+     */
+    private List<ValidRegion> resolveRegions(
+            WorkspaceRepository repo,
+            WorksheetRef sheet,
+            List<RegionProposal> proposals,
+            Map<Long, List<com.resurgent.tev.parser.db.CellPacketView>> cellsBySheet)
+            throws SQLException {
+        CheckedRegions best = checkRegions(repo, sheet, proposals);
+        String dump = cellDump(cellsBySheet.get(sheet.worksheetId()));
+        int retries = regionRetryBackoffMillis.length;
+        for (int retry = 0; retry < retries && !best.problems().isEmpty(); retry++) {
+            System.err.println("[region-layout] Sheet " + sheet.sheetName() + ": unusable regions "
+                    + best.problems() + "; retrying (" + (retry + 1) + "/" + retries + ")");
+            System.err.flush();
+            pauseBeforeRetry(retry);
+            String note = "\n\nNOTE: your previous answer for this sheet contained regions that cannot be used: "
+                    + String.join("; ", best.problems())
+                    + ". Every region must be a valid A1 range that contains at least one non-empty cell of"
+                    + " this sheet. Return the complete corrected list of regions.\n";
+            try {
+                CheckedRegions again = checkRegions(repo, sheet, llm.proposeRegions(
+                        new RegionLayoutPrompt(sheet.sheetName(), dump + note)));
+                if (again.problems().size() < best.problems().size()
+                        || (again.problems().size() == best.problems().size()
+                                && again.valid().size() > best.valid().size())) {
+                    best = again;
+                }
+            } catch (SQLException e) {
+                throw e;
+            } catch (Exception e) {
+                System.err.println("[region-layout] Retry for sheet " + sheet.sheetName() + " FAILED: "
+                        + e.getClass().getSimpleName() + ": " + e.getMessage());
+                System.err.flush();
+            }
+        }
+        if (!best.problems().isEmpty()) {
+            System.err.println("[region-layout] WARNING sheet " + sheet.sheetName() + ": dropping unusable regions "
+                    + best.problems() + " after " + retries + " retries; keeping " + best.valid().size()
+                    + " valid region(s)");
+            System.err.flush();
+        }
+        return best.valid();
     }
 
     private static String cellDump(List<com.resurgent.tev.parser.db.CellPacketView> cells) {
@@ -418,6 +521,7 @@ public final class ClassifyService {
         System.err.println("[classify] Layer A (packet disposition) - batching " + prepared.size() + " candidates");
         System.err.flush();
         List<PacketDisposition> dispositions = new ArrayList<>(prepared.size());
+        int skippedCandidates = 0;
 
         // Batch candidates: 10 per LLM call instead of 1
         for (int i = 0; i < prepared.size(); i += 10) {
@@ -426,40 +530,63 @@ public final class ClassifyService {
 
             try {
                 List<LayerAJudgment> judgments = classifyBatchLayerA(batch, families, deadlineNanos);
-                for (int j = 0; j < batch.size(); j++) {
-                    PreparedPacket item = batch.get(j);
-                    LayerAJudgment judgment = judgments.get(j);
-
-                    synchronized (families) {
-                        if (!ScheduleFamily.isKnown(judgment.scheduleFamily())) {
-                            families.admit(judgment.scheduleFamily());
-                        }
-                    }
-
-                    dispositions.add(new PacketDisposition(
-                            item.candidate().candidateId(),
-                            item.candidate().parseRunId(),
-                            judgment.scheduleFamily(),
-                            judgment.triage(),
-                            judgment.relevance(),
-                            judgment.rowLabels(),
-                            judgment.columnHeaders(),
-                            judgment.packetDefaultHead(),
-                            judgment.about(),
-                            item.candidate().parentCandidateId(),
-                            false));
+                if (judgments.size() != batch.size()) {
+                    throw new IllegalStateException(
+                            "expected " + batch.size() + " judgments, got " + judgments.size());
                 }
-
-                Progress.step("classify", "layer-a", dispositions.size(), prepared.size(), 10);
+                for (int j = 0; j < batch.size(); j++) {
+                    dispositions.add(dispositionFor(batch.get(j), judgments.get(j), families));
+                }
             } catch (Exception e) {
-                // Batch failed - do not fall back, throw to expose the issue
+                // The batch could not be used. Redo only these candidates one at a time (each
+                // already tries every configured model); a candidate that still fails is
+                // skipped so the rest of the run is never lost.
                 Throwable cause = e.getCause() != null ? e.getCause() : e;
                 String msg = cause.getMessage() != null ? cause.getMessage() : cause.toString();
-                throw new ClassifyException("Layer A batch failed: " + msg, cause);
+                System.err.println("[layer-a] Batch failed (" + msg + "); retrying its "
+                        + batch.size() + " candidates one at a time");
+                System.err.flush();
+                for (PreparedPacket item : batch) {
+                    try {
+                        dispositions.add(classifyOne(item, families, deadlineNanos));
+                    } catch (Exception ex) {
+                        skippedCandidates++;
+                        System.err.println("[layer-a] Skipping candidate " + item.candidate().candidateId()
+                                + " on " + item.sheetName() + ": " + ex.getMessage());
+                        System.err.flush();
+                    }
+                }
             }
+            Progress.step("classify", "layer-a", dispositions.size() + skippedCandidates, prepared.size(), 10);
+        }
+        if (skippedCandidates > 0) {
+            System.err.println("[layer-a] " + skippedCandidates + " of " + prepared.size()
+                    + " candidates were skipped (no model could classify them); the rest completed");
+            System.err.flush();
         }
 
         return dispositions;
+    }
+
+    private PacketDisposition dispositionFor(
+            PreparedPacket item, LayerAJudgment judgment, ScheduleFamilyCatalog families) {
+        synchronized (families) {
+            if (!ScheduleFamily.isKnown(judgment.scheduleFamily())) {
+                families.admit(judgment.scheduleFamily());
+            }
+        }
+        return new PacketDisposition(
+                item.candidate().candidateId(),
+                item.candidate().parseRunId(),
+                judgment.scheduleFamily(),
+                judgment.triage(),
+                judgment.relevance(),
+                judgment.rowLabels(),
+                judgment.columnHeaders(),
+                judgment.packetDefaultHead(),
+                judgment.about(),
+                item.candidate().parentCandidateId(),
+                false);
     }
 
     private List<LayerAJudgment> classifyBatchLayerA(
@@ -1009,8 +1136,12 @@ public final class ClassifyService {
             List<LayerBAssignment> assignments = llm.bindLayerB(prompt);
             return assignments == null ? List.of() : assignments;
         } catch (RuntimeException e) {
+            // No configured model could answer: leave these cells unbound rather than stop the run.
             String msg = e.getMessage() != null ? e.getMessage() : e.toString();
-            throw new ClassifyException("Layer B failed on " + sheetName + ": " + msg, e);
+            System.err.println("[layer-b] No model could bind " + missing.size() + " cell(s) on "
+                    + sheetName + ": " + msg + " - leaving them unbound");
+            System.err.flush();
+            return List.of();
         }
     }
 
