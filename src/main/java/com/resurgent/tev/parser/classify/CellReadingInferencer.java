@@ -53,13 +53,33 @@ public final class CellReadingInferencer {
      * Infer types for untypable cells using structural context.
      * Modifies the settled map in-place, replacing UNTYPABLE outcomes with inferred ones.
      */
+    /** Per-cell tracing is for debugging only: it runs to tens of thousands of lines on a real workbook. */
+    private static final boolean TRACE = Boolean.getBoolean("tev.trace");
+
+    private static void trace(String line) {
+        if (TRACE) {
+            System.err.println(line);
+        }
+    }
+
     public void infer(Map<Long, ReadingOutcome> settled) {
+        long typedBefore = settled.values().stream().filter(ReadingOutcome::typed).count();
+        long startedNanos = System.nanoTime();
+        applyRules(settled);
+        long typedAfter = settled.values().stream().filter(ReadingOutcome::typed).count();
+        System.err.println("[inference] structural rules (total rows, column consensus) typed "
+                + (typedAfter - typedBefore) + " more cells in "
+                + (System.nanoTime() - startedNanos) / 1_000_000 + "ms");
+        System.err.flush();
+    }
+
+    private void applyRules(Map<Long, ReadingOutcome> settled) {
         // Rule 1: Total rows - if row is labeled "Total" and has typed neighbors, infer from them
         for (Map<Integer, List<InterpretationCellView>> rowsByNum : cellsByWorksheetAndRow.values()) {
             for (List<InterpretationCellView> rowCells : rowsByNum.values()) {
                 if (isLabeledAsTotal(rowCells)) {
                     int rowNum = rowCells.isEmpty() ? -1 : rowCells.get(0).rowNum();
-                    System.err.println("[inference] Total row detected: row " + rowNum);
+                    trace("[inference] Total row detected: row " + rowNum);
                     inferTotalRow(rowCells, settled);
                 }
             }
@@ -83,13 +103,13 @@ public final class CellReadingInferencer {
                     String lower = text.toLowerCase();
                     boolean matches = lower.contains("total") || lower.contains("subtotal") || lower.contains("sum");
                     if (matches || rowNum == 28) {  // Debug: log row 28 and any total matches
-                        System.err.println("[inference] Row " + rowNum + " col " + c.colNum() +
+                        trace("[inference] Row " + rowNum + " col " + c.colNum() +
                             " text='" + text + "' matches=" + matches);
                     }
                     return matches;
                 });
         if (hasTotal) {
-            System.err.println("[inference] Row " + rowNum + " HAS TOTAL LABEL");
+            trace("[inference] Row " + rowNum + " HAS TOTAL LABEL");
         }
         return hasTotal;
     }
@@ -109,18 +129,18 @@ public final class CellReadingInferencer {
             }
 
             if (outcome == null || !ReadingOutcome.UNTYPABLE.equals(outcome.refusal)) {
-                System.err.println("[inference] Row " + cell.rowNum() + " col " + cell.colNum() +
+                trace("[inference] Row " + cell.rowNum() + " col " + cell.colNum() +
                     " (" + cell.coord() + "): outcome=" + (outcome == null ? "null" : outcome.refusal));
                 continue;
             }
 
-            System.err.println("[inference] Attempting to infer total row cell: " + cell.coord());
+            trace("[inference] Attempting to infer total row cell: " + cell.coord());
             ReadingOutcome inferred = inferFromColumnNeighbors(cell, worksheetId, settled);
             if (inferred != null) {
-                System.err.println("[inference] ✓ Inferred " + cell.coord() + " as " + inferred.kind);
+                trace("[inference] ✓ Inferred " + cell.coord() + " as " + inferred.kind);
                 settled.put(cellId, inferred);
             } else {
-                System.err.println("[inference] ✗ Could not infer " + cell.coord());
+                trace("[inference] ✗ Could not infer " + cell.coord());
             }
         }
     }
@@ -136,7 +156,7 @@ public final class CellReadingInferencer {
                 .filter(c -> Math.abs(c.rowNum() - row) <= range && c.rowNum() != row)
                 .collect(Collectors.toList());
 
-        System.err.println("[inference] Looking for neighbors of " + untypable.coord() +
+        trace("[inference] Looking for neighbors of " + untypable.coord() +
             " (col " + col + ", row " + row + ") in range ±" + range +
             ": found " + candidates.size() + " candidates");
 
@@ -144,7 +164,7 @@ public final class CellReadingInferencer {
                 .map(c -> {
                     ReadingOutcome o = settled.get(c.cellId());
                     if (o != null && o.typed()) {
-                        System.err.println("[inference]   - " + c.coord() + " (row " + c.rowNum() + "): " + o.kind);
+                        trace("[inference]   - " + c.coord() + " (row " + c.rowNum() + "): " + o.kind);
                     }
                     return o;
                 })
@@ -152,7 +172,7 @@ public final class CellReadingInferencer {
                 .collect(Collectors.toList());
 
         if (typedOutcomes.isEmpty()) {
-            System.err.println("[inference]   No typed neighbors found");
+            trace("[inference]   No typed neighbors found");
             return null;
         }
 
@@ -163,12 +183,12 @@ public final class CellReadingInferencer {
                                first.currency.equals(o.currency));
 
         if (allAgree) {
-            System.err.println("[inference]   All " + typedOutcomes.size() + " neighbors agree on " + first.kind);
+            trace("[inference]   All " + typedOutcomes.size() + " neighbors agree on " + first.kind);
             return ReadingOutcome.typed(
                     first.kind, first.scale, first.unit, first.currency, ReadingOutcome.DERIVED);
         }
 
-        System.err.println("[inference]   Neighbors disagree: cannot infer");
+        trace("[inference]   Neighbors disagree: cannot infer");
         return null;
     }
 

@@ -680,8 +680,21 @@ public final class ClassifyService {
                     failure = "expected " + batch.size() + " judgments, got " + outcome.value().size();
                 }
                 if (failure == null) {
+                    List<PreparedPacket> unanswered = new ArrayList<>();
                     for (int j = 0; j < batch.size(); j++) {
-                        dispositions.add(dispositionFor(batch.get(j), outcome.value().get(j), families));
+                        LayerAJudgment judgment = outcome.value().get(j);
+                        if (judgment == null) {
+                            unanswered.add(batch.get(j));
+                        } else {
+                            dispositions.add(dispositionFor(batch.get(j), judgment, families));
+                        }
+                    }
+                    if (!unanswered.isEmpty()) {
+                        System.err.println("[layer-a] Batch answered " + (batch.size() - unanswered.size())
+                                + " of " + batch.size() + " candidates; asking again only for the "
+                                + unanswered.size() + " missing");
+                        System.err.flush();
+                        skippedCandidates += redoOneByOne(unanswered, families, deadlineNanos, dispositions);
                     }
                 } else {
                     // The batch could not be used. Redo only these candidates one at a time (each
@@ -690,16 +703,7 @@ public final class ClassifyService {
                     System.err.println("[layer-a] Batch failed (" + failure + "); retrying its "
                             + batch.size() + " candidates one at a time");
                     System.err.flush();
-                    for (PreparedPacket item : batch) {
-                        try {
-                            dispositions.add(classifyOne(item, families, deadlineNanos));
-                        } catch (Exception ex) {
-                            skippedCandidates++;
-                            System.err.println("[layer-a] Skipping candidate " + item.candidate().candidateId()
-                                    + " on " + item.sheetName() + ": " + ex.getMessage());
-                            System.err.flush();
-                        }
-                    }
+                    skippedCandidates += redoOneByOne(batch, families, deadlineNanos, dispositions);
                 }
                 Progress.step("classify", "layer-a", dispositions.size() + skippedCandidates, prepared.size(), 10);
             }
@@ -711,6 +715,26 @@ public final class ClassifyService {
         }
 
         return dispositions;
+    }
+
+    /** Classify candidates one at a time; returns how many no model could classify (skipped). */
+    private int redoOneByOne(
+            List<PreparedPacket> items,
+            ScheduleFamilyCatalog families,
+            long deadlineNanos,
+            List<PacketDisposition> into) {
+        int skipped = 0;
+        for (PreparedPacket item : items) {
+            try {
+                into.add(classifyOne(item, families, deadlineNanos));
+            } catch (Exception ex) {
+                skipped++;
+                System.err.println("[layer-a] Skipping candidate " + item.candidate().candidateId()
+                        + " on " + item.sheetName() + ": " + ex.getMessage());
+                System.err.flush();
+            }
+        }
+        return skipped;
     }
 
     private PacketDisposition dispositionFor(
@@ -807,12 +831,14 @@ public final class ClassifyService {
             sb.append("5. columnHeaders: array of column header strings (can be empty [])\n");
             sb.append("6. packetDefaultHead: string or null\n");
             sb.append("7. about: string (1-2 sentences)\n");
+            sb.append("Also echo each candidate's own \"index\" number (as given above) in its result;")
+                    .append(" return exactly one result per candidate.\n");
             sb.append("\nOUTPUT: Return ONLY JSON. No markdown, no text, no explanations.\n");
             sb.append("Wrap the ").append(batch.size()).append(" classification objects in a JSON object with key 'results':\n");
             sb.append("{\n");
             sb.append("  \"results\": [\n");
-            sb.append("    {\"scheduleFamily\":\"assets\",\"triage\":\"MAIN\",\"relevance\":\"PRIMARY\",\"rowLabels\":[\"Fixed Assets\"],\"columnHeaders\":[],\"packetDefaultHead\":\"Assets\",\"about\":\"List of company assets.\"},\n");
-            sb.append("    {\"scheduleFamily\":\"liabilities\",\"triage\":\"HELPER\",\"relevance\":\"SECONDARY\",\"rowLabels\":[],\"columnHeaders\":[],\"packetDefaultHead\":null,\"about\":\"Supporting detail.\"}\n");
+            sb.append("    {\"index\":1,\"scheduleFamily\":\"assets\",\"triage\":\"MAIN\",\"relevance\":\"PRIMARY\",\"rowLabels\":[\"Fixed Assets\"],\"columnHeaders\":[],\"packetDefaultHead\":\"Assets\",\"about\":\"List of company assets.\"},\n");
+            sb.append("    {\"index\":2,\"scheduleFamily\":\"liabilities\",\"triage\":\"HELPER\",\"relevance\":\"SECONDARY\",\"rowLabels\":[],\"columnHeaders\":[],\"packetDefaultHead\":null,\"about\":\"Supporting detail.\"}\n");
             sb.append("  ]\n");
             sb.append("}\n\n");
             sb.append("CRITICAL: Return ONLY the JSON object with 'results' key containing the array. Nothing else.\n");
@@ -824,11 +850,13 @@ public final class ClassifyService {
 
     private List<LayerAJudgment> parseBatchLayerAResponse(String jsonResponse, int expectedCount) throws Exception {
         List<LayerAJudgment> judgments = new ArrayList<>();
-        com.fasterxml.jackson.databind.JsonNode root = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode().get("stub");
+        List<Integer> indexes = new ArrayList<>();
 
         com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
         com.fasterxml.jackson.databind.JsonNode nodes = mapper.readTree(jsonResponse);
-        System.err.println("[layer-a-batch-debug] Full response: " + jsonResponse.substring(0, Math.min(1000, jsonResponse.length())));
+        if (Boolean.getBoolean("tev.trace")) {
+    System.err.println("[layer-a-batch-debug] Full response: " + jsonResponse.substring(0, Math.min(1000, jsonResponse.length())));
+        }
 
         // Handle multiple formats: [...], {"results": [...]}, etc.
         if (!nodes.isArray()) {
@@ -922,8 +950,22 @@ public final class ClassifyService {
             }
 
             judgments.add(new LayerAJudgment(resolvedFamily, triage, relevance, rowLabels, columnHeaders, packetDefaultHead, about.trim()));
+            indexes.add(node.hasNonNull("index") && node.get("index").canConvertToInt() ? node.get("index").asInt() : null);
         }
 
+        // Numbered answers are matched to candidates by number: a missing, extra or reordered
+        // answer then affects only its own candidate. A null entry means "not answered".
+        boolean numbered = !judgments.isEmpty() && indexes.stream().allMatch(java.util.Objects::nonNull);
+        if (numbered) {
+            List<LayerAJudgment> byIndex = new ArrayList<>(java.util.Collections.nCopies(expectedCount, null));
+            for (int i = 0; i < judgments.size(); i++) {
+                int slot = indexes.get(i) - 1;
+                if (slot >= 0 && slot < expectedCount && byIndex.get(slot) == null) {
+                    byIndex.set(slot, judgments.get(i));
+                }
+            }
+            return byIndex;
+        }
         return judgments;
     }
 

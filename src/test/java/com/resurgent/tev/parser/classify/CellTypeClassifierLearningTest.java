@@ -356,6 +356,74 @@ class CellTypeClassifierLearningTest {
         assertThat(settled.get(1L).kind).isEqualTo("money");
     }
 
+    private static String numbered(int cell, String kind) {
+        return "{\"cell\":" + cell + ",\"kind\":\"" + kind
+                + "\",\"scale\":\"unit\",\"unit\":\"\",\"currency\":\"\",\"confidence\":0.95}";
+    }
+
+    private Map<Long, ReadingOutcome> classifyFive(java.util.function.Function<Integer, String> answerN, RecordingLlm[] holder) {
+        var llm = new RecordingLlm(answerN);
+        holder[0] = llm;
+        var ctx = new TestContext("wb1");
+        List<InterpretationCellView> cells = new ArrayList<>();
+        for (long id = 1; id <= 5; id++) {
+            ctx.cell(id, "Item " + id, "FY23", EXPENSES);
+            cells.add(number(id, (int) id));
+        }
+        var settled = untypable(1, 2, 3, 4, 5);
+        new CellTypeClassifierLlm(null, llm, new DynamicKindTokens(dir)).classifyRemaining(cells, settled, ctx);
+        return settled;
+    }
+
+    @Test
+    void aMissingAnswerRetriesOnlyThatCellNotTheWholeBatch() {
+        RecordingLlm[] llm = new RecordingLlm[1];
+        // batch answer skips cell 3; the single retry (n == 0) answers it as a count
+        var settled = classifyFive(n -> n == 0
+                ? numbered(0, "count")
+                : "{\"results\":[" + String.join(",", numbered(1, "money"), numbered(2, "money"),
+                        numbered(4, "money"), numbered(5, "money")) + "]}", llm);
+
+        assertThat(llm[0].prompts).hasSize(2); // one batch + one single, not 1 + 5
+        assertThat(settled.get(1L).kind).isEqualTo("money");
+        assertThat(settled.get(3L).kind).isEqualTo("count");
+        assertThat(settled.get(5L).kind).isEqualTo("money");
+    }
+
+    @Test
+    void extraAndDuplicateAnswersAreIgnoredWithoutRetrying() {
+        RecordingLlm[] llm = new RecordingLlm[1];
+        var settled = classifyFive(n -> "{\"results\":[" + String.join(",",
+                numbered(1, "money"), numbered(2, "money"), numbered(2, "count"), numbered(3, "money"),
+                numbered(4, "money"), numbered(5, "money"), numbered(6, "money")) + "]}", llm);
+
+        assertThat(llm[0].prompts).hasSize(1);
+        assertThat(settled.get(2L).kind).isEqualTo("money"); // first answer for a cell wins
+        assertThat(settled.values()).allMatch(o -> o.typed());
+    }
+
+    @Test
+    void answersAreMatchedByCellNumberNotByPosition() {
+        RecordingLlm[] llm = new RecordingLlm[1];
+        var settled = classifyFive(n -> "{\"results\":[" + String.join(",",
+                numbered(5, "percent"), numbered(4, "count"), numbered(3, "quantity"),
+                numbered(2, "ratio"), numbered(1, "money")) + "]}", llm);
+
+        assertThat(llm[0].prompts).hasSize(1);
+        assertThat(settled.get(1L).kind).isEqualTo("money");
+        assertThat(settled.get(3L).kind).isEqualTo("quantity");
+        assertThat(settled.get(5L).kind).isEqualTo("percent");
+    }
+
+    @Test
+    void promptAsksForTheCellNumberInEveryAnswer() {
+        RecordingLlm[] llm = new RecordingLlm[1];
+        classifyFive(n -> "{\"results\":[" + String.join(",", numbered(1, "money"), numbered(2, "money"),
+                numbered(3, "money"), numbered(4, "money"), numbered(5, "money")) + "]}", llm);
+
+        assertThat(llm[0].prompts.get(0)).contains("\"cell\"");
+    }
+
     private void teach(String label) {
         for (String workbook : new String[] {"wb1", "wb2"}) {
             var ctx = new TestContext(workbook).cell(1, label, "FY23", EXPENSES);

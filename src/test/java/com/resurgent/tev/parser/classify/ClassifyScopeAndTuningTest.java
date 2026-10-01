@@ -178,4 +178,82 @@ class ClassifyScopeAndTuningTest {
         assertThatThrownBy(() -> new ClassifyTuning(0, 10, 1)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new ClassifyTuning(15, 10, 0)).isInstanceOf(IllegalArgumentException.class);
     }
+
+    /** Answers Layer A batches with numbered results, optionally leaving some candidates out. */
+    private static final class NumberedLayerALlm implements ClassifierLlm {
+        final java.util.Set<Integer> leaveOut;
+        final List<String> singles = new CopyOnWriteArrayList<>();
+        final boolean numbered;
+
+        NumberedLayerALlm(java.util.Set<Integer> leaveOut, boolean numbered) {
+            this.leaveOut = leaveOut;
+            this.numbered = numbered;
+        }
+
+        @Override
+        public List<RegionProposal> proposeRegions(RegionLayoutPrompt prompt) {
+            return List.of(GOOD);
+        }
+
+        @Override
+        public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
+            singles.add(prompt.sheetName());
+            return new LayerAJudgment(
+                    ScheduleFamily.ASSUMPTIONS, Triage.MAIN, Relevance.PRIMARY, List.of(), List.of(), null, "Single.");
+        }
+
+        @Override
+        public String classifyLayerAJson(String userPrompt, int maxTokens) {
+            var m = java.util.regex.Pattern.compile("Classify exactly (\\d+) regions").matcher(userPrompt);
+            int n = m.find() ? Integer.parseInt(m.group(1)) : 0;
+            StringBuilder sb = new StringBuilder("{\"results\":[");
+            boolean first = true;
+            for (int i = 1; i <= n; i++) {
+                if (leaveOut.contains(i)) {
+                    continue;
+                }
+                sb.append(first ? "" : ",");
+                first = false;
+                sb.append("{").append(numbered ? "\"index\":" + i + "," : "")
+                        .append("\"scheduleFamily\":\"assumptions\",\"triage\":\"MAIN\",\"relevance\":\"PRIMARY\",")
+                        .append("\"rowLabels\":[],\"columnHeaders\":[],\"packetDefaultHead\":null,\"about\":\"Batch.\"}");
+            }
+            return sb.append("]}").toString();
+        }
+    }
+
+    @Test
+    void aMissingLayerAAnswerRetriesOnlyThatCandidate() throws Exception {
+        var llm = new NumberedLayerALlm(java.util.Set.of(2), true);
+
+        var summary = new ClassifyService(llm)
+                .withTuning(new ClassifyTuning(15, 100, 1))
+                .classify(dbPath, parseRunId);
+
+        assertThat(llm.singles).hasSize(1); // just candidate 2, not the whole batch
+        assertThat(summary.dispositionCount()).isGreaterThan(1);
+    }
+
+    @Test
+    void numberedLayerAAnswersNeedNoRetryWhenComplete() throws Exception {
+        var llm = new NumberedLayerALlm(java.util.Set.of(), true);
+
+        var summary = new ClassifyService(llm)
+                .withTuning(new ClassifyTuning(15, 100, 1))
+                .classify(dbPath, parseRunId);
+
+        assertThat(llm.singles).isEmpty();
+        assertThat(summary.dispositionCount()).isGreaterThan(1);
+    }
+
+    @Test
+    void unnumberedLayerAAnswersWithTheWrongCountStillFallBackToSingles() throws Exception {
+        var llm = new NumberedLayerALlm(java.util.Set.of(2), false);
+
+        var summary = new ClassifyService(llm)
+                .withTuning(new ClassifyTuning(15, 100, 1))
+                .classify(dbPath, parseRunId);
+
+        assertThat(llm.singles.size()).isEqualTo(summary.dispositionCount()); // every candidate redone
+    }
 }

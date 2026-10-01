@@ -214,22 +214,66 @@ public class CellTypeClassifierLlm {
             List<RegionContext> regions,
             ParallelCalls.Outcome<List<CellTypeResponse>> outcome,
             Map<Long, ReadingOutcome> settled) {
-        String failure = null;
         if (!outcome.ok()) {
-            failure = outcome.error().getMessage();
-        } else if (outcome.value().size() != batch.size()) {
-            // Positions no longer line up with cells; do not guess which answer is whose.
-            failure = "expected " + batch.size() + " responses, got " + outcome.value().size();
+            System.err.println("[llm-fallback] Failed to classify batch: " + outcome.error().getMessage());
+            reask(batch, requests, regions, allIndexes(batch.size()), settled);
+            return;
         }
-        if (failure == null) {
+        List<CellTypeResponse> responses = outcome.value();
+        boolean numbered = !responses.isEmpty() && responses.stream().allMatch(r -> r.cell() != null);
+        if (numbered) {
+            // Answers carry their cell number, so a missing, extra or reordered answer costs only
+            // that cell: the rest are applied and just the unanswered ones are asked again.
+            Map<Integer, CellTypeResponse> byCell = new HashMap<>();
+            for (CellTypeResponse response : responses) {
+                if (response.cell() >= 1 && response.cell() <= batch.size()) {
+                    byCell.putIfAbsent(response.cell(), response); // first answer for a cell wins
+                }
+            }
+            List<Integer> missing = new ArrayList<>();
             for (int i = 0; i < batch.size(); i++) {
-                applyResponse(batch.get(i), outcome.value().get(i), settled);
+                CellTypeResponse response = byCell.get(i + 1);
+                if (response == null) {
+                    missing.add(i);
+                } else {
+                    applyResponse(batch.get(i), response, settled);
+                }
+            }
+            if (!missing.isEmpty()) {
+                System.err.println("[llm-fallback] Batch answered " + (batch.size() - missing.size()) + " of "
+                        + batch.size() + " cells; asking again only for the " + missing.size() + " missing");
+                reask(batch, requests, regions, missing, settled);
             }
             return;
         }
-        System.err.println("[llm-fallback] Failed to classify batch: " + failure);
-        // Redo only this batch's cells one at a time (each already tries every configured model).
-        for (int i = 0; i < batch.size(); i++) {
+        if (responses.size() == batch.size()) {
+            for (int i = 0; i < batch.size(); i++) {
+                applyResponse(batch.get(i), responses.get(i), settled);
+            }
+            return;
+        }
+        // Unnumbered answers whose count is wrong: positions no longer line up with cells.
+        System.err.println("[llm-fallback] Failed to classify batch: expected " + batch.size()
+                + " responses, got " + responses.size());
+        reask(batch, requests, regions, allIndexes(batch.size()), settled);
+    }
+
+    private static List<Integer> allIndexes(int n) {
+        List<Integer> all = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            all.add(i);
+        }
+        return all;
+    }
+
+    /** Ask again, one cell at a time (each call already tries every configured model). */
+    private void reask(
+            List<InterpretationCellView> batch,
+            List<CellTypeRequest> requests,
+            List<RegionContext> regions,
+            List<Integer> indexes,
+            Map<Long, ReadingOutcome> settled) {
+        for (int i : indexes) {
             InterpretationCellView cell = batch.get(i);
             try {
                 applyResponse(cell, classifyCell(requests.get(i), regions.get(i)), settled);
@@ -288,7 +332,8 @@ public class CellTypeClassifierLlm {
     private List<CellTypeResponse> classifyBatchCells(List<CellTypeRequest> requests, List<RegionContext> regions) throws Exception {
         String userMessage = formatBatchUserMessage(requests, regions);
         long llmStart = System.nanoTime();
-        String jsonResponse = llm.classifyCellJson(SYSTEM_PROMPT, userMessage, 4096);
+        // Room for ~120 tokens per answer, so a long batch is not cut off mid-JSON.
+        String jsonResponse = llm.classifyCellJson(SYSTEM_PROMPT, userMessage, Math.max(4096, 120 * requests.size()));
         long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
         System.err.println("[cell-llm] Batch of " + requests.size() + " cells: LLM responded in " + llmMs + "ms");
         return parseBatchCellTypeResponse(jsonResponse, requests.size());
@@ -346,11 +391,12 @@ public class CellTypeClassifierLlm {
             sb.append("\n");
         }
 
-        sb.append("Return ONLY JSON. Wrap the ").append(requests.size()).append(" classifications in a JSON object with key 'results':\n");
+        sb.append("Return ONLY JSON, exactly one result per cell, each carrying its own \"cell\" number as given above.")
+                .append(" Wrap the ").append(requests.size()).append(" classifications in a JSON object with key 'results':\n");
         sb.append("{\n");
         sb.append("  \"results\": [\n");
-        sb.append("    {\"kind\":\"money\",\"scale\":\"lakh\",\"unit\":\"\",\"currency\":\"INR\",\"confidence\":0.95},\n");
-        sb.append("    {\"kind\":\"quantity\",\"scale\":\"unit\",\"unit\":\"pieces\",\"currency\":\"\",\"confidence\":0.90}\n");
+        sb.append("    {\"cell\":1,\"kind\":\"money\",\"scale\":\"lakh\",\"unit\":\"\",\"currency\":\"INR\",\"confidence\":0.95},\n");
+        sb.append("    {\"cell\":2,\"kind\":\"quantity\",\"scale\":\"unit\",\"unit\":\"pieces\",\"currency\":\"\",\"confidence\":0.90}\n");
         sb.append("  ]\n");
         sb.append("}\n");
 
@@ -404,14 +450,14 @@ public class CellTypeClassifierLlm {
             double confidence = node.get("confidence").asDouble(0.0);
 
             if (!List.of("money", "quantity", "rate", "percent", "count", "ratio").contains(kind)) {
-                throw new IllegalArgumentException("Invalid kind at index " + i + ": " + kind);
+                // One unusable item must not cost the whole batch: its cell is simply re-asked.
+                System.err.println("[llm-fallback] Ignoring answer " + (i + 1) + " with invalid kind '" + kind + "'");
+                continue;
             }
 
-            responses.add(new CellTypeResponse(kind, scale, unit, currency, confidence));
-        }
-
-        if (responses.size() != expectedCount) {
-            System.err.println("[llm-fallback] Warning: expected " + expectedCount + " responses, got " + responses.size());
+            Integer cellNumber = node.hasNonNull("cell") && node.get("cell").canConvertToInt()
+                    ? node.get("cell").asInt() : null;
+            responses.add(new CellTypeResponse(cellNumber, kind, scale, unit, currency, confidence));
         }
 
         return responses;
@@ -517,7 +563,7 @@ public class CellTypeClassifierLlm {
             throw new IllegalArgumentException("Invalid kind: " + kind);
         }
 
-        return new CellTypeResponse(kind, scale, unit, currency, confidence);
+        return new CellTypeResponse(null, kind, scale, unit, currency, confidence);
     }
 
     private boolean isNumeric(InterpretationCellView cell) {
@@ -546,7 +592,8 @@ public class CellTypeClassifierLlm {
 
     record NeighborCell(String direction, String displayValue, String type) {}
 
-    record CellTypeResponse(String kind, String scale, String unit, String currency, double confidence) {}
+    /** {@code cell} is the 1-based number the model echoes back; null when it did not. */
+    record CellTypeResponse(Integer cell, String kind, String scale, String unit, String currency, double confidence) {}
 
     /** Kind named by the static cue tokens in already-normalized label text, else {@code null}. */
     private static String staticKind(String normalizedLabels) {
