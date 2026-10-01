@@ -3,7 +3,9 @@ package com.resurgent.tev.parser.classify;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -15,6 +17,7 @@ public final class LlmEnvironment {
     static final String API_KEY = "OPENROUTER_API_KEY";
     static final String MODEL_ID = "Excel_Enrichment_Model_id";
     static final String MODEL2_ID = "Excel_Enrichment_Model2_id";
+    static final String MODEL3_ID = "Excel_Enrichment_Model3_id";
 
     private LlmEnvironment() {}
 
@@ -27,6 +30,7 @@ public final class LlmEnvironment {
         putIfPresent(values, API_KEY, System.getenv(API_KEY));
         putIfPresent(values, MODEL_ID, System.getenv(MODEL_ID));
         putIfPresent(values, MODEL2_ID, System.getenv(MODEL2_ID));
+        putIfPresent(values, MODEL3_ID, System.getenv(MODEL3_ID));
         if (dotenv != null && Files.isRegularFile(dotenv)) {
             try {
                 for (String line : Files.readAllLines(dotenv)) {
@@ -39,27 +43,35 @@ public final class LlmEnvironment {
         return Map.copyOf(values);
     }
 
+    /**
+     * Models to try, in order: Model 1, then Model 3, then Model 2. Unset and duplicate ids
+     * are skipped. A request that fails on one model is re-sent (that request only) to the next.
+     */
+    static List<String> modelChain(Map<String, String> env) {
+        List<String> chain = new ArrayList<>();
+        for (String name : new String[] {MODEL_ID, MODEL3_ID, MODEL2_ID}) {
+            String id = env.get(name);
+            if (id != null && !id.isBlank() && !chain.contains(id.trim())) {
+                chain.add(id.trim());
+            }
+        }
+        return List.copyOf(chain);
+    }
+
     public static ClassifierLlm classifierOrUnconfigured() {
         Map<String, String> env = load();
         String key = env.get(API_KEY);
-        String model = env.get(MODEL2_ID);
-        if (model == null || model.isBlank()) {
-            model = env.get(MODEL_ID);
-        }
-        if (key == null || key.isBlank() || model == null || model.isBlank()) {
+        List<String> models = modelChain(env);
+        if (key == null || key.isBlank() || models.isEmpty()) {
             return new UnconfiguredClassifierLlm();
         }
-        return new OpenRouterClassifierLlm(key, model);
+        return new OpenRouterClassifierLlm(key, models);
     }
 
     public static boolean liveConfigured() {
         Map<String, String> env = load();
         String key = env.get(API_KEY);
-        String model = env.get(MODEL2_ID);
-        if (model == null || model.isBlank()) {
-            model = env.get(MODEL_ID);
-        }
-        return key != null && !key.isBlank() && model != null && !model.isBlank();
+        return key != null && !key.isBlank() && !modelChain(env).isEmpty();
     }
 
     private static void parseLine(Map<String, String> values, String line) {

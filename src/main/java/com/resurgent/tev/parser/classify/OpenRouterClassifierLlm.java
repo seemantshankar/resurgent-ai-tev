@@ -32,6 +32,20 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         this(new HttpCompletionsClient(apiKey, model, DEFAULT_URL));
     }
 
+    /** Models in the order to try them; a failed request moves to the next model. */
+    public OpenRouterClassifierLlm(String apiKey, List<String> models) {
+        this(chainOf(apiKey, models));
+    }
+
+    private static CompletionsClient chainOf(String apiKey, List<String> models) {
+        if (models.size() == 1) {
+            return new HttpCompletionsClient(apiKey, models.get(0), DEFAULT_URL);
+        }
+        return new FallbackCompletionsClient(models.stream()
+                .map(m -> new FallbackCompletionsClient.Link(m, new HttpCompletionsClient(apiKey, m, DEFAULT_URL)))
+                .toList());
+    }
+
     OpenRouterClassifierLlm(CompletionsClient client) {
         this.client = Objects.requireNonNull(client, "client");
     }
@@ -54,60 +68,75 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
     @Override
     public List<RegionProposal> proposeRegions(RegionLayoutPrompt prompt) {
-        String system = RegionLayoutPromptAssembler.SYSTEM;
-        String user = RegionLayoutPromptAssembler.userMessage(prompt);
-        CompletionResult result = client.completeJson(system, user, REGION_LAYOUT_MAX_COMPLETION_TOKENS);
-        if (result.truncated()) {
-            // Deliberation ate the budget; retry with a lead-with-JSON instruction.
-            result = client.completeJson(
-                    system + "\nPrior response was TRUNCATED. Emit the JSON object immediately,"
-                            + " shortest form, no deliberation.",
-                    user + "\n\nRetry after truncation: JSON object only.",
-                    REGION_LAYOUT_MAX_COMPLETION_TOKENS);
+        return client.perModel(c -> {
+            String system = RegionLayoutPromptAssembler.SYSTEM;
+            String user = RegionLayoutPromptAssembler.userMessage(prompt);
+            CompletionResult result = c.completeJson(system, user, REGION_LAYOUT_MAX_COMPLETION_TOKENS);
             if (result.truncated()) {
-                throw new IllegalStateException(
-                        "OpenRouter region layout truncated after retry: finish="
-                                + result.finishReason());
+                // Deliberation ate the budget; retry with a lead-with-JSON instruction.
+                result = c.completeJson(
+                        system + "\nPrior response was TRUNCATED. Emit the JSON object immediately,"
+                                + " shortest form, no deliberation.",
+                        user + "\n\nRetry after truncation: JSON object only.",
+                        REGION_LAYOUT_MAX_COMPLETION_TOKENS);
+                if (result.truncated()) {
+                    throw new IllegalStateException(
+                            "OpenRouter region layout truncated after retry: finish="
+                                    + result.finishReason());
+                }
             }
-        }
-        return RegionLayoutResponseParser.parse(result.content());
+            return RegionLayoutResponseParser.parse(result.content());
+        });
     }
 
     @Override
     public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
-        String system = LayerAPromptAssembler.SYSTEM;
-        String user = LayerAPromptAssembler.userMessage(prompt);
-        List<String> families = prompt.scheduleFamilies();
-        CompletionResult result = client.completeLayerA(system, user, families);
-        if (result.truncated()) {
-            throw new IllegalStateException(
-                    "OpenRouter Layer A truncated: finish=" + result.finishReason());
-        }
-        return LayerAResponseParser.parse(result.content());
+        return client.perModel(c -> {
+            String system = LayerAPromptAssembler.SYSTEM;
+            String user = LayerAPromptAssembler.userMessage(prompt);
+            List<String> families = prompt.scheduleFamilies();
+            CompletionResult result = c.completeLayerA(system, user, families);
+            if (result.truncated()) {
+                throw new IllegalStateException(
+                        "OpenRouter Layer A truncated: finish=" + result.finishReason());
+            }
+            return LayerAResponseParser.parse(result.content());
+        });
     }
 
     @Override
     public List<LayerBAssignment> bindLayerB(LayerBPrompt prompt) {
-        String system = LayerBPromptAssembler.SYSTEM;
-        String user = LayerBPromptAssembler.userMessage(prompt);
-        CompletionResult result = client.completeJson(system, user, REGION_LAYOUT_MAX_COMPLETION_TOKENS);
-        if (result.truncated()) {
-            result = client.completeJson(
-                    system + "\nPrior response was TRUNCATED. Emit the JSON object immediately.",
-                    user + "\n\nRetry after truncation: JSON object only.",
-                    REGION_LAYOUT_MAX_COMPLETION_TOKENS);
+        return client.perModel(c -> {
+            String system = LayerBPromptAssembler.SYSTEM;
+            String user = LayerBPromptAssembler.userMessage(prompt);
+            CompletionResult result = c.completeJson(system, user, REGION_LAYOUT_MAX_COMPLETION_TOKENS);
             if (result.truncated()) {
-                throw new IllegalStateException(
-                        "OpenRouter Layer B truncated after retry: finish=" + result.finishReason());
+                result = c.completeJson(
+                        system + "\nPrior response was TRUNCATED. Emit the JSON object immediately.",
+                        user + "\n\nRetry after truncation: JSON object only.",
+                        REGION_LAYOUT_MAX_COMPLETION_TOKENS);
+                if (result.truncated()) {
+                    throw new IllegalStateException(
+                            "OpenRouter Layer B truncated after retry: finish=" + result.finishReason());
+                }
             }
-        }
-        return LayerBResponseParser.parse(result.content());
+            return LayerBResponseParser.parse(result.content());
+        });
     }
 
     @Override
     public String classifyCellJson(String systemPrompt, String userPrompt, int maxTokens) {
-        CompletionResult result = client.completeJson(systemPrompt, userPrompt, maxTokens);
-        return result.content();
+        return client.perModel(c -> validJson(c.completeJson(systemPrompt, userPrompt, maxTokens).content()));
+    }
+
+    /** The content when it parses as JSON; otherwise the model failed and the next one is tried. */
+    private static String validJson(String content) {
+        try {
+            new ObjectMapper().readTree(content);
+            return content;
+        } catch (Exception e) {
+            throw new IllegalStateException("model returned invalid JSON: " + e.getMessage(), e);
+        }
     }
 
     @Override
@@ -117,79 +146,80 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                 For each region, determine: scheduleFamily, triage (MAIN/HELPER), relevance (PRIMARY/SECONDARY/TERTIARY),
                 row labels, column headers, packet default head, and a brief description.
                 Return a JSON array with one object per candidate.""";
-        CompletionResult result = client.completeJson(systemPrompt, userPrompt, maxTokens);
-        return result.content();
+        return client.perModel(c -> validJson(c.completeJson(systemPrompt, userPrompt, maxTokens).content()));
     }
 
     @Override
     public java.util.Map<String, List<RegionProposal>> proposeRegionsBatch(
             java.util.List<RegionLayoutPrompt> prompts) {
-        String system = """
-                You classify regions on multiple Excel worksheets for a TEV clean financial-model extract.
-                For each worksheet, return ONLY JSON (no markdown):
-                {
-                  "main": [{"bbox":"A1:F10","label":"...","why":"..."}],
-                  "helper": [{"bbox":"A1:F10","label":"...","why":"..."}],
-                  "scratch": [{"bbox":"A1:F10","label":"...","why":"..."}]
-                }
+        return client.perModel(c -> {
+            String system = """
+                    You classify regions on multiple Excel worksheets for a TEV clean financial-model extract.
+                    For each worksheet, return ONLY JSON (no markdown):
+                    {
+                      "main": [{"bbox":"A1:F10","label":"...","why":"..."}],
+                      "helper": [{"bbox":"A1:F10","label":"...","why":"..."}],
+                      "scratch": [{"bbox":"A1:F10","label":"...","why":"..."}]
+                    }
 
-                DEFINITIONS
-                - main = RETAIN for the model
-                - helper = EXCLUDE from core model (audit / breakout / variance) — do not double-count
-                - scratch = OMIT (floating orphans only)
+                    DEFINITIONS
+                    - main = RETAIN for the model
+                    - helper = EXCLUDE from core model (audit / breakout / variance) — do not double-count
+                    - scratch = OMIT (floating orphans only)
 
-                CRITICAL — DO NOT OVER-SPLIT MAINS
-                - Prefer a SMALL number of large mains (ideally ~4 section mains + optional sheet title band).
-                - A section MAIN must be ONE bbox that includes, together:
-                  section header + item/detail rows + official section total / Lacs summary figures
-                  for that section.
-                - NEVER emit a main that is only a header row.
-                - NEVER emit a main that is only a total row detached from its section.
-                - Document title / units may be one small main OR absorbed into the first section main
-                  — but do NOT put floating scratch digits into main.
+                    CRITICAL — DO NOT OVER-SPLIT MAINS
+                    - Prefer a SMALL number of large mains (ideally ~4 section mains + optional sheet title band).
+                    - A section MAIN must be ONE bbox that includes, together:
+                      section header + item/detail rows + official section total / Lacs summary figures
+                      for that section.
+                    - NEVER emit a main that is only a header row.
+                    - NEVER emit a main that is only a total row detached from its section.
+                    - Document title / units may be one small main OR absorbed into the first section main
+                      — but do NOT put floating scratch digits into main.
 
-                HELPER (keep separate from mains)
-                - Inline BoQ / vendor quote / green-style breakout blocks.
-                - Side variance/scenario pads: alternate + difference columns. Prefer one helper bbox
-                  (or few) for that pad band, not dozens of singletons.
-                - Official cost lines on the primary estimate column belong on the SECTION MAIN;
-                  only the breakout math under them is helper.
-                - NEVER widen a section MAIN into side pad columns. If a column sits to the right of
-                  the primary amount column and looks like another amount band, treat it as helper
-                  unless you are sure it is part of the official section schedule.
+                    HELPER (keep separate from mains)
+                    - Inline BoQ / vendor quote / green-style breakout blocks.
+                    - Side variance/scenario pads: alternate + difference columns. Prefer one helper bbox
+                      (or few) for that pad band, not dozens of singletons.
+                    - Official cost lines on the primary estimate column belong on the SECTION MAIN;
+                      only the breakout math under them is helper.
+                    - NEVER widen a section MAIN into side pad columns. If a column sits to the right of
+                      the primary amount column and looks like another amount band, treat it as helper
+                      unless you are sure it is part of the official section schedule.
 
-                WHEN UNSURE — READ THE FORMULAS
-                - The dump shows formulas (not only cached values). Use them before deciding.
-                - Difference / variance / scenario formulas (e.g. =I9-J9, =J-K, compare-to-quote)
-                  → that column (or pad) is HELPER, not main.
-                - Formulas that only restate a primary amount in Lacs / another unit, or pull the
-                  same line for a check → HELPER tear-out, not an extension of the main bbox.
-                - Primary section totals that SUM the official estimate column stay on MAIN;
-                  do not fold neighboring variance columns into that main just because they
-                  share the same rows.
-                - If still ambiguous after reading formulas, prefer a separate helper bbox over
-                  merging the side pad into main.
+                    WHEN UNSURE — READ THE FORMULAS
+                    - The dump shows formulas (not only cached values). Use them before deciding.
+                    - Difference / variance / scenario formulas (e.g. =I9-J9, =J-K, compare-to-quote)
+                      → that column (or pad) is HELPER, not main.
+                    - Formulas that only restate a primary amount in Lacs / another unit, or pull the
+                      same line for a check → HELPER tear-out, not an extension of the main bbox.
+                    - Primary section totals that SUM the official estimate column stay on MAIN;
+                      do not fold neighboring variance columns into that main just because they
+                      share the same rows.
+                    - If still ambiguous after reading formulas, prefer a separate helper bbox over
+                      merging the side pad into main.
 
-                SCRATCH
-                - Only unanchored floats / far-right checksums with no section label.
-                - Do NOT mark intermediate cells inside a helper breakout as separate scratch.
+                    SCRATCH
+                    - Only unanchored floats / far-right checksums with no section label.
+                    - Do NOT mark intermediate cells inside a helper breakout as separate scratch.
 
-                bboxes must use addresses present in the dump. No invented cells.
-                """;
-        String user = formatBatchRegionLayoutPrompt(prompts);
-        CompletionResult result = client.completeJson(system, user, REGION_LAYOUT_MAX_COMPLETION_TOKENS);
-        if (result.truncated()) {
-            result = client.completeJson(
-                    system + "\nPrior response was TRUNCATED. Emit the JSON objects immediately, shortest form.",
-                    user + "\n\nRetry after truncation: JSON objects only.",
-                    REGION_LAYOUT_MAX_COMPLETION_TOKENS);
+                    bboxes must use addresses present in the dump. No invented cells.
+                    """;
+            String user = formatBatchRegionLayoutPrompt(prompts);
+            CompletionResult result = c.completeJson(system, user, REGION_LAYOUT_MAX_COMPLETION_TOKENS);
             if (result.truncated()) {
-                throw new IllegalStateException(
-                        "OpenRouter region layout batch truncated after retry: finish="
-                                + result.finishReason());
+                result = c.completeJson(
+                        system + "\nPrior response was TRUNCATED. Emit the JSON objects immediately, shortest form.",
+                        user + "\n\nRetry after truncation: JSON objects only.",
+                        REGION_LAYOUT_MAX_COMPLETION_TOKENS);
+                if (result.truncated()) {
+                    throw new IllegalStateException(
+                            "OpenRouter region layout batch truncated after retry: finish="
+                                    + result.finishReason());
+                }
             }
-        }
-        return RegionLayoutBatchResponseParser.parse(result.content());
+            return RegionLayoutBatchResponseParser.parse(result.content());
+        });
     }
 
     private static String formatBatchRegionLayoutPrompt(java.util.List<RegionLayoutPrompt> prompts) {
@@ -229,6 +259,14 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
         default UsageTotals usageTotals() {
             return UsageTotals.empty();
+        }
+
+        /**
+         * Run a whole operation (call + parse) against this client. A model chain overrides
+         * this to try each model in turn when the operation throws.
+         */
+        default <T> T perModel(java.util.function.Function<CompletionsClient, T> operation) {
+            return operation.apply(this);
         }
     }
 
