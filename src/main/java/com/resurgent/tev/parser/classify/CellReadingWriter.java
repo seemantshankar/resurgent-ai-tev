@@ -126,6 +126,15 @@ public final class CellReadingWriter {
                         .withBatching(tuning.cellBatchSize(), tuning.concurrency())
                         .withWorksheetScope(llmWorksheetIds)
                         .withUnstatedScales(unknowns);
+                CellDecisionClient decisionModel = LlmEnvironment.decisionClientOrNull();
+                if (decisionModel != null) {
+                    classifier.withDecisionModel(decisionModel)
+                            .withDecisionTuning(
+                                    LlmEnvironment.decisionMinConfidence(), LlmEnvironment.decisionConcurrency());
+                    if (LlmEnvironment.decisionCompareRequested()) {
+                        classifier.withDecisionComparison(LlmEnvironment.decisionCompareCsv());
+                    }
+                }
                 dynamicDict = classifier.getDynamicDictionary();
                 // Inputs first, then let formulas follow them, then whatever is still untyped.
                 List<InterpretationCellView> inputCells = new ArrayList<>();

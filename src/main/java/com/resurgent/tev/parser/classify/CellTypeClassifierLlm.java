@@ -35,6 +35,9 @@ import java.util.Objects;
  */
 public class CellTypeClassifierLlm {
     private static final double MIN_CONFIDENCE = 0.80;
+    /** Measured on OM Arham: D1 agreed with the chat model on 99.8% of cells at >= 0.90, 97% at >= 0.80. */
+    static final double DEFAULT_DECISION_MIN_CONFIDENCE = 0.90;
+    static final int DEFAULT_DECISION_CONCURRENCY = 8;
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String SYSTEM_PROMPT = """
             You are a financial model cell type classifier. Your task is to classify numeric cells in financial models.
@@ -63,6 +66,11 @@ public class CellTypeClassifierLlm {
     private int concurrency = 1;
     private java.util.Set<Long> llmWorksheetIds; // null: every sheet is sent to the model
     private UnstatedScales unknowns = new UnstatedScales();
+    private CellDecisionClient decisions; // null: every cell goes to the chat model
+    private double decisionMinConfidence = DEFAULT_DECISION_MIN_CONFIDENCE;
+    private int decisionConcurrency = DEFAULT_DECISION_CONCURRENCY;
+    private boolean compareDecisions;     // shadow mode: ask both models, trust only the chat model
+    private java.nio.file.Path compareCsv;
 
     public CellTypeClassifierLlm(WorkspaceRepository repo, ClassifierLlm llm) {
         this(repo, llm, new DynamicKindTokens());
@@ -90,6 +98,33 @@ public class CellTypeClassifierLlm {
     /** Where money typed from a keyword alone, with no scale stated anywhere, gets its unknown scale. */
     CellTypeClassifierLlm withUnstatedScales(UnstatedScales unknowns) {
         this.unknowns = unknowns;
+        return this;
+    }
+
+    /**
+     * Try a decision model (kind + scale from fixed options) on every cell before the chat
+     * model; cells it is unsure about, or fails on, still go to the chat model.
+     */
+    CellTypeClassifierLlm withDecisionModel(CellDecisionClient decisions) {
+        this.decisions = decisions;
+        return this;
+    }
+
+    /** Confidence the decision model must reach to settle a cell, and calls in flight at once. */
+    CellTypeClassifierLlm withDecisionTuning(double minConfidence, int concurrency) {
+        this.decisionMinConfidence = minConfidence;
+        this.decisionConcurrency = Math.max(1, concurrency);
+        return this;
+    }
+
+    /**
+     * Shadow mode: the decision model is asked about every cell the chat model will type, but
+     * its answers are never applied. A report of how often the two agree is printed afterwards
+     * (and written to {@code csv} when given).
+     */
+    CellTypeClassifierLlm withDecisionComparison(java.nio.file.Path csv) {
+        this.compareDecisions = true;
+        this.compareCsv = csv;
         return this;
     }
 
@@ -154,6 +189,24 @@ public class CellTypeClassifierLlm {
             return;
         }
 
+        List<InterpretationCellView> compared = List.of();
+        List<ParallelCalls.Outcome<CellDecisionClient.Decision>> shadow = List.of();
+        if (decisions != null && compareDecisions) {
+            compared = List.copyOf(stillUntyped);
+            long shadowStart = System.nanoTime();
+            shadow = askDecisions(compared, cells, settled);
+            System.err.println("[cell-decision] shadow mode: asked D1 about " + compared.size() + " cells in "
+                    + (System.nanoTime() - shadowStart) / 1_000_000 + "ms; answers are NOT applied");
+            System.err.flush();
+        } else if (decisions != null) {
+            stillUntyped = decideWithDecisionModel(stillUntyped, cells, settled);
+            if (stillUntyped.isEmpty()) {
+                System.err.println("[cell-classifier] All cells typed by decision model, skipping chat LLM");
+                System.err.flush();
+                return;
+            }
+        }
+
         System.err.println("[cell-classifier] Classifying " + stillUntyped.size() + " untyped cells via LLM");
         System.err.flush();
 
@@ -206,6 +259,120 @@ public class CellTypeClassifierLlm {
                     + " done (" + cellsDone + "/" + ordered.size() + " cells)");
             System.err.flush();
         }
+        if (!compared.isEmpty()) {
+            reportComparison(compared, shadow, settled);
+        }
+    }
+
+    private void reportComparison(
+            List<InterpretationCellView> compared,
+            List<ParallelCalls.Outcome<CellDecisionClient.Decision>> shadow,
+            Map<Long, ReadingOutcome> settled) {
+        List<DecisionComparison.Row> rows = new ArrayList<>();
+        int failed = 0;
+        for (int i = 0; i < compared.size(); i++) {
+            if (!shadow.get(i).ok()) {
+                failed++;
+                continue;
+            }
+            InterpretationCellView cell = compared.get(i);
+            ReadingOutcome chat = settled.get(cell.cellId());
+            boolean typed = chat != null && chat.refusal == null && chat.kind != null;
+            rows.add(new DecisionComparison.Row(
+                    cell.cellId(), cell.coord(), ctx.rowLabel(cell), shadow.get(i).value(),
+                    typed ? chat.kind : null,
+                    typed && chat.scale != null ? chat.scale.wireName() : null));
+        }
+        DecisionComparison comparison = new DecisionComparison(rows);
+        System.err.print(comparison.report());
+        if (failed > 0) {
+            System.err.println("[d1-compare] " + failed + " D1 calls failed and are not in the comparison");
+        }
+        if (compareCsv != null) {
+            try {
+                comparison.writeCsv(compareCsv);
+                System.err.println("[d1-compare] per-cell rows written to " + compareCsv);
+            } catch (java.io.IOException e) {
+                System.err.println("[d1-compare] could not write " + compareCsv + ": " + e.getMessage());
+            }
+        }
+        System.err.flush();
+    }
+
+    /** Cells the decision model could not settle, in their original order. */
+    private List<InterpretationCellView> decideWithDecisionModel(
+            List<InterpretationCellView> pending,
+            List<InterpretationCellView> allCells,
+            Map<Long, ReadingOutcome> settled) {
+        long start = System.nanoTime();
+        List<ParallelCalls.Outcome<CellDecisionClient.Decision>> outcomes = askDecisions(pending, allCells, settled);
+        List<InterpretationCellView> deferred = new ArrayList<>();
+        int failed = 0;
+        int lowConfidence = 0;
+        for (int i = 0; i < pending.size(); i++) {
+            InterpretationCellView cell = pending.get(i);
+            var outcome = outcomes.get(i);
+            if (!outcome.ok()) {
+                failed++;
+                deferred.add(cell);
+                continue;
+            }
+            CellDecisionClient.Decision d = outcome.value();
+            if (d.confidence() < decisionMinConfidence) {
+                lowConfidence++;
+                deferred.add(cell);
+                continue;
+            }
+            String rowLabel = KindTokens.normalizeLabel(ctx.rowLabel(cell));
+            String colLabel = KindTokens.normalizeLabel(ctx.columnLabel(cell));
+            boolean money = ReadingOutcome.MONEY.equals(d.kind());
+            String currency = money ? extractCurrencyFromLabels(rowLabel, colLabel) : "";
+            String unit = money ? "" : extractUnitFromLabels(rowLabel, colLabel);
+            applyResponse(cell, new CellTypeResponse(null, d.kind(), d.scale(), unit, currency, d.confidence()), settled);
+            if (settled.get(cell.cellId()) != null
+                    && ReadingOutcome.UNTYPABLE.equals(settled.get(cell.cellId()).refusal)) {
+                deferred.add(cell); // answer rejected (e.g. unknown scale)
+            }
+        }
+        long ms = (System.nanoTime() - start) / 1_000_000;
+        System.err.println("[cell-decision] " + (pending.size() - deferred.size()) + "/" + pending.size()
+                + " cells settled by decision model in " + ms + "ms; " + lowConfidence
+                + " low-confidence and " + failed + " failed deferred to chat LLM");
+        System.err.flush();
+        return deferred;
+    }
+
+    private List<ParallelCalls.Outcome<CellDecisionClient.Decision>> askDecisions(
+            List<InterpretationCellView> pending,
+            List<InterpretationCellView> allCells,
+            Map<Long, ReadingOutcome> settled) {
+        List<java.util.concurrent.Callable<CellDecisionClient.Decision>> tasks = new ArrayList<>();
+        for (InterpretationCellView cell : pending) {
+            String state = formatDecisionState(buildCellTypeRequest(cell, allCells, settled), ctx.region(cell));
+            tasks.add(() -> decisions.decide(state));
+        }
+        return ParallelCalls.run(tasks, decisionConcurrency);
+    }
+
+    private String formatDecisionState(CellTypeRequest request, RegionContext region) {
+        StringBuilder sb = new StringBuilder();
+        appendRegion(sb, region);
+        sb.append("Cell: ").append(request.coord).append(" (display: \"").append(request.displayValue).append("\"");
+        if (!request.formulaText.isBlank()) {
+            sb.append(", formula: \"").append(request.formulaText).append("\"");
+        }
+        sb.append(")\n");
+        if (!request.rowLabel.isBlank()) {
+            sb.append("Row Label: ").append(request.rowLabel).append("\n");
+        }
+        if (!request.columnLabel.isBlank()) {
+            sb.append("Column Label: ").append(request.columnLabel).append("\n");
+        }
+        for (NeighborCell neighbor : request.neighbors) {
+            sb.append("Neighbour ").append(neighbor.direction).append(": ").append(neighbor.displayValue)
+                    .append(" (").append(neighbor.type).append(")\n");
+        }
+        return sb.toString();
     }
 
     /**
