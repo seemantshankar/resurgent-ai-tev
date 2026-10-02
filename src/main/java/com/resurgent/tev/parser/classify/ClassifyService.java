@@ -288,6 +288,7 @@ public final class ClassifyService {
                 Progress.phase("classify", "STAGE 3/3 START - Layer B (typing every numeric cell)");
                 stageStarted = System.nanoTime();
                 cellReader().replace(repo, parseRunId, llm);
+                saveCellLabels(repo, parseRunId);
                 Progress.phase("classify", "STAGE 3/3 DONE - Layer B took " + secondsSince(stageStarted)
                         + "s; saving results");
                 db.connection().commit();
@@ -329,6 +330,7 @@ public final class ClassifyService {
             System.err.println("[classify] Running Layer B (cell type classification) with batching...");
             System.err.flush();
             cellReader().replace(repo, parseRunId, llm);
+            saveCellLabels(repo, parseRunId);
             db.connection().commit();
         } catch (Exception e) {
             db.connection().rollback();
@@ -339,6 +341,23 @@ public final class ClassifyService {
 
         return new ClassifySummary(
                 parseRunId, dispositions.size(), 0, dispositions.size());
+    }
+
+    /**
+     * Save, for every cell, the row header, column header and period/scale/currency/unit evidence
+     * it was read under, so a stored cell can be understood without re-running the resolver.
+     * Every candidate is passed, so the coverage parents make this every cell of the parse run.
+     * Runs in the caller's transaction.
+     */
+    private void saveCellLabels(WorkspaceRepository repo, long parseRunId) throws SQLException {
+        List<CandidateRow> candidates = repo.selectCandidatesForParseRun(parseRunId);
+        Progress.phase("classify", "saving row/column labels for every cell");
+        long started = System.nanoTime();
+        HeaderBindingWriter.Written written = HeaderBindingWriter.write(repo, parseRunId, candidates);
+        LlmStats.GLOBAL.put("layer-b", "label_cells_saved", written.cells());
+        LlmStats.GLOBAL.put("layer-b", "label_evidence_rows_saved", written.evidenceRows());
+        Progress.phase("classify", "saved " + written.evidenceRows() + " label rows for " + written.cells()
+                + " cells in " + secondsSince(started) + "s");
     }
 
     void materializeLlmRegions(WorkspaceRepository repo, long parseRunId)

@@ -105,6 +105,21 @@ class ClassifyServiceTest {
                     repo.selectPacketDispositionsForParseRun(ingest.parseRunId());
             assertThat(dispositions).hasSize(2);
             assertThat(dispositions).allMatch(d -> d.about().contains("Capex item table"));
+
+            // The normal classify run saves each cell's row/column labels (not only classify --sheet).
+            try (var st = db.connection().createStatement();
+                    var rs = st.executeQuery(
+                            "SELECT COUNT(*) FROM cell_interpretation_evidence e JOIN cell c USING (cell_id)"
+                                    + " WHERE e.role = 'row_header' AND e.resolution = 'resolved'"
+                                    + " AND c.coord = 'B5' AND e.source_text = 'Item 4'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getInt(1)).as("B5 keeps its row label 'Item 4'").isEqualTo(1);
+            }
+            try (var st = db.connection().createStatement();
+                    var rs = st.executeQuery("SELECT COUNT(*) FROM cell_interpretation")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getInt(1)).isPositive();
+            }
         }
     }
 }

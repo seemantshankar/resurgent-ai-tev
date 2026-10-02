@@ -19,10 +19,14 @@ final class HeaderBindingWriter {
 
     private HeaderBindingWriter() {}
 
-    static void write(WorkspaceRepository repo, long parseRunId, List<CandidateRow> candidates)
+    /** Cells and evidence rows written by the last {@link #write}; for the run log and stats. */
+    record Written(int cells, int evidenceRows) {}
+
+    static Written write(WorkspaceRepository repo, long parseRunId, List<CandidateRow> candidates)
             throws SQLException {
+        int evidenceRows = 0;
         if (candidates.isEmpty()) {
-            return;
+            return new Written(0, 0);
         }
         List<InterpretationCellView> cells = repo.selectInterpretationCellsForParseRun(parseRunId);
         Map<Long, InterpretationCellView> byId = InterpretationEvidenceResolver.indexCells(cells);
@@ -46,10 +50,13 @@ final class HeaderBindingWriter {
         }
         InterpretationEvidenceResolver.ResolveCache cache =
                 new InterpretationEvidenceResolver.ResolveCache(byId);
+        int done = 0;
         for (InterpretationCellView cell : cells) {
             if (!eligible.contains(cell.cellId())) {
                 continue;
             }
+            com.resurgent.tev.parser.Progress.step("labels", "cells with row/column labels saved",
+                    ++done, eligible.size(), 2500);
             NomenclatureBinding binding = bindingsByCell.get(cell.cellId());
             String status = binding != null ? "bound" : "not_applicable";
             repo.insertCellInterpretation(
@@ -68,7 +75,9 @@ final class HeaderBindingWriter {
                     binding);
             for (InterpretationEvidence item : evidence) {
                 repo.insertInterpretationEvidence(item);
+                evidenceRows++;
             }
         }
+        return new Written(done, evidenceRows);
     }
 }
