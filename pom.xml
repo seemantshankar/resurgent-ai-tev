@@ -134,7 +134,7 @@
             </program>
           </programs>
           <repositoryLayout>flat</repositoryLayout>
-          <useWildcardClassPath>true</useWildcardClassPath>
+          <useWildcardClassPath>false</useWildcardClassPath>
           <assembleDirectory>${project.build.directory}/appassembler</assembleDirectory>
         </configuration>
       </plugin>
