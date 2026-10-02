@@ -46,7 +46,9 @@ final class LayerAResponseParser {
                                 + " snippet=" + snippet(completion));
             }
             return new LayerAJudgment(
-                    family, triage, relevance, rowLabels, columnHeaders, head, about.trim());
+                    family, triage, relevance, rowLabels, columnHeaders, head, about.trim(),
+                    statedScale(text(root, "statedScale", "stated_scale")),
+                    cellCoord(text(root, "scaleCell", "scale_cell")));
         } catch (IllegalStateException | IllegalArgumentException e) {
             throw e instanceof IllegalStateException ise
                     ? ise
@@ -55,6 +57,22 @@ final class LayerAResponseParser {
             throw new IllegalStateException(
                     "LLM returned unparseable Layer A JSON: " + e.getMessage(), e);
         }
+    }
+
+    /** A scale wire name, or null for anything else (an unknown scale is treated as not stated). */
+    static String statedScale(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return CellScale.fromWire(value.strip().toLowerCase(java.util.Locale.ROOT)).wireName();
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    static String cellCoord(String value) {
+        return value == null || value.isBlank() ? null : value.strip().toUpperCase(java.util.Locale.ROOT);
     }
 
     static String extractJsonObject(String completion) {

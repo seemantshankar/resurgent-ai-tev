@@ -184,6 +184,9 @@ public final class CellReadingInferencer {
 
         if (allAgree) {
             trace("[inference]   All " + typedOutcomes.size() + " neighbors agree on " + first.kind);
+            if (first.scaleUnstated()) {
+                return first.as(ReadingOutcome.DERIVED); // shares the neighbours' unstated scale
+            }
             return ReadingOutcome.typed(
                     first.kind, first.scale, first.unit, first.currency, ReadingOutcome.DERIVED);
         }
@@ -217,12 +220,14 @@ public final class CellReadingInferencer {
         }
 
         Map<String, Long> typeFreq = new HashMap<>();
+        Map<String, ReadingOutcome> firstOfType = new HashMap<>();
         colCells.stream()
                 .map(c -> settled.get(c.cellId()))
                 .filter(o -> o != null && o.typed())
                 .forEach(o -> {
                     String key = o.kind + "|" + (o.scale == null ? "null" : o.scale.wireName()) + "|" + o.currency;
                     typeFreq.merge(key, 1L, Long::sum);
+                    firstOfType.putIfAbsent(key, o);
                 });
 
         String dominantType = typeFreq.entrySet().stream()
@@ -253,8 +258,10 @@ public final class CellReadingInferencer {
             ReadingOutcome outcome = settled.get(cellId);
 
             if (outcome != null && ReadingOutcome.UNTYPABLE.equals(outcome.refusal) && isNumeric(cell)) {
-                settled.put(cellId, ReadingOutcome.typed(
-                        kind, scale, "", currency, ReadingOutcome.DERIVED));
+                ReadingOutcome sample = firstOfType.get(dominantType);
+                settled.put(cellId, sample.scaleUnstated()
+                        ? sample.as(ReadingOutcome.DERIVED) // the column's money has no stated scale
+                        : ReadingOutcome.typed(kind, scale, "", currency, ReadingOutcome.DERIVED));
             }
         }
     }

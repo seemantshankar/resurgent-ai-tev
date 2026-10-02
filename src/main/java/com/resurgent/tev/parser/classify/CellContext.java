@@ -23,6 +23,11 @@ interface CellContext {
     /** Layer A region of the cell, or {@link RegionContext#NONE}. */
     RegionContext region(InterpretationCellView cell);
 
+    /** The scale this cell's region or sheet states for money, or {@code null}. */
+    default CellScale statedScale(InterpretationCellView cell) {
+        return null;
+    }
+
     /** Stable identity of the workbook (file hash) for de-duplicating evidence across runs. */
     String workbookKey();
 

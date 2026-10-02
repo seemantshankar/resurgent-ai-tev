@@ -487,8 +487,8 @@ public final class WorkspaceRepository {
         }
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO cell_reading (parse_run_id, cell_id, kind, scale, unit, currency,"
-                        + " absolute_amount, type_source, refusal)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                        + " absolute_amount, type_source, refusal, scale_basis)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
             for (CellReading row : readings) {
                 ps.setLong(1, parseRunId);
                 ps.setLong(2, row.cellId());
@@ -499,6 +499,7 @@ public final class WorkspaceRepository {
                 setNullableString(ps, 7, row.absoluteAmount());
                 setNullableString(ps, 8, row.typeSource());
                 setNullableString(ps, 9, row.refusal());
+                setNullableString(ps, 10, row.scaleBasis());
                 ps.addBatch();
             }
             ps.executeBatch();
@@ -508,7 +509,7 @@ public final class WorkspaceRepository {
     public List<CellReading> selectCellReadingsForParseRun(long parseRunId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT parse_run_id, cell_id, kind, scale, unit, currency, absolute_amount,"
-                        + " type_source, refusal FROM cell_reading WHERE parse_run_id = ?"
+                        + " type_source, refusal, scale_basis FROM cell_reading WHERE parse_run_id = ?"
                         + " ORDER BY cell_id")) {
             ps.setLong(1, parseRunId);
             try (ResultSet rs = ps.executeQuery()) {
@@ -523,7 +524,8 @@ public final class WorkspaceRepository {
                             rs.getString("currency"),
                             rs.getString("absolute_amount"),
                             rs.getString("type_source"),
-                            rs.getString("refusal")));
+                            rs.getString("refusal"),
+                            rs.getString("scale_basis")));
                 }
                 return rows;
             }
@@ -1085,8 +1087,9 @@ public final class WorkspaceRepository {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO packet_disposition (parse_run_id, candidate_id, schedule_family,"
                         + " triage, relevance, row_labels, column_headers, packet_default_head,"
-                        + " about, parent_candidate_id, cheap_pass, created_at)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        + " about, parent_candidate_id, cheap_pass, created_at,"
+                        + " stated_scale, scale_evidence_cell)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, row.parseRunId());
             ps.setLong(2, row.candidateId());
@@ -1100,6 +1103,8 @@ public final class WorkspaceRepository {
             setLong(ps, 10, row.parentCandidateId());
             ps.setInt(11, row.cheapPass() ? 1 : 0);
             ps.setString(12, Timestamps.now());
+            ps.setString(13, row.statedScale());
+            ps.setString(14, row.scaleEvidenceCell());
             ps.executeUpdate();
             return generatedId(ps);
         }
@@ -1110,7 +1115,7 @@ public final class WorkspaceRepository {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT candidate_id, parse_run_id, schedule_family, triage, relevance,"
                         + " row_labels, column_headers, packet_default_head, about,"
-                        + " parent_candidate_id, cheap_pass"
+                        + " parent_candidate_id, cheap_pass, stated_scale, scale_evidence_cell"
                         + " FROM packet_disposition WHERE parse_run_id = ?"
                         + " ORDER BY disposition_id")) {
             ps.setLong(1, parseRunId);
@@ -1128,7 +1133,9 @@ public final class WorkspaceRepository {
                             rs.getString("packet_default_head"),
                             rs.getString("about"),
                             getNullableLong(rs, "parent_candidate_id"),
-                            rs.getInt("cheap_pass") == 1));
+                            rs.getInt("cheap_pass") == 1,
+                            rs.getString("stated_scale"),
+                            rs.getString("scale_evidence_cell")));
                 }
                 return rows;
             }

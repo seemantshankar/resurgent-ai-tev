@@ -26,6 +26,9 @@ import java.util.Set;
  */
 public final class CellReadingWriter {
 
+    private static final java.util.regex.Pattern CONVERSION = java.util.regex.Pattern.compile(
+            "[*/]\\s*(?:1000|100000|1000000|10000000|1000000000)(?![0-9.])");
+
     private ClassifyTuning tuning = ClassifyTuning.sequential();
     private Set<Long> llmWorksheetIds; // null: every sheet may go to the model
 
@@ -64,11 +67,20 @@ public final class CellReadingWriter {
             gaps.computeIfAbsent(gap.fromCellId(), id -> new ArrayList<>()).add(gap.reason());
         }
         Map<String, Long> sheetIds = new HashMap<>();
+        Map<Long, String> sheetNames = new HashMap<>();
         for (WorksheetRef sheet : repo.selectWorksheetsForParseRun(parseRunId)) {
             sheetIds.put(sheet.sheetName().toLowerCase(Locale.ROOT), sheet.worksheetId());
+            sheetNames.put(sheet.worksheetId(), sheet.sheetName());
         }
         Map<Long, String> formats = repo.selectNumberFormatsForParseRun(parseRunId);
         String home = HomeCurrency.resolve(cells);
+
+        Map<Long, PacketDisposition> dispositions = new HashMap<>();
+        for (PacketDisposition d : repo.selectPacketDispositionsForParseRun(parseRunId)) {
+            dispositions.put(d.candidateId(), d);
+        }
+        StatedScales stated = new StatedScales(cells, owners, dispositions);
+        UnstatedScales unknowns = new UnstatedScales();
 
         Set<Long> numericIds = new HashSet<>();
         for (InterpretationCellView cell : cells) {
@@ -92,37 +104,13 @@ public final class CellReadingWriter {
                 String[] labels = InterpretationEvidenceResolver.resolvedHeaderTexts(
                         parseRunId, cell, cache, owners, members, candidatesById);
                 settled.put(cell.cellId(), InputReading.type(
-                        cell, labels[0], labels[1], formats.get(cell.cellId()), home));
+                        cell, labels[0], labels[1], formats.get(cell.cellId()), home, stated.of(cell), unknowns));
             } else {
                 formulas.add(cell);
             }
         }
 
-        boolean progressed = true;
-        while (progressed) {
-            progressed = false;
-            for (InterpretationCellView cell : formulas) {
-                if (settled.containsKey(cell.cellId())) {
-                    continue;
-                }
-                Set<Long> preds = precedents.getOrDefault(cell.cellId(), Set.of());
-                if (waiting(preds, numericIds, settled)) {
-                    continue;
-                }
-                settled.put(cell.cellId(), ReadingArithmetic.derive(
-                        cell.formulaText(),
-                        cell.worksheetId(),
-                        preds,
-                        numericIds,
-                        byId,
-                        sheetIds,
-                        settled));
-                progressed = true;
-            }
-        }
-        for (InterpretationCellView cell : formulas) {
-            settled.putIfAbsent(cell.cellId(), ReadingOutcome.refused(ReadingOutcome.UNTYPABLE));
-        }
+        propagate(formulas, precedents, numericIds, byId, sheetIds, settled, stated, unknowns);
 
         // Post-process: infer types for untypable cells based on structural context
         new CellReadingInferencer(cells).infer(settled);
@@ -131,22 +119,34 @@ public final class CellReadingWriter {
         DynamicKindTokens dynamicDict = null;
         try {
             if (llm != null) {
-                Map<Long, PacketDisposition> dispositions = new HashMap<>();
-                for (PacketDisposition d : repo.selectPacketDispositionsForParseRun(parseRunId)) {
-                    dispositions.put(d.candidateId(), d);
-                }
-                Map<Long, String> sheetNames = new HashMap<>();
-                for (WorksheetRef sheet : repo.selectWorksheetsForParseRun(parseRunId)) {
-                    sheetNames.put(sheet.worksheetId(), sheet.sheetName());
-                }
                 CellContext context = new ResolverCellContext(
                         parseRunId, cache, owners, members, candidatesById, dispositions, sheetNames,
-                        repo.selectSourceFileHashForParseRun(parseRunId));
+                        repo.selectSourceFileHashForParseRun(parseRunId), stated);
                 CellTypeClassifierLlm classifier = new CellTypeClassifierLlm(repo, llm)
                         .withBatching(tuning.cellBatchSize(), tuning.concurrency())
-                        .withWorksheetScope(llmWorksheetIds);
+                        .withWorksheetScope(llmWorksheetIds)
+                        .withUnstatedScales(unknowns);
                 dynamicDict = classifier.getDynamicDictionary();
-                classifier.classifyRemaining(cells, settled, context);
+                // Inputs first, then let formulas follow them, then whatever is still untyped.
+                List<InterpretationCellView> inputCells = new ArrayList<>();
+                for (InterpretationCellView cell : cells) {
+                    if (!precedents.containsKey(cell.cellId())) {
+                        inputCells.add(cell);
+                    }
+                }
+                classifier.classifyRemaining(inputCells, settled, context);
+                boolean retyped = false;
+                for (InterpretationCellView cell : formulas) {
+                    ReadingOutcome now = settled.get(cell.cellId());
+                    if (now != null && ReadingOutcome.UNTYPABLE.equals(now.refusal)) {
+                        settled.remove(cell.cellId());
+                        retyped = true;
+                    }
+                }
+                if (retyped) {
+                    propagate(formulas, precedents, numericIds, byId, sheetIds, settled, stated, unknowns);
+                }
+                classifier.classifyRemaining(formulas, settled, context);
             }
         } finally {
             // Keep what was learned even if the LLM pass failed part-way; never fails the parse.
@@ -155,6 +155,9 @@ public final class CellReadingWriter {
                 dynamicDict.printReport();
             }
         }
+
+        settleUnstatedScales(cells, settled, unknowns, sheetNames);
+        reportScaleConflicts(cells, settled, stated);
 
         List<CellReading> rows = new ArrayList<>();
         for (InterpretationCellView cell : cells) {
@@ -166,6 +169,137 @@ public final class CellReadingWriter {
         }
         repo.replaceCellReadings(parseRunId, rows);
 
+    }
+
+    /**
+     * Money the sheet or region says is in one scale but that was settled in another. The
+     * arithmetic or the label wins (a {@code /100000} legitimately changes scale), so this
+     * only reports: it is the list a person reads to find a wrong header or a wrong rule.
+     */
+    private static void reportScaleConflicts(
+            List<InterpretationCellView> cells, Map<Long, ReadingOutcome> settled, StatedScales stated) {
+        int count = 0;
+        List<String> samples = new ArrayList<>();
+        for (InterpretationCellView cell : cells) {
+            ReadingOutcome outcome = settled.get(cell.cellId());
+            CellScale says = stated.of(cell);
+            if (outcome == null || says == null || outcome.refusal != null
+                    || !ReadingOutcome.MONEY.equals(outcome.kind) || outcome.scale == null || outcome.scale == says
+                    || (cell.formulaText() != null && CONVERSION.matcher(cell.formulaText()).find())) {
+                continue; // a formula that converts scale is the explanation, not a conflict
+            }
+            count++;
+            if (samples.size() < 10) {
+                samples.add(cell.coord() + " is " + outcome.scale.wireName() + ", sheet says " + says.wireName());
+            }
+        }
+        if (count > 0) {
+            System.err.println("[cell-reading] " + count + " money cells differ from the scale their region or "
+                    + "sheet states (the label wins); first: " + String.join("; ", samples));
+            System.err.flush();
+        }
+    }
+
+    /**
+     * Gives unstated money the scale the sheets that read it agree on (an {@code Interest}
+     * schedule with no unit text, read by a cash flow that states lakhs, is in lakhs). Money
+     * whose readers disagree, or that nothing stated reads, keeps no scale and no absolute
+     * amount: it is listed for review, not guessed.
+     */
+    private static void settleUnstatedScales(
+            List<InterpretationCellView> cells,
+            Map<Long, ReadingOutcome> settled,
+            UnstatedScales unknowns,
+            Map<Long, String> sheetNames) {
+        Map<Long, InterpretationCellView> byId = new HashMap<>();
+        for (InterpretationCellView cell : cells) {
+            byId.put(cell.cellId(), cell);
+        }
+        int inferred = 0;
+        int unread = 0;
+        Map<Integer, String> conflicts = new LinkedHashMap<>();
+        for (InterpretationCellView cell : cells) {
+            ReadingOutcome outcome = settled.get(cell.cellId());
+            if (outcome == null || !outcome.scaleUnstated()) {
+                continue;
+            }
+            Map<CellScale, Long> required = unknowns.required(outcome.scaleUnknown);
+            if (required.size() == 1) {
+                settled.put(cell.cellId(), outcome.withScale(required.keySet().iterator().next(), true));
+                inferred++;
+            } else if (required.isEmpty()) {
+                unread++;
+            } else {
+                conflicts.computeIfAbsent(unknowns.root(outcome.scaleUnknown), root -> {
+                    List<String> claims = new ArrayList<>();
+                    required.forEach((scale, by) -> claims.add(
+                            scale.wireName() + " by " + where(byId.get(by), sheetNames)));
+                    return where(byId.get(unknowns.originOf(root)), sheetNames) + " read as " + String.join(", ", claims);
+                });
+            }
+        }
+        if (inferred + unread + conflicts.size() > 0) {
+            System.err.println("[cell-reading] unstated money scale: " + inferred + " cells took the scale "
+                    + "the sheets reading them state; " + unread + " are read by nothing that states one (no scale)"
+                    + (conflicts.isEmpty() ? "" : "; " + conflicts.size() + " groups read in conflicting scales "
+                            + "(no scale): " + String.join("; ", conflicts.values().stream().limit(10).toList())));
+            System.err.flush();
+        }
+    }
+
+    private static String where(InterpretationCellView cell, Map<Long, String> sheetNames) {
+        return cell == null ? "?" : sheetNames.getOrDefault(cell.worksheetId(), "?") + "!" + cell.coord();
+    }
+
+    /**
+     * Types formula cells from their precedents until nothing more settles. Run again after the
+     * fallback has typed inputs, so a formula built on a cell the fallback just typed (a
+     * difference of two lakh subtotals) follows it instead of being typed on its own. Money a
+     * formula left unstated takes the scale its own region or sheet states, and that statement
+     * then fixes the scale of what it read.
+     */
+    private static void propagate(
+            List<InterpretationCellView> formulas,
+            Map<Long, Set<Long>> precedents,
+            Set<Long> numericIds,
+            Map<Long, InterpretationCellView> byId,
+            Map<String, Long> sheetIds,
+            Map<Long, ReadingOutcome> settled,
+            StatedScales stated,
+            UnstatedScales unknowns) {
+        boolean progressed = true;
+        while (progressed) {
+            progressed = false;
+            for (InterpretationCellView cell : formulas) {
+                if (settled.containsKey(cell.cellId())) {
+                    continue;
+                }
+                Set<Long> preds = precedents.getOrDefault(cell.cellId(), Set.of());
+                if (waiting(preds, numericIds, settled)) {
+                    continue;
+                }
+                ReadingOutcome outcome = ReadingArithmetic.derive(
+                        cell.formulaText(),
+                        cell.worksheetId(),
+                        preds,
+                        numericIds,
+                        byId,
+                        sheetIds,
+                        settled,
+                        unknowns,
+                        cell.cellId());
+                CellScale says = outcome.scaleUnstated() ? stated.of(cell) : null;
+                if (says != null) {
+                    unknowns.require(outcome.scaleUnknown, says, cell.cellId());
+                    outcome = outcome.withScale(says, false);
+                }
+                settled.put(cell.cellId(), outcome);
+                progressed = true;
+            }
+        }
+        for (InterpretationCellView cell : formulas) {
+            settled.putIfAbsent(cell.cellId(), ReadingOutcome.refused(ReadingOutcome.UNTYPABLE));
+        }
     }
 
     private static boolean waiting(Set<Long> preds, Set<Long> numericIds, Map<Long, ReadingOutcome> settled) {
@@ -217,6 +351,10 @@ public final class CellReadingWriter {
         if (outcome.typed() && ReadingOutcome.MONEY.equals(outcome.kind)) {
             absolute = absoluteAmount(shownNumber(cell), outcome.scale);
         }
+        String basis = null;
+        if (outcome.typed() && ReadingOutcome.MONEY.equals(outcome.kind) && outcome.scale != null) {
+            basis = outcome.scaleInferred ? CellReading.SCALE_INFERRED : CellReading.SCALE_STATED;
+        }
         return new CellReading(
                 parseRunId,
                 cell.cellId(),
@@ -226,7 +364,8 @@ public final class CellReadingWriter {
                 outcome.currency,
                 absolute,
                 outcome.typeSource,
-                outcome.refusal);
+                outcome.refusal,
+                basis);
     }
 
     private static String shownNumber(InterpretationCellView cell) {

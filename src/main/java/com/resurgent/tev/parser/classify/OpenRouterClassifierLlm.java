@@ -530,6 +530,12 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             ArrayNode suggestedType = suggested.putArray("type");
             suggestedType.add("string");
             suggestedType.add("null");
+            for (String key : new String[] {"statedScale", "scaleCell"}) {
+                ObjectNode nullable = properties.putObject(key);
+                ArrayNode nullableType = nullable.putArray("type");
+                nullableType.add("string");
+                nullableType.add("null");
+            }
             objectProperty(properties, "about",
                     "Short paragraph (~4-8 sentences) grounded in CORE: identity, "
                             + "model function, row/column contents, and how amounts "
@@ -542,6 +548,8 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             required.add("rowLabels");
             required.add("columnHeaders");
             required.add("packetDefaultHead");
+            required.add("statedScale");
+            required.add("scaleCell");
             required.add("about");
             return format;
         }

@@ -11,6 +11,8 @@ import java.util.Set;
 /**
  * Types a formula from its precedents and the operators in {@code formula_text}.
  * A product stays unresolved until every factor is typed. A conflict is a refusal.
+ * Money of unstated scale never conflicts here: the operators record what they imply
+ * about it in {@link UnstatedScales}, and a stated scale wins over an unstated one.
  */
 final class ReadingArithmetic {
 
@@ -23,13 +25,15 @@ final class ReadingArithmetic {
             Set<Long> numericIds,
             Map<Long, InterpretationCellView> cells,
             Map<String, Long> sheetIds,
-            Map<Long, ReadingOutcome> settled) {
+            Map<Long, ReadingOutcome> settled,
+            UnstatedScales unknowns,
+            long cellId) {
         if (formula == null || formula.isBlank()) {
             return ReadingOutcome.refused(ReadingOutcome.UNTYPABLE);
         }
         try {
-            Parser parser = new Parser(
-                    formula, worksheetId, precedents, numericIds, cells, sheetIds, settled);
+            Parser parser = new Parser(formula, worksheetId, precedents, numericIds, cells, sheetIds, settled,
+                    new Links(unknowns, cellId));
             Val value = parser.parseExpression();
             if (!parser.finished() || value.group) {
                 return ReadingOutcome.refused(ReadingOutcome.UNTYPABLE);
@@ -48,6 +52,7 @@ final class ReadingArithmetic {
         private final Map<Long, InterpretationCellView> cells;
         private final Map<String, Long> sheetIds;
         private final Map<Long, ReadingOutcome> settled;
+        private final Links links;
         private int index;
 
         Parser(
@@ -57,7 +62,8 @@ final class ReadingArithmetic {
                 Set<Long> numericIds,
                 Map<Long, InterpretationCellView> cells,
                 Map<String, Long> sheetIds,
-                Map<Long, ReadingOutcome> settled) {
+                Map<Long, ReadingOutcome> settled,
+                Links links) {
             String body = formula.trim();
             if (body.startsWith("=")) {
                 body = body.substring(1);
@@ -69,6 +75,7 @@ final class ReadingArithmetic {
             this.cells = cells;
             this.sheetIds = sheetIds;
             this.settled = settled;
+            this.links = links;
         }
 
         boolean finished() {
@@ -85,7 +92,7 @@ final class ReadingArithmetic {
                 }
                 index++;
                 Val right = parseTerm();
-                value = op == '+' ? add(value, right) : add(value, negate(right));
+                value = op == '+' ? add(links, value, right) : add(links, value, negate(right));
             }
         }
 
@@ -98,7 +105,7 @@ final class ReadingArithmetic {
                 }
                 index++;
                 Val right = parseFactor();
-                value = op == '*' ? multiply(value, right) : divide(value, right);
+                value = op == '*' ? multiply(links, value, right) : divide(links, value, right);
             }
         }
 
@@ -201,7 +208,7 @@ final class ReadingArithmetic {
                 throw new IllegalArgumentException("call");
             }
             index++;
-            return apply(name, args);
+            return apply(links, name, args);
         }
 
         private Val parseRefRest(String sheetName) {
@@ -419,14 +426,25 @@ final class ReadingArithmetic {
 
     private record Ref(String sheet, int row, int col) {}
 
-    private static Val apply(String name, List<Val> args) {
+    /** Where the operators record what they imply about unstated scales, and on whose authority. */
+    private record Links(UnstatedScales unknowns, long cellId) {
+        void same(int a, int b) {
+            unknowns.same(a, b);
+        }
+
+        void require(int unknown, CellScale scale) {
+            unknowns.require(unknown, scale, cellId);
+        }
+    }
+
+    private static Val apply(Links links, String name, List<Val> args) {
         String fn = name.toUpperCase(Locale.ROOT);
         List<Val> flat = flatten(args);
         if (fn.equals("SUM") || fn.equals("AVERAGE") || fn.equals("MIN") || fn.equals("MAX")) {
-            return fold(flat, true);
+            return fold(links, flat, true);
         }
         if (fn.equals("PRODUCT")) {
-            return fold(flat, false);
+            return fold(links, flat, false);
         }
         if (fn.equals("ROUND") || fn.equals("ABS")) {
             for (Val arg : flat) {
@@ -454,7 +472,7 @@ final class ReadingArithmetic {
         return flat;
     }
 
-    private static Val fold(List<Val> args, boolean adding) {
+    private static Val fold(Links links, List<Val> args, boolean adding) {
         Val acc = null;
         for (Val arg : args) {
             if (arg.refusal != null) {
@@ -464,7 +482,7 @@ final class ReadingArithmetic {
                 acc = arg;
                 continue;
             }
-            acc = adding ? add(acc, arg) : multiply(acc, arg);
+            acc = adding ? add(links, acc, arg) : multiply(links, acc, arg);
         }
         return acc == null ? Val.refused(ReadingOutcome.UNTYPABLE) : acc;
     }
@@ -476,7 +494,7 @@ final class ReadingArithmetic {
         return value;
     }
 
-    private static Val add(Val left, Val right) {
+    private static Val add(Links links, Val left, Val right) {
         if (left.refusal != null) {
             return left;
         }
@@ -495,7 +513,8 @@ final class ReadingArithmetic {
         if (left.kind == null || right.kind == null) {
             return Val.refused(ReadingOutcome.UNTYPABLE);
         }
-        if (!left.kind.equals(right.kind) || left.scale != right.scale) {
+        boolean stated = left.unknown < 0 && right.unknown < 0;
+        if (!left.kind.equals(right.kind) || (stated && left.scale != right.scale)) {
             return Val.refused(ReadingOutcome.KIND_CONFLICT);
         }
         String currency = mergeCurrency(left, right);
@@ -506,10 +525,20 @@ final class ReadingArithmetic {
             return Val.refused(ReadingOutcome.KIND_CONFLICT);
         }
         String unit = left.unit.isEmpty() ? right.unit : left.unit;
-        return Val.dim(left.kind, left.scale, unit, currency);
+        if (stated) {
+            return Val.dim(left.kind, left.scale, unit, currency);
+        }
+        // Adding is only meaningful in one scale, so a stated side fixes the unstated one.
+        if (left.unknown >= 0 && right.unknown >= 0) {
+            links.same(left.unknown, right.unknown);
+            return Val.unstated(unit, currency, left.unknown);
+        }
+        Val known = left.unknown < 0 ? left : right;
+        links.require((left.unknown < 0 ? right : left).unknown, known.scale);
+        return Val.dim(known.kind, known.scale, unit, currency);
     }
 
-    private static Val multiply(Val left, Val right) {
+    private static Val multiply(Links links, Val left, Val right) {
         if (left.refusal != null) {
             return left;
         }
@@ -520,10 +549,10 @@ final class ReadingArithmetic {
             return Val.number(left.numeric.multiply(right.numeric));
         }
         if (left.number) {
-            return right;
+            return scaledByFactor(links, right, left.numeric);
         }
         if (right.number) {
-            return left;
+            return scaledByFactor(links, left, right.numeric);
         }
         if (ReadingOutcome.PERCENT.equals(left.kind)) {
             return right;
@@ -559,7 +588,37 @@ final class ReadingArithmetic {
         return Val.dim(ReadingOutcome.MONEY, scale, "", currency);
     }
 
-    private static Val divide(Val left, Val right) {
+    /** Powers of ten that convert between scales; other literals (x12, /365, 0.35) are plain arithmetic. */
+    private static boolean isScaleFactor(double factor) {
+        return factor == 1_000d || factor == 100_000d || factor == 1_000_000d
+                || factor == 10_000_000d || factor == 1_000_000_000d;
+    }
+
+    /**
+     * A money value multiplied by a literal. {@code x100000} turns lakhs into rupees, so the
+     * scale follows; {@code x1000} is left alone because a bare thousand is usually a count.
+     * A conversion that lands on no named scale (rupees x 100000) is refused, not guessed.
+     * Unstated money multiplied into rupees was in the scale the factor undoes.
+     */
+    private static Val scaledByFactor(Links links, Val value, java.math.BigDecimal factor) {
+        if (value.refusal != null || !ReadingOutcome.MONEY.equals(value.kind)) {
+            return value;
+        }
+        double f = factor.doubleValue();
+        if (f == 1_000d || !isScaleFactor(f)) {
+            return value;
+        }
+        if (value.unknown >= 0) {
+            links.require(value.unknown, CellScale.dividedBy(CellScale.UNIT, f));
+            return Val.dim(value.kind, CellScale.UNIT, value.unit, value.currency);
+        }
+        CellScale scaled = CellScale.multipliedBy(value.scale, f);
+        return scaled == null
+                ? Val.refused(ReadingOutcome.KIND_CONFLICT)
+                : Val.dim(value.kind, scaled, value.unit, value.currency);
+    }
+
+    private static Val divide(Links links, Val left, Val right) {
         if (left.refusal != null) {
             return left;
         }
@@ -576,8 +635,20 @@ final class ReadingArithmetic {
             if (left.kind == null || right.numeric.signum() == 0) {
                 return Val.refused(ReadingOutcome.UNTYPABLE);
             }
-            CellScale scaled = CellScale.dividedBy(left.scale, right.numeric.doubleValue());
-            return Val.dim(left.kind, scaled == null ? left.scale : scaled, left.unit, left.currency);
+            double divisor = right.numeric.doubleValue();
+            if (left.unknown >= 0 && isScaleFactor(divisor)) {
+                // Divided by 100000 to show lakhs: what was divided was rupees.
+                links.require(left.unknown, CellScale.UNIT);
+                return Val.dim(left.kind, CellScale.dividedBy(CellScale.UNIT, divisor), left.unit, left.currency);
+            }
+            if (ReadingOutcome.MONEY.equals(left.kind) && isScaleFactor(divisor)) {
+                CellScale scaled = CellScale.dividedBy(left.scale, divisor);
+                // A conversion that lands on no named scale (lakh / 100000) is not guessed.
+                return scaled == null
+                        ? Val.refused(ReadingOutcome.KIND_CONFLICT)
+                        : Val.dim(left.kind, scaled, left.unit, left.currency);
+            }
+            return left;
         }
         if (left.kind == null || right.kind == null) {
             return Val.refused(ReadingOutcome.UNTYPABLE);
@@ -636,6 +707,7 @@ final class ReadingArithmetic {
         final String refusal;
         final boolean group;
         final List<Val> members;
+        final int unknown; // UnstatedScales unknown in place of scale, or -1
 
         private Val(
                 boolean number,
@@ -646,7 +718,8 @@ final class ReadingArithmetic {
                 String currency,
                 String refusal,
                 boolean group,
-                List<Val> members) {
+                List<Val> members,
+                int unknown) {
             this.number = number;
             this.numeric = numeric;
             this.kind = kind;
@@ -656,27 +729,34 @@ final class ReadingArithmetic {
             this.refusal = refusal;
             this.group = group;
             this.members = members;
+            this.unknown = unknown;
         }
 
         static Val number(BigDecimal numeric) {
-            return new Val(true, numeric, null, null, "", "", null, false, List.of());
+            return new Val(true, numeric, null, null, "", "", null, false, List.of(), -1);
         }
 
         static Val of(ReadingOutcome outcome) {
-            return dim(outcome.kind, outcome.scale, outcome.unit, outcome.currency);
+            return outcome.scaleUnstated()
+                    ? unstated(outcome.unit, outcome.currency, outcome.scaleUnknown)
+                    : dim(outcome.kind, outcome.scale, outcome.unit, outcome.currency);
         }
 
         static Val dim(String kind, CellScale scale, String unit, String currency) {
             return new Val(false, null, kind, scale == null ? CellScale.UNIT : scale,
-                    unit, currency, null, false, List.of());
+                    unit, currency, null, false, List.of(), -1);
+        }
+
+        static Val unstated(String unit, String currency, int unknown) {
+            return new Val(false, null, ReadingOutcome.MONEY, null, unit, currency, null, false, List.of(), unknown);
         }
 
         static Val refused(String refusal) {
-            return new Val(false, null, null, null, "", "", refusal, false, List.of());
+            return new Val(false, null, null, null, "", "", refusal, false, List.of(), -1);
         }
 
         static Val group(List<Val> members) {
-            return new Val(false, null, null, null, "", "", null, true, List.copyOf(members));
+            return new Val(false, null, null, null, "", "", null, true, List.copyOf(members), -1);
         }
 
         ReadingOutcome toOutcome() {
@@ -685,6 +765,9 @@ final class ReadingArithmetic {
             }
             if (number || kind == null) {
                 return ReadingOutcome.refused(ReadingOutcome.UNTYPABLE);
+            }
+            if (unknown >= 0) {
+                return ReadingOutcome.unstated(unit, currency, ReadingOutcome.DERIVED, unknown);
             }
             return ReadingOutcome.typed(kind, scale, unit, currency, ReadingOutcome.DERIVED);
         }

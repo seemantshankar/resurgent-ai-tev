@@ -7,6 +7,7 @@ import com.resurgent.tev.parser.db.CellReading;
 import com.resurgent.tev.parser.db.InterpretationCellView;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
+import com.resurgent.tev.parser.db.WorksheetRef;
 import com.resurgent.tev.parser.ingest.IngestService;
 import com.resurgent.tev.parser.ingest.IngestSummary;
 import java.io.OutputStream;
@@ -104,8 +105,9 @@ class CellReadingWriterTest {
         CellReading amount = readings.get("B6");
         assertThat(amount.kind()).isEqualTo("money");
         assertThat(amount.currency()).isEqualTo("INR");
-        assertThat(amount.scale()).isEqualTo("unit");
-        assertThat(new BigDecimal(amount.absoluteAmount())).isEqualByComparingTo("10");
+        // A currency format names the currency, not the scale: nothing says these are rupees.
+        assertThat(amount.scale()).isNull();
+        assertThat(amount.absoluteAmount()).isNull();
     }
 
     @Test
@@ -148,6 +150,201 @@ class CellReadingWriterTest {
         assertThat(mixed.refusal()).isEqualTo("kind_conflict");
     }
 
+    @Test
+    void sheetTitleScaleTypesBareMoneyInputs() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lacs)");
+            sheet.createRow(2).createCell(0).setCellValue("Land cost");
+            sheet.getRow(2).createCell(1).setCellValue(12.5);
+            sheet.createRow(3).createCell(0).setCellValue("Occupancy %");
+            sheet.getRow(3).createCell(1).setCellValue(70);
+        }));
+
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").scale()).isEqualTo("lakh");
+        assertThat(readings.get("B4").kind()).isEqualTo("percent");
+        assertThat(readings.get("B4").scale()).isEqualTo("unit");
+    }
+
+    @Test
+    void labelScaleBeatsTheSheetTitle() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lacs)");
+            sheet.createRow(2).createCell(0).setCellValue("Machinery cost (Rs. crore)");
+            sheet.getRow(2).createCell(1).setCellValue(3);
+        }));
+
+        assertThat(readings.get("B3").scale()).isEqualTo("crore");
+    }
+
+    @Test
+    void twoDifferentTitleScalesStateNothing() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lacs)");
+            sheet.createRow(1).createCell(0).setCellValue("Detail (Amount in Rs)");
+            sheet.createRow(3).createCell(0).setCellValue("Land cost");
+            sheet.getRow(3).createCell(1).setCellValue(12.5);
+        }));
+
+        assertThat(readings.get("B4").kind()).isEqualTo("money");
+        assertThat(readings.get("B4").scale()).isNull();
+        assertThat(readings.get("B4").absoluteAmount()).isNull();
+    }
+
+    @Test
+    void moneyNothingStatesHasNoScaleRatherThanRupees() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Land cost");
+            sheet.getRow(0).createCell(1).setCellValue(12.5);
+            sheet.createRow(1).createCell(0).setCellValue("Building cost");
+            sheet.getRow(1).createCell(1).setCellValue(30);
+            sheet.createRow(2).createCell(1).setCellFormula("B1+B2");
+        }));
+
+        for (String coord : List.of("B1", "B2", "B3")) {
+            assertThat(readings.get(coord).kind()).isEqualTo("money");
+            assertThat(readings.get(coord).scale()).isNull();
+            assertThat(readings.get(coord).scaleBasis()).isNull();
+            assertThat(readings.get(coord).absoluteAmount()).isNull();
+        }
+    }
+
+    /**
+     * The OM Arham chain: an interest schedule with no unit text, read by a cash flow and a
+     * balance sheet that both state lakhs. The readers keep their statement, and the schedule
+     * takes it from them instead of the totals refusing as mixed scale.
+     */
+    @Test
+    void aStatedSheetReadingUnstatedMoneyFixesItsScale() throws Exception {
+        Map<String, CellReading> readings = read(book(workbook -> {
+            Sheet interest = workbook.createSheet("Interest");
+            interest.createRow(0).createCell(0).setCellValue("Statement of interest and repayment");
+            interest.createRow(2).createCell(0).setCellValue("Opening principal");
+            interest.getRow(2).createCell(1).setCellValue(2640);
+            interest.createRow(3).createCell(0).setCellValue("Repayment");
+            interest.getRow(3).createCell(1).setCellValue(15);
+            interest.createRow(4).createCell(0).setCellValue("Closing balance");
+            interest.getRow(4).createCell(1).setCellFormula("B3-B4");
+
+            Sheet cash = workbook.createSheet("CASH FLOW");
+            cash.createRow(0).createCell(0).setCellValue("Rs. In Lakhs");
+            cash.createRow(2).createCell(0).setCellValue("Repayment of term loan");
+            cash.getRow(2).createCell(1).setCellFormula("Interest!B4");
+
+            Sheet bs = workbook.createSheet("B S");
+            bs.createRow(0).createCell(0).setCellValue("Rs. In Lakhs");
+            bs.createRow(2).createCell(0).setCellValue("Secured term loan");
+            bs.getRow(2).createCell(1).setCellFormula("Interest!B5-'CASH FLOW'!B3");
+            bs.createRow(3).createCell(0).setCellValue("Current portion of loan");
+            bs.getRow(3).createCell(1).setCellFormula("'CASH FLOW'!B3");
+            bs.createRow(4).createCell(0).setCellValue("Share capital");
+            bs.getRow(4).createCell(1).setCellValue(1200);
+            bs.createRow(5).createCell(0).setCellValue("Total liabilities");
+            bs.getRow(5).createCell(1).setCellFormula("SUM(B3:B5)");
+        }));
+
+        assertThat(readings.get("CASH FLOW!B3").scale()).isEqualTo("lakh");
+        assertThat(readings.get("CASH FLOW!B3").scaleBasis()).isEqualTo("stated");
+        assertThat(readings.get("B S!B3").scale()).isEqualTo("lakh");
+        assertThat(readings.get("B S!B6").scale()).isEqualTo("lakh");
+        assertThat(readings.get("B S!B6").refusal()).isNull();
+        for (String coord : List.of("Interest!B3", "Interest!B4", "Interest!B5")) {
+            assertThat(readings.get(coord).scale()).as(coord).isEqualTo("lakh");
+            assertThat(readings.get(coord).scaleBasis()).as(coord).isEqualTo("inferred");
+        }
+        assertThat(new BigDecimal(readings.get("Interest!B3").absoluteAmount())).isEqualByComparingTo("264000000");
+    }
+
+    @Test
+    void readersThatDisagreeLeaveTheScaleUnstated() throws Exception {
+        Map<String, CellReading> readings = read(book(workbook -> {
+            Sheet source = workbook.createSheet("Source");
+            source.createRow(0).createCell(0).setCellValue("Loan amount");
+            source.getRow(0).createCell(1).setCellValue(50);
+
+            Sheet lakhs = workbook.createSheet("Lakhs");
+            lakhs.createRow(0).createCell(0).setCellValue("Rs. In Lakhs");
+            lakhs.createRow(2).createCell(0).setCellValue("Loan");
+            lakhs.getRow(2).createCell(1).setCellFormula("Source!B1");
+
+            Sheet crores = workbook.createSheet("Crores");
+            crores.createRow(0).createCell(0).setCellValue("Rs. In Crores");
+            crores.createRow(2).createCell(0).setCellValue("Loan");
+            crores.getRow(2).createCell(1).setCellFormula("Source!B1");
+        }));
+
+        assertThat(readings.get("Source!B1").kind()).isEqualTo("money");
+        assertThat(readings.get("Source!B1").scale()).isNull();
+        assertThat(readings.get("Lakhs!B3").scale()).isEqualTo("lakh");
+        assertThat(readings.get("Crores!B3").scale()).isEqualTo("crore");
+    }
+
+    @Test
+    void unstatedMoneyDividedIntoLakhsWasRupees() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Land cost");
+            sheet.getRow(0).createCell(1).setCellValue(2_500_000);
+            sheet.getRow(0).createCell(2).setCellFormula("B1/100000");
+        }));
+
+        assertThat(readings.get("C1").scale()).isEqualTo("lakh");
+        assertThat(readings.get("C1").scaleBasis()).isEqualTo("stated");
+        assertThat(readings.get("B1").scale()).isEqualTo("unit");
+        assertThat(readings.get("B1").scaleBasis()).isEqualTo("inferred");
+    }
+
+    @Test
+    void rupeesDividedByHundredThousandAreLakhs() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Detail (Amount in Rs)");
+            sheet.createRow(2).createCell(0).setCellValue("Land cost");
+            sheet.getRow(2).createCell(1).setCellValue(2_500_000);
+            sheet.getRow(2).createCell(2).setCellFormula("B3/100000");
+        }));
+
+        assertThat(readings.get("B3").scale()).isEqualTo("unit");
+        assertThat(readings.get("C3").kind()).isEqualTo("money");
+        assertThat(readings.get("C3").scale()).isEqualTo("lakh");
+        assertThat(readings.get("C3").typeSource()).isEqualTo("derived");
+    }
+
+    @Test
+    void lakhsTimesHundredThousandAreRupees() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lacs)");
+            sheet.createRow(2).createCell(0).setCellValue("Land cost");
+            sheet.getRow(2).createCell(1).setCellValue(25);
+            sheet.getRow(2).createCell(2).setCellFormula("B3*100000");
+        }));
+
+        assertThat(readings.get("C3").scale()).isEqualTo("unit");
+    }
+
+    @Test
+    void aConversionThatLandsOnNoScaleIsRefusedNotGuessed() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lacs)");
+            sheet.createRow(2).createCell(0).setCellValue("Land cost");
+            sheet.getRow(2).createCell(1).setCellValue(25);
+            sheet.getRow(2).createCell(2).setCellFormula("B3/100000");
+        }));
+
+        assertThat(readings.get("C3").kind()).isNull();
+        assertThat(readings.get("C3").refusal()).isEqualTo("kind_conflict");
+    }
+
+    @Test
+    void aPlainFractionDoesNotChangeScale() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lacs)");
+            sheet.createRow(2).createCell(0).setCellValue("Land cost");
+            sheet.getRow(2).createCell(1).setCellValue(100);
+            sheet.getRow(2).createCell(2).setCellFormula("B3*0.35");
+        }));
+
+        assertThat(readings.get("C3").scale()).isEqualTo("lakh");
+    }
+
     private Map<String, CellReading> read(XSSFWorkbook workbook) throws Exception {
         Path xlsx = tempDir.resolve("reading.xlsx");
         try (OutputStream out = Files.newOutputStream(xlsx)) {
@@ -161,53 +358,84 @@ class CellReadingWriterTest {
             WorkspaceRepository repo = new WorkspaceRepository(database.connection());
             List<InterpretationCellView> cells =
                     repo.selectInterpretationCellsForParseRun(summary.parseRunId());
-            int minRow = Integer.MAX_VALUE;
-            int minCol = Integer.MAX_VALUE;
-            int maxRow = 1;
-            int maxCol = 1;
-            long worksheetId = cells.get(0).worksheetId();
-            List<Long> members = new ArrayList<>();
+            Map<Long, String> sheetNames = new HashMap<>();
+            for (WorksheetRef sheet : repo.selectWorksheetsForParseRun(summary.parseRunId())) {
+                sheetNames.put(sheet.worksheetId(), sheet.sheetName());
+            }
             Map<Long, String> coords = new HashMap<>();
             for (InterpretationCellView cell : cells) {
                 coords.put(cell.cellId(), cell.coord());
-                if (cell.worksheetId() != worksheetId) {
-                    continue;
-                }
-                members.add(cell.cellId());
-                minRow = Math.min(minRow, cell.rowNum());
-                minCol = Math.min(minCol, cell.colNum());
-                maxRow = Math.max(maxRow, cell.rowNum());
-                maxCol = Math.max(maxCol, cell.colNum());
             }
-            repo.insertCandidate(new CandidateWrite(
-                    summary.parseRunId(),
-                    worksheetId,
-                    "child",
-                    null,
-                    minRow,
-                    minCol,
-                    maxRow,
-                    maxCol,
-                    null,
-                    null,
-                    null,
-                    false,
-                    null,
-                    null,
-                    "synthetic block",
-                    "main"), members);
+            for (long worksheetId : sheetNames.keySet()) {
+                insertBlock(repo, summary.parseRunId(), worksheetId, cells);
+            }
             new CellReadingWriter().replace(repo, summary.parseRunId());
             Map<String, CellReading> byCoord = new HashMap<>();
+            Map<Long, Long> sheetOf = new HashMap<>();
+            for (InterpretationCellView cell : cells) {
+                sheetOf.put(cell.cellId(), cell.worksheetId());
+            }
             for (CellReading reading : repo.selectCellReadingsForParseRun(summary.parseRunId())) {
-                byCoord.put(coords.get(reading.cellId()), reading);
+                String sheet = sheetNames.get(sheetOf.get(reading.cellId()));
+                byCoord.put(sheet + "!" + coords.get(reading.cellId()), reading);
+                if (sheetNames.size() == 1) {
+                    byCoord.put(coords.get(reading.cellId()), reading);
+                }
             }
             return byCoord;
         }
     }
 
+    /** One synthetic block over the whole sheet, so labels resolve. */
+    private static void insertBlock(
+            WorkspaceRepository repo, long parseRunId, long worksheetId, List<InterpretationCellView> cells)
+            throws Exception {
+        int minRow = Integer.MAX_VALUE;
+        int minCol = Integer.MAX_VALUE;
+        int maxRow = 1;
+        int maxCol = 1;
+        List<Long> members = new ArrayList<>();
+        for (InterpretationCellView cell : cells) {
+            if (cell.worksheetId() != worksheetId) {
+                continue;
+            }
+            members.add(cell.cellId());
+            minRow = Math.min(minRow, cell.rowNum());
+            minCol = Math.min(minCol, cell.colNum());
+            maxRow = Math.max(maxRow, cell.rowNum());
+            maxCol = Math.max(maxCol, cell.colNum());
+        }
+        if (members.isEmpty()) {
+            return;
+        }
+        repo.insertCandidate(new CandidateWrite(
+                parseRunId,
+                worksheetId,
+                "child",
+                null,
+                minRow,
+                minCol,
+                maxRow,
+                maxCol,
+                null,
+                null,
+                null,
+                false,
+                null,
+                null,
+                "synthetic block",
+                "main"), members);
+    }
+
     private XSSFWorkbook workbook(SheetSetup setup) {
         XSSFWorkbook workbook = new XSSFWorkbook();
         setup.build(workbook.createSheet("Model"));
+        return workbook;
+    }
+
+    private XSSFWorkbook book(java.util.function.Consumer<XSSFWorkbook> setup) {
+        XSSFWorkbook workbook = new XSSFWorkbook();
+        setup.accept(workbook);
         return workbook;
     }
 

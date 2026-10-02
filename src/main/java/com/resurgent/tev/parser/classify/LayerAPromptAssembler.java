@@ -26,6 +26,12 @@ final class LayerAPromptAssembler {
                 (empty if none). Do not copy CONTEXT-only labels into these arrays.
               packetDefaultHead: optional short heading grounded in CORE cells, or null
               suggestedFamily: a new category when scheduleFamily is "none", otherwise null
+              statedScale: the unit the money in this island is shown in, ONLY if a
+                cell in the packet (CORE or CONTEXT) literally says so, e.g. "Rs. In Lacs"
+                -> "lakh", "(Rs. in crore)" -> "crore", "Amount in Rs" -> "unit".
+                One of unit|thousand|lakh|million|crore|billion, else null. Never guess
+                from the size of the numbers.
+              scaleCell: the coord (e.g. "J6") of the cell that states it, else null
               about: one short paragraph (~4–8 sentences, roughly 80–200 words) that a
                 later cell-level nomenclature pass and a natural-language report writer
                 can use without seeing the grid. Grounded in CORE; concrete nouns, not

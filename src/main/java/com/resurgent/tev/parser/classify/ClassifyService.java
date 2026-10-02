@@ -755,7 +755,9 @@ public final class ClassifyService {
                 judgment.packetDefaultHead(),
                 judgment.about(),
                 item.candidate().parentCandidateId(),
-                false);
+                false,
+                judgment.statedScale(),
+                judgment.scaleEvidenceCell());
     }
 
     private List<LayerAJudgment> classifyBatchLayerA(
@@ -831,14 +833,17 @@ public final class ClassifyService {
             sb.append("5. columnHeaders: array of column header strings (can be empty [])\n");
             sb.append("6. packetDefaultHead: string or null\n");
             sb.append("7. about: string (1-2 sentences)\n");
+            sb.append("8. statedScale: unit|thousand|lakh|million|crore|billion, ONLY if a cell in that candidate")
+                    .append(" literally says the money unit (\"Rs. In Lacs\" -> lakh, \"Amount in Rs\" -> unit); else null.")
+                    .append(" scaleCell: the coord of that cell (e.g. \"J6\"), else null\n");
             sb.append("Also echo each candidate's own \"index\" number (as given above) in its result;")
                     .append(" return exactly one result per candidate.\n");
             sb.append("\nOUTPUT: Return ONLY JSON. No markdown, no text, no explanations.\n");
             sb.append("Wrap the ").append(batch.size()).append(" classification objects in a JSON object with key 'results':\n");
             sb.append("{\n");
             sb.append("  \"results\": [\n");
-            sb.append("    {\"index\":1,\"scheduleFamily\":\"assets\",\"triage\":\"MAIN\",\"relevance\":\"PRIMARY\",\"rowLabels\":[\"Fixed Assets\"],\"columnHeaders\":[],\"packetDefaultHead\":\"Assets\",\"about\":\"List of company assets.\"},\n");
-            sb.append("    {\"index\":2,\"scheduleFamily\":\"liabilities\",\"triage\":\"HELPER\",\"relevance\":\"SECONDARY\",\"rowLabels\":[],\"columnHeaders\":[],\"packetDefaultHead\":null,\"about\":\"Supporting detail.\"}\n");
+            sb.append("    {\"index\":1,\"scheduleFamily\":\"assets\",\"triage\":\"MAIN\",\"relevance\":\"PRIMARY\",\"rowLabels\":[\"Fixed Assets\"],\"columnHeaders\":[],\"packetDefaultHead\":\"Assets\",\"statedScale\":null,\"scaleCell\":null,\"about\":\"List of company assets.\"},\n");
+            sb.append("    {\"index\":2,\"scheduleFamily\":\"liabilities\",\"triage\":\"HELPER\",\"relevance\":\"SECONDARY\",\"rowLabels\":[],\"columnHeaders\":[],\"packetDefaultHead\":null,\"statedScale\":null,\"scaleCell\":null,\"about\":\"Supporting detail.\"}\n");
             sb.append("  ]\n");
             sb.append("}\n\n");
             sb.append("CRITICAL: Return ONLY the JSON object with 'results' key containing the array. Nothing else.\n");
@@ -949,7 +954,9 @@ public final class ClassifyService {
                 if (about == null) about = "Unclassified";
             }
 
-            judgments.add(new LayerAJudgment(resolvedFamily, triage, relevance, rowLabels, columnHeaders, packetDefaultHead, about.trim()));
+            judgments.add(new LayerAJudgment(resolvedFamily, triage, relevance, rowLabels, columnHeaders, packetDefaultHead, about.trim(),
+                    LayerAResponseParser.statedScale(getTextField(node, "statedScale", "stated_scale")),
+                    LayerAResponseParser.cellCoord(getTextField(node, "scaleCell", "scale_cell"))));
             indexes.add(node.hasNonNull("index") && node.get("index").canConvertToInt() ? node.get("index").asInt() : null);
         }
 
@@ -1026,7 +1033,9 @@ public final class ClassifyService {
                 judgment.packetDefaultHead(),
                 judgment.about(),
                 item.candidate().parentCandidateId(),
-                false);
+                false,
+                judgment.statedScale(),
+                judgment.scaleEvidenceCell());
     }
 
     /**

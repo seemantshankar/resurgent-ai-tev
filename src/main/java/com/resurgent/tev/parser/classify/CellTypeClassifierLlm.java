@@ -62,6 +62,7 @@ public class CellTypeClassifierLlm {
     private int batchSize = 15;
     private int concurrency = 1;
     private java.util.Set<Long> llmWorksheetIds; // null: every sheet is sent to the model
+    private UnstatedScales unknowns = new UnstatedScales();
 
     public CellTypeClassifierLlm(WorkspaceRepository repo, ClassifierLlm llm) {
         this(repo, llm, new DynamicKindTokens());
@@ -83,6 +84,12 @@ public class CellTypeClassifierLlm {
     /** Send only cells on these worksheets to the model; others keep their deterministic result. */
     CellTypeClassifierLlm withWorksheetScope(java.util.Set<Long> worksheetIds) {
         this.llmWorksheetIds = worksheetIds;
+        return this;
+    }
+
+    /** Where money typed from a keyword alone, with no scale stated anywhere, gets its unknown scale. */
+    CellTypeClassifierLlm withUnstatedScales(UnstatedScales unknowns) {
+        this.unknowns = unknowns;
         return this;
     }
 
@@ -293,6 +300,13 @@ public class CellTypeClassifierLlm {
         if (scale == null) {
             System.err.println("[llm-fallback] Unknown scale '" + response.scale + "' for " + cell.coord());
             return;
+        }
+        // A scale the sheet or region itself states beats the model's guess for money.
+        CellScale stated = ReadingOutcome.MONEY.equals(response.kind) ? ctx.statedScale(cell) : null;
+        if (stated != null && stated != scale) {
+            System.err.println("[llm-fallback] " + cell.coord() + ": model said " + scale.wireName()
+                    + " but the sheet states " + stated.wireName() + "; using " + stated.wireName());
+            scale = stated;
         }
         settled.put(cell.cellId(), ReadingOutcome.typed(
                 response.kind, scale, response.unit, response.currency, ReadingOutcome.DERIVED));
@@ -620,9 +634,11 @@ public class CellTypeClassifierLlm {
 
         String kind = staticKind(combined);
         if (ReadingOutcome.MONEY.equals(kind)) {
-            String scale = extractScaleFromLabels(rowLabel, colLabel);
-            return ReadingOutcome.typed(ReadingOutcome.MONEY, CellScale.valueOf(scale.toUpperCase()), "",
-                    extractCurrencyFromLabels(rowLabel, colLabel), ReadingOutcome.INPUT);
+            CellScale scale = extractScaleFromLabels(rowLabel, colLabel, cell);
+            String currency = extractCurrencyFromLabels(rowLabel, colLabel);
+            return scale == null
+                    ? ReadingOutcome.unstated("", currency, ReadingOutcome.INPUT, unknowns.fresh(cell.cellId()))
+                    : ReadingOutcome.typed(ReadingOutcome.MONEY, scale, "", currency, ReadingOutcome.INPUT);
         }
         if (ReadingOutcome.PERCENT.equals(kind)) {
             return ReadingOutcome.typed(ReadingOutcome.PERCENT, CellScale.UNIT, "", "", ReadingOutcome.INPUT);
@@ -649,6 +665,9 @@ public class CellTypeClassifierLlm {
             // Scale varies by sheet, so it is never remembered: no stated scale, ask the LLM.
             CellScale scale = CellScale.fromText(KindTokens.normalizeLabel(ctx.rowLabel(cell) + " " + normalizedColumn));
             if (scale == null) {
+                scale = ctx.statedScale(cell); // the region or sheet title states it for every money line
+            }
+            if (scale == null) {
                 return null;
             }
             return ReadingOutcome.typed(kind, scale, "", extractCurrencyFromLabels("", normalizedColumn),
@@ -667,10 +686,15 @@ public class CellTypeClassifierLlm {
         return "";
     }
 
-    private String extractScaleFromLabels(String rowLabel, String colLabel) {
+    /** The scale the labels or the region or sheet state, or {@code null}: nothing says rupees. */
+    private CellScale extractScaleFromLabels(String rowLabel, String colLabel, InterpretationCellView cell) {
         // CellScale.fromText is the one scale-word matcher (lakh/lac/lacs/crore/million/thousand/000s).
         CellScale scale = CellScale.fromText(KindTokens.normalizeLabel(rowLabel + " " + colLabel));
-        return scale == null ? "unit" : scale.name().toLowerCase(java.util.Locale.ROOT);
+        if (scale == null && (SheetScaleStatement.statesRupees(ctx.rowLabel(cell))
+                || SheetScaleStatement.statesRupees(ctx.columnLabel(cell)))) {
+            scale = CellScale.UNIT;
+        }
+        return scale != null ? scale : ctx.statedScale(cell);
     }
 
     private String extractUnitFromLabels(String rowLabel, String colLabel) {

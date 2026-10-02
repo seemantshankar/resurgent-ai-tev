@@ -25,6 +25,7 @@ final class ResolverCellContext implements CellContext {
     private final Map<Long, String> sheetNames;
     private final String workbookKey;
     private final Map<Long, String[]> labelMemo = new HashMap<>();
+    private final StatedScales statedScales;
 
     ResolverCellContext(
             long parseRunId,
@@ -34,7 +35,9 @@ final class ResolverCellContext implements CellContext {
             Map<Long, CandidateRow> candidatesById,
             Map<Long, PacketDisposition> dispositionsByCandidate,
             Map<Long, String> sheetNamesByWorksheet,
-            String workbookKey) {
+            String workbookKey,
+            StatedScales statedScales) {
+        this.statedScales = statedScales;
         this.parseRunId = parseRunId;
         this.cache = cache;
         this.owners = owners;
@@ -77,16 +80,22 @@ final class ResolverCellContext implements CellContext {
         for (CandidateRow c : narrow.isEmpty() ? parents : narrow) {
             PacketDisposition d = dispositions.get(c.candidateId());
             if (d != null) {
+                String sentence = statedScales == null ? "" : statedScales.sentence(cell);
                 return new RegionContext(
                         c.candidateId(),
                         d.scheduleFamily(),
-                        d.about(),
+                        sentence.isEmpty() ? d.about() : d.about() + " " + sentence + ".",
                         d.packetDefaultHead(),
                         sheetNames.getOrDefault(cell.worksheetId(), ""),
                         Triage.MAIN.equals(d.triage()) && !Relevance.NOISE.equals(d.relevance()));
             }
         }
         return RegionContext.NONE;
+    }
+
+    @Override
+    public CellScale statedScale(InterpretationCellView cell) {
+        return statedScales == null ? null : statedScales.of(cell);
     }
 
     @Override

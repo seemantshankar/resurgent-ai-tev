@@ -10,7 +10,8 @@ import java.util.regex.Pattern;
 /**
  * Types a hardcoded number or a constant-only formula from its row label, and
  * from the column header only when that row is an entity name (ADR 0020).
- * A formula divisor states scale before either label. Percent is stated.
+ * A formula divisor states scale before either label; a label's scale word beats the
+ * region or sheet statement. Money none of them scales is left unstated. Percent is stated.
  */
 final class InputReading {
 
@@ -27,12 +28,20 @@ final class InputReading {
 
     private InputReading() {}
 
+    /**
+     * {@code statedScale} is the scale the cell's region or sheet states for its money
+     * (for example {@code Rs. In Lacs} in the title). It applies to money inputs whose own
+     * labels and formula carry no scale word. Money with none of the three gets a fresh
+     * unknown from {@code unknowns}, not {@code unit}: nothing said it was rupees.
+     */
     static ReadingOutcome type(
             InterpretationCellView cell,
             String rowLabel,
             String columnHeader,
             String numberFormat,
-            String homeCurrency) {
+            String homeCurrency,
+            CellScale statedScale,
+            UnstatedScales unknowns) {
         Label row = Label.read(rowLabel, false);
         boolean entity = rowLabel != null && !rowLabel.isBlank() && row.kind == null && !periodOnly(rowLabel);
         Label column = entity ? Label.read(columnHeader, true) : Label.none();
@@ -50,7 +59,9 @@ final class InputReading {
         CellScale divisor = InterpretationEvidenceResolver.formulaDivisorScale(cell.formulaText());
         CellScale scale = divisor != null
                 ? divisor
-                : chosen.scale != null ? chosen.scale : CellScale.UNIT;
+                : chosen.scale != null
+                        ? chosen.scale
+                        : ReadingOutcome.MONEY.equals(kind) ? statedScale : CellScale.UNIT;
         if (ReadingOutcome.PERCENT.equals(kind)) {
             scale = CellScale.UNIT;
         }
@@ -68,6 +79,9 @@ final class InputReading {
         }
         if (!ReadingOutcome.MONEY.equals(kind) && !ReadingOutcome.RATE.equals(kind)) {
             currency = "";
+        }
+        if (scale == null) {
+            return ReadingOutcome.unstated(unit, currency, ReadingOutcome.INPUT, unknowns.fresh(cell.cellId()));
         }
         return ReadingOutcome.typed(kind, scale, unit, currency, ReadingOutcome.INPUT);
     }
@@ -160,7 +174,7 @@ final class InputReading {
             if (named != null) {
                 return named;
             }
-            if (text.matches("(?i).*\\b(?:amt\\.?\\s*in\\s+rs\\.?|in\\s+rs\\.?)\\b.*")) {
+            if (SheetScaleStatement.statesRupees(text)) {
                 return CellScale.UNIT;
             }
             return null;
