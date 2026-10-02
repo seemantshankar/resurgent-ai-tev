@@ -2140,6 +2140,21 @@ public final class WorkspaceRepository {
     }
 
     /**
+     * Forget everything recorded for one stage of a parse run, so a re-run replaces the stage as a
+     * whole instead of leaving rows for models or stats the new run did not produce.
+     */
+    public void deleteStageStats(long parseRunId, String stage) throws SQLException {
+        for (String table : new String[] {"llm_usage", "run_stat", "run_timing"}) {
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "DELETE FROM " + table + " WHERE parse_run_id = ? AND stage = ?")) {
+                ps.setLong(1, parseRunId);
+                ps.setString(2, stage);
+                ps.executeUpdate();
+            }
+        }
+    }
+
+    /**
      * One model's totals within one stage. Re-running a stage replaces its rows: the table
      * describes the latest execution of each (stage, model).
      */

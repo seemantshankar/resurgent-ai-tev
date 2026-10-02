@@ -134,4 +134,19 @@ class CellDecisionModelTest {
         assertThat(lenient.calls).isZero();
         assertThat(settled2.get(1L).kind).isEqualTo(ReadingOutcome.QUANTITY);
     }
+
+    @Test
+    void shadowModeCountsFailedDecisionCalls() {
+        LlmStats.GLOBAL.reset();
+        var classifier = new CellTypeClassifierLlm(null, new CountingChat())
+                .withDecisionModel(state -> {
+                    throw new IllegalStateException("HTTP 500");
+                })
+                .withDecisionComparison(null);
+
+        classifier.classifyRemaining(List.of(cell(1L, "A1")), untypable(1L));
+
+        assertThat(LlmStats.GLOBAL.stat("layer-b", "cells_decision_failed")).isEqualTo(1.0);
+        LlmStats.GLOBAL.reset();
+    }
 }

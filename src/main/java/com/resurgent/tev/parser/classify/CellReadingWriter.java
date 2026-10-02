@@ -157,6 +157,8 @@ public final class CellReadingWriter {
                         inputCells.add(cell);
                     }
                 }
+                System.err.println("[cell-reading] pass 1 of 2: " + inputCells.size() + " input cells");
+                System.err.flush();
                 classifier.classifyRemaining(inputCells, settled, context);
                 boolean retyped = false;
                 for (InterpretationCellView cell : formulas) {
@@ -169,6 +171,8 @@ public final class CellReadingWriter {
                 if (retyped) {
                     propagate(formulas, precedents, numericIds, byId, sheetIds, settled, stated, unknowns);
                 }
+                System.err.println("[cell-reading] pass 2 of 2: " + formulas.size() + " formula cells");
+                System.err.flush();
                 classifier.classifyRemaining(formulas, settled, context);
             }
         } finally {

@@ -62,8 +62,46 @@ class LlmStatsPersistenceTest {
             LlmStatsPersistence.write(repo, 7, rerun);
 
             assertThat(scalar(c, "SELECT prompt_tokens FROM llm_usage WHERE model_id = 'liquid/d1'")).isEqualTo(1);
-            assertThat(scalar(c, "SELECT COUNT(*) FROM llm_usage")).isEqualTo(2); // replaced, not duplicated
+            // the stage is replaced as a whole: the first run's other model is gone, not left behind
+            assertThat(scalar(c, "SELECT COUNT(*) FROM llm_usage")).isEqualTo(1);
             assertThat(scalar(c, "SELECT value_num FROM run_stat WHERE name = 'cells_to_decision_model'")).isEqualTo(5);
+        }
+    }
+
+    @Test
+    void rerunningAStageDropsRowsOfModelsAndStatsItDidNotProduceButKeepsOtherStages() throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dir.resolve("stale.db"))) {
+            Connection c = db.connection();
+            try (Statement s = c.createStatement()) {
+                s.execute("PRAGMA foreign_keys = OFF");
+            }
+            WorkspaceRepository repo = new WorkspaceRepository(c);
+            LlmStats first = new LlmStats();
+            first.enterStage("layer-a");
+            first.recordCall("m/layer-a-model", 1, 1, 0.0, 1);
+            first.enterStage("layer-b");
+            first.recordCall("m/luna", 10, 1, 0.01, 5);
+            first.recordCall("liquid/d1", 20, 0, 0.001, 5);
+            first.put("layer-b", "cells_settled_decision_model", 494);
+            first.put("layer-b", "only_in_first_run", 1);
+            LlmStatsPersistence.write(repo, 3, first);
+
+            LlmStats second = new LlmStats(); // classify resumed at Layer B and used a different chat model
+            second.enterStage("layer-b");
+            second.recordCall("m/mercury", 30, 1, 0.02, 5);
+            second.recordCall("liquid/d1", 40, 0, 0.002, 5);
+            second.put("layer-b", "cells_settled_decision_model", 500);
+            LlmStatsPersistence.write(repo, 3, second);
+
+            assertThat(scalar(c, "SELECT COUNT(*) FROM llm_usage WHERE stage = 'layer-b' AND model_id = 'm/luna'"))
+                    .as("model the re-run did not use").isZero();
+            assertThat(scalar(c, "SELECT COUNT(*) FROM llm_usage WHERE stage = 'layer-b'")).isEqualTo(2);
+            assertThat(scalar(c, "SELECT prompt_tokens FROM llm_usage WHERE model_id = 'liquid/d1'")).isEqualTo(40);
+            assertThat(scalar(c, "SELECT COUNT(*) FROM run_stat WHERE name = 'only_in_first_run'")).isZero();
+            assertThat(scalar(c, "SELECT value_num FROM run_stat WHERE name = 'cells_settled_decision_model'"))
+                    .isEqualTo(500);
+            assertThat(scalar(c, "SELECT COUNT(*) FROM llm_usage WHERE stage = 'layer-a'"))
+                    .as("a stage this process did not run is kept").isEqualTo(1);
         }
     }
 

@@ -60,6 +60,8 @@ final class OpenRouterDecisionClient implements CellDecisionClient {
     public Decision decide(String state) throws Exception {
         calls.increment();
         long start = System.nanoTime();
+        long activityId = LlmActivity.GLOBAL.begin(model); // so the heartbeat sees decision calls in flight
+        boolean succeeded = false;
         try {
             String body = post(requestBody(model, state));
             Decision decision = parse(body);
@@ -68,11 +70,14 @@ final class OpenRouterDecisionClient implements CellDecisionClient {
                     usage.path("output_tokens").asLong(0),
                     usage.path("cost").isNumber() ? usage.path("cost").asDouble() : null,
                     (System.nanoTime() - start) / 1_000_000);
+            succeeded = true;
             return decision;
         } catch (Exception e) {
             failures.increment();
             LlmStats.GLOBAL.recordFailedCall(model, (System.nanoTime() - start) / 1_000_000);
             throw e;
+        } finally {
+            LlmActivity.GLOBAL.end(activityId, succeeded);
         }
     }
 

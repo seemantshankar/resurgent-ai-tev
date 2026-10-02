@@ -287,6 +287,7 @@ public class CellTypeClassifierLlm {
                     typed ? chat.kind : null,
                     typed && chat.scale != null ? chat.scale.wireName() : null));
         }
+        LlmStats.GLOBAL.add("layer-b", "cells_decision_failed", failed);
         DecisionComparison comparison = new DecisionComparison(rows);
         System.err.print(comparison.report());
         if (failed > 0) {
@@ -351,6 +352,7 @@ public class CellTypeClassifierLlm {
         return deferred;
     }
 
+    /** Asked in slices so a long run prints progress instead of going quiet. */
     private List<ParallelCalls.Outcome<CellDecisionClient.Decision>> askDecisions(
             List<InterpretationCellView> pending,
             List<InterpretationCellView> allCells,
@@ -360,7 +362,19 @@ public class CellTypeClassifierLlm {
             String state = formatDecisionState(buildCellTypeRequest(cell, allCells, settled), ctx.region(cell));
             tasks.add(() -> decisions.decide(state));
         }
-        return ParallelCalls.run(tasks, decisionConcurrency);
+        List<ParallelCalls.Outcome<CellDecisionClient.Decision>> outcomes = new ArrayList<>(tasks.size());
+        int slice = Math.max(decisionConcurrency * 8, 50);
+        long started = System.nanoTime();
+        for (int from = 0; from < tasks.size(); from += slice) {
+            int to = Math.min(from + slice, tasks.size());
+            outcomes.addAll(ParallelCalls.run(tasks.subList(from, to), decisionConcurrency));
+            long failed = outcomes.stream().filter(o -> !o.ok()).count();
+            long seconds = Math.max(1, (System.nanoTime() - started) / 1_000_000_000L);
+            System.err.println("[cell-decision] asked " + to + "/" + tasks.size() + " cells ("
+                    + (to / seconds) + " cells/s, " + failed + " failed)");
+            System.err.flush();
+        }
+        return outcomes;
     }
 
     private String formatDecisionState(CellTypeRequest request, RegionContext region) {
