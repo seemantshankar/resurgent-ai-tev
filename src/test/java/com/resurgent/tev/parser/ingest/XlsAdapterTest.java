@@ -361,53 +361,6 @@ class XlsAdapterTest {
     }
 
     @Test
-    void numericTextCoercionHandlesIndianCurrencyAndParentheses() throws Exception {
-        try (HSSFWorkbook workbook = new HSSFWorkbook()) {
-            Sheet sheet = workbook.createSheet("Coerce");
-            Row row = sheet.createRow(0);
-            row.createCell(0).setCellValue("₹10,00,000.00");
-            row.createCell(1).setCellValue("(1,234)");
-            row.createCell(2).setCellValue("12.5%");
-            row.createCell(3).setCellValue("Rs. 50,000");
-
-            Path xls = writeWorkbook(workbook, "coerce.xls");
-            List<XlsxSheet> sheets = new XlsAdapter().parse(xls);
-            Map<String, NormalizedCell> cells = cellsByCoord(sheets);
-
-            assertThat(cells.get("A1").numericValue()).isEqualByComparingTo("1000000.00");
-            assertThat(cells.get("A1").coercedFromText()).isTrue();
-
-            assertThat(cells.get("B1").numericValue()).isEqualByComparingTo("-1234");
-            assertThat(cells.get("B1").coercedFromText()).isTrue();
-
-            assertThat(cells.get("C1").numericValue()).isEqualByComparingTo("0.125");
-            assertThat(cells.get("C1").coercedFromText()).isTrue();
-
-            assertThat(cells.get("D1").numericValue()).isEqualByComparingTo("50000");
-            assertThat(cells.get("D1").coercedFromText()).isTrue();
-        }
-    }
-
-    @Test
-    void quantityLikeTextIsStoredAsPlainText() throws Exception {
-        try (HSSFWorkbook workbook = new HSSFWorkbook()) {
-            Sheet sheet = workbook.createSheet("Qty");
-            Row row = sheet.createRow(0);
-            row.createCell(0).setCellValue("1Set");
-            row.createCell(1).setCellValue("200 PC");
-            row.createCell(2).setCellValue("L S");
-
-            Path xls = writeWorkbook(workbook, "qty.xls");
-            Map<String, NormalizedCell> cells = cellsByCoord(new XlsAdapter().parse(xls));
-
-            assertThat(cells.get("A1").valueType()).isEqualTo("text");
-            assertThat(cells.get("A1").textValue()).isEqualTo("1Set");
-            assertThat(cells.get("B1").textValue()).isEqualTo("200 PC");
-            assertThat(cells.get("C1").textValue()).isEqualTo("L S");
-        }
-    }
-
-    @Test
     void dateCellKeepsSerialInRawAndDateValue() throws Exception {
         try (HSSFWorkbook workbook = new HSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Dates");

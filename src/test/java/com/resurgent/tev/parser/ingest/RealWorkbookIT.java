@@ -17,6 +17,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -30,6 +31,7 @@ import org.junit.jupiter.api.io.TempDir;
  * formula references, dimensions) and never assert on the model's actual
  * financial figures.
  */
+@Tag("slow")
 class RealWorkbookIT {
 
     private static final Path WORKBOOK =

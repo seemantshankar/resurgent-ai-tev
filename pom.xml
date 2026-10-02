@@ -12,6 +12,9 @@
   <properties>
     <maven.compiler.release>25</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!-- Test groups skipped by default. The real-workbook ITs are tagged "slow": on a machine
+         that has the client workbooks they take ~6 minutes. Run them with -Preal-workbooks. -->
+    <tev.excludedGroups>slow</tev.excludedGroups>
   </properties>
 
   <dependencies>
@@ -68,12 +71,12 @@
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.5.2</version>
         <configuration>
-          <!-- *IT.java (e.g. RealWorkbookIT) is normally reserved for
-               maven-failsafe-plugin's integration-test phase, but this
-               project has no failsafe binding; running it here keeps it
-               part of the ordinary `mvn test` build. It self-skips via
-               assumeTrue when fixtures/private/ isn't provisioned, so
-               including it costs nothing on a fresh clone or public CI. -->
+          <!-- *IT.java is normally reserved for maven-failsafe-plugin, but this project has
+               no failsafe binding, so the ITs are included here. The real-workbook ITs read the
+               gitignored client files in "Project Docs/" and skip themselves (assumeTrue) when
+               those are absent. They are also tagged "slow" and excluded by default (see
+               tev.excludedGroups); run them with: mvn test -Preal-workbooks -->
+          <excludedGroups>${tev.excludedGroups}</excludedGroups>
           <includes>
             <include>**/*Test.java</include>
             <include>**/*IT.java</include>
@@ -140,4 +143,13 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <profile>
+      <id>real-workbooks</id>
+      <properties>
+        <tev.excludedGroups></tev.excludedGroups>
+      </properties>
+    </profile>
+  </profiles>
 </project>
