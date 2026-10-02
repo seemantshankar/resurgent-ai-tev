@@ -9,6 +9,8 @@ import com.resurgent.tev.parser.classify.ClassifyTuning;
 import com.resurgent.tev.parser.classify.ClassifySummary;
 import com.resurgent.tev.parser.classify.LlmEnvironment;
 import com.resurgent.tev.parser.classify.OpenRouterClassifierLlm;
+import com.resurgent.tev.parser.db.WorkspaceDatabase;
+import com.resurgent.tev.parser.db.WorkspaceRepository;
 import com.resurgent.tev.parser.discover.DiscoverService;
 import java.io.PrintWriter;
 import java.nio.file.Path;
@@ -20,7 +22,6 @@ import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Spec;
-
 /** {@code tev-parse classify}: Layer A disposition + about for main/helper Candidates. */
 @Command(
         name = "classify",
@@ -143,7 +144,7 @@ public final class ClassifyCommand implements Callable<Integer> {
                         bound.parseRunId(),
                         bound.boundCells(),
                         bound.skippedCells());
-                printUsage(out);
+                persistAndPrintUsage(out, parseRunId);
                 return 0;
             }
             ClassifySummary summary = service.classify(db, parseRunId);
@@ -153,17 +154,32 @@ public final class ClassifyCommand implements Callable<Integer> {
                     summary.dispositionCount(),
                     summary.eligibleCount(),
                     summary.skippedCount());
-            printUsage(out);
+            persistAndPrintUsage(out, parseRunId);
             return 0;
         } catch (ClassifyException e) {
             err.println("classify rejected: " + e.getMessage());
             return 3;
-        } catch (Exception e) {
-            String msg = e.getMessage() != null ? e.getMessage() : e.toString();
-            err.println("classify failed: " + msg);
-            return 1;
         } finally {
             System.setErr(originalErr);
         }
     }
+    private void persistAndPrintUsage(PrintWriter out, long parseRunId) {
+        printUsage(out);
+        if (!(llm instanceof OpenRouterClassifierLlm open)) {
+            return;
+        }
+        try (WorkspaceDatabase wdb = WorkspaceDatabase.open(db.toAbsolutePath().normalize())) {
+            WorkspaceRepository repo = new WorkspaceRepository(wdb.connection());
+            OpenRouterClassifierLlm.UsageTotals usage = open.usageTotals();
+            if (usage.calls() > 0) {
+                Double costUsd = usage.costKnown() ? usage.costUsd() : null;
+                repo.recordLlmUsage(parseRunId, "layer-a", usage.calls(), usage.promptTokens(),
+                        usage.completionTokens(), costUsd, usage.costMissing());
+                repo.commit();
+            }
+        } catch (Exception e) {
+            out.println("warning: failed to persist LLM usage: " + e.getMessage());
+        }
+    }
+
 }

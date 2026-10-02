@@ -2139,6 +2139,49 @@ public final class WorkspaceRepository {
         }
     }
 
+    public void recordLlmUsage(long parseRunId, String stage, long calls, long promptTokens,
+            long completionTokens, Double costUsd, long costMissing) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO llm_usage (parse_run_id, stage, calls, prompt_tokens, completion_tokens,"
+                        + " cost_usd, cost_missing)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, parseRunId);
+            ps.setString(2, stage);
+            ps.setLong(3, calls);
+            ps.setLong(4, promptTokens);
+            ps.setLong(5, completionTokens);
+            if (costUsd != null) {
+                ps.setDouble(6, costUsd);
+            } else {
+                ps.setNull(6, Types.DOUBLE);
+            }
+            ps.setLong(7, costMissing);
+            ps.executeUpdate();
+        }
+    }
+
+    public void recordRunTiming(long parseRunId, String stage, String startedAt, String finishedAt,
+            long durationMillis, Integer itemCount) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO run_timing (parse_run_id, stage, started_at, finished_at,"
+                        + " duration_millis, item_count)"
+                        + " VALUES (?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, parseRunId);
+            ps.setString(2, stage);
+            ps.setString(3, startedAt);
+            ps.setString(4, finishedAt);
+            ps.setLong(5, durationMillis);
+            if (itemCount != null) {
+                ps.setInt(6, itemCount);
+            } else {
+                ps.setNull(6, Types.INTEGER);
+            }
+            ps.executeUpdate();
+        }
+    }
+
     private static int bindNullableIntegerPair(PreparedStatement ps, int index, Integer value)
             throws SQLException {
         setInteger(ps, index, value);
