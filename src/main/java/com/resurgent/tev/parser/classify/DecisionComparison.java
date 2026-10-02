@@ -17,7 +17,8 @@ import java.util.TreeMap;
 final class DecisionComparison {
 
     /** {@code chatKind} and {@code chatScale} are null when the chat model left the cell untyped. */
-    record Row(long cellId, String coord, String rowLabel, CellDecisionClient.Decision decision,
+    record Row(long cellId, String coord, String rowLabel, String columnLabel,
+            CellDecisionClient.Decision decision,
             String chatKind, String chatScale) {
         boolean chatSettled() {
             return chatKind != null;
@@ -98,11 +99,11 @@ final class DecisionComparison {
         boolean fresh = !Files.exists(path); // the classifier runs twice per parse; the second call appends
         List<String> lines = new ArrayList<>();
         if (fresh) {
-            lines.add("cell_id,coord,row_label,d1_kind,d1_kind_conf,d1_scale,d1_scale_conf,chat_kind,chat_scale");
+            lines.add("cell_id,coord,row_label,column_label,d1_kind,d1_kind_conf,d1_scale,d1_scale_conf,chat_kind,chat_scale");
         }
         for (Row r : rows) {
             lines.add(String.join(",",
-                    Long.toString(r.cellId()), csv(r.coord()), csv(r.rowLabel()),
+                    Long.toString(r.cellId()), csv(r.coord()), csv(r.rowLabel()), csv(r.columnLabel()),
                     r.decision().kind(), Double.toString(r.decision().kindConfidence()),
                     r.decision().scale(), Double.toString(r.decision().scaleConfidence()),
                     r.chatKind() == null ? "" : r.chatKind(), r.chatScale() == null ? "" : r.chatScale()));

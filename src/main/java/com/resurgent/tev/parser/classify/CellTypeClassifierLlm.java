@@ -283,7 +283,7 @@ public class CellTypeClassifierLlm {
             ReadingOutcome chat = settled.get(cell.cellId());
             boolean typed = chat != null && chat.refusal == null && chat.kind != null;
             rows.add(new DecisionComparison.Row(
-                    cell.cellId(), cell.coord(), ctx.rowLabel(cell), shadow.get(i).value(),
+                    cell.cellId(), cell.coord(), ctx.rowLabel(cell), ctx.columnLabel(cell), shadow.get(i).value(),
                     typed ? chat.kind : null,
                     typed && chat.scale != null ? chat.scale.wireName() : null));
         }

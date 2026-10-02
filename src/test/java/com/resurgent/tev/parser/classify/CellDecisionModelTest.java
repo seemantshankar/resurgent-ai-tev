@@ -104,9 +104,9 @@ class CellDecisionModelTest {
         var high = new CellDecisionClient.Decision("money", 0.99, "lakh", 0.98);
         var low = new CellDecisionClient.Decision("rate", 0.60, "unit", 0.90);
         var report = new DecisionComparison(List.of(
-                new DecisionComparison.Row(1, "A1", "x", high, "money", "lakh"),
-                new DecisionComparison.Row(2, "A2", "y", low, "money", "lakh"),
-                new DecisionComparison.Row(3, "A3", "z", low, null, null))).report();
+                new DecisionComparison.Row(1, "A1", "x", "col", high, "money", "lakh"),
+                new DecisionComparison.Row(2, "A2", "y", "col", low, "money", "lakh"),
+                new DecisionComparison.Row(3, "A3", "z", "col", low, null, null))).report();
 
         assertThat(report).contains("3 cells compared").contains("chat left 1 untyped");
         assertThat(report).contains("rate -> money");
