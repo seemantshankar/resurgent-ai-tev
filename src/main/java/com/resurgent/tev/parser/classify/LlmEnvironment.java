@@ -131,6 +131,23 @@ public final class LlmEnvironment {
         return CellTypeClassifierLlm.DEFAULT_DECISION_CONCURRENCY;
     }
 
+    /**
+     * Record which models and decision-model settings this run uses, so a stored run says what
+     * produced it. Reads the same environment the classifier reads.
+     */
+    public static void recordSettings(LlmStats stats) {
+        Map<String, String> env = load();
+        stats.putText("run", "models_chain", describeModels());
+        String decision = env.get(CELL_DECISION_MODEL_ID);
+        boolean decisionOn = decision != null && !decision.isBlank() && env.get(API_KEY) != null;
+        stats.putText("run", "decision_model", decisionOn ? decision.trim() : "none");
+        if (decisionOn) {
+            stats.put("run", "decision_min_confidence", decisionMinConfidence());
+            stats.put("run", "decision_concurrency", decisionConcurrency());
+            stats.put("run", "decision_shadow_compare", decisionCompareRequested() ? 1 : 0);
+        }
+    }
+
     /** True when {@code Excel_Enrichment_Cell_decision_compare} is set to true: D1 runs in shadow mode. */
     static boolean decisionCompareRequested() {
         String v = load().get(CELL_DECISION_COMPARE);

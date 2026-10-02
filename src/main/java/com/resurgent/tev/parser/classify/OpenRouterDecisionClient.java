@@ -59,10 +59,19 @@ final class OpenRouterDecisionClient implements CellDecisionClient {
     @Override
     public Decision decide(String state) throws Exception {
         calls.increment();
+        long start = System.nanoTime();
         try {
-            return parse(post(requestBody(model, state)));
+            String body = post(requestBody(model, state));
+            Decision decision = parse(body);
+            JsonNode usage = MAPPER.readTree(body).path("usage");
+            LlmStats.GLOBAL.recordCall(model, usage.path("input_tokens").asLong(0),
+                    usage.path("output_tokens").asLong(0),
+                    usage.path("cost").isNumber() ? usage.path("cost").asDouble() : null,
+                    (System.nanoTime() - start) / 1_000_000);
+            return decision;
         } catch (Exception e) {
             failures.increment();
+            LlmStats.GLOBAL.recordFailedCall(model, (System.nanoTime() - start) / 1_000_000);
             throw e;
         }
     }

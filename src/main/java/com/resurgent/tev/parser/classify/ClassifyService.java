@@ -206,7 +206,19 @@ public final class ClassifyService {
                     + (scopeSheetNames == null ? "whole workbook" : String.join(", ", scopeSheetNames)));
             Progress.phase("classify", "STAGE 1/3 START - LLM region layout");
             long stageStarted = System.nanoTime();
+            LlmStats.GLOBAL.enterStage("region-layout");
+            java.time.Instant stageInstant = java.time.Instant.now();
+            int sheetsTotal = repo.selectWorksheetsForParseRun(parseRunId).size();
+            int candidatesBefore = repo.selectCandidatesForParseRun(parseRunId).size();
             materializeLlmRegions(repo, parseRunId);
+            int sheetsInScope = (int) repo.selectWorksheetsForParseRun(parseRunId).stream()
+                    .filter(sheet -> inScope(sheet.worksheetId())).count();
+            LlmStats.GLOBAL.put("region-layout", "sheets_total", sheetsTotal);
+            LlmStats.GLOBAL.put("region-layout", "sheets_sent_to_llm", sheetsInScope);
+            LlmStats.GLOBAL.put("region-layout", "candidates_before", candidatesBefore);
+            LlmStats.GLOBAL.put("region-layout", "candidates_after",
+                    repo.selectCandidatesForParseRun(parseRunId).size());
+            LlmStats.GLOBAL.timing("region-layout", stageInstant, java.time.Instant.now(), sheetsInScope);
             Progress.phase("classify", "STAGE 1/3 DONE - region layout took " + secondsSince(stageStarted) + "s");
 
             List<CandidateRow> all = repo.selectCandidatesForParseRun(parseRunId);
@@ -246,8 +258,15 @@ public final class ClassifyService {
             Progress.phase("classify", "STAGE 2/3 START - Layer A (what each region is about), "
                     + prepared.size() + " candidates");
             stageStarted = System.nanoTime();
+            LlmStats.GLOBAL.enterStage("layer-a");
+            stageInstant = java.time.Instant.now();
             List<PacketDisposition> dispositions =
                     runLayerA(prepared, families, deadlineNanos);
+            LlmStats.GLOBAL.put("layer-a", "candidates_total", all.size());
+            LlmStats.GLOBAL.put("layer-a", "candidates_eligible", eligible.size());
+            LlmStats.GLOBAL.put("layer-a", "candidates_skipped", skipped);
+            LlmStats.GLOBAL.put("layer-a", "dispositions", dispositions.size());
+            LlmStats.GLOBAL.timing("layer-a", stageInstant, java.time.Instant.now(), eligible.size());
             Progress.phase("classify", "STAGE 2/3 DONE - Layer A took " + secondsSince(stageStarted) + "s: "
                     + dispositions.size() + " of " + prepared.size() + " candidates classified");
 

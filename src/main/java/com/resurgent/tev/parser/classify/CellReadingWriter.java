@@ -44,6 +44,18 @@ public final class CellReadingWriter {
     }
 
     void replace(WorkspaceRepository repo, long parseRunId, ClassifierLlm llm) throws SQLException {
+        LlmStats.GLOBAL.enterStage("layer-b");
+        java.time.Instant started = java.time.Instant.now();
+        try {
+            replaceCells(repo, parseRunId, llm);
+        } finally {
+            Double numeric = LlmStats.GLOBAL.stat("layer-b", "cells_numeric");
+            LlmStats.GLOBAL.timing("layer-b", started, java.time.Instant.now(),
+                    numeric == null ? null : numeric.intValue());
+        }
+    }
+
+    private void replaceCells(WorkspaceRepository repo, long parseRunId, ClassifierLlm llm) throws SQLException {
         List<InterpretationCellView> cells = repo.selectInterpretationCellsForParseRun(parseRunId);
         Map<Long, InterpretationCellView> byId = InterpretationEvidenceResolver.indexCells(cells);
         Map<Long, Set<Long>> members = InterpretationEvidenceResolver.indexMembers(
@@ -89,6 +101,8 @@ public final class CellReadingWriter {
             }
         }
 
+        LlmStats.GLOBAL.put("layer-b", "cells_total", cells.size());
+        LlmStats.GLOBAL.put("layer-b", "cells_numeric", numericIds.size());
         Map<Long, ReadingOutcome> settled = new HashMap<>();
         List<InterpretationCellView> formulas = new ArrayList<>();
         for (InterpretationCellView cell : cells) {
@@ -165,6 +179,11 @@ public final class CellReadingWriter {
             }
         }
 
+        long untypedFinal = numericIds.stream()
+                .map(settled::get)
+                .filter(o -> o != null && ReadingOutcome.UNTYPABLE.equals(o.refusal))
+                .count();
+        LlmStats.GLOBAL.put("layer-b", "cells_untypable_final", untypedFinal);
         settleUnstatedScales(cells, settled, unknowns, sheetNames);
         reportScaleConflicts(cells, settled, stated);
 

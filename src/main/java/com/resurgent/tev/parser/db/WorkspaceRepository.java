@@ -2139,35 +2139,54 @@ public final class WorkspaceRepository {
         }
     }
 
-    public void recordLlmUsage(long parseRunId, String stage, long calls, long promptTokens,
-            long completionTokens, Double costUsd, long costMissing) throws SQLException {
+    /**
+     * One model's totals within one stage. Re-running a stage replaces its rows: the table
+     * describes the latest execution of each (stage, model).
+     */
+    public void recordLlmUsage(long parseRunId, String stage, String modelId, long calls, long failedCalls,
+            long failovers, long promptTokens, long completionTokens, Double costUsd, long costMissing,
+            long latencyMsTotal) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO llm_usage (parse_run_id, stage, calls, prompt_tokens, completion_tokens,"
-                        + " cost_usd, cost_missing)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                Statement.RETURN_GENERATED_KEYS)) {
+                "INSERT INTO llm_usage (parse_run_id, stage, model_id, calls, failed_calls, failovers,"
+                        + " prompt_tokens, completion_tokens, cost_usd, cost_missing, latency_ms_total)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        + " ON CONFLICT (parse_run_id, stage, model_id) DO UPDATE SET"
+                        + " calls = excluded.calls, failed_calls = excluded.failed_calls,"
+                        + " failovers = excluded.failovers, prompt_tokens = excluded.prompt_tokens,"
+                        + " completion_tokens = excluded.completion_tokens, cost_usd = excluded.cost_usd,"
+                        + " cost_missing = excluded.cost_missing,"
+                        + " latency_ms_total = excluded.latency_ms_total,"
+                        + " recorded_at = CURRENT_TIMESTAMP")) {
             ps.setLong(1, parseRunId);
             ps.setString(2, stage);
-            ps.setLong(3, calls);
-            ps.setLong(4, promptTokens);
-            ps.setLong(5, completionTokens);
+            ps.setString(3, modelId);
+            ps.setLong(4, calls);
+            ps.setLong(5, failedCalls);
+            ps.setLong(6, failovers);
+            ps.setLong(7, promptTokens);
+            ps.setLong(8, completionTokens);
             if (costUsd != null) {
-                ps.setDouble(6, costUsd);
+                ps.setDouble(9, costUsd);
             } else {
-                ps.setNull(6, Types.DOUBLE);
+                ps.setNull(9, Types.DOUBLE);
             }
-            ps.setLong(7, costMissing);
+            ps.setLong(10, costMissing);
+            ps.setLong(11, latencyMsTotal);
             ps.executeUpdate();
         }
     }
 
+    /** Latest execution of a stage wins. */
     public void recordRunTiming(long parseRunId, String stage, String startedAt, String finishedAt,
             long durationMillis, Integer itemCount) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO run_timing (parse_run_id, stage, started_at, finished_at,"
                         + " duration_millis, item_count)"
-                        + " VALUES (?, ?, ?, ?, ?, ?)",
-                Statement.RETURN_GENERATED_KEYS)) {
+                        + " VALUES (?, ?, ?, ?, ?, ?)"
+                        + " ON CONFLICT (parse_run_id, stage) DO UPDATE SET"
+                        + " started_at = excluded.started_at, finished_at = excluded.finished_at,"
+                        + " duration_millis = excluded.duration_millis, item_count = excluded.item_count,"
+                        + " recorded_at = CURRENT_TIMESTAMP")) {
             ps.setLong(1, parseRunId);
             ps.setString(2, stage);
             ps.setString(3, startedAt);
@@ -2178,6 +2197,28 @@ public final class WorkspaceRepository {
             } else {
                 ps.setNull(6, Types.INTEGER);
             }
+            ps.executeUpdate();
+        }
+    }
+
+    /** A setting or count for comparisons; exactly one of {@code num} and {@code text} is used. */
+    public void recordRunStat(long parseRunId, String stage, String name, Double num, String text)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO run_stat (parse_run_id, stage, name, value_num, value_text)"
+                        + " VALUES (?, ?, ?, ?, ?)"
+                        + " ON CONFLICT (parse_run_id, stage, name) DO UPDATE SET"
+                        + " value_num = excluded.value_num, value_text = excluded.value_text,"
+                        + " recorded_at = CURRENT_TIMESTAMP")) {
+            ps.setLong(1, parseRunId);
+            ps.setString(2, stage);
+            ps.setString(3, name);
+            if (num != null) {
+                ps.setDouble(4, num);
+            } else {
+                ps.setNull(4, Types.DOUBLE);
+            }
+            ps.setString(5, text);
             ps.executeUpdate();
         }
     }

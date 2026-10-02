@@ -179,6 +179,8 @@ public class CellTypeClassifierLlm {
         }
 
         int typedByDictionary = unclassified.size() - stillUntyped.size();
+        LlmStats.GLOBAL.add("layer-b", "cells_untypable_before_classifier", unclassified.size());
+        LlmStats.GLOBAL.add("layer-b", "cells_typed_dictionary", typedByDictionary);
         if (typedByDictionary > 0) {
             System.err.println("[cell-classifier] Typed " + typedByDictionary + " cells via KindTokens dictionary");
         }
@@ -195,6 +197,7 @@ public class CellTypeClassifierLlm {
             compared = List.copyOf(stillUntyped);
             long shadowStart = System.nanoTime();
             shadow = askDecisions(compared, cells, settled);
+            LlmStats.GLOBAL.add("layer-b", "cells_decision_shadow", compared.size());
             System.err.println("[cell-decision] shadow mode: asked D1 about " + compared.size() + " cells in "
                     + (System.nanoTime() - shadowStart) / 1_000_000 + "ms; answers are NOT applied");
             System.err.flush();
@@ -207,6 +210,7 @@ public class CellTypeClassifierLlm {
             }
         }
 
+        LlmStats.GLOBAL.add("layer-b", "cells_to_chat", stillUntyped.size());
         System.err.println("[cell-classifier] Classifying " + stillUntyped.size() + " untyped cells via LLM");
         System.err.flush();
 
@@ -335,6 +339,11 @@ public class CellTypeClassifierLlm {
             }
         }
         long ms = (System.nanoTime() - start) / 1_000_000;
+        LlmStats.GLOBAL.add("layer-b", "cells_to_decision_model", pending.size());
+        LlmStats.GLOBAL.add("layer-b", "cells_settled_decision_model", pending.size() - deferred.size());
+        LlmStats.GLOBAL.add("layer-b", "cells_deferred_decision_low_confidence", lowConfidence);
+        LlmStats.GLOBAL.add("layer-b", "cells_decision_failed", failed);
+        LlmStats.GLOBAL.add("layer-b", "decision_phase_millis", ms);
         System.err.println("[cell-decision] " + (pending.size() - deferred.size()) + "/" + pending.size()
                 + " cells settled by decision model in " + ms + "ms; " + lowConfidence
                 + " low-confidence and " + failed + " failed deferred to chat LLM");

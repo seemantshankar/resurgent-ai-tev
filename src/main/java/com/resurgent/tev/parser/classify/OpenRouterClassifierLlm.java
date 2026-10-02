@@ -403,7 +403,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                     costMissing.sum());
         }
 
-        private void recordUsage(String body, CompletionResult result) {
+        private void recordUsage(String body, CompletionResult result, long latencyMs) {
             calls.increment();
             if (result.promptTokens() != null) {
                 promptTokens.add(result.promptTokens());
@@ -417,6 +417,10 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             } else {
                 costUsd.add(cost);
             }
+            LlmStats.GLOBAL.recordCall(model,
+                    result.promptTokens() == null ? 0 : result.promptTokens(),
+                    result.completionTokens() == null ? 0 : result.completionTokens(),
+                    cost, latencyMs);
         }
 
         private static Double costUsd(String body) {
@@ -451,7 +455,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                                     + " " + snippet(response.body()));
                 }
                 CompletionResult result = contentWithUsage(response.body());
-                recordUsage(response.body(), result);
+                recordUsage(response.body(), result, elapsedMs);
                 succeeded = true;
                 return result;
             } catch (IllegalStateException e) {
@@ -467,6 +471,9 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                 System.err.flush();
                 throw new IllegalStateException("OpenRouter call failed: " + e.getMessage(), e);
             } finally {
+                if (!succeeded) {
+                    LlmStats.GLOBAL.recordFailedCall(model, (System.nanoTime() - startNanos) / 1_000_000);
+                }
                 LlmActivity.GLOBAL.end(activityId, succeeded);
             }
         }

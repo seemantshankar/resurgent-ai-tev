@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser;
 
+import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.FileOutputStream;
@@ -351,7 +352,7 @@ class IngestCommandTest {
 
         assertThat(result.exitCode()).isZero();
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
-            assertThat(count(c, "schema_migration")).isEqualTo(36);
+            assertThat(count(c, "schema_migration")).isEqualTo(WorkspaceDatabase.latestVersion());
             try (ResultSet rs = c.createStatement().executeQuery(
                     "SELECT coord FROM cell WHERE coord = 'Z9'")) {
                 assertThat(rs.next()).isFalse();

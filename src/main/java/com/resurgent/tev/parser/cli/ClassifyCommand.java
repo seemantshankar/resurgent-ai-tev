@@ -8,6 +8,7 @@ import com.resurgent.tev.parser.classify.ClassifyService;
 import com.resurgent.tev.parser.classify.ClassifyTuning;
 import com.resurgent.tev.parser.classify.ClassifySummary;
 import com.resurgent.tev.parser.classify.LlmEnvironment;
+import com.resurgent.tev.parser.classify.LlmStats;
 import com.resurgent.tev.parser.classify.OpenRouterClassifierLlm;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
@@ -129,6 +130,15 @@ public final class ClassifyCommand implements Callable<Integer> {
         }
         java.io.PrintStream originalErr = System.err;
         System.setErr(com.resurgent.tev.parser.TimestampedStream.wrap(originalErr));
+        LlmStats.GLOBAL.reset();
+        LlmEnvironment.recordSettings(LlmStats.GLOBAL);
+        LlmStats.GLOBAL.put("run", "cell_batch_size",
+                cellBatchSize != null ? cellBatchSize : ClassifyTuning.DEFAULT_CELL_BATCH_SIZE);
+        LlmStats.GLOBAL.put("run", "layer_a_batch_size",
+                layerABatchSize != null ? layerABatchSize : ClassifyTuning.DEFAULT_LAYER_A_BATCH_SIZE);
+        LlmStats.GLOBAL.put("run", "parallelism", limits.parallelism());
+        LlmStats.GLOBAL.putText("run", "scope",
+                onlySheets == null || onlySheets.isEmpty() ? "whole workbook" : String.join(", ", onlySheets));
         System.err.println("[classify] models in order: " + LlmEnvironment.describeModels());
         try (Heartbeat heartbeat = new Heartbeat(30)) {
             ClassifyService service = new ClassifyService(llm, new DiscoverService(), limits)
@@ -144,7 +154,7 @@ public final class ClassifyCommand implements Callable<Integer> {
                         bound.parseRunId(),
                         bound.boundCells(),
                         bound.skippedCells());
-                persistAndPrintUsage(out, parseRunId);
+                printUsage(out);
                 return 0;
             }
             ClassifySummary summary = service.classify(db, parseRunId);
@@ -154,32 +164,22 @@ public final class ClassifyCommand implements Callable<Integer> {
                     summary.dispositionCount(),
                     summary.eligibleCount(),
                     summary.skippedCount());
-            persistAndPrintUsage(out, parseRunId);
+            printUsage(out);
             return 0;
         } catch (ClassifyException e) {
             err.println("classify rejected: " + e.getMessage());
             return 3;
         } finally {
             System.setErr(originalErr);
+            persistStats(out, parseRunId);
         }
     }
-    private void persistAndPrintUsage(PrintWriter out, long parseRunId) {
-        printUsage(out);
-        if (!(llm instanceof OpenRouterClassifierLlm open)) {
+    /** Saves per-stage, per-model usage, settings, counts and timings; also after a failed run. */
+    private void persistStats(PrintWriter out, long parseRunId) {
+        if (LlmStats.GLOBAL.usageRows().isEmpty() && LlmStats.GLOBAL.timings().isEmpty()) {
             return;
         }
-        try (WorkspaceDatabase wdb = WorkspaceDatabase.open(db.toAbsolutePath().normalize())) {
-            WorkspaceRepository repo = new WorkspaceRepository(wdb.connection());
-            OpenRouterClassifierLlm.UsageTotals usage = open.usageTotals();
-            if (usage.calls() > 0) {
-                Double costUsd = usage.costKnown() ? usage.costUsd() : null;
-                repo.recordLlmUsage(parseRunId, "layer-a", usage.calls(), usage.promptTokens(),
-                        usage.completionTokens(), costUsd, usage.costMissing());
-                repo.commit();
-            }
-        } catch (Exception e) {
-            out.println("warning: failed to persist LLM usage: " + e.getMessage());
-        }
+        StatsRecorder.persist(out, db, parseRunId);
     }
 
 }
