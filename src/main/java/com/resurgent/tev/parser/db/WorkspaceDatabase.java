@@ -57,7 +57,9 @@ public final class WorkspaceDatabase implements AutoCloseable {
             "db/migration/V33__formula_graph.sql",
             "db/migration/V34__cell_reading.sql",
             "db/migration/V35__packet_disposition_stated_scale.sql",
-            "db/migration/V36__cell_reading_unstated_scale.sql"
+            "db/migration/V36__cell_reading_unstated_scale.sql",
+            "db/migration/V37__llm_usage.sql",
+            "db/migration/V38__run_timing.sql"
     };
 
     private final Connection connection;
