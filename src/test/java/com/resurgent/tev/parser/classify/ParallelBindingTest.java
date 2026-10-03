@@ -81,7 +81,7 @@ class ParallelBindingTest {
         BindSummary bound = service.bindSheets(db, ingest.parseRunId(), List.of("ONE", "TWO", "THREE"));
 
         assertThat(asked.get()).isGreaterThanOrEqualTo(3);
-        assertThat(mostAtOnce.get()).as("regions asked at the same time").isGreaterThan(1);
+        assertThat(mostAtOnce.get()).as("regions asked at the same time (asked=" + asked.get() + ")").isGreaterThan(1);
         assertThat(bound.boundCells()).isGreaterThanOrEqualTo(6);
     }
 

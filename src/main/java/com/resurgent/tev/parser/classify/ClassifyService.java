@@ -405,7 +405,10 @@ public final class ClassifyService {
         OntologySlice slice = catalog.sliceForMandate(mandateId);
         Map<Long, String> sheetById = new HashMap<>();
         for (WorksheetRef sheet : repo.selectWorksheetsForParseRun(parseRunId)) {
-            sheetById.put(sheet.worksheetId(), sheet.sheetName());
+            // A run scoped to some sheets binds those only; the rest of the workbook costs no model calls.
+            if (inScope(sheet.worksheetId())) {
+                sheetById.put(sheet.worksheetId(), sheet.sheetName());
+            }
         }
         BindSummary summary = bindCandidates(repo, parseRunId, sheetById, catalog, mandateId, slice);
         LlmStats.GLOBAL.put("layer-b", "bind_cells_bound", summary.boundCells());
@@ -1388,6 +1391,11 @@ public final class ClassifyService {
         }
         List<List<LayerBAssignment>> answers = new ArrayList<>();
         for (ParallelCalls.Outcome<List<LayerBAssignment>> outcome : ParallelCalls.run(tasks, tuning.concurrency())) {
+            if (!outcome.ok()) {
+                System.err.println("[layer-b] first binding round failed for a region, asking again in order: "
+                        + outcome.error());
+                System.err.flush();
+            }
             answers.add(outcome.ok() ? outcome.value() : null);
         }
         return answers;

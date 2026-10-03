@@ -53,8 +53,12 @@ final class RunCellContext {
                 byId);
     }
 
-    /** One line of context for a cell, or blank when it has none or is unknown. */
-    String inline(long cellId) {
+    /**
+     * One line of context for a cell, or blank when it has none or is unknown. Regions are bound
+     * from several threads at once and the resolver's caches are plain maps, so lookups take
+     * turns; each is a quick in-memory read next to the model call it feeds.
+     */
+    synchronized String inline(long cellId) {
         InterpretationCellView cell = byId.get(cellId);
         if (cell == null) {
             return "";
