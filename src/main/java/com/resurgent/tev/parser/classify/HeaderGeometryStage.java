@@ -39,6 +39,13 @@ final class HeaderGeometryStage {
                 periods) are labels too: they say which period the row is. Numbers that merely
                 index the rows (a serial or item number) are not, and neither are status or
                 remarks columns to the right of the amounts. Empty array if rows carry no labels.
+              annotationColumns: array of column letters holding text that qualifies a row's
+                amounts rather than naming it (a status, remark, basis or note beside the
+                numbers, e.g. whether the row is added, deducted or exempted). Empty if none.
+              groupColumns: array of column letters where a filled cell starts a group that the
+                rows beneath it belong to, until the next filled cell in that column: a running
+                item number whose sub-rows leave it blank, or a section heading standing alone
+                above its items. Empty if rows are not grouped.
             Use only coordinates that appear in the grid. JSON only, no markdown fences.
             """;
 
@@ -136,15 +143,12 @@ final class HeaderGeometryStage {
                 bands.add(band);
             }
         }
-        List<Integer> labelColumns = new ArrayList<>();
-        for (JsonNode node : root.path("rowLabelColumns")) {
-            int col = HeaderGeometry.columnNumber(node.asText());
-            if (col >= region.bboxMinCol() && col <= region.bboxMaxCol() && !labelColumns.contains(col)) {
-                labelColumns.add(col);
-            }
-        }
-        labelColumns.sort(Integer::compare);
-        HeaderGeometry geometry = new HeaderGeometry(region.candidateId(), bands, labelColumns);
+        HeaderGeometry geometry = new HeaderGeometry(
+                region.candidateId(),
+                bands,
+                withinRegion(root.path("rowLabelColumns"), region),
+                withinRegion(root.path("annotationColumns"), region),
+                withinRegion(root.path("groupColumns"), region));
         return geometry.isEmpty() ? Optional.empty() : Optional.of(geometry);
     }
 
@@ -203,6 +207,12 @@ final class HeaderGeometryStage {
         } catch (NumberFormatException e) {
             return null;
         }
+    }
+
+    private static List<Integer> withinRegion(JsonNode letters, CandidateRow region) {
+        return HeaderGeometry.columnList(letters).stream()
+                .filter(col -> col >= region.bboxMinCol() && col <= region.bboxMaxCol())
+                .toList();
     }
 
     private static boolean inside(CandidateRow r, InterpretationCellView c) {

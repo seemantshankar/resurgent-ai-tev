@@ -14,7 +14,12 @@ import java.util.Locale;
  * labels. Code assembles every cell's label text from this, so a wrong answer is one wrong
  * coordinate here and not thousands of scattered strings.
  */
-public record HeaderGeometry(long candidateId, List<Band> bands, List<Integer> rowLabelColumns) {
+public record HeaderGeometry(
+        long candidateId,
+        List<Band> bands,
+        List<Integer> rowLabelColumns,
+        List<Integer> annotationColumns,
+        List<Integer> groupColumns) {
 
     /** Header rows {@code rowMin..rowMax}, governing columns {@code colMin..colMax} (1-based). */
     public record Band(int rowMin, int rowMax, int colMin, int colMax) {
@@ -28,10 +33,17 @@ public record HeaderGeometry(long candidateId, List<Band> bands, List<Integer> r
     public HeaderGeometry {
         bands = List.copyOf(bands);
         rowLabelColumns = List.copyOf(rowLabelColumns);
+        annotationColumns = List.copyOf(annotationColumns);
+        groupColumns = List.copyOf(groupColumns);
+    }
+
+    /** Header bands and row-label columns only; no annotation or group columns. */
+    public HeaderGeometry(long candidateId, List<Band> bands, List<Integer> rowLabelColumns) {
+        this(candidateId, bands, rowLabelColumns, List.of(), List.of());
     }
 
     public boolean isEmpty() {
-        return bands.isEmpty() && rowLabelColumns.isEmpty();
+        return bands.isEmpty() && rowLabelColumns.isEmpty() && annotationColumns.isEmpty() && groupColumns.isEmpty();
     }
 
     /** The bands nearest above {@code row} that govern {@code col}: all that share the closest bottom row. */
@@ -57,10 +69,9 @@ public record HeaderGeometry(long candidateId, List<Band> bands, List<Integer> r
         for (Band band : bands) {
             bandNodes.add(columnLetters(band.colMin()) + band.rowMin() + ":" + columnLetters(band.colMax()) + band.rowMax());
         }
-        ArrayNode columns = root.putArray("rowLabelColumns");
-        for (int col : rowLabelColumns) {
-            columns.add(columnLetters(col));
-        }
+        putColumns(root, "rowLabelColumns", rowLabelColumns);
+        putColumns(root, "annotationColumns", annotationColumns);
+        putColumns(root, "groupColumns", groupColumns);
         return root.toString();
     }
 
@@ -74,18 +85,35 @@ public record HeaderGeometry(long candidateId, List<Band> bands, List<Integer> r
                     bands.add(band);
                 }
             }
-            List<Integer> columns = new ArrayList<>();
-            for (JsonNode node : root.path("rowLabelColumns")) {
-                int col = columnNumber(node.asText());
-                if (col > 0 && !columns.contains(col)) {
-                    columns.add(col);
-                }
-            }
-            columns.sort(Integer::compare);
-            return new HeaderGeometry(candidateId, bands, columns);
+            return new HeaderGeometry(
+                    candidateId,
+                    bands,
+                    columnList(root.path("rowLabelColumns")),
+                    columnList(root.path("annotationColumns")),
+                    columnList(root.path("groupColumns")));
         } catch (Exception e) {
             throw new IllegalArgumentException("unreadable header geometry: " + e.getMessage(), e);
         }
+    }
+
+    private static void putColumns(ObjectNode root, String name, List<Integer> columns) {
+        ArrayNode node = root.putArray(name);
+        for (int col : columns) {
+            node.add(columnLetters(col));
+        }
+    }
+
+    /** Column letters as sorted, distinct column numbers; anything that is not a column is dropped. */
+    static List<Integer> columnList(JsonNode letters) {
+        List<Integer> columns = new ArrayList<>();
+        for (JsonNode node : letters) {
+            int col = columnNumber(node.asText());
+            if (col > 0 && !columns.contains(col)) {
+                columns.add(col);
+            }
+        }
+        columns.sort(Integer::compare);
+        return columns;
     }
 
     /** {@code "B4:G7"}, in any corner order; null when it is not a range. */

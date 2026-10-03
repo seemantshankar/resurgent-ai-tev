@@ -68,6 +68,17 @@ class HeaderGeometryStageTest {
     }
 
     @Test
+    void parsesAnnotationAndGroupColumnsAndKeepsThemInRange() {
+        String json = "{\"bands\":[\"B4:G7\"],\"rowLabelColumns\":[\"B\"],"
+                + "\"annotationColumns\":[\"G\",\"Z\"],\"groupColumns\":[\"A\"]}";
+
+        HeaderGeometry g = HeaderGeometryStage.parse(json, REGION).orElseThrow();
+
+        assertThat(g.annotationColumns()).containsExactly(7);
+        assertThat(g.groupColumns()).containsExactly(1);
+    }
+
+    @Test
     void anUnusableAnswerGivesNoGeometryRatherThanAGuess() {
         assertThat(HeaderGeometryStage.parse("not json", REGION)).isEmpty();
         assertThat(HeaderGeometryStage.parse("{\"bands\":[],\"rowLabelColumns\":[]}", REGION)).isEmpty();
