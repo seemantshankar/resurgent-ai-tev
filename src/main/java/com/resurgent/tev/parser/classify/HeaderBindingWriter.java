@@ -22,6 +22,27 @@ final class HeaderBindingWriter {
     /** Cells and evidence rows written by the last {@link #write}; for the run log and stats. */
     record Written(int cells, int evidenceRows) {}
 
+    /**
+     * "bound" has a path; "not_applicable" is an error cell or one owned by a scratch region;
+     * anything else is "unbound" (read, but no nomenclature path yet or found).
+     */
+    static String status(NomenclatureBinding binding, InterpretationCellView cell, List<CandidateRow> owners) {
+        if (binding != null) {
+            return "bound";
+        }
+        if (cell.isError()) {
+            return "not_applicable";
+        }
+        if (owners != null) {
+            for (CandidateRow owner : owners) {
+                if ("scratch".equals(owner.structuralRole())) {
+                    return "not_applicable";
+                }
+            }
+        }
+        return "unbound";
+    }
+
     static Written write(WorkspaceRepository repo, long parseRunId, List<CandidateRow> candidates)
             throws SQLException {
         int evidenceRows = 0;
@@ -58,7 +79,7 @@ final class HeaderBindingWriter {
             com.resurgent.tev.parser.Progress.step("labels", "cells with row/column labels saved",
                     ++done, eligible.size(), 2500);
             NomenclatureBinding binding = bindingsByCell.get(cell.cellId());
-            String status = binding != null ? "bound" : "not_applicable";
+            String status = status(binding, cell, ownersByCell.get(cell.cellId()));
             repo.insertCellInterpretation(
                     parseRunId,
                     cell,

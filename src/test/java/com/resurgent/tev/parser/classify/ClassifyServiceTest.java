@@ -120,6 +120,15 @@ class ClassifyServiceTest {
                 assertThat(rs.next()).isTrue();
                 assertThat(rs.getInt(1)).isPositive();
             }
+            // classify now ends with a bind: the spine is seeded and no cell is blanket 'not_applicable'.
+            assertThat(repo.countNomenclatureSpine()).as("spine seeded by the bind stage").isPositive();
+            try (var st = db.connection().createStatement();
+                    var rs = st.executeQuery(
+                            "SELECT COUNT(*) FROM cell_interpretation WHERE nomenclature_status = 'unbound'"
+                                    + " OR nomenclature_status = 'bound'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getInt(1)).as("eligible cells are bound or unbound, not not_applicable").isPositive();
+            }
         }
     }
 }

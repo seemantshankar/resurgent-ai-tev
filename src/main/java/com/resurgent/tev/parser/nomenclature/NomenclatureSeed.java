@@ -25,8 +25,45 @@ public final class NomenclatureSeed {
             "Means of Finance > Unsecured Loans",
             "Means of Finance > Working Capital Assistance",
             "Profit & Loss",
+            "Profit & Loss > Revenue",
+            "Profit & Loss > Cost of Sales",
+            "Profit & Loss > Gross Profit",
+            "Profit & Loss > Operating Expenses",
+            "Profit & Loss > EBITDA",
+            "Profit & Loss > Depreciation & Amortisation",
+            "Profit & Loss > EBIT",
+            "Profit & Loss > Interest & Finance Charges",
+            "Profit & Loss > PBT",
+            "Profit & Loss > Tax",
+            "Profit & Loss > PAT",
             "Balance Sheet",
-            "Cash Flow");
+            "Balance Sheet > Net Block",
+            "Balance Sheet > Current Assets",
+            "Balance Sheet > Cash & Bank Balance",
+            "Balance Sheet > Current Liabilities",
+            "Balance Sheet > Total Debt",
+            "Balance Sheet > Net Worth",
+            "Balance Sheet > Capital Employed",
+            "Cash Flow",
+            "Cash Flow > Cash Flow from Operations",
+            "Cash Flow > Cash Flow from Investing",
+            "Cash Flow > Cash Flow from Financing",
+            "Key Ratios",
+            "Key Ratios > Profitability",
+            "Key Ratios > Profitability > Gross Margin",
+            "Key Ratios > Profitability > EBITDA Margin",
+            "Key Ratios > Profitability > PAT Margin",
+            "Key Ratios > Profitability > Return on Capital Employed",
+            "Key Ratios > Profitability > Return on Equity",
+            "Key Ratios > Leverage",
+            "Key Ratios > Leverage > Debt Equity",
+            "Key Ratios > Coverage",
+            "Key Ratios > Coverage > DSCR",
+            "Key Ratios > Coverage > Interest Coverage",
+            "Key Ratios > Liquidity",
+            "Key Ratios > Liquidity > Current Ratio",
+            "Key Ratios > Growth",
+            "Key Ratios > Growth > Sales Growth");
 
     public static final List<NomenclatureAlias> SPINE_ALIASES = List.of(
             new NomenclatureAlias("Building Cost",
@@ -56,7 +93,42 @@ public final class NomenclatureSeed {
             new NomenclatureAlias("Partners' Capital",
                     "Means of Finance > Promoter / Partners' Capital"),
             new NomenclatureAlias("PARTNERS' CAPITAL",
-                    "Means of Finance > Promoter / Partners' Capital"));
+                    "Means of Finance > Promoter / Partners' Capital"),
+            new NomenclatureAlias("Sales", "Profit & Loss > Revenue"),
+            new NomenclatureAlias("Net Sales", "Profit & Loss > Revenue"),
+            new NomenclatureAlias("Total Revenue", "Profit & Loss > Revenue"),
+            new NomenclatureAlias("Turnover", "Profit & Loss > Revenue"),
+            new NomenclatureAlias("Revenue from Operations", "Profit & Loss > Revenue"),
+            new NomenclatureAlias("Cost of Goods Sold", "Profit & Loss > Cost of Sales"),
+            new NomenclatureAlias("COGS", "Profit & Loss > Cost of Sales"),
+            new NomenclatureAlias("Operating Profit", "Profit & Loss > EBITDA"),
+            new NomenclatureAlias("Depreciation", "Profit & Loss > Depreciation & Amortisation"),
+            new NomenclatureAlias("Interest", "Profit & Loss > Interest & Finance Charges"),
+            new NomenclatureAlias("Finance Cost", "Profit & Loss > Interest & Finance Charges"),
+            new NomenclatureAlias("Profit Before Tax", "Profit & Loss > PBT"),
+            new NomenclatureAlias("Income Tax", "Profit & Loss > Tax"),
+            new NomenclatureAlias("Profit After Tax", "Profit & Loss > PAT"),
+            new NomenclatureAlias("Net Profit", "Profit & Loss > PAT"),
+            new NomenclatureAlias("Fixed Assets", "Balance Sheet > Net Block"),
+            new NomenclatureAlias("Cash and Bank Balance", "Balance Sheet > Cash & Bank Balance"),
+            new NomenclatureAlias("Total Borrowings", "Balance Sheet > Total Debt"),
+            new NomenclatureAlias("Tangible Net Worth", "Balance Sheet > Net Worth"),
+            new NomenclatureAlias("Cash from Operations", "Cash Flow > Cash Flow from Operations"),
+            new NomenclatureAlias("Net Cash from Operating Activities", "Cash Flow > Cash Flow from Operations"),
+            new NomenclatureAlias("Net Cash from Investing Activities", "Cash Flow > Cash Flow from Investing"),
+            new NomenclatureAlias("Net Cash from Financing Activities", "Cash Flow > Cash Flow from Financing"),
+            new NomenclatureAlias("EBITDA Margin (before LF)", "Key Ratios > Profitability > EBITDA Margin"),
+            new NomenclatureAlias("EBITDA Margin (after LF)", "Key Ratios > Profitability > EBITDA Margin"),
+            new NomenclatureAlias("ROCE", "Key Ratios > Profitability > Return on Capital Employed"),
+            new NomenclatureAlias("ROCE (EBIT/ Capital Employed)",
+                    "Key Ratios > Profitability > Return on Capital Employed"),
+            new NomenclatureAlias("ROE", "Key Ratios > Profitability > Return on Equity"),
+            new NomenclatureAlias("Debt Equity (in times)", "Key Ratios > Leverage > Debt Equity"),
+            new NomenclatureAlias("Debt Equity Ratio", "Key Ratios > Leverage > Debt Equity"),
+            new NomenclatureAlias("TOL/TNW", "Key Ratios > Leverage > Debt Equity"),
+            new NomenclatureAlias("Debt Service Coverage Ratio", "Key Ratios > Coverage > DSCR"),
+            new NomenclatureAlias("Interest Coverage Ratio", "Key Ratios > Coverage > Interest Coverage"),
+            new NomenclatureAlias("ICR", "Key Ratios > Coverage > Interest Coverage"));
 
     static final String HOTEL = "hotel";
 
@@ -92,7 +164,7 @@ public final class NomenclatureSeed {
         return sep < 0 ? path : path.substring(sep + 3);
     }
 
-    static String parentOf(String path) {
+    public static String parentOf(String path) {
         int sep = path.lastIndexOf(" > ");
         return sep < 0 ? null : path.substring(0, sep);
     }

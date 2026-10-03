@@ -289,6 +289,7 @@ public final class ClassifyService {
                 stageStarted = System.nanoTime();
                 cellReader().replace(repo, parseRunId, llm);
                 saveCellLabels(repo, parseRunId);
+                autoBind(repo, parseRunId);
                 Progress.phase("classify", "STAGE 3/3 DONE - Layer B took " + secondsSince(stageStarted)
                         + "s; saving results");
                 db.connection().commit();
@@ -331,6 +332,7 @@ public final class ClassifyService {
             System.err.flush();
             cellReader().replace(repo, parseRunId, llm);
             saveCellLabels(repo, parseRunId);
+            autoBind(repo, parseRunId);
             db.connection().commit();
         } catch (Exception e) {
             db.connection().rollback();
@@ -341,6 +343,28 @@ public final class ClassifyService {
 
         return new ClassifySummary(
                 parseRunId, dispositions.size(), 0, dispositions.size());
+    }
+
+    /**
+     * Final classify stage: seed the spine if needed and bind every sheet in scope, so one run
+     * leaves cells with nomenclature paths. Runs in the caller's transaction, after Layer B.
+     */
+    private BindSummary autoBind(WorkspaceRepository repo, long parseRunId) throws SQLException, ClassifyException {
+        long started = System.nanoTime();
+        Progress.phase("classify", "binding cells to nomenclature");
+        long mandateId = repo.selectParseRunMandateId(parseRunId);
+        NomenclatureCatalog catalog = new NomenclatureCatalog(repo);
+        OntologySlice slice = catalog.sliceForMandate(mandateId);
+        Map<Long, String> sheetById = new HashMap<>();
+        for (WorksheetRef sheet : repo.selectWorksheetsForParseRun(parseRunId)) {
+            sheetById.put(sheet.worksheetId(), sheet.sheetName());
+        }
+        BindSummary summary = bindCandidates(repo, parseRunId, sheetById, catalog, mandateId, slice);
+        LlmStats.GLOBAL.put("layer-b", "bind_cells_bound", summary.boundCells());
+        LlmStats.GLOBAL.put("layer-b", "bind_cells_unbound", summary.skippedCells());
+        Progress.phase("classify", "bound " + summary.boundCells() + " cells, " + summary.skippedCells()
+                + " left unbound in " + secondsSince(started) + "s");
+        return summary;
     }
 
     /**
@@ -1122,80 +1146,109 @@ public final class ClassifyService {
             if (!missingSheets.isEmpty()) {
                 throw new ClassifyException("sheet not in parse run: " + String.join(", ", missingSheets));
             }
-            Map<Long, PacketDisposition> aboutByCandidate = new HashMap<>();
-            for (PacketDisposition disposition : repo.selectPacketDispositionsForParseRun(parseRunId)) {
-                aboutByCandidate.put(disposition.candidateId(), disposition);
-            }
-            LivingOntology living = LivingOntology.from(slice);
-            int bound = 0;
-            int skipped = 0;
-            List<CandidateRow> boundCandidates = new ArrayList<>();
-            Map<Long, List<LayerBBinder.Draft>> draftsByCandidate = new LinkedHashMap<>();
-            Map<Long, List<BindCellRow>> cellsByCandidate = new LinkedHashMap<>();
             db.connection().setAutoCommit(false);
             try {
                 cellReader().replace(repo, parseRunId, llm);
-                for (CandidateRow candidate : repo.selectCandidatesForParseRun(parseRunId)) {
-                    if (!sheetById.containsKey(candidate.worksheetId())) {
-                        continue;
-                    }
-                    if (!isBindEligible(candidate, aboutByCandidate.get(candidate.candidateId()))) {
-                        if ("scratch".equals(candidate.structuralRole())
-                                || isSoftTriage(aboutByCandidate.get(candidate.candidateId()))) {
-                            skipped += repo.selectBindCells(candidate.candidateId()).size();
-                            repo.deleteNomenclatureBindings(parseRunId, candidate.candidateId());
-                        }
-                        continue;
-                    }
-                    List<BindCellRow> cells = repo.selectBindCells(candidate.candidateId());
-                    for (BindCellRow cell : cells) {
-                        if (cell.error()) {
-                            skipped++;
-                        }
-                    }
-                    PacketDisposition disposition = aboutByCandidate.get(candidate.candidateId());
-                    String about = disposition != null ? disposition.about() : "";
-                    String family = disposition != null ? disposition.scheduleFamily() : "";
-                    String sheetName = sheetById.get(candidate.worksheetId());
-                    BindResult result = bindCandidate(
-                            cells, sheetName, family, about, living, catalog, mandateId);
-                    living = result.living();
-                    skipped += result.unbound();
-                    repo.deleteNomenclatureBindings(parseRunId, candidate.candidateId());
-                    for (LayerBBinder.Draft draft : result.drafts()) {
-                        repo.insertNomenclatureBinding(new NomenclatureBinding(
-                                parseRunId,
-                                candidate.candidateId(),
-                                draft.cellId(),
-                                draft.coord(),
-                                draft.pathRoot(),
-                                draft.path(),
-                                draft.amountRole(),
-                                draft.verbatim()));
-                        bound++;
-                    }
-                    draftsByCandidate.put(candidate.candidateId(), result.drafts());
-                    cellsByCandidate.put(candidate.candidateId(), cells);
-                    boundCandidates.add(candidate);
-                }
-                int helpers = applyCrossSheetHelpers(
-                        repo, parseRunId, boundCandidates, cellsByCandidate, draftsByCandidate);
-                bound += helpers;
-                HeaderBindingWriter.write(repo, parseRunId, boundCandidates);
+                BindSummary summary = bindCandidates(repo, parseRunId, sheetById, catalog, mandateId, slice);
                 db.connection().commit();
+                return summary;
             } catch (Exception e) {
                 db.connection().rollback();
                 throw e;
             } finally {
                 db.connection().setAutoCommit(true);
             }
-            return new BindSummary(parseRunId, bound, skipped);
         } catch (ClassifyException e) {
             throw e;
         } catch (Exception e) {
             String msg = e.getMessage() != null ? e.getMessage() : e.toString();
             throw new ClassifyException("bind failed: " + msg, e);
         }
+    }
+
+    /**
+     * Binds every bind-eligible Candidate on the given sheets to the ontology and rewrites its cell labels.
+     * Runs in the caller's transaction; the caller owns commit, rollback and any Layer B re-read.
+     */
+    private BindSummary bindCandidates(
+            WorkspaceRepository repo,
+            long parseRunId,
+            Map<Long, String> sheetById,
+            NomenclatureCatalog catalog,
+            long mandateId,
+            OntologySlice slice)
+            throws SQLException, ClassifyException {
+        Map<Long, PacketDisposition> aboutByCandidate = new HashMap<>();
+        for (PacketDisposition disposition : repo.selectPacketDispositionsForParseRun(parseRunId)) {
+            aboutByCandidate.put(disposition.candidateId(), disposition);
+        }
+        // Clear first so a re-bind never collides with a binding another region wrote earlier.
+        for (CandidateRow candidate : repo.selectCandidatesForParseRun(parseRunId)) {
+            if (sheetById.containsKey(candidate.worksheetId())) {
+                repo.deleteNomenclatureBindings(parseRunId, candidate.candidateId());
+            }
+        }
+        Set<Long> claimedCells = new HashSet<>();
+        LivingOntology living = LivingOntology.from(slice);
+        int bound = 0;
+        int skipped = 0;
+        List<CandidateRow> boundCandidates = new ArrayList<>();
+        Map<Long, List<LayerBBinder.Draft>> draftsByCandidate = new LinkedHashMap<>();
+        Map<Long, List<BindCellRow>> cellsByCandidate = new LinkedHashMap<>();
+        for (CandidateRow candidate : repo.selectCandidatesForParseRun(parseRunId)) {
+            if (!sheetById.containsKey(candidate.worksheetId())) {
+                continue;
+            }
+            if (!isBindEligible(candidate, aboutByCandidate.get(candidate.candidateId()))) {
+                if ("scratch".equals(candidate.structuralRole())
+                        || isSoftTriage(aboutByCandidate.get(candidate.candidateId()))) {
+                    skipped += repo.selectBindCells(candidate.candidateId()).size();
+                    repo.deleteNomenclatureBindings(parseRunId, candidate.candidateId());
+                }
+                continue;
+            }
+            List<BindCellRow> cells = repo.selectBindCells(candidate.candidateId());
+            for (BindCellRow cell : cells) {
+                if (cell.error()) {
+                    skipped++;
+                }
+            }
+            PacketDisposition disposition = aboutByCandidate.get(candidate.candidateId());
+            String about = disposition != null ? disposition.about() : "";
+            String family = disposition != null ? disposition.scheduleFamily() : "";
+            String sheetName = sheetById.get(candidate.worksheetId());
+            BindResult result = bindCandidate(
+                    cells, sheetName, family, about, living, catalog, mandateId);
+            living = result.living();
+            skipped += result.unbound();
+            repo.deleteNomenclatureBindings(parseRunId, candidate.candidateId());
+            List<LayerBBinder.Draft> fresh = new ArrayList<>();
+            for (LayerBBinder.Draft draft : result.drafts()) {
+                // A cell can sit in two regions (a helper band inside a main schedule); the first binding wins.
+                if (!claimedCells.add(draft.cellId())) {
+                    continue;
+                }
+                fresh.add(draft);
+                repo.insertNomenclatureBinding(new NomenclatureBinding(
+                        parseRunId,
+                        candidate.candidateId(),
+                        draft.cellId(),
+                        draft.coord(),
+                        draft.pathRoot(),
+                        draft.path(),
+                        draft.amountRole(),
+                        draft.verbatim()));
+                bound++;
+            }
+            draftsByCandidate.put(candidate.candidateId(), fresh);
+            cellsByCandidate.put(candidate.candidateId(), cells);
+            boundCandidates.add(candidate);
+        }
+        int helpers = applyCrossSheetHelpers(
+                repo, parseRunId, boundCandidates, cellsByCandidate, draftsByCandidate);
+        bound += helpers;
+        HeaderBindingWriter.write(repo, parseRunId, boundCandidates);
+        return new BindSummary(parseRunId, bound, skipped);
     }
 
     private BindResult bindCandidate(

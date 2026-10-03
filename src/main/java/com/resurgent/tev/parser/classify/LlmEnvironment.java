@@ -18,6 +18,7 @@ public final class LlmEnvironment {
     static final String MODEL_ID = "Excel_Enrichment_Model_id";
     static final String MODEL2_ID = "Excel_Enrichment_Model2_id";
     static final String CELL_DECISION_MODEL_ID = "Excel_Enrichment_Cell_decision_model_id";
+    static final String STRUCTURED_DECISION_MODEL_ID = "Excel_Structured_Decision_Model_id";
     static final String CELL_DECISION_COMPARE = "Excel_Enrichment_Cell_decision_compare";
     static final String CELL_DECISION_MIN_CONFIDENCE = "Excel_Enrichment_Cell_decision_min_confidence";
     static final String CELL_DECISION_CONCURRENCY = "Excel_Enrichment_Cell_decision_concurrency";
@@ -36,6 +37,7 @@ public final class LlmEnvironment {
         putIfPresent(values, MODEL2_ID, System.getenv(MODEL2_ID));
         putIfPresent(values, MODEL3_ID, System.getenv(MODEL3_ID));
         putIfPresent(values, CELL_DECISION_MODEL_ID, System.getenv(CELL_DECISION_MODEL_ID));
+        putIfPresent(values, STRUCTURED_DECISION_MODEL_ID, System.getenv(STRUCTURED_DECISION_MODEL_ID));
         putIfPresent(values, CELL_DECISION_COMPARE, System.getenv(CELL_DECISION_COMPARE));
         putIfPresent(values, CELL_DECISION_MIN_CONFIDENCE, System.getenv(CELL_DECISION_MIN_CONFIDENCE));
         putIfPresent(values, CELL_DECISION_CONCURRENCY, System.getenv(CELL_DECISION_CONCURRENCY));
@@ -83,18 +85,32 @@ public final class LlmEnvironment {
     }
 
     /**
+     * The cell decision model id: {@code Excel_Enrichment_Cell_decision_model_id} if set, else
+     * {@code Excel_Structured_Decision_Model_id}; null when neither is set.
+     */
+    static String decisionModelId(Map<String, String> env) {
+        for (String name : new String[] {CELL_DECISION_MODEL_ID, STRUCTURED_DECISION_MODEL_ID}) {
+            String id = env.get(name);
+            if (id != null && !id.isBlank()) {
+                return id.trim();
+            }
+        }
+        return null;
+    }
+
+    /**
      * Decision model for cell kind + scale, used before the chat models when
      * {@code Excel_Enrichment_Cell_decision_model_id} is set (e.g. {@code liquid/d1}); else null.
      */
     static CellDecisionClient decisionClientOrNull() {
         Map<String, String> env = load();
         String key = env.get(API_KEY);
-        String model = env.get(CELL_DECISION_MODEL_ID);
-        if (key == null || key.isBlank() || model == null || model.isBlank()) {
+        String model = decisionModelId(env);
+        if (key == null || key.isBlank() || model == null) {
             return null;
         }
-        System.err.println("[cell-decision] using decision model " + model.trim());
-        return new OpenRouterDecisionClient(key, model.trim());
+        System.err.println("[cell-decision] using decision model " + model);
+        return new OpenRouterDecisionClient(key, model);
     }
 
     /** {@code Excel_Enrichment_Cell_decision_min_confidence}, default 0.90; ignored when not a number in (0, 1]. */
@@ -138,9 +154,9 @@ public final class LlmEnvironment {
     public static void recordSettings(LlmStats stats) {
         Map<String, String> env = load();
         stats.putText("run", "models_chain", describeModels());
-        String decision = env.get(CELL_DECISION_MODEL_ID);
-        boolean decisionOn = decision != null && !decision.isBlank() && env.get(API_KEY) != null;
-        stats.putText("run", "decision_model", decisionOn ? decision.trim() : "none");
+        String decision = decisionModelId(env);
+        boolean decisionOn = decision != null && env.get(API_KEY) != null;
+        stats.putText("run", "decision_model", decisionOn ? decision : "none");
         if (decisionOn) {
             stats.put("run", "decision_min_confidence", decisionMinConfidence());
             stats.put("run", "decision_concurrency", decisionConcurrency());
