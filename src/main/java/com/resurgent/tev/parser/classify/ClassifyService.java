@@ -1285,6 +1285,7 @@ public final class ClassifyService {
                 repo.deleteNomenclatureBindings(parseRunId, candidate.candidateId());
             }
         }
+        RunCellContext runContext = RunCellContext.create(repo, parseRunId);
         Set<Long> claimedCells = new HashSet<>();
         LivingOntology living = LivingOntology.from(slice);
         int bound = 0;
@@ -1315,7 +1316,7 @@ public final class ClassifyService {
             String family = disposition != null ? disposition.scheduleFamily() : "";
             String sheetName = sheetById.get(candidate.worksheetId());
             BindResult result = bindCandidate(
-                    cells, sheetName, family, about, living, catalog, mandateId);
+                    cells, sheetName, family, about, living, catalog, mandateId, runContext::inline);
             living = result.living();
             skipped += result.unbound();
             repo.deleteNomenclatureBindings(parseRunId, candidate.candidateId());
@@ -1355,7 +1356,8 @@ public final class ClassifyService {
             String about,
             LivingOntology living,
             NomenclatureCatalog catalog,
-            long mandateId)
+            long mandateId,
+            java.util.function.LongFunction<String> contextOf)
             throws ClassifyException {
         Map<String, String> aliases = living.aliases();
         List<String> paths = living.paths();
@@ -1364,7 +1366,7 @@ public final class ClassifyService {
         List<LayerBAssignment> assignments = new ArrayList<>();
         if (!missing.isEmpty()) {
             List<LayerBAssignment> first =
-                    askLayerB(sheetName, family, about, cells, missing, paths, false);
+                    askLayerB(sheetName, family, about, cells, missing, paths, false, contextOf);
             living = absorbNewLeaves(living, catalog, mandateId, first);
             aliases = living.aliases();
             paths = living.paths();
@@ -1374,7 +1376,7 @@ public final class ClassifyService {
         }
         if (!missing.isEmpty()) {
             List<LayerBAssignment> second =
-                    askLayerB(sheetName, family, about, cells, missing, paths, true);
+                    askLayerB(sheetName, family, about, cells, missing, paths, true, contextOf);
             living = absorbNewLeaves(living, catalog, mandateId, second);
             aliases = living.aliases();
             assignments.addAll(second);
@@ -1503,7 +1505,8 @@ public final class ClassifyService {
             List<BindCellRow> cells,
             List<BindCellRow> missing,
             List<String> catalog,
-            boolean retry)
+            boolean retry,
+            java.util.function.LongFunction<String> contextOf)
             throws ClassifyException {
         Set<String> unbound = new HashSet<>();
         for (BindCellRow cell : missing) {
@@ -1513,7 +1516,7 @@ public final class ClassifyService {
                 sheetName,
                 family,
                 about == null || about.isBlank() ? "No Layer A about stored." : about,
-                LayerBPromptAssembler.grid(cells, unbound),
+                LayerBPromptAssembler.grid(cells, unbound, contextOf),
                 catalog,
                 retry);
         try {

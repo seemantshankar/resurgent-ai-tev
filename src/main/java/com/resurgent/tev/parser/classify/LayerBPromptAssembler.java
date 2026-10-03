@@ -40,6 +40,10 @@ final class LayerBPromptAssembler {
               Frame > Field Mark, Frame > Blank.
             - Section banners, the schedule title, an annexure locator, and a
               scale marker are frame. They are not money lines.
+            - A bind line for an amount may end with [row: ... | column: ... | part of: ...
+              | note: ...]: the row label, column header, group and status text resolved
+              for that cell from the sheet. The grid may not contain those labels, so use
+              them to decide what the amount is.
             - Rows marked kept already have a path. Return paths for rows and
               cells marked bind. A row entry applies only to bind cells.
             Numeric literals are dummy stand-ins. Formulas and labels are real.
@@ -71,6 +75,16 @@ final class LayerBPromptAssembler {
     }
 
     static String grid(List<BindCellRow> cells, Set<String> unbound) {
+        return grid(cells, unbound, id -> "");
+    }
+
+    /**
+     * The grid, with each amount still to bind followed by the labels resolved for it. The
+     * region's own cells may not include its labels (they can sit in another region), so the
+     * model is told them rather than left to find them. {@code contextOf} maps a cell id to
+     * that text, or blank.
+     */
+    static String grid(List<BindCellRow> cells, Set<String> unbound, java.util.function.LongFunction<String> contextOf) {
         StringBuilder grid = new StringBuilder();
         for (BindCellRow cell : cells) {
             if (cell.error()) {
@@ -83,8 +97,14 @@ final class LayerBPromptAssembler {
                     .append('\t')
                     .append(cell.rowNum())
                     .append('\t')
-                    .append(shown(cell))
-                    .append('\n');
+                    .append(shown(cell));
+            String context = unbound.contains(coord) && "number".equals(cell.valueType())
+                    ? contextOf.apply(cell.cellId())
+                    : "";
+            if (context != null && !context.isBlank()) {
+                grid.append("\t[").append(context).append(']');
+            }
+            grid.append('\n');
         }
         return grid.toString();
     }
