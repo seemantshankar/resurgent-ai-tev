@@ -596,6 +596,55 @@ public final class ClassifyService {
                         proposal.structuralRole());
                 repo.insertCandidate(write, members);
             }
+            insertResidualRegions(repo, parseRunId, sheet, coverage,
+                    validBySheet.getOrDefault(sheet.worksheetId(), List.of()), cellsBySheet);
+        }
+    }
+
+    /**
+     * Numbers the model's regions skipped become regions of their own, so they get a description
+     * and header geometry like everything else instead of being read with no context at all.
+     */
+    private void insertResidualRegions(
+            WorkspaceRepository repo,
+            long parseRunId,
+            WorksheetRef sheet,
+            CandidateRow coverage,
+            List<ValidRegion> regions,
+            Map<Long, List<com.resurgent.tev.parser.db.CellPacketView>> cellsBySheet)
+            throws SQLException {
+        if (regions.isEmpty()) {
+            return; // the model did not lay this sheet out; it keeps its structural region
+        }
+        Set<Long> owned = new HashSet<>();
+        for (ValidRegion region : regions) {
+            owned.addAll(region.members());
+        }
+        List<ResidualRegions.Block> blocks =
+                ResidualRegions.find(cellsBySheet.getOrDefault(sheet.worksheetId(), List.of()), owned);
+        for (ResidualRegions.Block block : blocks) {
+            repo.insertCandidate(
+                    new CandidateWrite(
+                            parseRunId,
+                            sheet.worksheetId(),
+                            "child",
+                            coverage.candidateId(),
+                            block.minRow(),
+                            block.minCol(),
+                            block.maxRow(),
+                            block.maxCol(),
+                            null,
+                            null,
+                            null,
+                            false,
+                            0.5,
+                            "residual cells no model region claimed",
+                            "Residual region: cells the layout left unclaimed",
+                            "helper"),
+                    block.memberIds());
+        }
+        if (!blocks.isEmpty()) {
+            LlmStats.GLOBAL.add("region-layout", "residual_regions", blocks.size());
         }
     }
 

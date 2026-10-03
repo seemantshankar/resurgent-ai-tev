@@ -103,6 +103,21 @@ class RegionLayoutResilienceTest {
     }
 
     @Test
+    void numbersTheModelLeftOutOfEveryRegionBecomeARegionOfTheirOwn() throws Exception {
+        // the model boxes only the labels and column B; the amounts in column D are unclaimed
+        var llm = new ScriptedLlm((sheet, n) -> List.of(new RegionProposal("main", "A1:B11", "left", "labels")));
+
+        materialize(llm);
+
+        List<CandidateRow> regions = children("ASSETS");
+        assertThat(regions).hasSize(2);
+        CandidateRow residual = regions.stream().filter(c -> c.bboxMinCol() == 4).findFirst().orElseThrow();
+        assertThat(residual.structuralRole()).isEqualTo("helper");
+        assertThat(residual.bboxMinRow()).isEqualTo(1);
+        assertThat(residual.bboxMaxRow()).isEqualTo(11);
+    }
+
+    @Test
     void emptyRegionIsRetriedForThatSheetAndTheRunContinues() throws Exception {
         var llm = new ScriptedLlm((sheet, n) -> n == 1 ? List.of(GOOD, EMPTY) : List.of(GOOD));
 
