@@ -20,6 +20,16 @@ interface CellContext {
     /** Column header text, or {@code ""}. */
     String columnLabel(InterpretationCellView cell);
 
+    /** Text beside this cell's row amounts that qualifies them (a status or remark), if any. */
+    default List<String> rowNotes(InterpretationCellView cell) {
+        return List.of();
+    }
+
+    /** The group this cell's row belongs to (the item or section it is a sub-row of), or {@code null}. */
+    default String partOf(InterpretationCellView cell) {
+        return null;
+    }
+
     /** Layer A region of the cell, or {@link RegionContext#NONE}. */
     RegionContext region(InterpretationCellView cell);
 

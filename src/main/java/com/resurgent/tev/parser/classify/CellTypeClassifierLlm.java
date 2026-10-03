@@ -377,25 +377,48 @@ public class CellTypeClassifierLlm {
         return outcomes;
     }
 
+    /**
+     * The decision model's input: one JSON object with a named field for each fact, as the
+     * Decisions API recommends when the context has several parts. Facts a cell lacks are left
+     * out, so a cell with no region or notes reads as sparsely as before.
+     */
     private String formatDecisionState(CellTypeRequest request, RegionContext region) {
-        StringBuilder sb = new StringBuilder();
-        appendRegion(sb, region);
-        sb.append("Cell: ").append(request.coord).append(" (display: \"").append(request.displayValue).append("\"");
-        if (!request.formulaText.isBlank()) {
-            sb.append(", formula: \"").append(request.formulaText).append("\"");
+        com.fasterxml.jackson.databind.node.ObjectNode state = MAPPER.createObjectNode();
+        if (!region.scheduleFamily().isBlank() || !region.about().isBlank()) {
+            com.fasterxml.jackson.databind.node.ObjectNode r = state.putObject("region");
+            putIfPresent(r, "family", region.scheduleFamily());
+            putIfPresent(r, "head", region.packetHead());
+            putIfPresent(r, "sheet", region.sheetName());
+            putIfPresent(r, "about", region.about());
         }
-        sb.append(")\n");
-        if (!request.rowLabel.isBlank()) {
-            sb.append("Row Label: ").append(request.rowLabel).append("\n");
+        com.fasterxml.jackson.databind.node.ObjectNode cell = state.putObject("cell");
+        cell.put("coord", request.coord);
+        cell.put("display", request.displayValue);
+        putIfPresent(cell, "formula", request.formulaText);
+        CellContextBlock.Parts parts = request.context();
+        putIfPresent(state, "row_label", parts.rowLabel());
+        putIfPresent(state, "column_label", parts.columnLabel());
+        putIfPresent(state, "part_of", parts.partOf());
+        if (!parts.rowNotes().isEmpty()) {
+            com.fasterxml.jackson.databind.node.ArrayNode notes = state.putArray("row_note");
+            parts.rowNotes().forEach(notes::add);
         }
-        if (!request.columnLabel.isBlank()) {
-            sb.append("Column Label: ").append(request.columnLabel).append("\n");
+        if (!request.neighbors.isEmpty()) {
+            com.fasterxml.jackson.databind.node.ArrayNode near = state.putArray("neighbours");
+            for (NeighborCell neighbor : request.neighbors) {
+                com.fasterxml.jackson.databind.node.ObjectNode n = near.addObject();
+                n.put("direction", neighbor.direction);
+                n.put("display", neighbor.displayValue);
+                n.put("kind", neighbor.type);
+            }
         }
-        for (NeighborCell neighbor : request.neighbors) {
-            sb.append("Neighbour ").append(neighbor.direction).append(": ").append(neighbor.displayValue)
-                    .append(" (").append(neighbor.type).append(")\n");
+        return state.toString();
+    }
+
+    private static void putIfPresent(com.fasterxml.jackson.databind.node.ObjectNode node, String name, String value) {
+        if (value != null && !value.isBlank()) {
+            node.put(name, value);
         }
-        return sb.toString();
     }
 
     /**
@@ -577,12 +600,7 @@ public class CellTypeClassifierLlm {
             }
             sb.append(")\n");
 
-            if (!request.rowLabel.isBlank()) {
-                sb.append("  Row Label: ").append(request.rowLabel).append("\n");
-            }
-            if (!request.columnLabel.isBlank()) {
-                sb.append("  Column Label: ").append(request.columnLabel).append("\n");
-            }
+            sb.append(CellContextBlock.lines(request.context(), "  "));
 
             if (!request.neighbors.isEmpty()) {
                 sb.append("  Context:");
@@ -683,7 +701,9 @@ public class CellTypeClassifierLlm {
                 rowLabel,
                 columnLabel,
                 cell.formulaText() != null ? cell.formulaText() : "",
-                neighbors);
+                neighbors,
+                ctx.rowNotes(cell),
+                ctx.partOf(cell));
     }
 
     private List<NeighborCell> extractNeighbors(
@@ -733,12 +753,7 @@ public class CellTypeClassifierLlm {
         }
         sb.append(")\n");
 
-        if (!request.rowLabel.isBlank()) {
-            sb.append("Row Label: ").append(request.rowLabel).append("\n");
-        }
-        if (!request.columnLabel.isBlank()) {
-            sb.append("Column Label: ").append(request.columnLabel).append("\n");
-        }
+        sb.append(CellContextBlock.lines(request.context(), ""));
 
         if (!request.neighbors.isEmpty()) {
             sb.append("Context:\n");
@@ -792,7 +807,14 @@ public class CellTypeClassifierLlm {
             String rowLabel,
             String columnLabel,
             String formulaText,
-            List<NeighborCell> neighbors) {}
+            List<NeighborCell> neighbors,
+            List<String> rowNotes,
+            String partOf) {
+        /** The labels, row notes and group the model is told about this cell, written the same in every prompt. */
+        CellContextBlock.Parts context() {
+            return new CellContextBlock.Parts(rowLabel, columnLabel, rowNotes, partOf);
+        }
+    }
 
     record NeighborCell(String direction, String displayValue, String type) {}
 

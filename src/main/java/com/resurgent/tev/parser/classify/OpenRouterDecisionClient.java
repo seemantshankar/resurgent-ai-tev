@@ -84,11 +84,26 @@ final class OpenRouterDecisionClient implements CellDecisionClient {
     static String requestBody(String model, String state) throws Exception {
         ObjectNode root = MAPPER.createObjectNode();
         root.put("model", model);
-        root.put("state", state);
+        root.set("state", stateNode(state));
         ObjectNode questions = root.putObject("questions");
-        question(questions, "kind", "What kind of quantity is the number in the cell?", KINDS);
-        question(questions, "scale", "In what scale is the number stated (a Region or label may say Lacs, Crores, etc.)?", SCALES);
+        question(questions, "kind", "What kind of quantity is the number in the cell? Judge from region.about, row_label, column_label, part_of and row_note, not from the size of the number.", KINDS);
+        question(questions, "scale", "In what scale is the number stated? A region.about, row_label or column_label may say Lacs, Crores, thousands or millions; if none does, the scale is unit.", SCALES);
         return MAPPER.writeValueAsString(root);
+    }
+
+    /** A JSON object state is sent as an object, as the API prefers for multi-part context; text stays text. */
+    private static JsonNode stateNode(String state) {
+        if (state.stripLeading().startsWith("{")) {
+            try {
+                JsonNode parsed = MAPPER.readTree(state);
+                if (parsed.isObject()) {
+                    return parsed;
+                }
+            } catch (Exception ignored) {
+                // not JSON after all; send it as text
+            }
+        }
+        return MAPPER.getNodeFactory().textNode(state);
     }
 
     private static void question(ObjectNode questions, String name, String instructions, Map<String, String> options) {

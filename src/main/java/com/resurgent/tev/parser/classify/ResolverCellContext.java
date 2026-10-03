@@ -69,6 +69,26 @@ final class ResolverCellContext implements CellContext {
     }
 
     @Override
+    public List<String> rowNotes(InterpretationCellView cell) {
+        HeaderGeometry geometry = cache.geometryFor(owners.getOrDefault(cell.cellId(), List.of()));
+        return geometry == null
+                ? List.of()
+                : RowContext.annotations(geometry, cell, (row, col) -> cache.cellAt(cell.worksheetId(), row, col));
+    }
+
+    @Override
+    public String partOf(InterpretationCellView cell) {
+        HeaderGeometry geometry = cache.geometryFor(owners.getOrDefault(cell.cellId(), List.of()));
+        CandidateRow region = geometry == null ? null : candidatesById.get(geometry.candidateId());
+        if (region == null || region.bboxMinRow() == null || region.bboxMaxRow() == null) {
+            return null;
+        }
+        return RowContext.parent(
+                geometry, cell, (row, col) -> cache.cellAt(cell.worksheetId(), row, col),
+                region.bboxMinRow(), region.bboxMaxRow());
+    }
+
+    @Override
     public RegionContext region(InterpretationCellView cell) {
         List<CandidateRow> owned = owners.getOrDefault(cell.cellId(), List.of());
         List<CandidateRow> narrow = new ArrayList<>();

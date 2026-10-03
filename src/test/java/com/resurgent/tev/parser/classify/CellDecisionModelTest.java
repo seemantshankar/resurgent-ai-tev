@@ -69,6 +69,49 @@ class CellDecisionModelTest {
     }
 
     @Test
+    void decisionStateIsAStructuredObjectCarryingTheCellsFullContext() throws Exception {
+        List<String> states = new java.util.ArrayList<>();
+        var classifier = new CellTypeClassifierLlm(null, new CountingChat())
+                .withDecisionModel(state -> {
+                    states.add(state);
+                    return new CellDecisionClient.Decision("quantity", 0.97, "unit", 0.95);
+                });
+        CellContext context = new CellContext() {
+            @Override public String rowLabel(InterpretationCellView c) { return "Site development"; }
+            @Override public String columnLabel(InterpretationCellView c) { return "Phase 1"; }
+            @Override public List<String> rowNotes(InterpretationCellView c) { return List.of("Exempted"); }
+            @Override public String partOf(InterpretationCellView c) { return "Mezzanine floor"; }
+            @Override public RegionContext region(InterpretationCellView c) {
+                return new RegionContext(5L, "project_summary", "Area statement of floors.", "Area statement", "area", true);
+            }
+            @Override public String workbookKey() { return ""; }
+        };
+
+        classifier.classifyRemaining(List.of(cell(1L, "A1")), untypable(1L), context);
+
+        var state = new com.fasterxml.jackson.databind.ObjectMapper().readTree(states.get(0));
+        assertThat(state.path("cell").path("coord").asText()).isEqualTo("A1");
+        assertThat(state.path("row_label").asText()).isEqualTo("Site development");
+        assertThat(state.path("column_label").asText()).isEqualTo("Phase 1");
+        assertThat(state.path("part_of").asText()).isEqualTo("Mezzanine floor");
+        assertThat(state.path("row_note").get(0).asText()).isEqualTo("Exempted");
+        assertThat(state.path("region").path("about").asText()).isEqualTo("Area statement of floors.");
+        assertThat(state.path("region").path("family").asText()).isEqualTo("project_summary");
+    }
+
+    @Test
+    void structuredStateGoesToTheDecisionsApiAsAnObjectAndPlainTextStaysText() throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+
+        var asObject = mapper.readTree(OpenRouterDecisionClient.requestBody("m", "{\"cell\":{\"coord\":\"A1\"}}"));
+        var asText = mapper.readTree(OpenRouterDecisionClient.requestBody("m", "Cell: A1"));
+
+        assertThat(asObject.path("state").isObject()).isTrue();
+        assertThat(asObject.path("state").path("cell").path("coord").asText()).isEqualTo("A1");
+        assertThat(asText.path("state").isTextual()).isTrue();
+    }
+
+    @Test
     void parsesDecisionsResponse() throws Exception {
         var d = OpenRouterDecisionClient.parse("""
                 {"model":"liquid/d1-20260930","answers":{
