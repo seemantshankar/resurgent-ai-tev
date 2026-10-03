@@ -26,6 +26,21 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
     public static final int REGION_LAYOUT_MAX_COMPLETION_TOKENS = 32_768;
     public static final int LAYER_A_LABEL_MAX_ITEMS = 32;
 
+    /** A binding answer is a short list of row and cell paths; a small prompt needs no more than this. */
+    private static final int BIND_SMALL_COMPLETION_TOKENS = 12_288;
+
+    /**
+     * The completion cap for a binding call. The cap also decides which hang deadline applies
+     * ({@link Deadlines}), and a cap of 32k classed every binding call as a big batch, so one
+     * stuck request held the whole run for three minutes. A small prompt gets a small cap and
+     * the fail-fast deadline; a big prompt, whose answer may be long, keeps the large one.
+     */
+    static int bindMaxCompletionTokens(int promptChars) {
+        return promptChars >= Deadlines.LARGE_PROMPT_CHARS
+                ? REGION_LAYOUT_MAX_COMPLETION_TOKENS
+                : BIND_SMALL_COMPLETION_TOKENS;
+    }
+
     private final CompletionsClient client;
 
     public OpenRouterClassifierLlm(String apiKey, String model) {
@@ -63,9 +78,13 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         static final Deadlines FAIL_FAST = new Deadlines(Duration.ofSeconds(45), Duration.ofSeconds(180));
         static final Deadlines LAST_RESORT = new Deadlines(Duration.ofSeconds(120), Duration.ofSeconds(240));
 
+        /** A prompt this long, or a completion cap this high, is treated as a big batch. */
+        static final int LARGE_PROMPT_CHARS = 40_000;
+        static final int LARGE_COMPLETION_TOKENS = 16_384;
+
         /** Large when the model may write a long answer or the prompt itself is big. */
         Duration forRequest(int promptChars, int maxCompletionTokens) {
-            boolean large = maxCompletionTokens >= 16_384 || promptChars >= 40_000;
+            boolean large = maxCompletionTokens >= LARGE_COMPLETION_TOKENS || promptChars >= LARGE_PROMPT_CHARS;
             return large ? this.large : this.small;
         }
     }
@@ -133,12 +152,13 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         return client.perModel(c -> {
             String system = LayerBPromptAssembler.SYSTEM;
             String user = LayerBPromptAssembler.userMessage(prompt);
-            CompletionResult result = c.completeJson(system, user, REGION_LAYOUT_MAX_COMPLETION_TOKENS);
+            int maxTokens = bindMaxCompletionTokens(user.length());
+            CompletionResult result = c.completeJson(system, user, maxTokens);
             if (result.truncated()) {
                 result = c.completeJson(
                         system + "\nPrior response was TRUNCATED. Emit the JSON object immediately.",
                         user + "\n\nRetry after truncation: JSON object only.",
-                        REGION_LAYOUT_MAX_COMPLETION_TOKENS);
+                        maxTokens);
                 if (result.truncated()) {
                     throw new IllegalStateException(
                             "OpenRouter Layer B truncated after retry: finish=" + result.finishReason());

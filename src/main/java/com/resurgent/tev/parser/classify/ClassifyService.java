@@ -1293,6 +1293,7 @@ public final class ClassifyService {
         List<CandidateRow> boundCandidates = new ArrayList<>();
         Map<Long, List<LayerBBinder.Draft>> draftsByCandidate = new LinkedHashMap<>();
         Map<Long, List<BindCellRow>> cellsByCandidate = new LinkedHashMap<>();
+        List<BindJob> jobs = new ArrayList<>();
         for (CandidateRow candidate : repo.selectCandidatesForParseRun(parseRunId)) {
             if (!sheetById.containsKey(candidate.worksheetId())) {
                 continue;
@@ -1312,11 +1313,23 @@ public final class ClassifyService {
                 }
             }
             PacketDisposition disposition = aboutByCandidate.get(candidate.candidateId());
-            String about = disposition != null ? disposition.about() : "";
-            String family = disposition != null ? disposition.scheduleFamily() : "";
-            String sheetName = sheetById.get(candidate.worksheetId());
+            jobs.add(new BindJob(
+                    candidate,
+                    cells,
+                    sheetById.get(candidate.worksheetId()),
+                    disposition != null ? disposition.scheduleFamily() : "",
+                    disposition != null ? disposition.about() : ""));
+        }
+        // Every region's first question goes out together, so one slow model call holds up only
+        // itself. The answers are then applied in region order, exactly as before.
+        List<List<LayerBAssignment>> firstAnswers = askFirstRound(jobs, living, runContext::inline);
+        for (int i = 0; i < jobs.size(); i++) {
+            BindJob job = jobs.get(i);
+            CandidateRow candidate = job.candidate();
+            List<BindCellRow> cells = job.cells();
             BindResult result = bindCandidate(
-                    cells, sheetName, family, about, living, catalog, mandateId, runContext::inline);
+                    cells, job.sheetName(), job.family(), job.about(), living, catalog, mandateId,
+                    runContext::inline, firstAnswers.get(i));
             living = result.living();
             skipped += result.unbound();
             repo.deleteNomenclatureBindings(parseRunId, candidate.candidateId());
@@ -1349,6 +1362,37 @@ public final class ClassifyService {
         return new BindSummary(parseRunId, bound, skipped);
     }
 
+    /** One region to bind: its cells and the Layer A brief the model reads with them. */
+    private record BindJob(
+            CandidateRow candidate, List<BindCellRow> cells, String sheetName, String family, String about) {}
+
+    /**
+     * Ask the first binding question for every region at once, from the catalog as it stands.
+     * An entry is null when the region needed no question or its call failed; the sequential
+     * pass then asks again, so a failed call costs time and never a binding.
+     */
+    private List<List<LayerBAssignment>> askFirstRound(
+            List<BindJob> jobs, LivingOntology living, java.util.function.LongFunction<String> contextOf) {
+        List<java.util.concurrent.Callable<List<LayerBAssignment>>> tasks = new ArrayList<>();
+        Map<String, String> aliases = living.aliases();
+        List<String> paths = living.paths();
+        for (BindJob job : jobs) {
+            tasks.add(() -> {
+                List<BindCellRow> missing = LayerBBinder.unbound(
+                        job.cells(), LayerBBinder.bind(job.cells(), List.of(), aliases));
+                return missing.isEmpty()
+                        ? null
+                        : askLayerB(job.sheetName(), job.family(), job.about(), job.cells(), missing, paths,
+                                false, contextOf);
+            });
+        }
+        List<List<LayerBAssignment>> answers = new ArrayList<>();
+        for (ParallelCalls.Outcome<List<LayerBAssignment>> outcome : ParallelCalls.run(tasks, tuning.concurrency())) {
+            answers.add(outcome.ok() ? outcome.value() : null);
+        }
+        return answers;
+    }
+
     private BindResult bindCandidate(
             List<BindCellRow> cells,
             String sheetName,
@@ -1357,7 +1401,8 @@ public final class ClassifyService {
             LivingOntology living,
             NomenclatureCatalog catalog,
             long mandateId,
-            java.util.function.LongFunction<String> contextOf)
+            java.util.function.LongFunction<String> contextOf,
+            List<LayerBAssignment> alreadyAsked)
             throws ClassifyException {
         Map<String, String> aliases = living.aliases();
         List<String> paths = living.paths();
@@ -1365,8 +1410,9 @@ public final class ClassifyService {
         List<BindCellRow> missing = LayerBBinder.unbound(cells, proved);
         List<LayerBAssignment> assignments = new ArrayList<>();
         if (!missing.isEmpty()) {
-            List<LayerBAssignment> first =
-                    askLayerB(sheetName, family, about, cells, missing, paths, false, contextOf);
+            List<LayerBAssignment> first = alreadyAsked != null
+                    ? alreadyAsked
+                    : askLayerB(sheetName, family, about, cells, missing, paths, false, contextOf);
             living = absorbNewLeaves(living, catalog, mandateId, first);
             aliases = living.aliases();
             paths = living.paths();
