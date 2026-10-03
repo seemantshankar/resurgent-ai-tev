@@ -35,6 +35,28 @@ class HeaderGeometryStageTest {
     }
 
     @Test
+    void aRunningSequenceIsShownAsItselfBecauseItIsAPeriodLabelNotAnAmount() {
+        List<InterpretationCellView> cells = List.of(
+                cell("A8", 8, 1, "number", null, "1", "1", false, false, null),
+                cell("A9", 9, 1, "number", null, "2", "2", false, false, null),
+                cell("A10", 10, 1, "number", null, "3", "3", false, false, null),
+                cell("C8", 8, 3, "number", null, "7", "7", false, false, null),   // lone amount, not a sequence
+                cell("C10", 10, 3, "number", null, "9", "9", false, false, null));
+
+        String grid = HeaderGeometryStage.render(REGION, "s", cells);
+
+        assertThat(grid).contains("A8=1").contains("A9=2").contains("A10=3");
+        assertThat(grid).contains("C8=#").contains("C10=#");
+    }
+
+    @Test
+    void promptDoesNotTellTheModelToDropNumberedLabelColumns() {
+        assertThat(HeaderGeometryStage.SYSTEM)
+                .contains("Numbers that count")
+                .doesNotContain("Leave out serial-number columns");
+    }
+
+    @Test
     void parsesBandsAndLabelColumnsAndDropsWhatLiesOutsideTheRegion() {
         String json = "{\"bands\":[\"B4:G7\",\"A40:G42\",\"B1:G30\"],\"rowLabelColumns\":[\"B\",\"Z\"]}";
 

@@ -21,20 +21,24 @@ final class HeaderGeometryStage {
     static final String SYSTEM = """
             You read one region of a financial-model worksheet and say where its labels are.
             The user message shows the region as a grid: one line per row, each cell as
-            COORD="text". A number is shown as # (a year such as 2025 is shown as itself),
-            an error as #ERR. A merged cell appears once, as its range, e.g. B4:C4="Title".
+            COORD="text". A number is shown as # (a year such as 2025, and a running sequence
+            such as 1, 2, 3, ... , are shown as themselves), an error as #ERR. A merged cell appears once, as its range, e.g. B4:C4="Title".
             Return one JSON object with keys:
               bands: array of A1 ranges, one per column-header band. A band is the run of rows
                 whose text says what the columns below hold (titles, periods, units, multi-row
                 headings) and the columns those headings govern, e.g. "B4:G7" for header rows
                 4-7 over columns B to G. Include EVERY row of a multi-row heading. Never include
-                data rows or body text such as "Nil", "Total" or a row's own label. If the region
+                data rows, or text inside the body that merely sits in a data column (a status
+                word, a total label, a row's own name). If the region
                 holds several tables, give one band per table, directly above that table's data.
                 Empty array if the region has no column headings.
-              rowLabelColumns: array of column letters that hold the name of each row (item
-                names, section labels), left to right, e.g. ["A","B"]. Leave out serial-number
-                columns (Sl. No., 1, 2, 3) and status or remarks columns to the right of the
-                numbers. Empty array if rows carry no labels.
+              rowLabelColumns: array of column letters whose cells name the row, left to right,
+                e.g. ["A","B"]. Decide from the column's own heading and contents what its
+                values ARE. Text that names an item or section is a label. Numbers that count
+                time (years, months, periods, e.g. 1, 2, 3 under a heading about years or
+                periods) are labels too: they say which period the row is. Numbers that merely
+                index the rows (a serial or item number) are not, and neither are status or
+                remarks columns to the right of the amounts. Empty array if rows carry no labels.
             Use only coordinates that appear in the grid. JSON only, no markdown fences.
             """;
 
@@ -82,6 +86,7 @@ final class HeaderGeometryStage {
             }
             byRow.computeIfAbsent(cell.rowNum(), r -> new ArrayList<>()).add(cell);
         }
+        java.util.Set<Long> sequence = runningSequences(byRow);
         StringBuilder sb = new StringBuilder();
         sb.append("region ").append(region.candidateId()).append(" on sheet \"").append(sheetName).append("\", ")
                 .append(bounds(region)).append('\n');
@@ -101,7 +106,7 @@ final class HeaderGeometryStage {
                 if (text.length() > 0) {
                     text.append(" | ");
                 }
-                text.append(show(cell));
+                text.append(show(cell, sequence.contains(cell.cellId())));
             }
             if (text.length() > 0) {
                 sb.append(row.getKey()).append(": ").append(text).append('\n');
@@ -143,6 +148,63 @@ final class HeaderGeometryStage {
         return geometry.isEmpty() ? Optional.empty() : Optional.of(geometry);
     }
 
+    /**
+     * Cells in a run of three or more whole numbers that each step up by one, across a row or down
+     * a column (1, 2, 3, ...). Those are period or year labels, not amounts, so the grid shows them.
+     */
+    private static java.util.Set<Long> runningSequences(Map<Integer, List<InterpretationCellView>> byRow) {
+        Map<Integer, Map<Integer, InterpretationCellView>> at = new HashMap<>();
+        for (List<InterpretationCellView> row : byRow.values()) {
+            for (InterpretationCellView cell : row) {
+                if (wholeNumber(cell) != null) {
+                    at.computeIfAbsent(cell.rowNum(), r -> new HashMap<>()).put(cell.colNum(), cell);
+                }
+            }
+        }
+        java.util.Set<Long> marked = new java.util.HashSet<>();
+        for (Map.Entry<Integer, Map<Integer, InterpretationCellView>> row : at.entrySet()) {
+            for (InterpretationCellView cell : row.getValue().values()) {
+                markRun(cell, at, 0, 1, marked);
+                markRun(cell, at, 1, 0, marked);
+            }
+        }
+        return marked;
+    }
+
+    /** Marks the run that starts at {@code start} stepping by (dRow, dCol), if it has 3+ steps of +1. */
+    private static void markRun(
+            InterpretationCellView start, Map<Integer, Map<Integer, InterpretationCellView>> at,
+            int dRow, int dCol, java.util.Set<Long> marked) {
+        List<InterpretationCellView> run = new ArrayList<>(List.of(start));
+        InterpretationCellView prev = start;
+        while (true) {
+            Map<Integer, InterpretationCellView> row = at.get(prev.rowNum() + dRow);
+            InterpretationCellView next = row == null ? null : row.get(prev.colNum() + dCol);
+            if (next == null || wholeNumber(next) != wholeNumber(prev) + 1) {
+                break;
+            }
+            run.add(next);
+            prev = next;
+        }
+        if (run.size() >= 3) {
+            for (InterpretationCellView cell : run) {
+                marked.add(cell.cellId());
+            }
+        }
+    }
+
+    private static Long wholeNumber(InterpretationCellView c) {
+        if (!"number".equals(c.valueType()) || c.numericValue() == null || c.numericValue().isBlank()) {
+            return null;
+        }
+        try {
+            double value = Double.parseDouble(c.numericValue());
+            return value == Math.rint(value) && Math.abs(value) < 1e9 ? (long) value : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     private static boolean inside(CandidateRow r, InterpretationCellView c) {
         return c.rowNum() >= r.bboxMinRow() && c.rowNum() <= r.bboxMaxRow()
                 && c.colNum() >= r.bboxMinCol() && c.colNum() <= r.bboxMaxCol();
@@ -153,7 +215,7 @@ final class HeaderGeometryStage {
         return c.isMergedParticipant() || "empty".equals(c.valueType()) && !c.isMergedAnchor();
     }
 
-    private static String show(InterpretationCellView c) {
+    private static String show(InterpretationCellView c, boolean inSequence) {
         String at = c.isMergedAnchor() && c.mergedRange() != null ? c.mergedRange() : c.coord();
         if (c.isError() || "error".equals(c.valueType())) {
             return at + "=#ERR";
@@ -169,7 +231,7 @@ final class HeaderGeometryStage {
         if (numeric != null && !numeric.isBlank()) {
             try {
                 double value = Double.parseDouble(numeric);
-                if (value == Math.rint(value) && value >= 1900 && value <= 2100) {
+                if (value == Math.rint(value) && (inSequence || value >= 1900 && value <= 2100)) {
                     return at + "=" + (int) value;
                 }
             } catch (NumberFormatException ignored) {

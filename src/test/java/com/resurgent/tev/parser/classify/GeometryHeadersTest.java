@@ -45,6 +45,21 @@ class GeometryHeadersTest {
         assertThat(f.header(f.f17, g, EvidenceRole.COLUMN_HEADER)).isNotEmpty().doesNotContain("Area of floors");
     }
 
+    @Test
+    void aNumberedLabelColumnIsAPeriodLabelAndCarriesItsHeading() {
+        // Column A holds year numbers 1,2,3 under a "Month/Year" heading; they name the rows.
+        Fixture f = new Fixture();
+        f.add(text("A7", 7, 1, "Month/Year"));
+        f.add(text("D7", 7, 4, "Revenue"));
+        f.add(number("A8", 8, 1, "1"));
+        f.add(number("A9", 9, 1, "2"));
+        InterpretationCellView target = f.add(number("D9", 9, 4, "950"));
+        HeaderGeometry g = new HeaderGeometry(REGION, List.of(new HeaderGeometry.Band(7, 7, 1, 4)), List.of(1));
+
+        assertThat(f.header(target, g, EvidenceRole.ROW_HEADER)).containsExactly("Month/Year", "2");
+        assertThat(f.header(target, g, EvidenceRole.COLUMN_HEADER)).containsExactly("Revenue");
+    }
+
     // ---- fixture -------------------------------------------------------------------------
 
     private Fixture royale() {

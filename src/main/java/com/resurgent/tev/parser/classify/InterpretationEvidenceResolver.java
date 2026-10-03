@@ -497,7 +497,11 @@ final class InterpretationEvidenceResolver {
         return cells.isEmpty() ? null : HeaderChain.fromGeometry(cells);
     }
 
-    /** The row labels the geometry's label columns hold on this cell's row, left to right. */
+    /**
+     * The row labels the geometry's label columns hold on this cell's row, left to right. A whole
+     * number there is a period label (the years 1, 2, 3 under "Month/Year"), so it is taken as a
+     * label and carries its column's heading, which is what says what the number counts.
+     */
     private static HeaderChain geometryRowChain(
             HeaderGeometry geometry, InterpretationCellView target, ResolveCache cache) {
         Set<String> seenMerges = new HashSet<>();
@@ -507,11 +511,44 @@ final class InterpretationEvidenceResolver {
                 continue;
             }
             InterpretationCellView cell = cache.cellAt(target.worksheetId(), target.rowNum(), col);
-            if (cell != null && labelText(cell) != null && countsAsHeader(cell, cache, seenMerges, false)) {
+            if (cell == null || !countsAsHeader(cell, cache, seenMerges, false)) {
+                continue;
+            }
+            if (labelText(cell) != null) {
+                cells.add(cell);
+            } else if (isWholeNumber(cell)) {
+                cells.addAll(headingOfColumn(geometry, cell, cache));
                 cells.add(cell);
             }
         }
         return cells.isEmpty() ? null : HeaderChain.fromGeometry(cells);
+    }
+
+    /** The header text sitting over {@code cell}'s column in the nearest band above it. */
+    private static List<InterpretationCellView> headingOfColumn(
+            HeaderGeometry geometry, InterpretationCellView cell, ResolveCache cache) {
+        List<InterpretationCellView> heading = new ArrayList<>();
+        for (HeaderGeometry.Band band : geometry.bandsAbove(cell.rowNum(), cell.colNum())) {
+            for (int row = band.rowMin(); row <= band.rowMax(); row++) {
+                InterpretationCellView above = cache.cellAt(cell.worksheetId(), row, cell.colNum());
+                if (above != null && labelText(above) != null) {
+                    heading.add(above);
+                }
+            }
+        }
+        return heading;
+    }
+
+    private static boolean isWholeNumber(InterpretationCellView cell) {
+        if (!"number".equals(cell.valueType()) || cell.numericValue() == null || cell.numericValue().isBlank()) {
+            return false;
+        }
+        try {
+            double value = Double.parseDouble(cell.numericValue());
+            return value == Math.rint(value);
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
     /**
