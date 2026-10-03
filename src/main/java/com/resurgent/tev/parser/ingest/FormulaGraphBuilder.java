@@ -159,6 +159,7 @@ public final class FormulaGraphBuilder {
         Map<Long, Integer> best = new HashMap<>();
         ArrayDeque<long[]> queue = new ArrayDeque<>();
         for (long next : direct.getOrDefault(origin, Set.of())) {
+            best.put(next, 1);
             queue.add(new long[] {next, 1});
         }
         int guard = direct.size() + 1;
@@ -170,12 +171,16 @@ public final class FormulaGraphBuilder {
                 continue;
             }
             Integer known = best.get(node);
-            if (known != null && known <= depth) {
+            if (known != null && known < depth) {
                 continue;
             }
-            best.put(node, depth);
             for (long next : direct.getOrDefault(node, Set.of())) {
-                queue.add(new long[] {next, depth + 1L});
+                int newDepth = depth + 1;
+                Integer nextKnown = best.get(next);
+                if (nextKnown == null || nextKnown > newDepth) {
+                    best.put(next, newDepth);
+                    queue.add(new long[] {next, newDepth});
+                }
             }
         }
         return best;
