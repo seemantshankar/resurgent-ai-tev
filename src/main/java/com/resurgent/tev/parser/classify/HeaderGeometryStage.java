@@ -79,9 +79,9 @@ final class HeaderGeometryStage {
             }
             outcome.value().ifPresent(g -> found.put(g.candidateId(), g));
         }
-        LlmStats.GLOBAL.add("header-geometry", "regions_asked", regions.size());
-        LlmStats.GLOBAL.add("header-geometry", "regions_with_geometry", found.size());
-        LlmStats.GLOBAL.add("header-geometry", "regions_failed", failed);
+        LlmStats.GLOBAL.add("layer-a", "header_geometry_regions_asked", regions.size());
+        LlmStats.GLOBAL.add("layer-a", "header_geometry_regions_found", found.size());
+        LlmStats.GLOBAL.add("layer-a", "header_geometry_regions_failed", failed);
         return found;
     }
 

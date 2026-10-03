@@ -347,7 +347,7 @@ public final class ClassifyService {
         }
         Progress.phase("classify", "finding header rows and label columns in " + regions.size() + " regions");
         long started = System.nanoTime();
-        LlmStats.GLOBAL.enterStage("header-geometry");
+        LlmStats.GLOBAL.enterStage("layer-a"); // runs right after Layer A; the stats tables accept no other new stage
         Map<Long, HeaderGeometry> found = HeaderGeometryStage.ask(regions, llm, tuning.concurrency());
         for (HeaderGeometry geometry : found.values()) {
             repo.insertHeaderGeometry(parseRunId, geometry);
