@@ -212,8 +212,8 @@ final class InterpretationEvidenceResolver {
         for (CandidateRow scope : peers) {
             ScopeIndex scopeIndex = cache.scope(scope, membersByCandidate, candidatesById);
             InterpretationCellView focus = focusCell(target, cache, scopeIndex);
-            rowChains.add(rowHeaderChain(focus, scopeIndex));
-            colChains.add(columnHeaderChain(focus, scopeIndex));
+            rowChains.add(rowHeaderChain(focus, scopeIndex, cache));
+            colChains.add(columnHeaderChain(focus, scopeIndex, cache));
         }
         List<InterpretationEvidence> out = new ArrayList<>();
         out.addAll(mergeHeaderRole(
@@ -416,13 +416,15 @@ final class InterpretationEvidenceResolver {
         return target;
     }
 
-    private static HeaderChain rowHeaderChain(InterpretationCellView focus, ScopeIndex scope) {
+    private static HeaderChain rowHeaderChain(
+            InterpretationCellView focus, ScopeIndex scope, ResolveCache cache) {
         List<InterpretationCellView> left = new ArrayList<>();
+        Set<String> seenMerges = new HashSet<>();
         for (InterpretationCellView cell : scope.row(focus.worksheetId(), focus.rowNum())) {
             if (cell.colNum() >= focus.colNum()) {
                 continue;
             }
-            if (labelText(cell) == null) {
+            if (labelText(cell) == null || !countsAsHeader(cell, cache, seenMerges, false)) {
                 continue;
             }
             left.add(cell);
@@ -431,7 +433,9 @@ final class InterpretationEvidenceResolver {
         return HeaderChain.from(left);
     }
 
-    private static HeaderChain columnHeaderChain(InterpretationCellView focus, ScopeIndex scope) {
+    private static HeaderChain columnHeaderChain(
+            InterpretationCellView focus, ScopeIndex scope, ResolveCache cache) {
+        Set<String> seenMerges = new HashSet<>();
         // Nearest header band above focus: skip body/numeric rows until the first header,
         // then stop at the first gap (stacked upper schedules stay out).
         Map<Integer, List<InterpretationCellView>> byRow = new HashMap<>();
@@ -439,7 +443,7 @@ final class InterpretationEvidenceResolver {
             if (cell.rowNum() >= focus.rowNum()) {
                 continue;
             }
-            if (!isColumnHeaderCandidate(cell)) {
+            if (!isColumnHeaderCandidate(cell) || !countsAsHeader(cell, cache, seenMerges, true)) {
                 continue;
             }
             byRow.computeIfAbsent(cell.rowNum(), r -> new ArrayList<>()).add(cell);
@@ -459,6 +463,28 @@ final class InterpretationEvidenceResolver {
             // Not started: keep scanning through body rows toward the local header.
         }
         return HeaderChain.from(band);
+    }
+
+    /**
+     * Error cells never name anything. A merged header is one label: its participants repeat
+     * the anchor's text, so one that sits on the anchor's own axis line (same column for a
+     * column header, same row for a row header) adds nothing, and one that does not is counted
+     * once per merge.
+     */
+    private static boolean countsAsHeader(
+            InterpretationCellView cell, ResolveCache cache, Set<String> seenMerges, boolean columnAxis) {
+        if (cell.isError() || "error".equals(cell.valueType())) {
+            return false;
+        }
+        if (!cell.isMergedParticipant() || cell.mergedRange() == null) {
+            return true;
+        }
+        for (InterpretationCellView anchor : cache.mergedAnchors(cell.worksheetId(), cell.mergedRange())) {
+            if (columnAxis ? anchor.colNum() == cell.colNum() : anchor.rowNum() == cell.rowNum()) {
+                return false;
+            }
+        }
+        return seenMerges.add(cell.worksheetId() + "|" + cell.mergedRange());
     }
 
     /**

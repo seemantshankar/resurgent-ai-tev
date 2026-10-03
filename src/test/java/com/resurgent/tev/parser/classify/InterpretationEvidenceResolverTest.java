@@ -199,6 +199,63 @@ class InterpretationEvidenceResolverTest {
         }
     }
 
+    @Test
+    void verticallyMergedHeaderCountsOnceNotPerMergedCell() {
+        // Jettwings Passenger!K19:K20 "Aug": anchor and participant both carry the text.
+        InterpretationCellView anchor = merged(1L, "K19", 19, 11, "Aug", true, "K19:K20");
+        InterpretationCellView participant = merged(2L, "K20", 20, 11, "Aug", false, "K19:K20");
+        InterpretationCellView target = numericCell(3L, "K22", 22, 11, "0");
+
+        assertThat(columnHeaderTexts(target, anchor, participant)).containsExactly("Aug");
+    }
+
+    @Test
+    void errorCellsAreNotColumnHeaders() {
+        // Req_PNB!D20: #REF! cells sit between the real header and the data.
+        InterpretationCellView header = textCell(1L, "D5", 5, 4, "Amount");
+        InterpretationCellView err1 = errorCell(2L, "D6", 6, 4);
+        InterpretationCellView err2 = errorCell(3L, "D7", 7, 4);
+        InterpretationCellView target = numericCell(4L, "D8", 8, 4, "0");
+
+        assertThat(columnHeaderTexts(target, header, err1, err2)).containsExactly("Amount");
+    }
+
+    private static List<String> columnHeaderTexts(
+            InterpretationCellView target, InterpretationCellView... others) {
+        java.util.List<InterpretationCellView> all = new java.util.ArrayList<>(List.of(others));
+        all.add(target);
+        CandidateRow parent = candidate(10L, "coverage_parent", null, 1, 1, 40, 20);
+        Map<Long, InterpretationCellView> byId = new java.util.HashMap<>();
+        Set<Long> ids = new java.util.HashSet<>();
+        Map<Long, List<CandidateRow>> owners = new java.util.HashMap<>();
+        for (InterpretationCellView c : all) {
+            byId.put(c.cellId(), c);
+            ids.add(c.cellId());
+            owners.put(c.cellId(), List.of(parent));
+        }
+        List<InterpretationEvidence> evidence = InterpretationEvidenceResolver.resolve(
+                PARSE_RUN, target, byId, owners, Map.of(10L, ids), Map.of(10L, parent), null);
+        return evidenceOfRole(evidence, EvidenceRole.COLUMN_HEADER).stream()
+                .filter(e -> EvidenceResolution.RESOLVED.equals(e.resolution()))
+                .map(InterpretationEvidence::sourceText)
+                .toList();
+    }
+
+    private static InterpretationCellView merged(
+            long id, String coord, int row, int col, String text, boolean anchor, String range) {
+        return new InterpretationCellView(
+                id, WORKSHEET, coord, row, col, anchor ? "text" : "empty", anchor ? text : null, text,
+                null, null, null, null, null, null, null, false, null,
+                anchor, !anchor, range, anchor ? "cell" : "merged_anchor");
+    }
+
+    private static InterpretationCellView errorCell(long id, String coord, int row, int col) {
+        return new InterpretationCellView(
+                id, WORKSHEET, coord, row, col, "error", "#REF!", "#REF!",
+                null, null, null, null, null, null, null, true, "#REF!",
+                false, false, null, "cell");
+    }
+
     private static List<InterpretationEvidence> evidenceOfRole(
             List<InterpretationEvidence> evidence, String role) {
         return evidence.stream().filter(e -> role.equals(e.role())).toList();
