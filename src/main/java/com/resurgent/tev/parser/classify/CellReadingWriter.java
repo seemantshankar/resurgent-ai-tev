@@ -69,6 +69,7 @@ public final class CellReadingWriter {
                 InterpretationEvidenceResolver.indexOwners(candidates, members);
         InterpretationEvidenceResolver.ResolveCache cache =
                 new InterpretationEvidenceResolver.ResolveCache(byId);
+        cache.useGeometry(repo.selectHeaderGeometry(parseRunId));
 
         Map<Long, Set<Long>> precedents = new LinkedHashMap<>();
         for (FormulaLink link : repo.selectFormulaLinksForParseRun(parseRunId)) {

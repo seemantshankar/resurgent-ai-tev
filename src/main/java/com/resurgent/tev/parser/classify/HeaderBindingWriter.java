@@ -71,6 +71,7 @@ final class HeaderBindingWriter {
         }
         InterpretationEvidenceResolver.ResolveCache cache =
                 new InterpretationEvidenceResolver.ResolveCache(byId);
+        cache.useGeometry(repo.selectHeaderGeometry(parseRunId));
         int done = 0;
         for (InterpretationCellView cell : cells) {
             if (!eligible.contains(cell.cellId())) {

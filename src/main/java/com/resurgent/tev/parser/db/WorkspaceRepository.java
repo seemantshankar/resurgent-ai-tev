@@ -2,6 +2,7 @@ package com.resurgent.tev.parser.db;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.resurgent.tev.parser.classify.HeaderGeometry;
 import com.resurgent.tev.parser.classify.InterpretationEvidence;
 import com.resurgent.tev.parser.classify.PacketDisposition;
 import com.resurgent.tev.parser.nomenclature.ProjectFactField;
@@ -1013,6 +1014,18 @@ public final class WorkspaceRepository {
             return;
         }
         try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM region_header_geometry WHERE parse_run_id = ? AND candidate_id IN"
+                        + " (SELECT candidate_id FROM candidate WHERE parse_run_id = ? AND worksheet_id IN ("
+                        + placeholders(worksheetIds.size()) + "))")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, parseRunId);
+            int index = 3;
+            for (Long id : worksheetIds) {
+                ps.setLong(index++, id);
+            }
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
                 "DELETE FROM packet_disposition WHERE parse_run_id = ? AND candidate_id IN"
                         + " (SELECT candidate_id FROM candidate WHERE parse_run_id = ? AND worksheet_id IN ("
                         + placeholders(worksheetIds.size()) + "))")) {
@@ -1054,6 +1067,11 @@ public final class WorkspaceRepository {
 
     public void deletePacketDispositionsForParseRun(long parseRunId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM region_header_geometry WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
                 "DELETE FROM packet_disposition WHERE parse_run_id = ?")) {
             ps.setLong(1, parseRunId);
             ps.executeUpdate();
@@ -1080,6 +1098,34 @@ public final class WorkspaceRepository {
             ps.setString(1, name);
             ps.setString(2, java.time.Instant.now().toString());
             ps.executeUpdate();
+        }
+    }
+
+    public void insertHeaderGeometry(long parseRunId, HeaderGeometry geometry) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT OR REPLACE INTO region_header_geometry (parse_run_id, candidate_id, geometry_json,"
+                        + " created_at) VALUES (?, ?, ?, ?)")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, geometry.candidateId());
+            ps.setString(3, geometry.toJson());
+            ps.setString(4, Timestamps.now());
+            ps.executeUpdate();
+        }
+    }
+
+    /** Header geometry by region, for the label resolver; regions without one are absent. */
+    public Map<Long, HeaderGeometry> selectHeaderGeometry(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT candidate_id, geometry_json FROM region_header_geometry WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                Map<Long, HeaderGeometry> byCandidate = new HashMap<>();
+                while (rs.next()) {
+                    long candidateId = rs.getLong("candidate_id");
+                    byCandidate.put(candidateId, HeaderGeometry.fromJson(candidateId, rs.getString("geometry_json")));
+                }
+                return byCandidate;
+            }
         }
     }
 

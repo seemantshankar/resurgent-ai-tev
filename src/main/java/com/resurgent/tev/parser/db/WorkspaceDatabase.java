@@ -60,7 +60,8 @@ public final class WorkspaceDatabase implements AutoCloseable {
             "db/migration/V36__cell_reading_unstated_scale.sql",
             "db/migration/V37__llm_usage.sql",
             "db/migration/V38__run_timing.sql",
-            "db/migration/V39__llm_stats_context.sql"
+            "db/migration/V39__llm_stats_context.sql",
+            "db/migration/V40__region_header_geometry.sql"
     };
 
     /** Number of bundled migrations, i.e. the schema version a fully migrated database reports. */

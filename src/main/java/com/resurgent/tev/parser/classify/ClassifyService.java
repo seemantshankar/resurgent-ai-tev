@@ -285,6 +285,7 @@ public final class ClassifyService {
                 for (PacketDisposition disposition : dispositions) {
                     repo.insertPacketDisposition(disposition);
                 }
+                findHeaderGeometry(repo, parseRunId, dispositions);
                 Progress.phase("classify", "STAGE 3/3 START - Layer B (typing every numeric cell)");
                 stageStarted = System.nanoTime();
                 cellReader().replace(repo, parseRunId, llm);
@@ -312,6 +313,50 @@ public final class ClassifyService {
     }
 
     /**
+     * Ask the LLM, once per region that matters, where its column headers and row labels are, and
+     * store the answer; the label resolver builds every cell's labels from it. Runs in the caller's
+     * transaction, after Layer A and before any cell is typed.
+     */
+    private void findHeaderGeometry(WorkspaceRepository repo, long parseRunId, List<PacketDisposition> dispositions)
+            throws SQLException {
+        Map<Long, CandidateRow> candidates = new HashMap<>();
+        for (CandidateRow candidate : repo.selectCandidatesForParseRun(parseRunId)) {
+            candidates.put(candidate.candidateId(), candidate);
+        }
+        Map<Long, String> sheetNames = new HashMap<>();
+        for (WorksheetRef sheet : repo.selectWorksheetsForParseRun(parseRunId)) {
+            sheetNames.put(sheet.worksheetId(), sheet.sheetName());
+        }
+        Map<Long, List<com.resurgent.tev.parser.db.InterpretationCellView>> cellsBySheet = new HashMap<>();
+        for (com.resurgent.tev.parser.db.InterpretationCellView cell :
+                repo.selectInterpretationCellsForParseRun(parseRunId)) {
+            cellsBySheet.computeIfAbsent(cell.worksheetId(), id -> new ArrayList<>()).add(cell);
+        }
+        List<HeaderGeometryStage.Region> regions = new ArrayList<>();
+        for (PacketDisposition disposition : dispositions) {
+            CandidateRow candidate = candidates.get(disposition.candidateId());
+            if (candidate == null || Triage.isSoft(disposition.triage()) || !inScope(candidate.worksheetId())
+                    || candidate.bboxMinRow() == null || candidate.bboxMaxRow() == null
+                    || candidate.bboxMinCol() == null || candidate.bboxMaxCol() == null) {
+                continue;
+            }
+            regions.add(new HeaderGeometryStage.Region(
+                    candidate,
+                    sheetNames.getOrDefault(candidate.worksheetId(), ""),
+                    cellsBySheet.getOrDefault(candidate.worksheetId(), List.of())));
+        }
+        Progress.phase("classify", "finding header rows and label columns in " + regions.size() + " regions");
+        long started = System.nanoTime();
+        LlmStats.GLOBAL.enterStage("header-geometry");
+        Map<Long, HeaderGeometry> found = HeaderGeometryStage.ask(regions, llm, tuning.concurrency());
+        for (HeaderGeometry geometry : found.values()) {
+            repo.insertHeaderGeometry(parseRunId, geometry);
+        }
+        Progress.phase("classify", "header geometry found for " + found.size() + " of " + regions.size()
+                + " regions in " + secondsSince(started) + "s");
+    }
+
+    /**
      * Replace narrow Candidates with LLM-proposed regions. Empty proposal list
      * leaves discover geometry unchanged (test fakes).
      */
@@ -328,6 +373,9 @@ public final class ClassifyService {
         // Run Layer B (cell reading/classification)
         db.connection().setAutoCommit(false);
         try {
+            if (repo.selectHeaderGeometry(parseRunId).isEmpty()) {
+                findHeaderGeometry(repo, parseRunId, dispositions);
+            }
             System.err.println("[classify] Running Layer B (cell type classification) with batching...");
             System.err.flush();
             cellReader().replace(repo, parseRunId, llm);
