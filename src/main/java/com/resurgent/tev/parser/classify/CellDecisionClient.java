@@ -9,9 +9,15 @@ interface CellDecisionClient {
 
     /**
      * One cell's pick; each confidence is the model's own, 0.0-1.0. {@code scale} is null (and its
-     * confidence 0) when the scale question was not asked.
+     * confidence 0) when the scale question was not asked;
+     * {@code kindProbabilities} is the kind answer's whole distribution when the model gave one.
      */
-    record Decision(String kind, double kindConfidence, String scale, double scaleConfidence) {
+    record Decision(String kind, double kindConfidence, String scale, double scaleConfidence,
+            java.util.Map<String, Double> kindProbabilities) {
+        Decision(String kind, double kindConfidence, String scale, double scaleConfidence) {
+            this(kind, kindConfidence, scale, scaleConfidence, java.util.Map.of());
+        }
+
         /** The weaker of the two answers: what a cell must clear when both questions matter. */
         double confidence() {
             return Math.min(kindConfidence, scaleConfidence);

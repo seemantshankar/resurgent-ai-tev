@@ -153,15 +153,17 @@ final class OpenRouterDecisionClient implements CellDecisionClient {
         if (!kind.hasNonNull("choice") || (scaleAsked && !scale.hasNonNull("choice"))) {
             throw new IllegalStateException("decisions response lacks kind/scale choice");
         }
+        java.util.Map<String, Double> probabilities = new java.util.LinkedHashMap<>();
+        kind.path("probabilities").fields().forEachRemaining(e -> probabilities.put(e.getKey(), e.getValue().asDouble(0.0)));
         if (!scaleAsked) {
             return new Decision(
                     kind.get("choice").asText().trim().toLowerCase(java.util.Locale.ROOT),
-                    kind.path("confidence").asDouble(0.0), null, 0.0);
+                    kind.path("confidence").asDouble(0.0), null, 0.0, probabilities);
         }
         return new Decision(
                 kind.get("choice").asText().trim().toLowerCase(java.util.Locale.ROOT),
                 kind.path("confidence").asDouble(0.0),
                 scale.get("choice").asText().trim().toLowerCase(java.util.Locale.ROOT),
-                scale.path("confidence").asDouble(0.0));
+                scale.path("confidence").asDouble(0.0), probabilities);
     }
 }

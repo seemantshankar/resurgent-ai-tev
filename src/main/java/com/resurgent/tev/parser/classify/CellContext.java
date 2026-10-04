@@ -38,6 +38,11 @@ interface CellContext {
         return null;
     }
 
+    /** Name of the cell's worksheet as written, or {@code ""} when this context does not know it. */
+    default String sheetName(InterpretationCellView cell) {
+        return "";
+    }
+
     /** Stable identity of the workbook (file hash) for de-duplicating evidence across runs. */
     String workbookKey();
 

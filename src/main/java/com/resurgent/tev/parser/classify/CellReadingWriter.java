@@ -31,11 +31,18 @@ public final class CellReadingWriter {
 
     private ClassifyTuning tuning = ClassifyTuning.sequential();
     private Set<Long> llmWorksheetIds; // null: every sheet may go to the model
+    private CellDecisionClient decisionModelOverride; // null: the environment decides
 
     /** Batch sizes, concurrency, and the sheets whose untyped cells may be sent to the model. */
     CellReadingWriter withTuning(ClassifyTuning tuning, Set<Long> llmWorksheetIds) {
         this.tuning = tuning;
         this.llmWorksheetIds = llmWorksheetIds;
+        return this;
+    }
+
+    /** Use this decision model instead of the one the environment configures (replays and tests). */
+    CellReadingWriter withDecisionModel(CellDecisionClient decisionModel) {
+        this.decisionModelOverride = decisionModel;
         return this;
     }
 
@@ -144,12 +151,18 @@ public final class CellReadingWriter {
                         .withBatching(tuning.cellBatchSize(), tuning.concurrency())
                         .withWorksheetScope(llmWorksheetIds)
                         .withUnstatedScales(unknowns);
-                CellDecisionClient decisionModel = LlmEnvironment.decisionClientOrNull();
+                CellDecisionClient decisionModel =
+                        decisionModelOverride != null ? decisionModelOverride : LlmEnvironment.decisionClientOrNull();
                 if (decisionModel != null) {
+                    // An injected model runs on the defaults, whatever the environment says.
+                    boolean fromEnvironment = decisionModelOverride == null;
                     classifier.withDecisionModel(decisionModel)
                             .withDecisionTuning(
-                                    LlmEnvironment.decisionMinConfidence(), LlmEnvironment.decisionConcurrency());
-                    if (LlmEnvironment.decisionCompareRequested()) {
+                                    fromEnvironment ? LlmEnvironment.decisionMinConfidence()
+                                            : CellTypeClassifierLlm.DEFAULT_DECISION_MIN_CONFIDENCE,
+                                    fromEnvironment ? LlmEnvironment.decisionConcurrency()
+                                            : CellTypeClassifierLlm.DEFAULT_DECISION_CONCURRENCY);
+                    if (fromEnvironment && LlmEnvironment.decisionCompareRequested()) {
                         classifier.withDecisionComparison(LlmEnvironment.decisionCompareCsv());
                     }
                 }

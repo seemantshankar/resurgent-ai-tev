@@ -19,7 +19,13 @@ final class DecisionComparison {
     /** {@code chatKind} and {@code chatScale} are null when the chat model left the cell untyped. */
     record Row(long cellId, String coord, String rowLabel, String columnLabel,
             CellDecisionClient.Decision decision,
-            String chatKind, String chatScale) {
+            String chatKind, String chatScale,
+            String sheet, boolean hasRegion, String statedScale) {
+        Row(long cellId, String coord, String rowLabel, String columnLabel,
+                CellDecisionClient.Decision decision, String chatKind, String chatScale) {
+            this(cellId, coord, rowLabel, columnLabel, decision, chatKind, chatScale, "", false, "");
+        }
+
         boolean chatSettled() {
             return chatKind != null;
         }
@@ -99,19 +105,30 @@ final class DecisionComparison {
         boolean fresh = !Files.exists(path); // the classifier runs twice per parse; the second call appends
         List<String> lines = new ArrayList<>();
         if (fresh) {
-            lines.add("cell_id,coord,row_label,column_label,d1_kind,d1_kind_conf,d1_scale,d1_scale_conf,chat_kind,chat_scale");
+            lines.add("cell_id,coord,row_label,column_label,d1_kind,d1_kind_conf,d1_scale,d1_scale_conf,chat_kind,chat_scale,sheet,has_region,stated_scale,d1_kind_top2");
         }
         for (Row r : rows) {
             lines.add(String.join(",",
                     Long.toString(r.cellId()), csv(r.coord()), csv(r.rowLabel()), csv(r.columnLabel()),
                     r.decision().kind(), Double.toString(r.decision().kindConfidence()),
                     r.decision().scale(), Double.toString(r.decision().scaleConfidence()),
-                    r.chatKind() == null ? "" : r.chatKind(), r.chatScale() == null ? "" : r.chatScale()));
+                    r.chatKind() == null ? "" : r.chatKind(), r.chatScale() == null ? "" : r.chatScale(),
+                    csv(r.sheet()), Boolean.toString(r.hasRegion()), r.statedScale() == null ? "" : r.statedScale(),
+                    csv(topTwo(r.decision().kindProbabilities()))));
         }
         if (path.getParent() != null) {
             Files.createDirectories(path.getParent());
         }
         Files.write(path, lines, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+    }
+
+    /** "money:0.93|rate:0.05": the two likeliest kinds, so a near miss shows what it was close to. */
+    private static String topTwo(Map<String, Double> probabilities) {
+        return probabilities.entrySet().stream()
+                .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
+                .limit(2)
+                .map(e -> e.getKey() + ":" + String.format(Locale.ROOT, "%.2f", e.getValue()))
+                .collect(java.util.stream.Collectors.joining("|"));
     }
 
     private static String csv(String s) {

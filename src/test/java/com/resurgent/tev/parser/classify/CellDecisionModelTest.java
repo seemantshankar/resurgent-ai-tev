@@ -215,6 +215,39 @@ class CellDecisionModelTest {
     }
 
     @Test
+    void shadowCsvCarriesTheContextEachDecisionWasMadeFromAndItsRunnerUp() throws Exception {
+        var csv = java.nio.file.Files.createTempFile("d1ctx", ".csv");
+        java.nio.file.Files.delete(csv);
+        var classifier = new CellTypeClassifierLlm(null, new CountingChat())
+                .withDecisionModel(state -> new CellDecisionClient.Decision(
+                        "money", 0.97, "lakh", 0.95, java.util.Map.of("money", 0.93, "rate", 0.05, "ratio", 0.02)))
+                .withDecisionComparison(csv);
+        CellContext context = new CellContext() {
+            @Override public String rowLabel(InterpretationCellView c) { return "Land"; }
+            @Override public String columnLabel(InterpretationCellView c) { return ""; }
+            @Override public RegionContext region(InterpretationCellView c) { return RegionContext.NONE; }
+            @Override public CellScale statedScale(InterpretationCellView c) { return CellScale.LAKH; }
+            @Override public String sheetName(InterpretationCellView c) { return "P  L "; }
+            @Override public String workbookKey() { return ""; }
+        };
+
+        classifier.classifyRemaining(List.of(cell(1L, "A1")), untypable(1L), context);
+
+        var lines = java.nio.file.Files.readAllLines(csv);
+        assertThat(lines.get(0)).contains("sheet,has_region,stated_scale,d1_kind_top2");
+        assertThat(lines.get(1)).contains("\"P  L \",false,lakh,\"money:0.93|rate:0.05\"");
+    }
+
+    @Test
+    void parsesTheKindProbabilitiesOfADecisionsResponse() throws Exception {
+        var d = OpenRouterDecisionClient.parse("""
+                {"answers":{
+                 "kind":{"type":"choice","choice":"money","probabilities":{"money":0.7,"rate":0.2,"count":0.1},"confidence":0.6},
+                 "scale":{"type":"choice","choice":"unit","confidence":0.9}}}""");
+        assertThat(d.kindProbabilities()).containsEntry("rate", 0.2).containsEntry("money", 0.7);
+    }
+
+    @Test
     void reportBucketsAgreementByConfidence() {
         var high = new CellDecisionClient.Decision("money", 0.99, "lakh", 0.98);
         var low = new CellDecisionClient.Decision("rate", 0.60, "unit", 0.90);

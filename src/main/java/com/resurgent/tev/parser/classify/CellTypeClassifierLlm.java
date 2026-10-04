@@ -285,7 +285,9 @@ public class CellTypeClassifierLlm {
             rows.add(new DecisionComparison.Row(
                     cell.cellId(), cell.coord(), ctx.rowLabel(cell), ctx.columnLabel(cell), shadow.get(i).value(),
                     typed ? chat.kind : null,
-                    typed && chat.scale != null ? chat.scale.wireName() : null));
+                    typed && chat.scale != null ? chat.scale.wireName() : null,
+                    ctx.sheetName(cell), hasRegionBlock(ctx.region(cell)),
+                    ctx.statedScale(cell) == null ? "" : ctx.statedScale(cell).wireName()));
         }
         LlmStats.GLOBAL.add("layer-b", "cells_decision_failed", failed);
         DecisionComparison comparison = new DecisionComparison(rows);
@@ -389,7 +391,7 @@ public class CellTypeClassifierLlm {
      */
     private String formatDecisionState(CellTypeRequest request, RegionContext region) {
         com.fasterxml.jackson.databind.node.ObjectNode state = MAPPER.createObjectNode();
-        if (!region.scheduleFamily().isBlank() || !region.about().isBlank()) {
+        if (hasRegionBlock(region)) {
             com.fasterxml.jackson.databind.node.ObjectNode r = state.putObject("region");
             putIfPresent(r, "family", region.scheduleFamily());
             putIfPresent(r, "head", region.packetHead());
@@ -418,6 +420,11 @@ public class CellTypeClassifierLlm {
             }
         }
         return state.toString();
+    }
+
+    /** Whether the decision state carries a {@code region} block for this region. */
+    private static boolean hasRegionBlock(RegionContext region) {
+        return !region.scheduleFamily().isBlank() || !region.about().isBlank();
     }
 
     private static void putIfPresent(com.fasterxml.jackson.databind.node.ObjectNode node, String name, String value) {

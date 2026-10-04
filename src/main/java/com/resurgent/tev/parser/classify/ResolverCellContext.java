@@ -119,6 +119,11 @@ final class ResolverCellContext implements CellContext {
     }
 
     @Override
+    public String sheetName(InterpretationCellView cell) {
+        return sheetNames.getOrDefault(cell.worksheetId(), "");
+    }
+
+    @Override
     public String workbookKey() {
         return workbookKey;
     }
