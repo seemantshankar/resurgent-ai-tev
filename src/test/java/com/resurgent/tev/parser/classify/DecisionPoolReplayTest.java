@@ -51,7 +51,8 @@ class DecisionPoolReplayTest {
     private record Asked(String coord, String display, String formula) {}
 
     /** One live answer, with what the state it was asked from carried. */
-    private record Answer(CellDecisionClient.Decision decision, boolean hadInputs, boolean askedScale) {}
+    private record Answer(CellDecisionClient.Decision decision, boolean hadInputs, boolean askedScale,
+            String sheet, String inputs) {}
 
     /**
      * A/B of the decision state against the stored run, with the live decision model: each variant
@@ -93,6 +94,7 @@ class DecisionPoolReplayTest {
         };
 
         Map<String, Map<String, Answer>> byVariant = new java.util.LinkedHashMap<>();
+        Map<String, int[]> fanout = new HashMap<>(); // key -> {cells downstream, 1 if any is on another sheet, direct readers}
         Map<String, CellReading> stored = new HashMap<>();
         Set<String> ambiguous = new HashSet<>();
         for (String variant : System.getProperty("tev.replay.variants", "legacy,facts,inputs").split(",")) {
@@ -138,7 +140,8 @@ class DecisionPoolReplayTest {
                         Decision d = real.decide(state, askScale);
                         answers.put(oracleKey(s.path("cell").path("coord").asText(),
                                 s.path("cell").path("display").asText(), s.path("cell").path("formula").asText("")),
-                                new Answer(d, s.has("inputs"), askScale));
+                                new Answer(d, s.has("inputs"), askScale, s.path("sheet").asText(""),
+                                        s.has("inputs") ? s.get("inputs").toString() : ""));
                         return new Decision("money", 0.0, "unit", 0.0); // asked, never applied
                     }
                 };
@@ -150,10 +153,37 @@ class DecisionPoolReplayTest {
                         .withDecisionStateFacts(facts, facts, "inputs".equals(variant))
                         .replace(repo, parseRunId, answersNothing);
                 byVariant.put(variant, answers);
+                if (fanout.isEmpty()) {
+                    computeFanout(repo, parseRunId, scope, answers.keySet(), fanout);
+                }
                 System.err.println("[live] " + variant + ": " + real.stats());
             }
         }
+        String answersFile = System.getProperty("tev.replay.answers");
+        if (answersFile != null && !answersFile.isBlank()) {
+            // One line per answered cell (the last variant run), to join with the workbook's graph elsewhere.
+            Map<String, Answer> last = byVariant.get(new ArrayList<>(byVariant.keySet()).get(byVariant.size() - 1));
+            List<String> lines = new ArrayList<>();
+            lines.add(String.join("\t", "sheet", "coord", "display", "formula", "asked_scale", "had_inputs",
+                    "d1_kind", "d1_kind_conf", "d1_scale", "d1_scale_conf", "stored_kind", "stored_scale"));
+            for (var e : last.entrySet()) {
+                CellReading was = stored.get(e.getKey());
+                if (was == null || ambiguous.contains(e.getKey())) {
+                    continue;
+                }
+                String[] parts = e.getKey().split("\\|", 3);
+                Answer a = e.getValue();
+                lines.add(String.join("\t", a.sheet(), parts[0], parts[1], parts[2],
+                        String.valueOf(a.askedScale()), String.valueOf(a.hadInputs()),
+                        a.decision().kind(), String.valueOf(a.decision().kindConfidence()),
+                        String.valueOf(a.decision().scale()), String.valueOf(a.decision().scaleConfidence()),
+                        String.valueOf(was.kind()), String.valueOf(was.scale())));
+            }
+            Files.write(Path.of(answersFile), lines);
+        }
         StringBuilder report = new StringBuilder(liveReport(byVariant, stored, ambiguous));
+        report.append(fanoutReport(byVariant.get(byVariant.containsKey("inputs") ? "inputs" : byVariant.keySet().iterator().next()),
+                stored, ambiguous, fanout));
         String out = System.getProperty("tev.replay.out");
         if (out != null && !out.isBlank()) {
             Files.writeString(Path.of(out), report.toString());
@@ -257,6 +287,32 @@ class DecisionPoolReplayTest {
                 }
             }
         }
+        // Settled only below 0.90 and differing from the stored run: what a lower threshold would add.
+        if (inputsRun != null) {
+            sb.append("[live] answers a lower threshold adds (confidence 0.70 to 0.90) that differ from the stored run:\n");
+            int shown = 0;
+            for (String k : common) {
+                CellReading was = stored.get(k);
+                Answer a = inputsRun.get(k);
+                if (was == null || was.kind() == null || ambiguous.contains(k)
+                        || settledAt(a, 0.90) || !settledAt(a, 0.70)) {
+                    continue;
+                }
+                boolean kindDiffers = !a.decision().kind().equals(was.kind());
+                boolean scaleDiffers = a.askedScale() && "money".equals(was.kind()) && was.scale() != null
+                        && !was.scale().equals(a.decision().scale());
+                if (!kindDiffers && !scaleDiffers) {
+                    continue;
+                }
+                sb.append(String.format(Locale.ROOT, "[live] ADDED %s!%s | %s | stored %s/%s | D1 %s (%.2f) %s (%.2f) | inputs %s%n",
+                        a.sheet(), k.split("\\|")[0], k.split("\\|", 3)[2], was.kind(), was.scale(),
+                        a.decision().kind(), a.decision().kindConfidence(),
+                        a.askedScale() ? a.decision().scale() : "-", a.askedScale() ? a.decision().scaleConfidence() : 0.0,
+                        a.inputs().isEmpty() ? "none" : a.inputs()));
+                shown++;
+            }
+            sb.append("[live] added disagreements listed: ").append(shown).append('\n');
+        }
         // The settled answers that differ from the stored run, so a person can say which is right.
         if (inputsRun != null) {
             int shown = 0;
@@ -286,6 +342,123 @@ class DecisionPoolReplayTest {
                 }
             }
         }
+        return sb.toString();
+    }
+
+    /**
+     * For each answered cell: how many cells read it, directly or through others, and whether any of
+     * them is on another sheet. A cell whose influence stays inside one small calculation is the
+     * "scratch" the person reading the sheet would call a check, a counter or a scenario.
+     */
+    private static void computeFanout(
+            WorkspaceRepository repo, long parseRunId, Set<Long> scope, Set<String> keys, Map<String, int[]> out)
+            throws Exception {
+        Map<Long, InterpretationCellView> byId = new HashMap<>();
+        Map<String, InterpretationCellView> byKey = new HashMap<>();
+        Set<String> seen = new HashSet<>();
+        for (InterpretationCellView c : repo.selectInterpretationCellsForParseRun(parseRunId)) {
+            byId.put(c.cellId(), c);
+            if (scope != null && !scope.contains(c.worksheetId())) {
+                continue;
+            }
+            String k = oracleKey(c.coord(), c.displayValue() == null ? "" : c.displayValue(),
+                    c.formulaText() == null ? "" : c.formulaText());
+            if (!seen.add(k)) {
+                byKey.remove(k); // ambiguous: left out
+            } else {
+                byKey.put(k, c);
+            }
+        }
+        Map<Long, Set<Long>> readers = new HashMap<>();
+        for (FormulaLink l : repo.selectFormulaLinksForParseRun(parseRunId)) {
+            readers.computeIfAbsent(l.toCellId(), x -> new HashSet<>()).add(l.fromCellId());
+        }
+        for (String k : keys) {
+            InterpretationCellView c = byKey.get(k);
+            if (c == null) {
+                continue;
+            }
+            Set<Long> reached = new HashSet<>();
+            java.util.ArrayDeque<Long> queue = new java.util.ArrayDeque<>(readers.getOrDefault(c.cellId(), Set.of()));
+            boolean otherSheet = false;
+            while (!queue.isEmpty()) {
+                long id = queue.poll();
+                if (!reached.add(id)) {
+                    continue;
+                }
+                InterpretationCellView r = byId.get(id);
+                if (r != null && r.worksheetId() != c.worksheetId()) {
+                    otherSheet = true;
+                }
+                queue.addAll(readers.getOrDefault(id, Set.of()));
+            }
+            out.put(k, new int[] {reached.size(), otherSheet ? 1 : 0, readers.getOrDefault(c.cellId(), Set.of()).size()});
+        }
+    }
+
+    /** Does D1's disagreement with the stored run concentrate in cells whose influence stays small and local? */
+    private static String fanoutReport(
+            Map<String, Answer> run, Map<String, CellReading> stored, Set<String> ambiguous, Map<String, int[]> fanout) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("[fanout] D1 answers by how far the cell's influence reaches "
+                + "(stored run is a guess: disagreement is an upper bound on D1's error)%n"));
+        sb.append(String.format("[fanout] %-26s %5s %9s %9s %10s %10s%n", "group", "n", "settled.9", "settled.7",
+                "disagree.9", "disagree.7"));
+        String[] names = {"reaches another sheet", "stays on its sheet, >5 cells", "stays on its sheet, 1-5 cells", "read by nothing"};
+        for (String name : names) {
+            int n = 0, s9 = 0, s7 = 0, d9 = 0, d7 = 0;
+            for (var e : run.entrySet()) {
+                int[] f = fanout.get(e.getKey());
+                CellReading was = stored.get(e.getKey());
+                if (f == null || was == null || was.kind() == null || ambiguous.contains(e.getKey())) {
+                    continue;
+                }
+                String group = f[1] == 1 ? names[0] : f[0] > 5 ? names[1] : f[0] >= 1 ? names[2] : names[3];
+                if (!group.equals(name)) {
+                    continue;
+                }
+                Answer a = e.getValue();
+                n++;
+                boolean differs = !a.decision().kind().equals(was.kind())
+                        || (a.askedScale() && "money".equals(was.kind()) && was.scale() != null
+                                && !was.scale().equals(a.decision().scale()));
+                if (settledAt(a, 0.90)) {
+                    s9++;
+                    d9 += differs ? 1 : 0;
+                }
+                if (settledAt(a, 0.70)) {
+                    s7++;
+                    d7 += differs ? 1 : 0;
+                }
+            }
+            if (n > 0) {
+                sb.append(String.format(Locale.ROOT, "[fanout] %-26s %5d %4d %4.0f%% %4d %4.0f%% %5d/%-3d %4.1f%% %5d/%-3d %4.1f%%%n",
+                        name, n, s9, 100.0 * s9 / n, s7, 100.0 * s7 / n, d9, s9, s9 == 0 ? 0.0 : 100.0 * d9 / s9,
+                        d7, s7, s7 == 0 ? 0.0 : 100.0 * d7 / s7));
+            }
+        }
+        // The disagreements that sit in cells the model depends on: these are the ones that matter most.
+        sb.append("[fanout] settled >= 0.70, differing from the stored run, in cells that reach another sheet:\n");
+        int shown = 0;
+        for (var e : run.entrySet()) {
+            int[] f = fanout.get(e.getKey());
+            CellReading was = stored.get(e.getKey());
+            Answer a = e.getValue();
+            if (f == null || f[1] != 1 || was == null || was.kind() == null || ambiguous.contains(e.getKey())
+                    || !settledAt(a, 0.70)) {
+                continue;
+            }
+            boolean differs = !a.decision().kind().equals(was.kind())
+                    || (a.askedScale() && "money".equals(was.kind()) && was.scale() != null
+                            && !was.scale().equals(a.decision().scale()));
+            if (differs && shown++ < 40) {
+                sb.append(String.format(Locale.ROOT, "[fanout]   %s!%s | %s | stored %s/%s | D1 %s (%.2f) %s (%.2f) | reaches %d cells%n",
+                        a.sheet(), e.getKey().split("\\|")[0], e.getKey().split("\\|", 3)[2], was.kind(), was.scale(),
+                        a.decision().kind(), a.decision().kindConfidence(),
+                        a.askedScale() ? a.decision().scale() : "-", a.askedScale() ? a.decision().scaleConfidence() : 0.0, f[0]));
+            }
+        }
+        sb.append("[fanout] listed: ").append(Math.min(shown, 40)).append('\n');
         return sb.toString();
     }
 
