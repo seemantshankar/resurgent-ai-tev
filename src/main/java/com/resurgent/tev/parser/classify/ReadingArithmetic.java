@@ -377,7 +377,8 @@ final class ReadingArithmetic {
             if (name == null || name.isBlank()) {
                 return worksheetId;
             }
-            return sheetIds.get(name.trim().toLowerCase(Locale.ROOT));
+            Long exact = sheetIds.get(name.toLowerCase(Locale.ROOT));
+            return exact != null ? exact : sheetIds.get(name.trim().toLowerCase(Locale.ROOT));
         }
 
         private InterpretationCellView find(long sheet, int row, int col) {

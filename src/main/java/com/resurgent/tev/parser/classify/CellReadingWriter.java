@@ -82,7 +82,10 @@ public final class CellReadingWriter {
         Map<String, Long> sheetIds = new HashMap<>();
         Map<Long, String> sheetNames = new HashMap<>();
         for (WorksheetRef sheet : repo.selectWorksheetsForParseRun(parseRunId)) {
+            // Registered by its exact name and, when padded, by its trimmed name too: a formula may
+            // spell the padded name either way, and two sheets differing only by padding must not clobber.
             sheetIds.put(sheet.sheetName().toLowerCase(Locale.ROOT), sheet.worksheetId());
+            sheetIds.putIfAbsent(sheet.sheetName().trim().toLowerCase(Locale.ROOT), sheet.worksheetId());
             sheetNames.put(sheet.worksheetId(), sheet.sheetName());
         }
         Map<Long, String> formats = repo.selectNumberFormatsForParseRun(parseRunId);

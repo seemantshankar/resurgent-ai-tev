@@ -255,6 +255,25 @@ class CellReadingWriterTest {
         assertThat(new BigDecimal(readings.get("Interest!B3").absoluteAmount())).isEqualByComparingTo("264000000");
     }
 
+    /** Workbooks pad sheet names ("P  L "); a reference to one must still find its sheet. */
+    @Test
+    void aFormulaReadingAPaddedSheetNameFollowsItsPrecedent() throws Exception {
+        Map<String, CellReading> readings = read(book(workbook -> {
+            Sheet padded = workbook.createSheet("P  L ");
+            padded.createRow(0).createCell(0).setCellValue("Area (sqm)");
+            padded.getRow(0).createCell(1).setCellValue(100);
+
+            Sheet calc = workbook.createSheet("Calc");
+            calc.createRow(0).createCell(1).setCellFormula("'P  L '!B1");
+        }));
+
+        CellReading area = readings.get("Calc!B1");
+        assertThat(area.refusal()).isNull();
+        assertThat(area.kind()).isEqualTo("quantity");
+        assertThat(area.unit()).isEqualTo("sqm");
+        assertThat(area.typeSource()).isEqualTo("derived");
+    }
+
     @Test
     void readersThatDisagreeLeaveTheScaleUnstated() throws Exception {
         Map<String, CellReading> readings = read(book(workbook -> {
