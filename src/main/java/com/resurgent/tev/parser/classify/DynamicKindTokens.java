@@ -53,10 +53,17 @@ public class DynamicKindTokens {
             ReadingOutcome.COUNT,
             ReadingOutcome.RATIO);
 
-    /** Promote when this many distinct workbooks agree, or ... */
+    /**
+     * Promote only when this many independent workbooks agree. A term learned from one file is that
+     * file's own vocabulary ("Game Parlour", "Train Manager"), not a general word, however many of its
+     * rows use it: the dictionary is for general terms that classify a label with confidence anywhere.
+     */
     static final int MIN_WORKBOOKS = 2;
-    /** ... this many rows across at least two sheets agree. */
-    static final int MIN_ROWS = 3;
+    /**
+     * Two file hashes whose evidence puts at least this many same labels on the same sheet and row are
+     * copies of one workbook (a redacted or re-exported version), and count once.
+     */
+    static final int SAME_FILE_SHARED_ROWS = 3;
     static final double MIN_ROW_PURITY = 0.80;
     static final double MIN_DOMINANCE = 0.95;
     static final int MAX_CANDIDATES = 20_000;
@@ -179,8 +186,9 @@ public class DynamicKindTokens {
         Map<String, LearnedTerm> promoted = new TreeMap<>();
         List<Candidate> contested = new ArrayList<>();
         int staged = 0;
+        java.util.function.UnaryOperator<String> sameFile = sameFileGroups(all);
         for (Map.Entry<String, Candidate> e : all.entrySet()) {
-            Verdict v = e.getValue().evaluate();
+            Verdict v = e.getValue().evaluate(sameFile);
             switch (v.state) {
                 case PROMOTED -> {
                     if (promoted.size() < MAX_TERMS) {
@@ -225,6 +233,53 @@ public class DynamicKindTokens {
                 .sorted((a, b) -> key(a.family, a.phrase).compareTo(key(b.family, b.phrase)))
                 .forEach(c -> quarantineArray.add(c.toJson().put("family", c.family).put("phrase", c.phrase)));
         writeAtomically(dir.resolve("quarantine.json"), quarantineRoot);
+    }
+
+    /**
+     * Maps a workbook hash to one representative of the copies of that workbook. Hashes are grouped
+     * when their evidence shares {@link #SAME_FILE_SHARED_ROWS} (label, sheet, row) triples; unrelated
+     * workbooks almost never place three of the same labels on the same rows, and merging two that do
+     * (a shared template) only makes the dictionary stricter.
+     */
+    private static java.util.function.UnaryOperator<String> sameFileGroups(Map<String, Candidate> all) {
+        Map<String, Set<String>> hashesByRow = new HashMap<>();
+        for (Map.Entry<String, Candidate> e : all.entrySet()) {
+            for (String rowId : e.getValue().rows.keySet()) {
+                String[] id = rowId.split("\\|", 3);
+                if (id.length == 3) {
+                    hashesByRow.computeIfAbsent(e.getKey() + "|" + id[1] + "|" + id[2], k -> new HashSet<>()).add(id[0]);
+                }
+            }
+        }
+        Map<String, Integer> shared = new HashMap<>();
+        for (Set<String> hashes : hashesByRow.values()) {
+            List<String> sorted = new ArrayList<>(new java.util.TreeSet<>(hashes));
+            for (int i = 0; i < sorted.size(); i++) {
+                for (int j = i + 1; j < sorted.size(); j++) {
+                    shared.merge(sorted.get(i) + "\u0000" + sorted.get(j), 1, Integer::sum);
+                }
+            }
+        }
+        Map<String, String> parent = new HashMap<>();
+        shared.forEach((pair, n) -> {
+            if (n >= SAME_FILE_SHARED_ROWS) {
+                String[] ab = pair.split("\u0000");
+                String ra = root(parent, ab[0]);
+                String rb = root(parent, ab[1]);
+                if (!ra.equals(rb)) {
+                    parent.put(ra.compareTo(rb) < 0 ? rb : ra, ra.compareTo(rb) < 0 ? ra : rb);
+                }
+            }
+        });
+        return hash -> root(parent, hash);
+    }
+
+    private static String root(Map<String, String> parent, String hash) {
+        String r = hash;
+        while (parent.containsKey(r)) {
+            r = parent.get(r);
+        }
+        return r;
     }
 
     private static void writeAtomically(Path target, JsonNode content) throws IOException {
@@ -387,10 +442,9 @@ public class DynamicKindTokens {
             lastSeen = other.lastSeen;
         }
 
-        synchronized Verdict evaluate() {
+        synchronized Verdict evaluate(java.util.function.UnaryOperator<String> sameFile) {
             Map<String, Integer> rowsByKind = new HashMap<>();
             Map<String, Set<String>> workbooksByKind = new HashMap<>();
-            Map<String, Set<String>> sheetsByKind = new HashMap<>();
             for (Map.Entry<String, Map<String, Integer>> row : rows.entrySet()) {
                 int total = row.getValue().values().stream().mapToInt(Integer::intValue).sum();
                 Map.Entry<String, Integer> top = row.getValue().entrySet().stream()
@@ -401,8 +455,7 @@ public class DynamicKindTokens {
                 String kind = top.getKey();
                 String[] id = row.getKey().split("\\|", 3);
                 rowsByKind.merge(kind, 1, Integer::sum);
-                workbooksByKind.computeIfAbsent(kind, k -> new HashSet<>()).add(id[0]);
-                sheetsByKind.computeIfAbsent(kind, k -> new HashSet<>()).add(id[0] + "|" + id[1]);
+                workbooksByKind.computeIfAbsent(kind, k -> new HashSet<>()).add(sameFile.apply(id[0]));
             }
             int totalRows = rowsByKind.values().stream().mapToInt(Integer::intValue).sum();
             if (totalRows == 0) {
@@ -416,8 +469,7 @@ public class DynamicKindTokens {
             if (otherRows > 0 && (otherRows >= 2 || dominance < MIN_DOMINANCE)) {
                 return new Verdict(State.CONTESTED, null, "");
             }
-            boolean supported = workbooksByKind.get(kind).size() >= MIN_WORKBOOKS
-                    || (dominant.getValue() >= MIN_ROWS && sheetsByKind.get(kind).size() >= 2);
+            boolean supported = workbooksByKind.get(kind).size() >= MIN_WORKBOOKS;
             if (!supported || otherRows > 0) {
                 return new Verdict(State.STAGED, kind, "");
             }

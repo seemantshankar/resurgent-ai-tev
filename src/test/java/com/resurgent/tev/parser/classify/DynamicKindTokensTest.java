@@ -21,11 +21,10 @@ class DynamicKindTokensTest {
         return d.observe("expenses", label, kind, "", wb, sheet, row);
     }
 
-    /** Three rows on two sheets of one workbook: enough to promote. */
+    /** One row in each of two independent workbooks: enough to promote. */
     private static void teach(DynamicKindTokens d, String label, String kind) {
         observe(d, label, kind, "wb1", "ASSETS", 24);
-        observe(d, label, kind, "wb1", "ASSETS", 41);
-        observe(d, label, kind, "wb1", "Power", 17);
+        observe(d, label, kind, "wb2", "Power", 17);
         d.persist();
     }
 
@@ -81,6 +80,42 @@ class DynamicKindTokensTest {
         d.persist();
 
         assertThat(new DynamicKindTokens(dir).lookup("expenses", "Plumbing Works")).isEmpty();
+    }
+
+    /** A term is general vocabulary only if independent workbooks use it: one file's own line items are not. */
+    @Test
+    void manyRowsAcrossSheetsOfOneWorkbookAreNotEnough() {
+        var d = new DynamicKindTokens(dir);
+        observe(d, "Game Parlour", "money", "wb1", "P L", 14);
+        observe(d, "Game Parlour", "money", "wb1", "P L", 26);
+        observe(d, "Game Parlour", "money", "wb1", "SALES", 62);
+        observe(d, "Game Parlour", "money", "wb1", "SALES", 80);
+        d.persist();
+
+        assertThat(new DynamicKindTokens(dir).lookup("expenses", "Game Parlour")).isEmpty();
+    }
+
+    /**
+     * A redacted or re-exported copy of a file has another hash but the same rows. Two copies of one
+     * workbook are one workbook; a really different one still counts.
+     */
+    @Test
+    void twoCopiesOfOneWorkbookCountOnce() {
+        var d = new DynamicKindTokens(dir);
+        for (String label : new String[] {"Fitness Centre", "Game Parlour", "Banquet Hall", "Train Manager"}) {
+            int row = 10 + label.length();
+            observe(d, label, "money", "copyA", "P L", row);
+            observe(d, label, "money", "copyB", "P L", row);
+        }
+        observe(d, "Salary", "money", "copyA", "P L", 40);
+        observe(d, "Salary", "money", "copyB", "P L", 40);
+        observe(d, "Salary", "money", "other", "Costs", 7);
+        d.persist();
+
+        var reloaded = new DynamicKindTokens(dir);
+        assertThat(reloaded.lookup("expenses", "Game Parlour")).isEmpty();
+        assertThat(reloaded.lookup("expenses", "Train Manager")).isEmpty();
+        assertThat(reloaded.lookup("expenses", "Salary")).isPresent();
     }
 
     @Test
@@ -178,8 +213,9 @@ class DynamicKindTokensTest {
             jobs.add(pool.submit(() -> {
                 var d = new DynamicKindTokens(dir);
                 for (int i = 0; i < 5; i++) {
-                    d.observe("expenses", "Shared Phrase", "money", "", "wb" + id, "S", i);
-                    d.observe("expenses", "Own Phrase Number" + "x".repeat(id + 1), "money", "", "wb" + id, "S", i);
+                    // Each simulated workbook uses its own rows: identical rows would make them copies of one file.
+                    d.observe("expenses", "Shared Phrase", "money", "", "wb" + id, "S", id * 100 + i);
+                    d.observe("expenses", "Own Phrase Number" + "x".repeat(id + 1), "money", "", "wb" + id, "S", id * 100 + i);
                 }
                 d.persist();
             }));
