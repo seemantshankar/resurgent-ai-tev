@@ -103,6 +103,33 @@ class RegionLayoutResilienceTest {
     }
 
     @Test
+    void aUnitsColumnTheModelLeftJustOutsideItsBoxJoinsTheRegion() throws Exception {
+        // the model boxes A1:B11 (labels and amounts); column C holds a unit beside each amount
+        Path xlsx = tempDir.resolve("units.xlsx");
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("UNITS");
+            for (int r = 0; r < 11; r++) {
+                Row row = sheet.createRow(r);
+                row.createCell(0).setCellValue("Area " + r);
+                row.createCell(1).setCellValue(10.0 * (r + 1));
+                row.createCell(2).setCellValue("SQM");
+            }
+            try (FileOutputStream out = new FileOutputStream(xlsx.toFile())) {
+                workbook.write(out);
+            }
+        }
+        dbPath = tempDir.resolve("units.db");
+        parseRunId = new IngestService().ingest(xlsx, 2L, dbPath).parseRunId();
+        new DiscoverService().discover(dbPath, parseRunId);
+
+        materialize(new ScriptedLlm((sheet, n) -> List.of(new RegionProposal("main", "A1:B11", "areas", "areas"))));
+
+        List<CandidateRow> regions = children("UNITS");
+        assertThat(regions).hasSize(1);
+        assertThat(regions.get(0).bboxMaxCol()).isEqualTo(3);
+    }
+
+    @Test
     void numbersTheModelLeftOutOfEveryRegionBecomeARegionOfTheirOwn() throws Exception {
         // the model boxes only the labels and column B; the amounts in column D are unclaimed
         var llm = new ScriptedLlm((sheet, n) -> List.of(new RegionProposal("main", "A1:B11", "left", "labels")));

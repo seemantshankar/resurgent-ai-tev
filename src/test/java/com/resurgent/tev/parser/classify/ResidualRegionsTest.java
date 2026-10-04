@@ -71,6 +71,102 @@ class ResidualRegionsTest {
         assertThat(ResidualRegions.find(cells, Set.of())).isEmpty();
     }
 
+    // ---- fringe: unit / remark / note text hugging a region's edge ----------------------
+
+    @Test
+    void aUnitsColumnBesideTheAmountsJoinsTheRegionThatTheModelBoxedOneColumnShort() {
+        // region L2:N11; its amounts are in N and the "SQM" units in O were left out of the box
+        List<CellPacketView> cells = new ArrayList<>();
+        List<Long> own = new ArrayList<>();
+        for (int r = 6; r <= 11; r++) {
+            CellPacketView amount = number(r, 14);
+            cells.add(amount);
+            own.add(amount.cellId());
+            cells.add(text(r, 15, "SQM"));
+        }
+
+        List<ResidualRegions.Extent> out = ResidualRegions.absorbFringe(
+                cells, List.of(new ResidualRegions.Extent(2, 12, 11, 14, new java.util.HashSet<>(own))));
+
+        assertThat(out).hasSize(1);
+        assertThat(out.get(0).maxCol()).isEqualTo(15);
+        assertThat(out.get(0).memberIds()).hasSize(12);
+    }
+
+    @Test
+    void aColumnThatRunsPastTheRegionBelongsToSomethingElseAndIsLeftAlone() {
+        List<CellPacketView> cells = new ArrayList<>();
+        Set<Long> own = new java.util.HashSet<>();
+        for (int r = 2; r <= 5; r++) {
+            CellPacketView amount = number(r, 4);
+            cells.add(amount);
+            own.add(amount.cellId());
+        }
+        for (int r = 2; r <= 20; r++) {
+            cells.add(text(r, 5, "note"));   // keeps going far below the region's rows 2-5
+        }
+
+        List<ResidualRegions.Extent> out =
+                ResidualRegions.absorbFringe(cells, List.of(new ResidualRegions.Extent(2, 1, 5, 4, own)));
+
+        assertThat(out.get(0).maxCol()).isEqualTo(4);
+        assertThat(out.get(0).memberIds()).hasSize(4);
+    }
+
+    @Test
+    void amountsAreNotFringeBecauseAColumnOfNumbersIsATableOfItsOwn() {
+        List<CellPacketView> cells = new ArrayList<>();
+        Set<Long> own = new java.util.HashSet<>();
+        for (int r = 2; r <= 6; r++) {
+            CellPacketView label = text(r, 1, "item");
+            cells.add(label);
+            own.add(label.cellId());
+            cells.add(number(r, 2));         // unclaimed numbers right beside the labels
+        }
+
+        List<ResidualRegions.Extent> out =
+                ResidualRegions.absorbFringe(cells, List.of(new ResidualRegions.Extent(2, 1, 6, 1, own)));
+
+        assertThat(out.get(0).maxCol()).isEqualTo(1);
+    }
+
+    @Test
+    void textTwoColumnsAwayIsNotAdjacent() {
+        List<CellPacketView> cells = new ArrayList<>();
+        Set<Long> own = new java.util.HashSet<>();
+        for (int r = 2; r <= 5; r++) {
+            CellPacketView amount = number(r, 2);
+            cells.add(amount);
+            own.add(amount.cellId());
+            cells.add(text(r, 4, "far"));
+        }
+
+        List<ResidualRegions.Extent> out =
+                ResidualRegions.absorbFringe(cells, List.of(new ResidualRegions.Extent(2, 1, 5, 2, own)));
+
+        assertThat(out.get(0).maxCol()).isEqualTo(2);
+    }
+
+    @Test
+    void aNoteRowUnderTheRegionAndTwoStackedUnitColumnsAreAllAbsorbed() {
+        List<CellPacketView> cells = new ArrayList<>();
+        Set<Long> own = new java.util.HashSet<>();
+        for (int r = 2; r <= 4; r++) {
+            CellPacketView amount = number(r, 2);
+            cells.add(amount);
+            own.add(amount.cellId());
+            cells.add(text(r, 3, "SQM"));      // first unit column
+            cells.add(text(r, 4, "per floor")); // a second one beyond it
+        }
+        cells.add(text(5, 2, "all figures provisional"));   // a note row just below, in the region's columns
+
+        List<ResidualRegions.Extent> out =
+                ResidualRegions.absorbFringe(cells, List.of(new ResidualRegions.Extent(2, 2, 4, 2, own)));
+
+        assertThat(out.get(0).maxCol()).isEqualTo(4);
+        assertThat(out.get(0).maxRow()).isEqualTo(5);
+    }
+
     private CellPacketView number(int row, int col) {
         return new CellPacketView(nextId++, 1L, "X" + row + "_" + col, row, col, "number", null, "5", "5", null, false, false);
     }

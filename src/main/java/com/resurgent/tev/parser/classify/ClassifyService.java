@@ -573,7 +573,10 @@ public final class ClassifyService {
                 throw new ClassifyException(
                         "missing coverage parent for worksheet " + sheet.sheetName());
             }
-            for (ValidRegion region : validBySheet.getOrDefault(sheet.worksheetId(), List.of())) {
+            List<ValidRegion> regions = withFringe(
+                    validBySheet.getOrDefault(sheet.worksheetId(), List.of()),
+                    cellsBySheet.getOrDefault(sheet.worksheetId(), List.of()));
+            for (ValidRegion region : regions) {
                 RegionProposal proposal = region.proposal();
                 A1Bbox.Bounds bounds = region.bounds();
                 List<Long> members = region.members();
@@ -599,9 +602,38 @@ public final class ClassifyService {
                         proposal.structuralRole());
                 repo.insertCandidate(write, members);
             }
-            insertResidualRegions(repo, parseRunId, sheet, coverage,
-                    validBySheet.getOrDefault(sheet.worksheetId(), List.of()), cellsBySheet);
+            insertResidualRegions(repo, parseRunId, sheet, coverage, regions, cellsBySheet);
         }
+    }
+
+    /**
+     * Each region grows to take in the units, remarks and notes hugging its edge that the model's
+     * box left out (see {@link ResidualRegions#absorbFringe}).
+     */
+    private static List<ValidRegion> withFringe(
+            List<ValidRegion> regions, List<com.resurgent.tev.parser.db.CellPacketView> sheetCells) {
+        if (regions.isEmpty()) {
+            return regions;
+        }
+        List<ResidualRegions.Extent> extents = new ArrayList<>();
+        for (ValidRegion region : regions) {
+            A1Bbox.Bounds b = region.bounds();
+            extents.add(new ResidualRegions.Extent(
+                    b.minRow(), b.minCol(), b.maxRow(), b.maxCol(), new HashSet<>(region.members())));
+        }
+        List<ResidualRegions.Extent> grown = ResidualRegions.absorbFringe(sheetCells, extents);
+        List<ValidRegion> out = new ArrayList<>();
+        for (int i = 0; i < regions.size(); i++) {
+            ResidualRegions.Extent e = grown.get(i);
+            ValidRegion region = regions.get(i);
+            out.add(e.memberIds().size() == region.members().size()
+                    ? region
+                    : new ValidRegion(
+                            region.proposal(),
+                            new A1Bbox.Bounds(e.minRow(), e.minCol(), e.maxRow(), e.maxCol()),
+                            new ArrayList<>(e.memberIds())));
+        }
+        return out;
     }
 
     /**
