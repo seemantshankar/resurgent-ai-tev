@@ -857,11 +857,8 @@ public final class ClassifyService {
         int skippedCandidates = 0;
 
         // Candidates go to the model in batches; a few batch calls run at once.
-        int size = tuning.layerABatchSize();
-        List<List<PreparedPacket>> batches = new ArrayList<>();
-        for (int i = 0; i < prepared.size(); i += size) {
-            batches.add(prepared.subList(i, Math.min(i + size, prepared.size())));
-        }
+        List<List<PreparedPacket>> batches = LayerABatching.split(
+                prepared, ClassifyService::promptChars, tuning.layerABatchSize(), LAYER_A_BATCH_CHARS);
         for (int waveStart = 0; waveStart < batches.size(); waveStart += tuning.concurrency()) {
             List<List<PreparedPacket>> wave =
                     batches.subList(waveStart, Math.min(waveStart + tuning.concurrency(), batches.size()));
@@ -918,6 +915,23 @@ public final class ClassifyService {
         }
 
         return dispositions;
+    }
+
+    /**
+     * About 400,000 characters (100,000 tokens) of packets to a Layer A call. Above it a call is slow, its
+     * reply is long enough to be cut off, and a prompt over 272,000 tokens is priced twice over per token.
+     */
+    static final long LAYER_A_BATCH_CHARS = 400_000;
+
+    /** What a candidate adds to a batch prompt: each cell is a JSON object of about 55 characters and its text. */
+    private static long promptChars(PreparedPacket item) {
+        long chars = 0;
+        for (PacketCell cell : item.redacted().cells()) {
+            chars += 55;
+            chars += cell.displayValue() == null ? 0 : cell.displayValue().length();
+            chars += cell.textValue() == null ? 0 : cell.textValue().length();
+        }
+        return chars;
     }
 
     /** Classify candidates one at a time; returns how many no model could classify (skipped). */
@@ -982,7 +996,8 @@ public final class ClassifyService {
 
         String userMessage = formatBatchLayerAPrompt(batch, offered);
         long llmStart = System.nanoTime();
-        String jsonResponse = llm.classifyLayerAJson(userMessage, 4096);
+        String jsonResponse = llm.classifyLayerAJson(
+                userMessage, OpenRouterClassifierLlm.layerAMaxCompletionTokens(batch.size()));
         long llmMs = (System.nanoTime() - llmStart) / 1_000_000;
         System.err.println("[layer-a-batch] LLM responded in " + llmMs + "ms");
         System.err.flush();

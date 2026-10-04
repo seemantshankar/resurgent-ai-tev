@@ -23,8 +23,19 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
     static final String DEFAULT_URL = "https://openrouter.ai/api/v1/chat/completions";
     public static final int LAYER_A_MAX_COMPLETION_TOKENS = 4_096;
+    /** A Layer A batch reply: about 800 tokens a candidate (its "about" paragraph and labels) plus reasoning. */
+    private static final int LAYER_A_TOKENS_PER_CANDIDATE = 800;
+    private static final int LAYER_A_BATCH_MAX_COMPLETION_TOKENS = 24_576;
+    /** The most a truncated Layer A batch reply is retried with; every model in the chain allows far more. */
+    private static final int LAYER_A_RETRY_MAX_COMPLETION_TOKENS = 49_152;
     public static final int REGION_LAYOUT_MAX_COMPLETION_TOKENS = 32_768;
     public static final int LAYER_A_LABEL_MAX_ITEMS = 32;
+
+    /** The reply budget for a Layer A call over {@code candidates} regions: it grows with them, up to a bound. */
+    static int layerAMaxCompletionTokens(int candidates) {
+        return Math.min(LAYER_A_BATCH_MAX_COMPLETION_TOKENS,
+                Math.max(LAYER_A_MAX_COMPLETION_TOKENS, LAYER_A_TOKENS_PER_CANDIDATE * candidates));
+    }
 
     /** A binding answer is a short list of row and cell paths; a small prompt needs no more than this. */
     private static final int BIND_SMALL_COMPLETION_TOKENS = 12_288;
@@ -200,7 +211,21 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                 For each region, determine: scheduleFamily, triage (MAIN/HELPER), relevance (PRIMARY/SECONDARY/TERTIARY),
                 row labels, column headers, packet default head, and a brief description.
                 Return a JSON array with one object per candidate.""";
-        return client.perModel(c -> validJson(c.completeJson(systemPrompt, userPrompt, maxTokens).content()));
+        return client.perModel(c -> {
+            CompletionResult result = c.completeJson(systemPrompt, userPrompt, maxTokens);
+            if (result.truncated()) {
+                // The reply ran out of room mid-answer: that is the request's budget, not a failed model, and
+                // the same prompt sent on down the chain only pays for the whole prompt again. Ask once more
+                // with more room before any model is blamed.
+                result = c.completeJson(systemPrompt, userPrompt,
+                        Math.min(maxTokens * 2, LAYER_A_RETRY_MAX_COMPLETION_TOKENS));
+                if (result.truncated()) {
+                    throw new IllegalStateException(
+                            "OpenRouter Layer A batch truncated after retry: finish=" + result.finishReason());
+                }
+            }
+            return validJson(result.content());
+        });
     }
 
     @Override
