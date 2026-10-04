@@ -531,6 +531,66 @@ class CellReadingWriterTest {
         assertThat(readings.get("C3").scale()).isEqualTo("lakh");
     }
 
+    /**
+     * B1 is a formula the arithmetic cannot read, so a model types it. B2 and B3 wait on it. B4 divides
+     * B2 by B3 and carries {@code label}, so the dictionary types it before B1 is known; B5 follows B4.
+     */
+    private static void aRatioLabelledAsMoney(Sheet sheet, String label, String ratioFormula) {
+        sheet.createRow(0).createCell(0).setCellValue("Seed");
+        sheet.getRow(0).createCell(2).setCellValue(25);
+        sheet.getRow(0).createCell(1).setCellFormula("SQRT(C1)");
+        sheet.createRow(1).createCell(0).setCellValue("Left");
+        sheet.getRow(1).createCell(1).setCellFormula("B1*2");
+        sheet.createRow(2).createCell(0).setCellValue("Right");
+        sheet.getRow(2).createCell(1).setCellFormula("B1*3");
+        sheet.createRow(3).createCell(0).setCellValue(label);
+        sheet.getRow(3).createCell(1).setCellFormula(ratioFormula);
+        sheet.createRow(4).createCell(0).setCellValue("Next");
+        sheet.getRow(4).createCell(1).setCellFormula("B4*2");
+    }
+
+    private static RecordingDecisions seedIsMoney() {
+        return new RecordingDecisions(
+                Map.of("B1", new CellDecisionClient.Decision("money", 0.97, "unit", 0.95)));
+    }
+
+    /**
+     * The label typed B4 as money while B2 and B3 were still waiting. Once they are money, B2/B3 is a ratio:
+     * the formula's own arithmetic beats the earlier answer, and B5, built on B4, follows the corrected cell.
+     */
+    @Test
+    void aFormulaTypedByItsLabelIsCorrectedByItsOwnArithmeticOnceItsInputsAreTyped() throws Exception {
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> aRatioLabelledAsMoney(sheet, "Total cost (in Rs.)", "B2/B3")),
+                seedIsMoney(), new SilentChat());
+
+        assertThat(readings.get("B2").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+        assertThat(readings.get("B4").kind()).isEqualTo("ratio");
+        assertThat(readings.get("B4").typeSource()).isEqualTo("derived");
+        assertThat(readings.get("B5").kind()).isEqualTo("ratio");
+    }
+
+    /** Percent and ratio are the same dimension: a percent the label chose is not overridden by "ratio". */
+    @Test
+    void aPercentTheLabelChoseIsNotReplacedByTheRatioTheArithmeticGives() throws Exception {
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> aRatioLabelledAsMoney(sheet, "Margin (%)", "B2/B3")),
+                seedIsMoney(), new SilentChat());
+
+        assertThat(readings.get("B4").kind()).isEqualTo("percent");
+    }
+
+    /** Arithmetic that cannot read the formula says nothing: the label's answer stands. */
+    @Test
+    void aFormulaTheArithmeticCannotReadKeepsItsLabelsAnswer() throws Exception {
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> aRatioLabelledAsMoney(sheet, "Total cost (in Rs.)", "SQRT(B2)")),
+                seedIsMoney(), new SilentChat());
+
+        assertThat(readings.get("B4").kind()).isEqualTo("money");
+    }
+
     private static void restore(String property, String value) {
         if (value == null) {
             System.clearProperty(property);

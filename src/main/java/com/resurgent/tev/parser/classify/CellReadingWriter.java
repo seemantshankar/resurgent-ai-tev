@@ -210,6 +210,8 @@ public final class CellReadingWriter {
             }
         }
 
+        reconcile(formulas, precedents, numericIds, byId, sheetIds, settled, stated, unknowns, sheetNames);
+
         long untypedFinal = numericIds.stream()
                 .map(settled::get)
                 .filter(o -> o != null && ReadingOutcome.UNTYPABLE.equals(o.refusal))
@@ -337,28 +339,113 @@ public final class CellReadingWriter {
                 if (waiting(preds, numericIds, settled)) {
                     continue;
                 }
-                ReadingOutcome outcome = ReadingArithmetic.derive(
-                        cell.formulaText(),
-                        cell.worksheetId(),
-                        preds,
-                        numericIds,
-                        byId,
-                        sheetIds,
-                        settled,
-                        unknowns,
-                        cell.cellId());
-                CellScale says = outcome.scaleUnstated() ? stated.of(cell) : null;
-                if (says != null) {
-                    unknowns.require(outcome.scaleUnknown, says, cell.cellId());
-                    outcome = outcome.withScale(says, false);
-                }
-                settled.put(cell.cellId(), outcome);
+                settled.put(cell.cellId(),
+                        deriveFor(cell, preds, numericIds, byId, sheetIds, settled, stated, unknowns));
                 progressed = true;
             }
         }
         for (InterpretationCellView cell : formulas) {
             settled.putIfAbsent(cell.cellId(), ReadingOutcome.refused(ReadingOutcome.UNTYPABLE));
         }
+    }
+
+    /** What the formula's own arithmetic says of this cell, given what its precedents are typed as now. */
+    private static ReadingOutcome deriveFor(
+            InterpretationCellView cell,
+            Set<Long> preds,
+            Set<Long> numericIds,
+            Map<Long, InterpretationCellView> byId,
+            Map<String, Long> sheetIds,
+            Map<Long, ReadingOutcome> settled,
+            StatedScales stated,
+            UnstatedScales unknowns) {
+        ReadingOutcome outcome = ReadingArithmetic.derive(
+                cell.formulaText(),
+                cell.worksheetId(),
+                preds,
+                numericIds,
+                byId,
+                sheetIds,
+                settled,
+                unknowns,
+                cell.cellId());
+        CellScale says = outcome.scaleUnstated() ? stated.of(cell) : null;
+        if (says != null) {
+            unknowns.require(outcome.scaleUnknown, says, cell.cellId());
+            outcome = outcome.withScale(says, false);
+        }
+        return outcome;
+    }
+
+    /** Safety stop for {@link #reconcile}; each pass must change a cell to continue. */
+    private static final int MAX_RECONCILE_PASSES = 20;
+
+    /** Kinds of quantity that cannot be one another: a money cell is never a ratio. Percent and ratio are one. */
+    private static String dimension(String kind) {
+        if (kind == null) {
+            return null;
+        }
+        return switch (kind) {
+            case ReadingOutcome.PERCENT, ReadingOutcome.RATIO -> "dimensionless";
+            case ReadingOutcome.COUNT, ReadingOutcome.QUANTITY -> "amount";
+            default -> kind; // money, rate
+        };
+    }
+
+    /**
+     * Formula authority (ADR 0025 section 3), applied last. Every stage that types a formula before its
+     * inputs are known (a label the dictionary read, a column's majority, a model's answer) guesses; the
+     * arithmetic of the formula, once what it reads is typed, does not. A typed formula cell whose own
+     * arithmetic, over inputs typed by now, gives another dimension (money where it divides money by money)
+     * takes the arithmetic's reading, and what was built on it is checked again. Arithmetic that cannot
+     * read the formula says nothing, and the earlier answer stands.
+     *
+     * <p>Only the dimension is overridden (money, rate, ratio or percent, count or quantity): a percent
+     * the label chose over the arithmetic's ratio, a count over a quantity, is the same dimension and stays.
+     */
+    private static void reconcile(
+            List<InterpretationCellView> formulas,
+            Map<Long, Set<Long>> precedents,
+            Set<Long> numericIds,
+            Map<Long, InterpretationCellView> byId,
+            Map<String, Long> sheetIds,
+            Map<Long, ReadingOutcome> settled,
+            StatedScales stated,
+            UnstatedScales unknowns,
+            Map<Long, String> sheetNames) {
+        Map<String, Integer> changes = new java.util.TreeMap<>();
+        List<String> samples = new ArrayList<>();
+        int overridden = 0;
+        for (int pass = 0; pass < MAX_RECONCILE_PASSES; pass++) {
+            boolean changed = false;
+            for (InterpretationCellView cell : formulas) {
+                ReadingOutcome now = settled.get(cell.cellId());
+                Set<Long> preds = precedents.getOrDefault(cell.cellId(), Set.of());
+                if (now == null || !now.typed() || preds.isEmpty()) {
+                    continue;
+                }
+                ReadingOutcome derived = deriveFor(cell, preds, numericIds, byId, sheetIds, settled, stated, unknowns);
+                if (!derived.typed() || dimension(derived.kind).equals(dimension(now.kind))) {
+                    continue;
+                }
+                settled.put(cell.cellId(), derived);
+                changed = true;
+                overridden++;
+                changes.merge(now.kind + "->" + derived.kind, 1, Integer::sum);
+                if (samples.size() < 60) {
+                    samples.add(where(cell, sheetNames) + " " + now.kind + "->" + derived.kind);
+                }
+            }
+            if (!changed) {
+                break;
+            }
+        }
+        if (overridden > 0) {
+            System.err.println("[cell-reading] formula authority: " + overridden + " typed formula cells took the "
+                    + "reading their own arithmetic gives " + changes + "; first " + samples.size() + ": " + String.join("; ", samples));
+            System.err.flush();
+        }
+        LlmStats.GLOBAL.put("layer-b", "cells_overridden_by_arithmetic", overridden);
     }
 
     /** Safety stop for the rounds of {@link #typeFormulas}; every round must settle a cell to continue. */
