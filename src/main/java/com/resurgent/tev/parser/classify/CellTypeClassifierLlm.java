@@ -323,7 +323,8 @@ public class CellTypeClassifierLlm {
                 continue;
             }
             CellDecisionClient.Decision d = outcome.value();
-            if (d.confidence() < decisionMinConfidence) {
+            CellScale stated = ctx.statedScale(cell);
+            if (!d.settles(decisionMinConfidence, stated)) {
                 lowConfidence++;
                 deferred.add(cell);
                 continue;
@@ -333,7 +334,9 @@ public class CellTypeClassifierLlm {
             boolean money = ReadingOutcome.MONEY.equals(d.kind());
             String currency = money ? extractCurrencyFromLabels(rowLabel, colLabel) : "";
             String unit = money ? "" : extractUnitFromLabels(rowLabel, colLabel);
-            applyResponse(cell, new CellTypeResponse(null, d.kind(), d.scale(), unit, currency, d.confidence()), settled);
+            // A non-money number has no scale, and a scale the sheet states beats the model's.
+            String scale = !money ? CellScale.UNIT.wireName() : stated != null ? stated.wireName() : d.scale();
+            applyResponse(cell, new CellTypeResponse(null, d.kind(), scale, unit, currency, d.confidenceFor(stated)), settled);
             if (settled.get(cell.cellId()) != null
                     && ReadingOutcome.UNTYPABLE.equals(settled.get(cell.cellId()).refusal)) {
                 deferred.add(cell); // answer rejected (e.g. unknown scale)
@@ -360,7 +363,9 @@ public class CellTypeClassifierLlm {
         List<java.util.concurrent.Callable<CellDecisionClient.Decision>> tasks = new ArrayList<>();
         for (InterpretationCellView cell : pending) {
             String state = formatDecisionState(buildCellTypeRequest(cell, allCells, settled), ctx.region(cell));
-            tasks.add(() -> decisions.decide(state));
+            // Shadow mode always asks the scale too, so its CSV can price every gate rule.
+            boolean askScale = compareDecisions || ctx.statedScale(cell) == null;
+            tasks.add(() -> decisions.decide(state, askScale));
         }
         List<ParallelCalls.Outcome<CellDecisionClient.Decision>> outcomes = new ArrayList<>(tasks.size());
         int slice = Math.max(decisionConcurrency * 8, 50);

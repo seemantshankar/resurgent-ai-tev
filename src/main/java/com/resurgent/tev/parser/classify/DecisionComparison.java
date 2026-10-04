@@ -34,7 +34,7 @@ final class DecisionComparison {
         }
 
         boolean scaleAgrees() {
-            return decision.scale().equals(chatScale);
+            return decision.scale() != null && decision.scale().equals(chatScale);
         }
     }
 

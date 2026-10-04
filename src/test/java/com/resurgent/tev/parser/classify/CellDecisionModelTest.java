@@ -50,6 +50,78 @@ class CellDecisionModelTest {
     }
 
     @Test
+    void aNonMoneyKindSettlesOnItsKindConfidenceAloneAndNeverCarriesAScale() {
+        var chat = new CountingChat();
+        var classifier = new CellTypeClassifierLlm(null, chat)
+                .withDecisionModel(state -> new CellDecisionClient.Decision("percent", 0.97, "lakh", 0.30));
+        var settled = untypable(1L);
+
+        classifier.classifyRemaining(List.of(cell(1L, "A1")), settled);
+
+        assertThat(chat.calls).isZero();
+        assertThat(settled.get(1L).kind).isEqualTo(ReadingOutcome.PERCENT);
+        assertThat(settled.get(1L).scale).isEqualTo(CellScale.UNIT); // the model's "lakh" means nothing for a percent
+    }
+
+    @Test
+    void moneyWhoseScaleTheSheetStatesSettlesOnKindAloneAndTheScaleQuestionIsNotAsked() {
+        var chat = new CountingChat();
+        List<Boolean> askedScale = new java.util.ArrayList<>();
+        var classifier = new CellTypeClassifierLlm(null, chat)
+                .withDecisionModel(new CellDecisionClient() {
+                    @Override public Decision decide(String state) {
+                        throw new AssertionError("production asks through decide(state, askScale)");
+                    }
+                    @Override public Decision decide(String state, boolean askScale) {
+                        askedScale.add(askScale);
+                        return new Decision("money", 0.97, null, 0.0);
+                    }
+                });
+        CellContext context = new CellContext() {
+            @Override public String rowLabel(InterpretationCellView c) { return "Land"; }
+            @Override public String columnLabel(InterpretationCellView c) { return ""; }
+            @Override public RegionContext region(InterpretationCellView c) { return RegionContext.NONE; }
+            @Override public CellScale statedScale(InterpretationCellView c) { return CellScale.LAKH; }
+            @Override public String workbookKey() { return ""; }
+        };
+        var settled = untypable(1L);
+
+        classifier.classifyRemaining(List.of(cell(1L, "A1")), settled, context);
+
+        assertThat(askedScale).containsExactly(false);
+        assertThat(chat.calls).isZero();
+        assertThat(settled.get(1L).kind).isEqualTo(ReadingOutcome.MONEY);
+        assertThat(settled.get(1L).scale).isEqualTo(CellScale.LAKH);
+    }
+
+    @Test
+    void moneyWithNoStatedScaleStillNeedsTheScaleConfidence() {
+        var chat = new CountingChat();
+        var classifier = new CellTypeClassifierLlm(null, chat)
+                .withDecisionModel(state -> new CellDecisionClient.Decision("money", 0.97, "lakh", 0.40));
+
+        classifier.classifyRemaining(List.of(cell(1L, "A1")), untypable(1L));
+
+        assertThat(chat.calls).isPositive();
+    }
+
+    @Test
+    void theScaleQuestionIsLeftOutOfTheRequestWhenNotAskedAndItsMissingAnswerParses() throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+
+        var without = mapper.readTree(OpenRouterDecisionClient.requestBody("m", "{\"cell\":{}}", false));
+        var with = mapper.readTree(OpenRouterDecisionClient.requestBody("m", "{\"cell\":{}}", true));
+        var d = OpenRouterDecisionClient.parse("""
+                {"answers":{"kind":{"type":"choice","choice":"money","confidence":0.95}}}""", false);
+
+        assertThat(without.path("questions").has("scale")).isFalse();
+        assertThat(without.path("questions").has("kind")).isTrue();
+        assertThat(with.path("questions").has("scale")).isTrue();
+        assertThat(d.kind()).isEqualTo("money");
+        assertThat(d.scale()).isNull();
+    }
+
+    @Test
     void lowConfidenceOrFailedDecisionFallsBackToChatModel() {
         var chat = new CountingChat();
         var classifier = new CellTypeClassifierLlm(null, chat)
