@@ -85,6 +85,13 @@ public final class ClassifyCommand implements Callable<Integer> {
     }
 
     private void printUsage(PrintWriter out) {
+        printChatUsage(out);
+        // The whole run, every model it called: the decision model keeps its own counter, so the line
+        // above (the chat models only) does not include it.
+        com.resurgent.tev.parser.classify.UsageReport.lines(LlmStats.GLOBAL.usageRows()).forEach(out::println);
+    }
+
+    private void printChatUsage(PrintWriter out) {
         if (!(llm instanceof OpenRouterClassifierLlm open)) {
             return;
         }
