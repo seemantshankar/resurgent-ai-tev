@@ -1019,13 +1019,23 @@ public class CellTypeClassifierLlm {
     /** {@code cell} is the 1-based number the model echoes back; null when it did not. */
     record CellTypeResponse(Integer cell, String kind, String scale, String unit, String currency, double confidence) {}
 
-    /** Kind named by the static cue tokens in already-normalized label text, else {@code null}. */
-    private static String staticKind(String normalizedLabels) {
-        if (KindTokens.MONEY_TOKEN.matcher(normalizedLabels).find()) {
-            return ReadingOutcome.MONEY;
-        }
-        if (KindTokens.PERCENT_TOKEN.matcher(normalizedLabels).find()) {
+    /**
+     * Kind named by the static cue tokens in already-normalized label text, else {@code null}. Only
+     * confident cues decide: a percent that is the cell's unit, then money words; a label that is a rate
+     * or a ratio, or whose only money word can name an amount or a rate (interest, margin), is left to
+     * the formula and the models.
+     */
+    static String staticKind(String normalizedLabels) {
+        if (KindTokens.PERCENT_UNIT.matcher(normalizedLabels).find()) {
             return ReadingOutcome.PERCENT;
+        }
+        if (KindTokens.RATE_LIKE.matcher(normalizedLabels).find()) {
+            return null;
+        }
+        String unambiguous = KindTokens.AMBIGUOUS_AMOUNT.matcher(normalizedLabels).replaceAll(" ");
+        if (KindTokens.MONEY_TOKEN.matcher(unambiguous).find()
+                || KindTokens.GENERAL_MONEY.matcher(normalizedLabels).find()) {
+            return ReadingOutcome.MONEY;
         }
         if (KindTokens.QUANTITY_TOKEN.matcher(normalizedLabels).find()) {
             return ReadingOutcome.QUANTITY;

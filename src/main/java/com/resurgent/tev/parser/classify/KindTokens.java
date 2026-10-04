@@ -34,6 +34,30 @@ final class KindTokens {
                     + "\\bmonths?\\b|\\byears?\\b|\\bsq\\.?\\s*ft\\b|\\bsqft\\b|\\bsqm\\b|"
                     + "\\barea\\b|\\bcapacity\\b|\\bcount\\b)");
 
+    /**
+     * A percent that is the cell's unit: {@code (%)}, {@code % of cash profit}, {@code in percent}. A
+     * percentage with a number in front ({@code @ 10 %}, {@code (2.5% of civil cost)}) says how an
+     * amount is worked out, and the row is still an amount.
+     */
+    static final Pattern PERCENT_UNIT = Pattern.compile("(?i)(?:(?<![0-9.])(?<![0-9.] )%|\\bpercent(?:age)?\\b)");
+
+    /**
+     * Words that name an amount or a rate depending on the formula and the cell: "Interest" is money on
+     * "Interest on Term Loan" and a rate on "Interest rate". On their own they classify nothing.
+     */
+    static final Pattern AMBIGUOUS_AMOUNT = Pattern.compile(
+            "(?i)(?<![a-z])(?:interest|discount(?:ed|ing)?|markup|rebate|tariff|dividend)(?:s|es)?(?![a-z])");
+
+    /** Words that make a label a rate or a ratio, whatever else it says; "per" a period is not one. */
+    static final Pattern RATE_LIKE = Pattern.compile(
+            "(?i)(?<![a-z])(?:rate|ratio|coverage|yield|returns?|margin|multiple"
+                    + "|per(?!\\s+(?:annum|year|month|quarter|day|period)))(?![a-z])");
+
+    /** General money terms that are an amount wherever they appear. */
+    static final Pattern GENERAL_MONEY = Pattern.compile(
+            "(?i)(?<![a-z])(?:salary|salaries|wages?|remuneration|rent(?:al)?s?|bonus(?:es)?|commissions?"
+                    + "|royalt(?:y|ies)|insurance|tax(?:es|ation)?|dut(?:y|ies))(?![a-z])");
+
     /** Percent is stated, never implied by a word: only % or "percent" counts. */
     static final Pattern PERCENT_TOKEN = Pattern.compile("(?i)(?:%|\\bpercent\\b)");
 
