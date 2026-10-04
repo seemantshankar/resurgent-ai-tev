@@ -21,6 +21,7 @@ public final class UsageReport {
         long failed = 0;
         long prompt = 0;
         long completion = 0;
+        long cached = 0;
         long missing = 0;
         double cost = 0;
         for (LlmStats.UsageRow r : rows) {
@@ -28,18 +29,20 @@ public final class UsageReport {
             failed += r.failedCalls();
             prompt += r.promptTokens();
             completion += r.completionTokens();
+            cached += r.cachedPromptTokens();
             missing += r.costMissing();
             cost += r.costUsd() == null ? 0 : r.costUsd();
         }
         List<String> lines = new ArrayList<>();
         lines.add(String.format(Locale.US,
-                "LLM_COST_TOTAL calls=%d failed=%d prompt_tokens=%d completion_tokens=%d cost_usd=%.6f cost_missing=%d%s",
-                calls, failed, prompt, completion, cost, missing,
+                "LLM_COST_TOTAL calls=%d failed=%d prompt_tokens=%d cached_tokens=%d completion_tokens=%d cost_usd=%.6f cost_missing=%d%s",
+                calls, failed, prompt, cached, completion, cost, missing,
                 missing > 0 ? " (partial: some calls did not report a cost)" : ""));
         for (LlmStats.UsageRow r : rows) {
             lines.add(String.format(Locale.US,
-                    "LLM_COST stage=%s model=%s calls=%d failed=%d prompt_tokens=%d completion_tokens=%d cost_usd=%s",
-                    r.stage(), r.modelId(), r.calls(), r.failedCalls(), r.promptTokens(), r.completionTokens(),
+                    "LLM_COST stage=%s model=%s calls=%d failed=%d prompt_tokens=%d cached_tokens=%d completion_tokens=%d cost_usd=%s",
+                    r.stage(), r.modelId(), r.calls(), r.failedCalls(), r.promptTokens(), r.cachedPromptTokens(),
+                    r.completionTokens(),
                     r.costUsd() == null ? "unknown" : String.format(Locale.US, "%.6f", r.costUsd())));
         }
         return lines;

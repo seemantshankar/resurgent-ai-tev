@@ -24,7 +24,16 @@ public final class LlmStats {
     public record UsageRow(
             String stage, String modelId, long calls, long failedCalls, long failovers,
             long promptTokens, long completionTokens, Double costUsd, long costMissing,
-            long latencyMsTotal) {}
+            long latencyMsTotal, long cachedPromptTokens) {
+
+        /** A row from a source that does not report cached tokens. */
+        public UsageRow(
+                String stage, String modelId, long calls, long failedCalls, long failovers,
+                long promptTokens, long completionTokens, Double costUsd, long costMissing, long latencyMsTotal) {
+            this(stage, modelId, calls, failedCalls, failovers, promptTokens, completionTokens, costUsd,
+                    costMissing, latencyMsTotal, 0);
+        }
+    }
 
     /** A numeric or text fact about the run or one of its stages. */
     public record Stat(String stage, String name, Double num, String text) {}
@@ -36,6 +45,7 @@ public final class LlmStats {
         long failedCalls;
         long failovers;
         long promptTokens;
+        long cachedPromptTokens;
         long completionTokens;
         double costUsd;
         long costMissing;
@@ -59,9 +69,20 @@ public final class LlmStats {
     /** A request that came back with a usable HTTP response and token usage. */
     public synchronized void recordCall(
             String modelId, long promptTokens, long completionTokens, Double costUsd, long latencyMs) {
+        recordCall(modelId, promptTokens, completionTokens, 0, costUsd, latencyMs);
+    }
+
+    /** As above, with how many of the prompt tokens the provider served from its cache (billed at a fraction). */
+    public synchronized void recordCall(
+            String modelId, long promptTokens, long completionTokens, long cachedPromptTokens,
+            Double costUsd, long latencyMs) {
         Acc acc = acc(modelId);
         acc.calls++;
         acc.promptTokens += promptTokens;
+        acc.cachedPromptTokens += cachedPromptTokens;
+        if (cachedPromptTokens > 0) {
+            add("cached_prompt_tokens", cachedPromptTokens);
+        }
         acc.completionTokens += completionTokens;
         acc.latencyMs += latencyMs;
         if (costUsd == null) {
@@ -137,7 +158,8 @@ public final class LlmStats {
             // Cost is null only when no call reported it; a mix keeps the partial sum and flags it.
             boolean anyCost = a.calls > a.costMissing;
             rows.add(new UsageRow(key[0], key[1], a.calls, a.failedCalls, a.failovers, a.promptTokens,
-                    a.completionTokens, anyCost || a.calls == 0 ? a.costUsd : null, a.costMissing, a.latencyMs));
+                    a.completionTokens, anyCost || a.calls == 0 ? a.costUsd : null, a.costMissing, a.latencyMs,
+                    a.cachedPromptTokens));
         }
         return rows;
     }

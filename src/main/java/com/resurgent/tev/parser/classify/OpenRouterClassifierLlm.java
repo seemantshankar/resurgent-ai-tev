@@ -475,7 +475,17 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             LlmStats.GLOBAL.recordCall(model,
                     result.promptTokens() == null ? 0 : result.promptTokens(),
                     result.completionTokens() == null ? 0 : result.completionTokens(),
+                    cachedTokens(body),
                     cost, latencyMs);
+        }
+
+        /** The prompt tokens the provider served from its cache, 0 when it does not say. */
+        static long cachedTokens(String body) {
+            try {
+                return MAPPER.readTree(body).path("usage").path("prompt_tokens_details").path("cached_tokens").asLong(0);
+            } catch (Exception ignored) {
+                return 0;
+            }
         }
 
         private static Double costUsd(String body) {
