@@ -32,11 +32,18 @@ public final class CellReadingWriter {
     private ClassifyTuning tuning = ClassifyTuning.sequential();
     private Set<Long> llmWorksheetIds; // null: every sheet may go to the model
     private CellDecisionClient decisionModelOverride; // null: the environment decides
+    private boolean[] stateFacts = {true, true, true}; // sheet, stated scale, inputs
 
     /** Batch sizes, concurrency, and the sheets whose untyped cells may be sent to the model. */
     CellReadingWriter withTuning(ClassifyTuning tuning, Set<Long> llmWorksheetIds) {
         this.tuning = tuning;
         this.llmWorksheetIds = llmWorksheetIds;
+        return this;
+    }
+
+    /** Which facts the decision model's state carries beyond the labels: sheet, stated scale, precedent kinds. */
+    CellReadingWriter withDecisionStateFacts(boolean sheet, boolean statedScale, boolean inputs) {
+        this.stateFacts = new boolean[] {sheet, statedScale, inputs};
         return this;
     }
 
@@ -150,7 +157,9 @@ public final class CellReadingWriter {
                 CellTypeClassifierLlm classifier = new CellTypeClassifierLlm(repo, llm)
                         .withBatching(tuning.cellBatchSize(), tuning.concurrency())
                         .withWorksheetScope(llmWorksheetIds)
-                        .withUnstatedScales(unknowns);
+                        .withUnstatedScales(unknowns)
+                        .withPrecedents(precedents, byId)
+                        .withDecisionStateFacts(stateFacts[0], stateFacts[1], stateFacts[2]);
                 CellDecisionClient decisionModel =
                         decisionModelOverride != null ? decisionModelOverride : LlmEnvironment.decisionClientOrNull();
                 if (decisionModel != null) {

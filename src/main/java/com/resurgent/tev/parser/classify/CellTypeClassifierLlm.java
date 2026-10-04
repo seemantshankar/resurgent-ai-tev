@@ -72,6 +72,11 @@ public class CellTypeClassifierLlm {
     private int decisionConcurrency = DEFAULT_DECISION_CONCURRENCY;
     private boolean compareDecisions;     // shadow mode: ask both models, trust only the chat model
     private java.nio.file.Path compareCsv;
+    private Map<Long, Set<Long>> precedentIds = Map.of(); // formula cell -> the cells its formula reads
+    private Map<Long, InterpretationCellView> cellsById = Map.of();
+    private boolean stateSheet = true;       // facts sent to the decision model beyond the region block
+    private boolean stateStatedScale = true;
+    private boolean stateInputs = true;
     private final Set<Long> decisionAsked = new java.util.HashSet<>(); // cells the decision model has been asked about
     private final Set<Long> chatAsked = new java.util.HashSet<>();     // cells the chat model has been asked about
     private final List<InterpretationCellView> comparedCells = new ArrayList<>();
@@ -112,6 +117,25 @@ public class CellTypeClassifierLlm {
      */
     CellTypeClassifierLlm withDecisionModel(CellDecisionClient decisions) {
         this.decisions = decisions;
+        return this;
+    }
+
+    /**
+     * What each formula cell reads, so the decision model is told the kinds of those cells instead of
+     * having to follow {@code 'P  L '!D29/12*$D$12} itself.
+     */
+    CellTypeClassifierLlm withPrecedents(
+            Map<Long, Set<Long>> precedents, Map<Long, InterpretationCellView> cellsById) {
+        this.precedentIds = precedents;
+        this.cellsById = cellsById;
+        return this;
+    }
+
+    /** Which facts the decision state carries besides the cell and its labels; all on by default. */
+    CellTypeClassifierLlm withDecisionStateFacts(boolean sheet, boolean statedScale, boolean inputs) {
+        this.stateSheet = sheet;
+        this.stateStatedScale = statedScale;
+        this.stateInputs = inputs;
         return this;
     }
 
@@ -455,7 +479,8 @@ public class CellTypeClassifierLlm {
             Map<Long, ReadingOutcome> settled) {
         List<java.util.concurrent.Callable<CellDecisionClient.Decision>> tasks = new ArrayList<>();
         for (InterpretationCellView cell : pending) {
-            String state = formatDecisionState(buildCellTypeRequest(cell, allCells, settled), ctx.region(cell));
+            String state = formatDecisionState(
+                    buildCellTypeRequest(cell, allCells, settled), ctx.region(cell), cell, settled);
             // Shadow mode always asks the scale too, so its CSV can price every gate rule.
             boolean askScale = compareDecisions || ctx.statedScale(cell) == null;
             tasks.add(() -> decisions.decide(state, askScale));
@@ -480,13 +505,24 @@ public class CellTypeClassifierLlm {
      * Decisions API recommends when the context has several parts. Facts a cell lacks are left
      * out, so a cell with no region or notes reads as sparsely as before.
      */
-    private String formatDecisionState(CellTypeRequest request, RegionContext region) {
+    private String formatDecisionState(
+            CellTypeRequest request, RegionContext region, InterpretationCellView cellView,
+            Map<Long, ReadingOutcome> settled) {
         com.fasterxml.jackson.databind.node.ObjectNode state = MAPPER.createObjectNode();
+        if (stateSheet) {
+            putIfPresent(state, "sheet", ctx.sheetName(cellView).trim());
+        }
+        CellScale stated = ctx.statedScale(cellView);
+        if (stateStatedScale && stated != null) {
+            state.put("stated_scale", stated.wireName());
+        }
         if (hasRegionBlock(region)) {
             com.fasterxml.jackson.databind.node.ObjectNode r = state.putObject("region");
             putIfPresent(r, "family", region.scheduleFamily());
             putIfPresent(r, "head", region.packetHead());
-            putIfPresent(r, "sheet", region.sheetName());
+            if (!stateSheet) {
+                putIfPresent(r, "sheet", region.sheetName()); // the sheet rides in the region block only
+            }
             putIfPresent(r, "about", region.about());
         }
         com.fasterxml.jackson.databind.node.ObjectNode cell = state.putObject("cell");
@@ -501,6 +537,9 @@ public class CellTypeClassifierLlm {
             com.fasterxml.jackson.databind.node.ArrayNode notes = state.putArray("row_note");
             parts.rowNotes().forEach(notes::add);
         }
+        if (stateInputs) {
+            putInputs(state, cellView, settled);
+        }
         if (!request.neighbors.isEmpty()) {
             com.fasterxml.jackson.databind.node.ArrayNode near = state.putArray("neighbours");
             for (NeighborCell neighbor : request.neighbors) {
@@ -511,6 +550,48 @@ public class CellTypeClassifierLlm {
             }
         }
         return state.toString();
+    }
+
+    /** The most precedents listed for one formula; the rest are only counted. */
+    private static final int MAX_INPUTS = 8;
+
+    /**
+     * What the formula reads, as computed here: each typed precedent's kind (and scale, for money)
+     * and what its row is called. Untyped precedents say nothing, so they are left out.
+     */
+    private void putInputs(
+            com.fasterxml.jackson.databind.node.ObjectNode state, InterpretationCellView cell,
+            Map<Long, ReadingOutcome> settled) {
+        List<InterpretationCellView> typed = new ArrayList<>();
+        for (long id : precedentIds.getOrDefault(cell.cellId(), Set.of())) {
+            InterpretationCellView pred = cellsById.get(id);
+            ReadingOutcome outcome = settled.get(id);
+            if (pred != null && outcome != null && outcome.refusal == null && outcome.kind != null) {
+                typed.add(pred);
+            }
+        }
+        if (typed.isEmpty()) {
+            return;
+        }
+        typed.sort(java.util.Comparator.comparingLong(InterpretationCellView::worksheetId)
+                .thenComparingInt(InterpretationCellView::rowNum)
+                .thenComparingInt(InterpretationCellView::colNum));
+        String ownSheet = ctx.sheetName(cell);
+        com.fasterxml.jackson.databind.node.ArrayNode inputs = state.putArray("inputs");
+        for (InterpretationCellView pred : typed.subList(0, Math.min(MAX_INPUTS, typed.size()))) {
+            ReadingOutcome outcome = settled.get(pred.cellId());
+            com.fasterxml.jackson.databind.node.ObjectNode in = inputs.addObject();
+            String sheet = ctx.sheetName(pred);
+            in.put("ref", sheet.equals(ownSheet) || sheet.isBlank() ? pred.coord() : sheet.trim() + "!" + pred.coord());
+            in.put("kind", outcome.kind);
+            if (ReadingOutcome.MONEY.equals(outcome.kind) && outcome.scale != null) {
+                in.put("scale", outcome.scale.wireName());
+            }
+            putIfPresent(in, "row_label", ctx.rowLabel(pred));
+        }
+        if (typed.size() > MAX_INPUTS) {
+            state.put("inputs_not_shown", typed.size() - MAX_INPUTS);
+        }
     }
 
     /** Whether the decision state carries a {@code region} block for this region. */

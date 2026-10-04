@@ -43,6 +43,14 @@ final class OpenRouterDecisionClient implements CellDecisionClient {
     private final LongAdder calls = new LongAdder();
     private final LongAdder failures = new LongAdder();
 
+    private boolean legacyWording;
+
+    /** Ask the questions as they were before inputs were sent (for A/B runs). */
+    OpenRouterDecisionClient withLegacyWording() {
+        this.legacyWording = true;
+        return this;
+    }
+
     OpenRouterDecisionClient(String apiKey, String model) {
         this.apiKey = Objects.requireNonNull(apiKey, "apiKey");
         this.model = Objects.requireNonNull(model, "model");
@@ -68,7 +76,7 @@ final class OpenRouterDecisionClient implements CellDecisionClient {
         long activityId = LlmActivity.GLOBAL.begin(model); // so the heartbeat sees decision calls in flight
         boolean succeeded = false;
         try {
-            String body = post(requestBody(model, state, askScale));
+            String body = post(requestBody(model, state, askScale, legacyWording));
             Decision decision = parse(body, askScale);
             JsonNode usage = MAPPER.readTree(body).path("usage");
             LlmStats.GLOBAL.recordCall(model, usage.path("input_tokens").asLong(0),
@@ -91,13 +99,28 @@ final class OpenRouterDecisionClient implements CellDecisionClient {
     }
 
     static String requestBody(String model, String state, boolean askScale) throws Exception {
+        return requestBody(model, state, askScale, false);
+    }
+
+    /** {@code legacyWording} asks the questions as they were before the state carried inputs (for A/B runs). */
+    static String requestBody(String model, String state, boolean askScale, boolean legacyWording) throws Exception {
         ObjectNode root = MAPPER.createObjectNode();
         root.put("model", model);
         root.set("state", stateNode(state));
         ObjectNode questions = root.putObject("questions");
-        question(questions, "kind", "What kind of quantity is the number in the cell? Judge from region.about, row_label, column_label, part_of and row_note, not from the size of the number.", KINDS);
+        // The questions ask about the fact itself and name no field that may be absent: a question
+        // about what a field "says" makes the model read literally and suppresses inference.
+        question(questions, "kind", legacyWording
+                ? "What kind of quantity is the number in the cell? Judge from region.about, row_label, column_label, part_of and row_note, not from the size of the number."
+                : "What kind of quantity is the number in the cell? Decide from what the cell is called (its row and "
+                        + "column labels and the schedule it belongs to), which sheet it is on, and the kinds of the "
+                        + "cells its formula reads (inputs). Judge its meaning, not the size of the number.", KINDS);
         if (askScale) {
-            question(questions, "scale", "In what scale is the number stated? A region.about, row_label or column_label may say Lacs, Crores, thousands or millions; if none does, the scale is unit.", SCALES);
+            question(questions, "scale", legacyWording
+                    ? "In what scale is the number stated? A region.about, row_label or column_label may say Lacs, Crores, thousands or millions; if none does, the scale is unit."
+                    : "In what scale is this number expressed? A figure of money shown in thousands, lakhs, crores, "
+                            + "millions or billions has that scale; a figure of money in plain rupees, or any figure "
+                            + "that is not money, is in units.", SCALES);
         }
         return MAPPER.writeValueAsString(root);
     }

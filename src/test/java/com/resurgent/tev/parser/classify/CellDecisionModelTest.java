@@ -171,6 +171,113 @@ class CellDecisionModelTest {
         assertThat(state.path("region").path("family").asText()).isEqualTo("project_summary");
     }
 
+    // ---- the facts the model is given, beyond the region ------------------------------------
+
+    private static InterpretationCellView formulaCell(long id, String coord, String formula) {
+        return new InterpretationCellView(
+                id, 1L, coord, (int) id, 0, "number", "100", "100", "100", null, null, formula, null, null,
+                null, false, null, false, false, null, "formula");
+    }
+
+    private static CellContext sheetContext(String sheet, CellScale stated, Map<Long, String> rowLabels) {
+        return new CellContext() {
+            @Override public String rowLabel(InterpretationCellView c) { return rowLabels.getOrDefault(c.cellId(), ""); }
+            @Override public String columnLabel(InterpretationCellView c) { return ""; }
+            @Override public RegionContext region(InterpretationCellView c) { return RegionContext.NONE; }
+            @Override public CellScale statedScale(InterpretationCellView c) { return stated; }
+            @Override public String sheetName(InterpretationCellView c) { return sheet; }
+            @Override public String workbookKey() { return ""; }
+        };
+    }
+
+    /** The state sent for the first cell asked about, as JSON. */
+    private static com.fasterxml.jackson.databind.JsonNode stateFor(
+            CellTypeClassifierLlm classifier, List<InterpretationCellView> cells, CellContext context,
+            Map<Long, ReadingOutcome> settled) throws Exception {
+        List<String> states = new java.util.ArrayList<>();
+        classifier.withDecisionModel(state -> {
+            states.add(state);
+            return new CellDecisionClient.Decision("quantity", 0.97, "unit", 0.95);
+        }).classifyRemaining(cells, settled, context);
+        return new com.fasterxml.jackson.databind.ObjectMapper().readTree(states.get(0));
+    }
+
+    @Test
+    void theStateCarriesTheSheetAndTheStatedScaleWithOrWithoutARegion() throws Exception {
+        var state = stateFor(new CellTypeClassifierLlm(null, new CountingChat()), List.of(cell(1L, "A1")),
+                sheetContext("P  L ", CellScale.LAKH, Map.of()), untypable(1L));
+
+        assertThat(state.path("sheet").asText()).isEqualTo("P  L");
+        assertThat(state.path("stated_scale").asText()).isEqualTo("lakh");
+        assertThat(state.has("region")).isFalse();
+    }
+
+    @Test
+    void aFormulaCellCarriesTheKindsOfTheCellsItReadsAndNotTheUntypedOnes() throws Exception {
+        var sales = cell(2L, "B2");
+        var untyped = cell(3L, "B3");
+        var formula = formulaCell(1L, "B1", "B2*B3");
+        Map<Long, ReadingOutcome> settled = untypable(1L, 3L);
+        settled.put(2L, ReadingOutcome.typed("money", CellScale.LAKH, "", "INR", ReadingOutcome.INPUT));
+        var classifier = new CellTypeClassifierLlm(null, new CountingChat())
+                .withPrecedents(Map.of(1L, java.util.Set.of(2L, 3L)),
+                        Map.of(1L, formula, 2L, sales, 3L, untyped));
+
+        var state = stateFor(classifier, List.of(formula), sheetContext("Calc", null, Map.of(2L, "Net sales")), settled);
+
+        var inputs = state.path("inputs");
+        assertThat(inputs).hasSize(1);
+        assertThat(inputs.get(0).path("ref").asText()).isEqualTo("B2");
+        assertThat(inputs.get(0).path("kind").asText()).isEqualTo("money");
+        assertThat(inputs.get(0).path("scale").asText()).isEqualTo("lakh");
+        assertThat(inputs.get(0).path("row_label").asText()).isEqualTo("Net sales");
+    }
+
+    @Test
+    void aLongPrecedentListIsCutAndCounted() throws Exception {
+        var formula = formulaCell(1L, "B1", "SUM(C1:C20)");
+        Map<Long, InterpretationCellView> byId = new HashMap<>();
+        Map<Long, ReadingOutcome> settled = untypable(1L);
+        java.util.Set<Long> preds = new java.util.TreeSet<>();
+        byId.put(1L, formula);
+        for (long id = 2; id <= 21; id++) {
+            byId.put(id, cell(id, "C" + id));
+            preds.add(id);
+            settled.put(id, ReadingOutcome.typed("money", CellScale.LAKH, "", "INR", ReadingOutcome.INPUT));
+        }
+        var classifier = new CellTypeClassifierLlm(null, new CountingChat()).withPrecedents(Map.of(1L, preds), byId);
+
+        var state = stateFor(classifier, List.of(formula), sheetContext("Calc", null, Map.of()), settled);
+
+        assertThat(state.path("inputs")).hasSize(8);
+        assertThat(state.path("inputs_not_shown").asInt()).isEqualTo(12);
+    }
+
+    @Test
+    void anInputCellHasNoInputsAndTheFactsCanBeSwitchedOff() throws Exception {
+        var plain = stateFor(new CellTypeClassifierLlm(null, new CountingChat()), List.of(cell(1L, "A1")),
+                sheetContext("P  L ", CellScale.LAKH, Map.of()), untypable(1L));
+        var legacy = stateFor(
+                new CellTypeClassifierLlm(null, new CountingChat()).withDecisionStateFacts(false, false, false),
+                List.of(cell(1L, "A1")), sheetContext("P  L ", CellScale.LAKH, Map.of()), untypable(1L));
+
+        assertThat(plain.has("inputs")).isFalse();
+        assertThat(legacy.has("sheet")).isFalse();
+        assertThat(legacy.has("stated_scale")).isFalse();
+    }
+
+    @Test
+    void theQuestionsNameOnlyWhatIsGivenAndDoNotInviteReadingWhatTheCellSays() throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var body = mapper.readTree(OpenRouterDecisionClient.requestBody("m", "{\"cell\":{}}", true));
+        var legacy = mapper.readTree(OpenRouterDecisionClient.requestBody("m", "{\"cell\":{}}", true, true));
+
+        assertThat(body.path("questions").path("scale").path("instructions").asText())
+                .doesNotContain("if none does").doesNotContain("says");
+        assertThat(body.path("questions").path("kind").path("instructions").asText()).contains("inputs");
+        assertThat(legacy.path("questions").path("scale").path("instructions").asText()).contains("if none does");
+    }
+
     @Test
     void structuredStateGoesToTheDecisionsApiAsAnObjectAndPlainTextStaysText() throws Exception {
         var mapper = new com.fasterxml.jackson.databind.ObjectMapper();

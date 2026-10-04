@@ -19,6 +19,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
@@ -48,6 +49,218 @@ class DecisionPoolReplayTest {
 
     /** What the model was asked, so the pool can be told apart from cells settled by labels. */
     private record Asked(String coord, String display, String formula) {}
+
+    /** One live answer, with what the state it was asked from carried. */
+    private record Answer(CellDecisionClient.Decision decision, boolean hadInputs, boolean askedScale) {}
+
+    /**
+     * A/B of the decision state against the stored run, with the live decision model: each variant
+     * asks about the same cells (its answers are recorded but never applied), and the answers are
+     * compared with what the stored run says. The stored run is itself a model's guess, so this
+     * measures agreement, not truth; read the disagreements.
+     *
+     * <p>Needs {@code -Dtev.replay.db}, {@code -Dtev.replay.live=true} and the OpenRouter key in
+     * {@code .env}. Variants: {@code legacy} (the state and wording as they were), {@code facts}
+     * (adds sheet and stated scale, new wording), {@code inputs} (adds the kinds of what a formula reads).
+     */
+    @Test
+    void compareDecisionStateVariantsOnTheLiveModel() throws Exception {
+        String source = System.getProperty("tev.replay.db");
+        assumeTrue(source != null && "true".equals(System.getProperty("tev.replay.live")),
+                "set -Dtev.replay.db and -Dtev.replay.live=true to ask the live decision model");
+        Map<String, String> env = LlmEnvironment.load();
+        String modelId = LlmEnvironment.decisionModelId(env);
+        String key = env.get(LlmEnvironment.API_KEY);
+        assumeTrue(key != null && !key.isBlank() && modelId != null, "no OpenRouter key or decision model in .env");
+
+        Path dictionaries = temp.resolve("dictionaries");
+        Files.createDirectories(dictionaries);
+        Path home = Path.of(System.getProperty("user.home"), ".tev-parser", "dictionaries");
+        if (Files.isDirectory(home)) {
+            try (var files = Files.list(home)) {
+                for (Path file : (Iterable<Path>) files::iterator) {
+                    if (Files.isRegularFile(file)) {
+                        Files.copy(file, dictionaries.resolve(file.getFileName()));
+                    }
+                }
+            }
+        }
+        System.setProperty(DynamicKindTokens.DIR_PROPERTY, dictionaries.toString());
+        System.setProperty(DynamicKindTokens.LEARN_PROPERTY, "false");
+        ClassifierLlm answersNothing = new ClassifierLlm() {
+            @Override public List<RegionProposal> proposeRegions(RegionLayoutPrompt prompt) { return List.of(); }
+            @Override public LayerAJudgment classifyLayerA(LayerAPrompt prompt) { return null; }
+        };
+
+        Map<String, Map<String, Answer>> byVariant = new java.util.LinkedHashMap<>();
+        Map<String, CellReading> stored = new HashMap<>();
+        Set<String> ambiguous = new HashSet<>();
+        for (String variant : System.getProperty("tev.replay.variants", "legacy,facts,inputs").split(",")) {
+            Path db = temp.resolve("live_" + variant + ".db");
+            Files.copy(Path.of(source), db, StandardCopyOption.REPLACE_EXISTING);
+            try (WorkspaceDatabase database = WorkspaceDatabase.open(db)) {
+                WorkspaceRepository repo = new WorkspaceRepository(database.connection());
+                long parseRunId;
+                try (var st = database.connection().createStatement();
+                        ResultSet rs = st.executeQuery("select max(parse_run_id) from parse_run")) {
+                    rs.next();
+                    parseRunId = rs.getLong(1);
+                }
+                List<String> scopeNames = List.of(System.getProperty("tev.replay.scope", "B  S").split(","));
+                Set<Long> scope = "*".equals(scopeNames.get(0).trim())
+                        ? null
+                        : new ClassifyService(answersNothing).withSheetScope(scopeNames).resolveScope(repo, parseRunId);
+                if (stored.isEmpty()) {
+                    Map<Long, InterpretationCellView> byId = new HashMap<>();
+                    repo.selectInterpretationCellsForParseRun(parseRunId).forEach(c -> byId.put(c.cellId(), c));
+                    for (CellReading r : repo.selectCellReadingsForParseRun(parseRunId)) {
+                        InterpretationCellView c = byId.get(r.cellId());
+                        if (c != null && (scope == null || scope.contains(c.worksheetId()))) {
+                            String k = oracleKey(c.coord(), c.displayValue() == null ? "" : c.displayValue(),
+                                    c.formulaText() == null ? "" : c.formulaText());
+                            if (stored.put(k, r) != null) {
+                                ambiguous.add(k);
+                            }
+                        }
+                    }
+                }
+                OpenRouterDecisionClient real = new OpenRouterDecisionClient(key, modelId);
+                if ("legacy".equals(variant)) {
+                    real.withLegacyWording();
+                }
+                Map<String, Answer> answers = new java.util.concurrent.ConcurrentHashMap<>();
+                CellDecisionClient recording = new CellDecisionClient() {
+                    @Override public Decision decide(String state) throws Exception {
+                        return decide(state, true);
+                    }
+                    @Override public Decision decide(String state, boolean askScale) throws Exception {
+                        JsonNode s = MAPPER.readTree(state);
+                        Decision d = real.decide(state, askScale);
+                        answers.put(oracleKey(s.path("cell").path("coord").asText(),
+                                s.path("cell").path("display").asText(), s.path("cell").path("formula").asText("")),
+                                new Answer(d, s.has("inputs"), askScale));
+                        return new Decision("money", 0.0, "unit", 0.0); // asked, never applied
+                    }
+                };
+                boolean facts = !"legacy".equals(variant);
+                LlmStats.GLOBAL.reset();
+                new CellReadingWriter()
+                        .withTuning(new ClassifyTuning(15, 10, 8), scope)
+                        .withDecisionModel(recording)
+                        .withDecisionStateFacts(facts, facts, "inputs".equals(variant))
+                        .replace(repo, parseRunId, answersNothing);
+                byVariant.put(variant, answers);
+                System.err.println("[live] " + variant + ": " + real.stats());
+            }
+        }
+        StringBuilder report = new StringBuilder(liveReport(byVariant, stored, ambiguous));
+        String out = System.getProperty("tev.replay.out");
+        if (out != null && !out.isBlank()) {
+            Files.writeString(Path.of(out), report.toString());
+        }
+        System.err.print(report);
+    }
+
+    private static String liveReport(
+            Map<String, Map<String, Answer>> byVariant, Map<String, CellReading> stored, Set<String> ambiguous) {
+        // The cells every variant answered, and the part of them whose state carried inputs.
+        Set<String> common = null;
+        for (Map<String, Answer> answers : byVariant.values()) {
+            common = common == null ? new HashSet<>(answers.keySet()) : intersect(common, answers.keySet());
+        }
+        Set<String> withInputs = new HashSet<>();
+        Map<String, Answer> inputsRun = byVariant.get("inputs");
+        if (inputsRun != null) {
+            common.forEach(k -> {
+                if (inputsRun.get(k).hadInputs()) {
+                    withInputs.add(k);
+                }
+            });
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("[live] cells every variant answered: %d (typed in the stored run: %d); "
+                + "with inputs in the inputs variant: %d%n", common.size(),
+                common.stream().filter(k -> stored.get(k) != null && stored.get(k).kind() != null && !ambiguous.contains(k)).count(),
+                withInputs.size()));
+        sb.append(String.format("[live] %-8s %-14s %6s %10s %12s %14s%n", "variant", "cells", "n", "settled@.90",
+                "kind agrees", "agree|settled"));
+        for (var entry : byVariant.entrySet()) {
+            for (var subset : List.of(Map.entry("all", common), Map.entry("with inputs", (Set<String>) withInputs))) {
+                if (subset.getValue().isEmpty()) {
+                    continue;
+                }
+                int n = 0;
+                int settled = 0;
+                int kindAgree = 0;
+                int settledAgree = 0;
+                for (String k : subset.getValue()) {
+                    CellReading was = stored.get(k);
+                    if (was == null || was.kind() == null || ambiguous.contains(k)) {
+                        continue;
+                    }
+                    Answer a = entry.getValue().get(k);
+                    n++;
+                    boolean kindSame = a.decision().kind().equals(was.kind());
+                    boolean scaleOk = !a.askedScale() || !"money".equals(was.kind()) || was.scale() == null
+                            || java.util.Objects.equals(a.decision().scale(), was.scale());
+                    boolean isSettled = a.decision().kindConfidence() >= 0.90
+                            && (!a.askedScale() || !"money".equals(a.decision().kind())
+                                    || a.decision().scaleConfidence() >= 0.90);
+                    if (kindSame) {
+                        kindAgree++;
+                    }
+                    if (isSettled) {
+                        settled++;
+                        if (kindSame && scaleOk) {
+                            settledAgree++;
+                        }
+                    }
+                }
+                if (n == 0) {
+                    continue;
+                }
+                sb.append(String.format(Locale.ROOT, "[live] %-8s %-14s %6d %9.1f%% %11.1f%% %13.1f%%%n",
+                        entry.getKey(), subset.getKey(), n, 100.0 * settled / n, 100.0 * kindAgree / n,
+                        settled == 0 ? 0.0 : 100.0 * settledAgree / settled));
+            }
+        }
+        // The settled answers that differ from the stored run, so a person can say which is right.
+        if (inputsRun != null) {
+            int shown = 0;
+            for (String k : withInputs) {
+                CellReading was = stored.get(k);
+                Answer a = inputsRun.get(k);
+                if (was == null || was.kind() == null || ambiguous.contains(k)
+                        || a.decision().kindConfidence() < 0.90) {
+                    continue;
+                }
+                boolean kindDiffers = !a.decision().kind().equals(was.kind());
+                boolean scaleDiffers = a.askedScale() && "money".equals(was.kind()) && was.scale() != null
+                        && a.decision().scaleConfidence() >= 0.90 && !was.scale().equals(a.decision().scale());
+                if (!kindDiffers && !scaleDiffers) {
+                    continue;
+                }
+                Answer base = byVariant.containsKey("facts") ? byVariant.get("facts").get(k) : null;
+                sb.append("[live] settled with inputs, differs from stored: ").append(k.replace("|", "  |  "))
+                        .append("  stored ").append(was.kind()).append('/').append(was.scale())
+                        .append("  inputs-variant ").append(a.decision().kind()).append('/').append(a.decision().scale())
+                        .append(String.format(Locale.ROOT, " (%.2f)", a.decision().kindConfidence()))
+                        .append(base == null ? "" : "  facts-variant " + base.decision().kind()
+                                + String.format(Locale.ROOT, " (%.2f)", base.decision().kindConfidence()))
+                        .append('\n');
+                if (++shown >= 30) {
+                    break;
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    private static Set<String> intersect(Set<String> a, Set<String> b) {
+        Set<String> out = new HashSet<>(a);
+        out.retainAll(b);
+        return out;
+    }
 
     @Test
     void replayThePoolThatReachesTheDecisionModel() throws Exception {
