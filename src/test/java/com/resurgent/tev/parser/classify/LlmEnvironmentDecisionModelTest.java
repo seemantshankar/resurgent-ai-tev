@@ -45,7 +45,7 @@ class LlmEnvironmentDecisionModelTest {
 
     @Test
     void aModelWithoutItsOwnThresholdUsesTheGlobalOneThenTheDefault() throws Exception {
-        assertThat(LlmEnvironment.decisionMinConfidence(envWith("X=1"), "liquid/d1")).isEqualTo(0.90);
+        assertThat(LlmEnvironment.decisionMinConfidence(envWith("X=1"), "liquid/d1")).isEqualTo(0.75);
         assertThat(LlmEnvironment.decisionMinConfidence(
                 envWith("Excel_Enrichment_Cell_decision_min_confidence=0.85"), "liquid/d1")).isEqualTo(0.85);
     }
@@ -78,8 +78,8 @@ class LlmEnvironmentDecisionModelTest {
         Map<String, String> env = envWith(
                 "Excel_Enrichment_Cell_decision_min_confidence_by_model=liquid/d1=abc,perplexity/x=1.5,other/y=0.8");
 
-        assertThat(LlmEnvironment.decisionMinConfidence(env, "liquid/d1")).isEqualTo(0.90);
-        assertThat(LlmEnvironment.decisionMinConfidence(env, "perplexity/x")).isEqualTo(0.90);
+        assertThat(LlmEnvironment.decisionMinConfidence(env, "liquid/d1")).isEqualTo(0.75);
+        assertThat(LlmEnvironment.decisionMinConfidence(env, "perplexity/x")).isEqualTo(0.75);
         assertThat(LlmEnvironment.decisionMinConfidence(env, "other/y")).isEqualTo(0.80);
     }
 }

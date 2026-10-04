@@ -36,8 +36,14 @@ import java.util.Set;
  */
 public class CellTypeClassifierLlm {
     private static final double MIN_CONFIDENCE = 0.80;
-    /** Measured on OM Arham: D1 agreed with the chat model on 99.8% of cells at >= 0.90, 97% at >= 0.80. */
-    static final double DEFAULT_DECISION_MIN_CONFIDENCE = 0.90;
+    /**
+     * Measured on OM Arham: D1 agreed with the chat model on 99.8% of cells at >= 0.90 and 97% at >= 0.80. A run set to
+     * 0.75 was in fact clipped to 0.80 by the chat floor (fixed): it settled 86% of what it was asked (38% at 0.90),
+     * its readings matched the 0.90 runs on 96% of cells (as two 0.90 runs match each other), and a hand audit of the
+     * differences found none wrong. 0.75 itself is chosen, not yet measured; one workbook. Lower or raise it per model
+     * with {@code Excel_Enrichment_Cell_decision_min_confidence_by_model}.
+     */
+    static final double DEFAULT_DECISION_MIN_CONFIDENCE = 0.75;
     static final int DEFAULT_DECISION_CONCURRENCY = 8;
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String SYSTEM_PROMPT = """
@@ -453,7 +459,9 @@ public class CellTypeClassifierLlm {
             String unit = money ? "" : extractUnitFromLabels(rowLabel, colLabel);
             // A non-money number has no scale, and a scale the sheet states beats the model's.
             String scale = !money ? CellScale.UNIT.wireName() : stated != null ? stated.wireName() : d.scale();
-            applyResponse(cell, new CellTypeResponse(null, d.kind(), scale, unit, currency, d.confidenceFor(stated)), settled);
+            // The decision model's own threshold already gated this answer: the chat model's floor must not gate it again.
+            applyResponse(cell, new CellTypeResponse(null, d.kind(), scale, unit, currency, d.confidenceFor(stated)),
+                    settled, 0.0);
             if (settled.get(cell.cellId()) != null
                     && ReadingOutcome.UNTYPABLE.equals(settled.get(cell.cellId()).refusal)) {
                 deferred.add(cell); // answer rejected (e.g. unknown scale)
@@ -687,10 +695,17 @@ public class CellTypeClassifierLlm {
         }
     }
 
-    /** Settle one LLM answer and stage it as evidence for the dictionary. */
+    /** Settle one chat answer and stage it as evidence for the dictionary. */
     private void applyResponse(
             InterpretationCellView cell, CellTypeResponse response, Map<Long, ReadingOutcome> settled) {
-        if (response.confidence < MIN_CONFIDENCE) {
+        applyResponse(cell, response, settled, MIN_CONFIDENCE);
+    }
+
+    /** {@code minConfidence}: the answer is dropped below it (the chat model's floor; the decision model passes none). */
+    private void applyResponse(
+            InterpretationCellView cell, CellTypeResponse response, Map<Long, ReadingOutcome> settled,
+            double minConfidence) {
+        if (response.confidence < minConfidence) {
             return;
         }
         CellScale scale = parseScale(response.scale);

@@ -382,21 +382,21 @@ class CellDecisionModelTest {
     }
 
     @Test
-    void decisionBetweenOldAndNewThresholdNowGoesToChatModel() {
+    void aDecisionBelowTheDefaultThresholdGoesToChatModel() {
         var chat = new CountingChat();
         var classifier = new CellTypeClassifierLlm(null, chat)
-                .withDecisionModel(state -> new CellDecisionClient.Decision("quantity", 0.85, "unit", 0.88));
+                .withDecisionModel(state -> new CellDecisionClient.Decision("quantity", 0.65, "unit", 0.70));
 
         var settled = untypable(1L);
         classifier.classifyRemaining(List.of(cell(1L, "A1")), settled);
 
-        assertThat(chat.calls).isPositive(); // 0.85 < the 0.90 default
+        assertThat(chat.calls).isPositive(); // 0.65 < the 0.75 default
         assertThat(settled.get(1L).kind).isEqualTo(ReadingOutcome.MONEY); // chat's answer
 
         var lenient = new CountingChat();
         var relaxed = new CellTypeClassifierLlm(null, lenient)
-                .withDecisionModel(state -> new CellDecisionClient.Decision("quantity", 0.85, "unit", 0.88))
-                .withDecisionTuning(0.80, 4);
+                .withDecisionModel(state -> new CellDecisionClient.Decision("quantity", 0.65, "unit", 0.70))
+                .withDecisionTuning(0.60, 4);
         var settled2 = untypable(1L);
         relaxed.classifyRemaining(List.of(cell(1L, "A1")), settled2);
 

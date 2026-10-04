@@ -121,7 +121,7 @@ public final class LlmEnvironment {
      * estimate"), so a threshold chosen for one does not carry to another. In order: the model's own
      * entry in {@code Excel_Enrichment_Cell_decision_min_confidence_by_model} ({@code id=0.9,id2=0.85};
      * the exact id first, then the id without its {@code -YYYYMMDD} build or {@code :variant}), the
-     * global {@code Excel_Enrichment_Cell_decision_min_confidence}, then 0.90.
+     * global {@code Excel_Enrichment_Cell_decision_min_confidence}, then 0.75.
      */
     static double decisionMinConfidence(Map<String, String> env, String modelId) {
         String perModel = env.get(CELL_DECISION_MIN_CONFIDENCE_BY_MODEL);
@@ -157,7 +157,7 @@ public final class LlmEnvironment {
         return decisionMinConfidence(env);
     }
 
-    /** {@code Excel_Enrichment_Cell_decision_min_confidence}, default 0.90; ignored when not a number in (0, 1]. */
+    /** {@code Excel_Enrichment_Cell_decision_min_confidence}, default 0.75; ignored when not a number in (0, 1]. */
     static double decisionMinConfidence() {
         return decisionMinConfidence(load());
     }
