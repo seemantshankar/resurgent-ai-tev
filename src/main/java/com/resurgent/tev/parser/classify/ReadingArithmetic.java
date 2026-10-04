@@ -561,6 +561,13 @@ final class ReadingArithmetic {
         if (ReadingOutcome.PERCENT.equals(right.kind)) {
             return left;
         }
+        // A ratio is a dimensionless multiple (a proration, a share): it keeps the kind of what it scales.
+        if (ReadingOutcome.RATIO.equals(left.kind)) {
+            return right;
+        }
+        if (ReadingOutcome.RATIO.equals(right.kind)) {
+            return left;
+        }
         if (isQuantity(left.kind) && ReadingOutcome.RATE.equals(right.kind)) {
             return money(left, right);
         }
@@ -671,6 +678,9 @@ final class ReadingArithmetic {
         }
         if (left.kind.equals(right.kind)) {
             return Val.dim(ReadingOutcome.RATIO, CellScale.UNIT, "", "");
+        }
+        if (ReadingOutcome.RATIO.equals(right.kind)) {
+            return left; // divided by a dimensionless multiple
         }
         return Val.refused(ReadingOutcome.KIND_CONFLICT);
     }

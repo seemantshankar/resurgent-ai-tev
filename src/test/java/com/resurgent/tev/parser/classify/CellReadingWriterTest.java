@@ -497,6 +497,28 @@ class CellReadingWriterTest {
         assertThat(readings.get("B4").kind()).isEqualTo("ratio");
     }
 
+    /** A ratio is a dimensionless multiple: a proration keeps the kind of what it prorates. */
+    @Test
+    void aRatioScalesWhatItMultipliesOrDividesWithoutChangingItsKind() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Part (in Rs. Lakhs)");
+            sheet.getRow(0).createCell(1).setCellValue(100);
+            sheet.createRow(1).createCell(0).setCellValue("Whole (in Rs. Lakhs)");
+            sheet.getRow(1).createCell(1).setCellValue(400);
+            sheet.createRow(2).createCell(0).setCellValue("Charge (in Rs. Lakhs)");
+            sheet.getRow(2).createCell(1).setCellValue(50);
+            sheet.createRow(3).createCell(1).setCellFormula("B1/B2*B3");
+            sheet.createRow(4).createCell(1).setCellFormula("B3/(B1/B2)");
+            sheet.createRow(5).createCell(1).setCellFormula("(B1/B2)*(B1/B2)");
+        }));
+
+        assertThat(readings.get("B4").kind()).isEqualTo("money");
+        assertThat(readings.get("B4").scale()).isEqualTo("lakh");
+        assertThat(readings.get("B5").kind()).isEqualTo("money");
+        assertThat(readings.get("B5").scale()).isEqualTo("lakh");
+        assertThat(readings.get("B6").kind()).isEqualTo("ratio");
+    }
+
     @Test
     void aPlainFractionDoesNotChangeScale() throws Exception {
         Map<String, CellReading> readings = read(workbook(sheet -> {
