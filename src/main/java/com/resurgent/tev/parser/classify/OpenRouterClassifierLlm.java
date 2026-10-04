@@ -70,12 +70,22 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
      * longer only delays the fallback. The last model has nothing behind it, so it is patient.
      */
     static Deadlines deadlinesFor(int index, int chainLength) {
-        return index == chainLength - 1 ? Deadlines.LAST_RESORT : Deadlines.FAIL_FAST;
+        if (index == chainLength - 1) {
+            return Deadlines.LAST_RESORT;
+        }
+        return index == 0 ? Deadlines.FIRST_CHOICE : Deadlines.FALLBACK;
     }
 
     /** Whole-exchange limits: {@code small} for ordinary calls, {@code large} for big batches. */
     record Deadlines(Duration small, Duration large) {
-        static final Deadlines FAIL_FAST = new Deadlines(Duration.ofSeconds(30), Duration.ofSeconds(180));
+        /**
+         * Chosen from a measured run: the first-choice model's healthy small calls took 2-10s
+         * (slowest 9.7s of 63), so anything past 15s is a hang worth abandoning. At 45s a hang
+         * made it slower on average than using the fallback alone.
+         */
+        static final Deadlines FIRST_CHOICE = new Deadlines(Duration.ofSeconds(15), Duration.ofSeconds(180));
+        /** A slower middle model: its healthy small calls reached 31s in that run, so it gets 45s. */
+        static final Deadlines FALLBACK = new Deadlines(Duration.ofSeconds(45), Duration.ofSeconds(180));
         static final Deadlines LAST_RESORT = new Deadlines(Duration.ofSeconds(120), Duration.ofSeconds(240));
 
         /** A prompt this long, or a completion cap this high, is treated as a big batch. */

@@ -20,7 +20,7 @@ final class FallbackCompletionsClient implements CompletionsClient {
     /** A model is set aside when this many of its last {@link #WINDOW} calls failed. */
     static final int MAX_FAILURES_IN_WINDOW = 3;
     static final int WINDOW = 10;
-    static final long COOL_OFF_NANOS = 90L * 1_000_000_000L;
+    static final long COOL_OFF_NANOS = 5L * 60L * 1_000_000_000L;
 
     /** One model in the chain. */
     record Link(String model, CompletionsClient client) {}

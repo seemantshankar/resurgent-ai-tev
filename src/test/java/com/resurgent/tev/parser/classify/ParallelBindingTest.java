@@ -152,8 +152,8 @@ class ParallelBindingTest {
     void aSmallBindingPromptGetsTheFailFastDeadlineNotTheBigBatchOne() {
         int maxTokens = OpenRouterClassifierLlm.bindMaxCompletionTokens(3_000);
 
-        assertThat(OpenRouterClassifierLlm.Deadlines.FAIL_FAST.forRequest(3_000, maxTokens))
-                .isEqualTo(Duration.ofSeconds(30));
+        assertThat(OpenRouterClassifierLlm.Deadlines.FIRST_CHOICE.forRequest(3_000, maxTokens))
+                .isEqualTo(Duration.ofSeconds(15));
     }
 
     @Test
@@ -161,7 +161,7 @@ class ParallelBindingTest {
         int maxTokens = OpenRouterClassifierLlm.bindMaxCompletionTokens(80_000);
 
         assertThat(maxTokens).isGreaterThanOrEqualTo(16_384);
-        assertThat(OpenRouterClassifierLlm.Deadlines.FAIL_FAST.forRequest(80_000, maxTokens))
+        assertThat(OpenRouterClassifierLlm.Deadlines.FIRST_CHOICE.forRequest(80_000, maxTokens))
                 .isEqualTo(Duration.ofSeconds(180));
     }
 }

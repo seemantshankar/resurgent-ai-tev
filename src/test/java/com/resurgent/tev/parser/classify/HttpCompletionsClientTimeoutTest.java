@@ -120,8 +120,9 @@ class HttpCompletionsClientTimeoutTest {
         var last = OpenRouterClassifierLlm.deadlinesFor(2, 3);
         var only = OpenRouterClassifierLlm.deadlinesFor(0, 1);
 
-        assertThat(first.small()).isEqualTo(Duration.ofSeconds(30));
-        assertThat(middle).isEqualTo(first);
+        // measured: the first-choice model's healthy calls never exceeded 10s, the fallback's reached 31s
+        assertThat(first.small()).isEqualTo(Duration.ofSeconds(15));
+        assertThat(middle.small()).isEqualTo(Duration.ofSeconds(45));
         assertThat(last.small()).isGreaterThan(first.small());
         assertThat(last.large()).isGreaterThan(first.large());
         assertThat(only).isEqualTo(last); // nothing to fall back to: be patient

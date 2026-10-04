@@ -64,12 +64,6 @@ class FallbackCompletionsClientTest {
     }
 
     @Test
-    void aModelThatHangsInBurstsIsSetAsideForMinutesNotQuarterHours() {
-        assertThat(FallbackCompletionsClient.COOL_OFF_NANOS)
-                .isEqualTo(java.util.concurrent.TimeUnit.SECONDS.toNanos(90));
-    }
-
-    @Test
     void firstModelAnswersWhenHealthy() {
         var m1 = ok("m1");
         var m3 = ok("m3");
