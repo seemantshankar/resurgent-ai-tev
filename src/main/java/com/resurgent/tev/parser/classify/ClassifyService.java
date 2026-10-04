@@ -1364,17 +1364,14 @@ public final class ClassifyService {
                     disposition != null ? disposition.scheduleFamily() : "",
                     disposition != null ? disposition.about() : ""));
         }
-        // Every region's first question goes out together, so one slow model call holds up only
-        // itself. The answers are then applied in region order, exactly as before.
-        List<List<LayerBAssignment>> firstAnswers = askFirstRound(jobs, living, runContext::inline);
+        // Binding runs in two rounds of concurrent model calls; see bindAll.
+        BindRound round = bindAll(jobs, living, catalog, mandateId, runContext::inline);
+        living = round.living();
         for (int i = 0; i < jobs.size(); i++) {
             BindJob job = jobs.get(i);
             CandidateRow candidate = job.candidate();
             List<BindCellRow> cells = job.cells();
-            BindResult result = bindCandidate(
-                    cells, job.sheetName(), job.family(), job.about(), living, catalog, mandateId,
-                    runContext::inline, firstAnswers.get(i));
-            living = result.living();
+            BindResult result = round.results().get(i);
             skipped += result.unbound();
             repo.deleteNomenclatureBindings(parseRunId, candidate.candidateId());
             List<LayerBBinder.Draft> fresh = new ArrayList<>();
@@ -1442,44 +1439,76 @@ public final class ClassifyService {
         return answers;
     }
 
-    private BindResult bindCandidate(
-            List<BindCellRow> cells,
-            String sheetName,
-            String family,
-            String about,
+    /**
+     * Bind every region in two rounds of model calls. Round one asks each region its first
+     * question; round two asks the retry for every region that still has unbound cells. Within a
+     * round the calls go out together under {@code --parallelism}, so one slow call holds up only
+     * itself; between rounds the answers are applied in region order, which keeps the result
+     * independent of which call finished first. A region sees the catalog as it stood when its
+     * round began, so a leaf minted by another region in the same round is not offered to it.
+     */
+    private BindRound bindAll(
+            List<BindJob> jobs,
             LivingOntology living,
             NomenclatureCatalog catalog,
             long mandateId,
-            java.util.function.LongFunction<String> contextOf,
-            List<LayerBAssignment> alreadyAsked)
+            java.util.function.LongFunction<String> contextOf)
             throws ClassifyException {
-        Map<String, String> aliases = living.aliases();
+        List<List<LayerBAssignment>> firstAnswers = askFirstRound(jobs, living, contextOf);
+        List<List<LayerBAssignment>> assignments = new ArrayList<>();
+        List<List<BindCellRow>> open = new ArrayList<>();
+        for (int i = 0; i < jobs.size(); i++) {
+            BindJob job = jobs.get(i);
+            List<LayerBAssignment> mine = new ArrayList<>();
+            List<BindCellRow> missing = LayerBBinder.unbound(
+                    job.cells(), LayerBBinder.bind(job.cells(), List.of(), living.aliases()));
+            if (!missing.isEmpty()) {
+                List<LayerBAssignment> first = firstAnswers.get(i) != null
+                        ? firstAnswers.get(i)
+                        : askLayerB(job.sheetName(), job.family(), job.about(), job.cells(), missing,
+                                living.paths(), false, contextOf);
+                living = absorbNewLeaves(living, catalog, mandateId, first);
+                mine.addAll(first);
+                missing = LayerBBinder.unbound(job.cells(), LayerBBinder.bind(job.cells(), mine, living.aliases()));
+            }
+            assignments.add(mine);
+            open.add(missing);
+        }
+        List<Integer> retried = new ArrayList<>();
+        List<java.util.concurrent.Callable<List<LayerBAssignment>>> tasks = new ArrayList<>();
         List<String> paths = living.paths();
-        List<LayerBBinder.Draft> proved = LayerBBinder.bind(cells, List.of(), aliases);
-        List<BindCellRow> missing = LayerBBinder.unbound(cells, proved);
-        List<LayerBAssignment> assignments = new ArrayList<>();
-        if (!missing.isEmpty()) {
-            List<LayerBAssignment> first = alreadyAsked != null
-                    ? alreadyAsked
-                    : askLayerB(sheetName, family, about, cells, missing, paths, false, contextOf);
-            living = absorbNewLeaves(living, catalog, mandateId, first);
-            aliases = living.aliases();
-            paths = living.paths();
-            assignments.addAll(first);
-            proved = LayerBBinder.bind(cells, assignments, aliases);
-            missing = LayerBBinder.unbound(cells, proved);
+        for (int i = 0; i < jobs.size(); i++) {
+            if (open.get(i).isEmpty()) {
+                continue;
+            }
+            BindJob job = jobs.get(i);
+            List<BindCellRow> missing = open.get(i);
+            retried.add(i);
+            tasks.add(() -> askLayerB(
+                    job.sheetName(), job.family(), job.about(), job.cells(), missing, paths, true, contextOf));
         }
-        if (!missing.isEmpty()) {
-            List<LayerBAssignment> second =
-                    askLayerB(sheetName, family, about, cells, missing, paths, true, contextOf);
-            living = absorbNewLeaves(living, catalog, mandateId, second);
-            aliases = living.aliases();
-            assignments.addAll(second);
-            proved = LayerBBinder.bind(cells, assignments, aliases);
-            missing = LayerBBinder.unbound(cells, proved);
+        List<ParallelCalls.Outcome<List<LayerBAssignment>>> outcomes = ParallelCalls.run(tasks, tuning.concurrency());
+        for (int k = 0; k < retried.size(); k++) {
+            int i = retried.get(k);
+            if (!outcomes.get(k).ok()) {
+                System.err.println("[layer-b] retry failed for a region; its cells stay unbound: "
+                        + outcomes.get(k).error());
+                System.err.flush();
+                continue;
+            }
+            living = absorbNewLeaves(living, catalog, mandateId, outcomes.get(k).value());
+            assignments.get(i).addAll(outcomes.get(k).value());
         }
-        return new BindResult(proved, missing.size(), living);
+        List<BindResult> results = new ArrayList<>();
+        for (int i = 0; i < jobs.size(); i++) {
+            BindJob job = jobs.get(i);
+            List<LayerBBinder.Draft> proved = LayerBBinder.bind(job.cells(), assignments.get(i), living.aliases());
+            results.add(new BindResult(proved, LayerBBinder.unbound(job.cells(), proved).size(), living));
+        }
+        return new BindRound(results, living);
     }
+
+    private record BindRound(List<BindResult> results, LivingOntology living) {}
 
     private LivingOntology absorbNewLeaves(
             LivingOntology living,
