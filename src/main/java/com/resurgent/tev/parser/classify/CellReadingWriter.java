@@ -190,7 +190,7 @@ public final class CellReadingWriter {
                 }
                 System.err.println("[cell-reading] pass 2 of 2: " + formulas.size() + " formula cells");
                 System.err.flush();
-                classifier.classifyRemaining(formulas, settled, context);
+                typeFormulas(classifier, context, formulas, precedents, numericIds, byId, sheetIds, settled, stated, unknowns);
             }
         } finally {
             // Keep what was learned even if the LLM pass failed part-way; never fails the parse.
@@ -349,6 +349,128 @@ public final class CellReadingWriter {
         for (InterpretationCellView cell : formulas) {
             settled.putIfAbsent(cell.cellId(), ReadingOutcome.refused(ReadingOutcome.UNTYPABLE));
         }
+    }
+
+    /** Safety stop for the rounds of {@link #typeFormulas}; every round must settle a cell to continue. */
+    private static final int MAX_ROUNDS = 50;
+
+    /**
+     * Pass 2: types the formulas the arithmetic could not. A formula follows the cells typed before
+     * it, whichever stage typed them, so every stage that settles a cell is followed by another
+     * {@link #propagate}, and the next stage sees only what is still untyped.
+     *
+     * <ol>
+     *   <li>The dictionary types what its labels say; what waited on those cells follows.
+     *   <li>Rounds: the decision model, then the chat model for what it was unsure of, are asked only
+     *       about cells that wait on no other untyped formula; their answers are propagated before
+     *       the next round, so a formula built on a cell they just typed is never asked about.
+     *   <li>What is left (a chain whose first cell nothing could type) goes to the models once, all at
+     *       a time, as before. No cell is asked of the same model twice.
+     * </ol>
+     */
+    private static void typeFormulas(
+            CellTypeClassifierLlm classifier,
+            CellContext context,
+            List<InterpretationCellView> formulas,
+            Map<Long, Set<Long>> precedents,
+            Set<Long> numericIds,
+            Map<Long, InterpretationCellView> byId,
+            Map<String, Long> sheetIds,
+            Map<Long, ReadingOutcome> settled,
+            StatedScales stated,
+            UnstatedScales unknowns) {
+        classifier.useContext(context);
+        List<InterpretationCellView> untyped = classifier.untypable(formulas, settled);
+        if (untyped.isEmpty()) {
+            return;
+        }
+        classifier.typeByDictionary(untyped, settled);
+        long followed = repropagate(
+                formulas, precedents, numericIds, byId, sheetIds, settled, stated, unknowns, classifier::inScope);
+
+        int rounds = 0;
+        while (rounds < MAX_ROUNDS) {
+            untyped = classifier.untypable(formulas, settled);
+            Set<Long> waitingIds = new HashSet<>();
+            untyped.forEach(c -> waitingIds.add(c.cellId()));
+            List<InterpretationCellView> ready = new ArrayList<>();
+            for (InterpretationCellView cell : untyped) {
+                // A cell waits only on an untyped formula some stage may still type; an untyped input
+                // or a formula outside the model's scope is not going to change.
+                boolean waits = false;
+                for (long pred : precedents.getOrDefault(cell.cellId(), Set.of())) {
+                    if (pred != cell.cellId() && waitingIds.contains(pred)) {
+                        waits = true;
+                        break;
+                    }
+                }
+                if (!waits) {
+                    ready.add(cell);
+                }
+            }
+            if (ready.isEmpty()) {
+                break;
+            }
+            rounds++;
+            int before = untyped.size();
+            classifier.typeByChat(classifier.typeByDecisionModel(ready, formulas, settled), formulas, settled);
+            long typed = repropagate(
+                    formulas, precedents, numericIds, byId, sheetIds, settled, stated, unknowns, classifier::inScope);
+            followed += typed;
+            int after = classifier.untypable(formulas, settled).size();
+            System.err.println("[cell-reading] round " + rounds + ": asked about " + ready.size() + " of "
+                    + before + " untyped formulas; " + typed + " more followed by arithmetic; " + after + " left");
+            System.err.flush();
+            if (after >= before) {
+                break;
+            }
+        }
+
+        untyped = classifier.untypable(formulas, settled);
+        if (!untyped.isEmpty()) {
+            classifier.typeByChat(classifier.typeByDecisionModel(untyped, formulas, settled), formulas, settled);
+            followed += repropagate(
+                    formulas, precedents, numericIds, byId, sheetIds, settled, stated, unknowns, classifier::inScope);
+        }
+        classifier.finishComparison(settled);
+        LlmStats.GLOBAL.add("layer-b", "cells_typed_repropagation", followed);
+        LlmStats.GLOBAL.add("layer-b", "decision_rounds", rounds);
+    }
+
+    /**
+     * Forgets the formulas still marked untypable and types them again from what is typed now.
+     * Returns how many got a type that way.
+     */
+    private static long repropagate(
+            List<InterpretationCellView> formulas,
+            Map<Long, Set<Long>> precedents,
+            Set<Long> numericIds,
+            Map<Long, InterpretationCellView> byId,
+            Map<String, Long> sheetIds,
+            Map<Long, ReadingOutcome> settled,
+            StatedScales stated,
+            UnstatedScales unknowns,
+            java.util.function.Predicate<InterpretationCellView> counted) {
+        List<InterpretationCellView> retry = new ArrayList<>();
+        for (InterpretationCellView cell : formulas) {
+            ReadingOutcome now = settled.get(cell.cellId());
+            if (now != null && ReadingOutcome.UNTYPABLE.equals(now.refusal)) {
+                settled.remove(cell.cellId());
+                retry.add(cell);
+            }
+        }
+        if (retry.isEmpty()) {
+            return 0;
+        }
+        propagate(formulas, precedents, numericIds, byId, sheetIds, settled, stated, unknowns);
+        long typed = 0;
+        for (InterpretationCellView cell : retry) {
+            ReadingOutcome now = settled.get(cell.cellId());
+            if (counted.test(cell) && now != null && now.refusal == null) {
+                typed++;
+            }
+        }
+        return typed;
     }
 
     private static boolean waiting(Set<Long> preds, Set<Long> numericIds, Map<Long, ReadingOutcome> settled) {

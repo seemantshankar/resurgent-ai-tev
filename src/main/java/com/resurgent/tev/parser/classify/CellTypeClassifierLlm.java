@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * LLM-based fallback for cell type classification.
@@ -71,6 +72,10 @@ public class CellTypeClassifierLlm {
     private int decisionConcurrency = DEFAULT_DECISION_CONCURRENCY;
     private boolean compareDecisions;     // shadow mode: ask both models, trust only the chat model
     private java.nio.file.Path compareCsv;
+    private final Set<Long> decisionAsked = new java.util.HashSet<>(); // cells the decision model has been asked about
+    private final Set<Long> chatAsked = new java.util.HashSet<>();     // cells the chat model has been asked about
+    private final List<InterpretationCellView> comparedCells = new ArrayList<>();
+    private final List<ParallelCalls.Outcome<CellDecisionClient.Decision>> comparedOutcomes = new ArrayList<>();
 
     public CellTypeClassifierLlm(WorkspaceRepository repo, ClassifierLlm llm) {
         this(repo, llm, new DynamicKindTokens());
@@ -148,26 +153,64 @@ public class CellTypeClassifierLlm {
         this.ctx = context;
         System.err.println("[cell-classifier] Starting classifyRemaining, total cells=" + cells.size());
         System.err.flush();
-        List<InterpretationCellView> unclassified = new ArrayList<>();
-        Map<Long, InterpretationCellView> cellIndex = new HashMap<>();
-        for (InterpretationCellView cell : cells) {
-            cellIndex.put(cell.cellId(), cell);
-            ReadingOutcome outcome = settled.get(cell.cellId());
-            if (outcome != null && ReadingOutcome.UNTYPABLE.equals(outcome.refusal)) {
-                if (isNumeric(cell)
-                        && (llmWorksheetIds == null || llmWorksheetIds.contains(cell.worksheetId()))) {
-                    unclassified.add(cell);
-                }
-            }
-        }
-
+        List<InterpretationCellView> unclassified = untypable(cells, settled);
         if (unclassified.isEmpty()) {
             System.err.println("[cell-classifier] No unclassified cells found, skipping LLM");
             System.err.flush();
             return;
         }
 
-        // First pass: try to type using KindTokens dictionary (deterministic)
+        List<InterpretationCellView> stillUntyped = typeByDictionary(unclassified, settled);
+        if (stillUntyped.isEmpty()) {
+            System.err.println("[cell-classifier] All cells typed by dictionary, skipping LLM");
+            System.err.flush();
+            return;
+        }
+
+        stillUntyped = typeByDecisionModel(stillUntyped, cells, settled);
+        if (stillUntyped.isEmpty()) {
+            System.err.println("[cell-classifier] All cells typed by decision model, skipping chat LLM");
+            System.err.flush();
+            finishComparison(settled);
+            return;
+        }
+        typeByChat(stillUntyped, cells, settled);
+        finishComparison(settled);
+    }
+
+    // ---- the stages of classifyRemaining, callable one at a time ---------------------------
+    //
+    // A caller that can type more cells between stages (formulas follow the cells typed before
+    // them) drives these itself; classifyRemaining runs them back to back. A cell the decision
+    // model or the chat model has been asked about is not asked again by the same classifier.
+
+    /** Use this context for the labels, regions and stated scales of the stages that follow. */
+    void useContext(CellContext context) {
+        this.ctx = context;
+    }
+
+    /** Whether the models may be asked about this cell (it is on a sheet in scope). */
+    boolean inScope(InterpretationCellView cell) {
+        return llmWorksheetIds == null || llmWorksheetIds.contains(cell.worksheetId());
+    }
+
+    /** The numeric, in-scope cells still marked untypable: what the stages below may settle. */
+    List<InterpretationCellView> untypable(List<InterpretationCellView> cells, Map<Long, ReadingOutcome> settled) {
+        List<InterpretationCellView> untyped = new ArrayList<>();
+        for (InterpretationCellView cell : cells) {
+            ReadingOutcome outcome = settled.get(cell.cellId());
+            if (outcome != null && ReadingOutcome.UNTYPABLE.equals(outcome.refusal)
+                    && isNumeric(cell)
+                    && (llmWorksheetIds == null || llmWorksheetIds.contains(cell.worksheetId()))) {
+                untyped.add(cell);
+            }
+        }
+        return untyped;
+    }
+
+    /** Static and learned dictionary, by the cell's labels. Returns the cells it left untyped. */
+    List<InterpretationCellView> typeByDictionary(
+            List<InterpretationCellView> unclassified, Map<Long, ReadingOutcome> settled) {
         List<InterpretationCellView> stillUntyped = new ArrayList<>();
         for (InterpretationCellView cell : unclassified) {
             ReadingOutcome outcome = tryDictionaryBasedTyping(cell);
@@ -177,37 +220,73 @@ public class CellTypeClassifierLlm {
                 stillUntyped.add(cell);
             }
         }
-
         int typedByDictionary = unclassified.size() - stillUntyped.size();
         LlmStats.GLOBAL.add("layer-b", "cells_untypable_before_classifier", unclassified.size());
         LlmStats.GLOBAL.add("layer-b", "cells_typed_dictionary", typedByDictionary);
         if (typedByDictionary > 0) {
             System.err.println("[cell-classifier] Typed " + typedByDictionary + " cells via KindTokens dictionary");
         }
+        return stillUntyped;
+    }
 
-        if (stillUntyped.isEmpty()) {
-            System.err.println("[cell-classifier] All cells typed by dictionary, skipping LLM");
-            System.err.flush();
-            return;
+    /**
+     * The decision model, when one is configured. Returns the cells it did not settle, in their
+     * original order: every cell when there is no decision model, and in shadow mode (where it is
+     * asked but its answers are never applied).
+     */
+    List<InterpretationCellView> typeByDecisionModel(
+            List<InterpretationCellView> pending,
+            List<InterpretationCellView> allCells,
+            Map<Long, ReadingOutcome> settled) {
+        if (decisions == null) {
+            return pending;
         }
-
-        List<InterpretationCellView> compared = List.of();
-        List<ParallelCalls.Outcome<CellDecisionClient.Decision>> shadow = List.of();
-        if (decisions != null && compareDecisions) {
-            compared = List.copyOf(stillUntyped);
-            long shadowStart = System.nanoTime();
-            shadow = askDecisions(compared, cells, settled);
-            LlmStats.GLOBAL.add("layer-b", "cells_decision_shadow", compared.size());
-            System.err.println("[cell-decision] shadow mode: asked D1 about " + compared.size() + " cells in "
-                    + (System.nanoTime() - shadowStart) / 1_000_000 + "ms; answers are NOT applied");
-            System.err.flush();
-        } else if (decisions != null) {
-            stillUntyped = decideWithDecisionModel(stillUntyped, cells, settled);
-            if (stillUntyped.isEmpty()) {
-                System.err.println("[cell-classifier] All cells typed by decision model, skipping chat LLM");
-                System.err.flush();
-                return;
+        List<InterpretationCellView> toAsk = new ArrayList<>();
+        for (InterpretationCellView cell : pending) {
+            if (decisionAsked.add(cell.cellId())) {
+                toAsk.add(cell);
             }
+        }
+        if (compareDecisions) {
+            if (!toAsk.isEmpty()) {
+                long shadowStart = System.nanoTime();
+                comparedCells.addAll(toAsk);
+                comparedOutcomes.addAll(askDecisions(toAsk, allCells, settled));
+                LlmStats.GLOBAL.add("layer-b", "cells_decision_shadow", toAsk.size());
+                System.err.println("[cell-decision] shadow mode: asked D1 about " + toAsk.size() + " cells in "
+                        + (System.nanoTime() - shadowStart) / 1_000_000 + "ms; answers are NOT applied");
+                System.err.flush();
+            }
+            return pending;
+        }
+        List<InterpretationCellView> deferredAsked = decideWithDecisionModel(toAsk, allCells, settled);
+        Set<Long> unsettled = new java.util.HashSet<>();
+        deferredAsked.forEach(c -> unsettled.add(c.cellId()));
+        List<InterpretationCellView> deferred = new ArrayList<>();
+        for (InterpretationCellView cell : pending) {
+            // Asked before and still untyped, or asked now and not settled.
+            ReadingOutcome now = settled.get(cell.cellId());
+            if (unsettled.contains(cell.cellId())
+                    || (now != null && ReadingOutcome.UNTYPABLE.equals(now.refusal))) {
+                deferred.add(cell);
+            }
+        }
+        return deferred;
+    }
+
+    /** The chat model, in batches of one region's cells at a time. */
+    void typeByChat(
+            List<InterpretationCellView> pending,
+            List<InterpretationCellView> cells,
+            Map<Long, ReadingOutcome> settled) {
+        List<InterpretationCellView> stillUntyped = new ArrayList<>();
+        for (InterpretationCellView cell : pending) {
+            if (chatAsked.add(cell.cellId())) {
+                stillUntyped.add(cell);
+            }
+        }
+        if (stillUntyped.isEmpty()) {
+            return;
         }
 
         LlmStats.GLOBAL.add("layer-b", "cells_to_chat", stillUntyped.size());
@@ -263,9 +342,18 @@ public class CellTypeClassifierLlm {
                     + " done (" + cellsDone + "/" + ordered.size() + " cells)");
             System.err.flush();
         }
-        if (!compared.isEmpty()) {
-            reportComparison(compared, shadow, settled);
+    }
+
+    /** Shadow mode only: report, and write the CSV for, every cell the decision model was asked about. */
+    void finishComparison(Map<Long, ReadingOutcome> settled) {
+        if (comparedCells.isEmpty()) {
+            return;
         }
+        List<InterpretationCellView> compared = List.copyOf(comparedCells);
+        List<ParallelCalls.Outcome<CellDecisionClient.Decision>> shadow = List.copyOf(comparedOutcomes);
+        comparedCells.clear();
+        comparedOutcomes.clear();
+        reportComparison(compared, shadow, settled);
     }
 
     private void reportComparison(
@@ -311,6 +399,9 @@ public class CellTypeClassifierLlm {
             List<InterpretationCellView> pending,
             List<InterpretationCellView> allCells,
             Map<Long, ReadingOutcome> settled) {
+        if (pending.isEmpty()) {
+            return pending;
+        }
         long start = System.nanoTime();
         List<ParallelCalls.Outcome<CellDecisionClient.Decision>> outcomes = askDecisions(pending, allCells, settled);
         List<InterpretationCellView> deferred = new ArrayList<>();
@@ -532,6 +623,20 @@ public class CellTypeClassifierLlm {
             System.err.println("[llm-fallback] " + cell.coord() + ": model said " + scale.wireName()
                     + " but the sheet states " + stated.wireName() + "; using " + stated.wireName());
             scale = stated;
+        }
+        if (ReadingOutcome.MONEY.equals(response.kind) && stated == null && scale == CellScale.UNIT) {
+            // "Unit" is what a model says when it finds no scale word, not a reading: money nothing
+            // states has no scale rather than rupees, and the sheets that read it may fix it. Unless
+            // the cell's own labels say rupees, it is left unstated like the dictionary leaves it.
+            CellScale labelled = extractScaleFromLabels(
+                    KindTokens.normalizeLabel(ctx.rowLabel(cell)), KindTokens.normalizeLabel(ctx.columnLabel(cell)), cell);
+            if (labelled == null) {
+                settled.put(cell.cellId(), ReadingOutcome.unstated(
+                        response.unit, response.currency, ReadingOutcome.DERIVED, unknowns.fresh(cell.cellId())));
+                learnFrom(cell, response);
+                return;
+            }
+            scale = labelled;
         }
         settled.put(cell.cellId(), ReadingOutcome.typed(
                 response.kind, scale, response.unit, response.currency, ReadingOutcome.DERIVED));

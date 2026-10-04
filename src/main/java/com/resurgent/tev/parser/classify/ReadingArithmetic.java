@@ -602,10 +602,13 @@ final class ReadingArithmetic {
      * Unstated money multiplied into rupees was in the scale the factor undoes.
      */
     private static Val scaledByFactor(Links links, Val value, java.math.BigDecimal factor) {
+        double f = factor.doubleValue();
+        if (value.refusal == null && ReadingOutcome.RATIO.equals(value.kind) && f == 100d) {
+            return Val.dim(ReadingOutcome.PERCENT, CellScale.UNIT, "", ""); // x / y * 100
+        }
         if (value.refusal != null || !ReadingOutcome.MONEY.equals(value.kind)) {
             return value;
         }
-        double f = factor.doubleValue();
         if (f == 1_000d || !isScaleFactor(f)) {
             return value;
         }

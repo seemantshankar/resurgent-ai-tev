@@ -255,6 +255,135 @@ class CellReadingWriterTest {
         assertThat(new BigDecimal(readings.get("Interest!B3").absoluteAmount())).isEqualByComparingTo("264000000");
     }
 
+    // ---- formulas follow the cells typed before them, whichever stage typed those ----------
+
+    /** A decision model that asks nothing of the sheet but records which coordinates it was asked about. */
+    private static final class RecordingDecisions implements CellDecisionClient {
+        private final java.util.Map<String, Decision> answers;
+        final List<String> asked = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        /** Coordinates not listed get a decision no threshold accepts. */
+        RecordingDecisions(java.util.Map<String, Decision> answers) {
+            this.answers = answers;
+        }
+
+        @Override
+        public Decision decide(String state) throws Exception {
+            String coord = new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readTree(state).path("cell").path("coord").asText();
+            asked.add(coord);
+            return answers.getOrDefault(coord, new Decision("money", 0.1, "unit", 0.1));
+        }
+    }
+
+    /** A chat model that types nothing, or records what it was sent. */
+    private static class SilentChat implements ClassifierLlm {
+        final List<String> prompts = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        @Override public List<RegionProposal> proposeRegions(RegionLayoutPrompt prompt) { return List.of(); }
+        @Override public LayerAJudgment classifyLayerA(LayerAPrompt prompt) { return null; }
+        @Override public String classifyCellJson(String systemPrompt, String userPrompt, int maxTokens) {
+            prompts.add(userPrompt);
+            return "";
+        }
+    }
+
+    private static void seedAndTwoFormulas(Sheet sheet, String secondLabel) {
+        sheet.createRow(0).createCell(0).setCellValue("Seed");
+        sheet.getRow(0).createCell(1).setCellValue(5);
+        sheet.createRow(1).createCell(0).setCellValue(secondLabel);
+        sheet.getRow(1).createCell(1).setCellFormula("B1*2");
+        sheet.createRow(2).createCell(0).setCellValue("Subtotal");
+        sheet.getRow(2).createCell(1).setCellFormula("B2*0.5");
+    }
+
+    /**
+     * B2 is typed by its label (the dictionary); B3 only waits on B2. Once B2 is typed, B3 follows
+     * it by arithmetic: no model is asked about B3.
+     */
+    @Test
+    void aFormulaWaitingOnADictionaryTypedCellFollowsItWithoutAModel() throws Exception {
+        var decisions = new RecordingDecisions(Map.of());
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> seedAndTwoFormulas(sheet, "Total cost (in Rs.)")), decisions, new SilentChat());
+
+        assertThat(readings.get("B2").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").typeSource()).isEqualTo("derived");
+        assertThat(decisions.asked).doesNotContain("B3");
+    }
+
+    /**
+     * B2 reads an input nothing can type, so it is ready to be asked; B3 waits on B2. The model is
+     * asked about B2 only, and B3 follows from its answer.
+     */
+    @Test
+    void theDecisionModelIsAskedOnlyAboutCellsNotWaitingOnAnotherUntypedFormula() throws Exception {
+        var decisions = new RecordingDecisions(
+                Map.of("B2", new CellDecisionClient.Decision("money", 0.97, "unit", 0.95)));
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> seedAndTwoFormulas(sheet, "Gross")), decisions, new SilentChat());
+
+        assertThat(decisions.asked).contains("B2").doesNotContain("B3");
+        assertThat(readings.get("B2").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").typeSource()).isEqualTo("derived");
+    }
+
+    /** A ready cell the decision model is unsure about goes to chat in the same round; B3 never does. */
+    @Test
+    void aDeferredReadyCellGoesToChatAndItsDependentStillFollowsByArithmetic() throws Exception {
+        var decisions = new RecordingDecisions(Map.of());
+        var chat = new SilentChat() {
+            @Override public String classifyCellJson(String systemPrompt, String userPrompt, int maxTokens) {
+                prompts.add(userPrompt);
+                return new CellTypeClassifierLlmTest.FakeClassifierLlm()
+                        .classifyCellJson(systemPrompt, userPrompt, maxTokens);
+            }
+        };
+        Map<String, CellReading> readings = read(workbook(sheet -> seedAndTwoFormulas(sheet, "Gross")), decisions, chat);
+
+        assertThat(readings.get("B2").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").typeSource()).isEqualTo("derived");
+        assertThat(chat.prompts).noneMatch(prompt -> prompt.contains("B3"));
+    }
+
+    /**
+     * A model's "unit" for money nothing states a scale for is its default, not a reading. It must not
+     * follow the formulas built on it as a firm scale: the lakh sheet that reads them fixes theirs.
+     */
+    @Test
+    void aModelsDefaultUnitScaleForMoneyDoesNotOverrideWhatTheReadingSheetStates() throws Exception {
+        var decisions = new RecordingDecisions(
+                Map.of("B2", new CellDecisionClient.Decision("money", 0.97, "unit", 0.95)));
+        Map<String, CellReading> readings = read(book(workbook -> {
+            Sheet model = workbook.createSheet("Model");
+            seedAndTwoFormulas(model, "Gross");
+            Sheet report = workbook.createSheet("Report");
+            report.createRow(0).createCell(0).setCellValue("Rs. In Lakhs");
+            report.createRow(2).createCell(0).setCellValue("Result");
+            report.getRow(2).createCell(1).setCellFormula("Model!B3");
+        }), decisions, new SilentChat());
+
+        assertThat(readings.get("Model!B2").kind()).isEqualTo("money");
+        assertThat(readings.get("Report!B3").scale()).isEqualTo("lakh");
+        assertThat(readings.get("Model!B3").scale()).isEqualTo("lakh");
+        assertThat(readings.get("Model!B2").scale()).isEqualTo("lakh");
+    }
+
+    /** Nothing can type the chain: it ends untyped, and no cell is put to the decision model twice. */
+    @Test
+    void anUntypableChainEndsUntypedAndIsNotAskedTwice() throws Exception {
+        var decisions = new RecordingDecisions(Map.of());
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> seedAndTwoFormulas(sheet, "Gross")), decisions, new SilentChat());
+
+        assertThat(readings.get("B2").refusal()).isEqualTo("untypable");
+        assertThat(readings.get("B3").refusal()).isEqualTo("untypable");
+        assertThat(decisions.asked).doesNotHaveDuplicates();
+    }
+
     /** Workbooks pad sheet names ("P  L "); a reference to one must still find its sheet. */
     @Test
     void aFormulaReadingAPaddedSheetNameFollowsItsPrecedent() throws Exception {
@@ -353,6 +482,22 @@ class CellReadingWriterTest {
     }
 
     @Test
+    void aRatioTimesOneHundredIsAPercent() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Profit (in Rs. Lakhs)");
+            sheet.getRow(0).createCell(1).setCellValue(12);
+            sheet.createRow(1).createCell(0).setCellValue("Sales (in Rs. Lakhs)");
+            sheet.getRow(1).createCell(1).setCellValue(80);
+            sheet.createRow(2).createCell(1).setCellFormula("B1/B2*100");
+            sheet.createRow(3).createCell(1).setCellFormula("B1/B2");
+        }));
+
+        assertThat(readings.get("B3").kind()).isEqualTo("percent");
+        assertThat(readings.get("B3").scale()).isEqualTo("unit");
+        assertThat(readings.get("B4").kind()).isEqualTo("ratio");
+    }
+
+    @Test
     void aPlainFractionDoesNotChangeScale() throws Exception {
         Map<String, CellReading> readings = read(workbook(sheet -> {
             sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lacs)");
@@ -364,7 +509,20 @@ class CellReadingWriterTest {
         assertThat(readings.get("C3").scale()).isEqualTo("lakh");
     }
 
+    private static void restore(String property, String value) {
+        if (value == null) {
+            System.clearProperty(property);
+        } else {
+            System.setProperty(property, value);
+        }
+    }
+
     private Map<String, CellReading> read(XSSFWorkbook workbook) throws Exception {
+        return read(workbook, null, null);
+    }
+
+    private Map<String, CellReading> read(XSSFWorkbook workbook, CellDecisionClient decision, ClassifierLlm chat)
+            throws Exception {
         Path xlsx = tempDir.resolve("reading.xlsx");
         try (OutputStream out = Files.newOutputStream(xlsx)) {
             XSSFFormulaEvaluator.evaluateAllFormulaCells(workbook);
@@ -388,7 +546,17 @@ class CellReadingWriterTest {
             for (long worksheetId : sheetNames.keySet()) {
                 insertBlock(repo, summary.parseRunId(), worksheetId, cells);
             }
-            new CellReadingWriter().replace(repo, summary.parseRunId());
+            // A model means the classifier runs, and it persists the learned dictionary: keep that out of ~/.tev-parser.
+            String oldDir = System.getProperty(DynamicKindTokens.DIR_PROPERTY);
+            String oldLearn = System.getProperty(DynamicKindTokens.LEARN_PROPERTY);
+            System.setProperty(DynamicKindTokens.DIR_PROPERTY, tempDir.resolve("dictionaries").toString());
+            System.setProperty(DynamicKindTokens.LEARN_PROPERTY, "false");
+            try {
+                new CellReadingWriter().withDecisionModel(decision).replace(repo, summary.parseRunId(), chat);
+            } finally {
+                restore(DynamicKindTokens.DIR_PROPERTY, oldDir);
+                restore(DynamicKindTokens.LEARN_PROPERTY, oldLearn);
+            }
             Map<String, CellReading> byCoord = new HashMap<>();
             Map<Long, Long> sheetOf = new HashMap<>();
             for (InterpretationCellView cell : cells) {

@@ -28,14 +28,15 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Offline replay of Layer B's typing on a copy of a finished workspace, with no network: the
- * decision model is a recording stub that is never sure, and the chat model answers nothing, so
+ * decision model is a recording stub that is never sure (by default), and the chat model answers nothing, so
  * the cells left untyped are exactly the cells that reached the decision model. The report says
  * how many there were and how they wait on each other, which is what the round-based pass 2 is
  * sized from.
  *
  * <p>Skipped unless {@code -Dtev.replay.db=<path to a workspace db>} is given. Optional:
- * {@code -Dtev.replay.scope="B  S"} (comma separated; default {@code B  S}) and
- * {@code -Dtev.replay.out=<file>} for the report. The database and the learned dictionary are
+ * {@code -Dtev.replay.scope="B  S"} (comma separated; default {@code B  S}; {@code *} is the whole workbook) and
+ * {@code -Dtev.replay.out=<file>} for the report, and {@code -Dtev.replay.model=confident} for a decision
+ * model that settles whatever it is asked. The database and the learned dictionary are
  * copied first, so neither the workspace nor {@code ~/.tev-parser} is touched.
  */
 class DecisionPoolReplayTest {
@@ -70,6 +71,13 @@ class DecisionPoolReplayTest {
         System.setProperty(DynamicKindTokens.DIR_PROPERTY, dictionaries.toString());
         System.setProperty(DynamicKindTokens.LEARN_PROPERTY, "false");
 
+        // "confident" settles every cell it is asked (as money): the cells it is asked about are then
+        // the ones that cannot follow by arithmetic, a count of the questions a model has to answer.
+        boolean confident = "confident".equals(System.getProperty("tev.replay.model"));
+        boolean oracleMode = "oracle".equals(System.getProperty("tev.replay.model"));
+        Map<String, CellReading> oracle = new HashMap<>(); // coord|display|formula -> the stored reading
+        Set<String> ambiguous = new HashSet<>();
+        Map<Long, CellReading> before = new HashMap<>();
         List<Asked> asked = new CopyOnWriteArrayList<>();
         CellDecisionClient neverSure = state -> {
             JsonNode s = MAPPER.readTree(state);
@@ -77,7 +85,18 @@ class DecisionPoolReplayTest {
                     s.path("cell").path("coord").asText(),
                     s.path("cell").path("display").asText(),
                     s.path("cell").path("formula").asText("")));
-            return new CellDecisionClient.Decision("money", 0.0, "unit", 0.0);
+            if (oracleMode) {
+                String key = oracleKey(s.path("cell").path("coord").asText(),
+                        s.path("cell").path("display").asText(), s.path("cell").path("formula").asText(""));
+                CellReading stored = oracle.get(key);
+                if (stored != null && stored.kind() != null && !ambiguous.contains(key)) {
+                    return new CellDecisionClient.Decision(stored.kind(), 0.99,
+                            stored.scale() == null ? "unit" : stored.scale(), 0.99);
+                }
+                return new CellDecisionClient.Decision("money", 0.0, "unit", 0.0);
+            }
+            double sure = confident ? 0.99 : 0.0;
+            return new CellDecisionClient.Decision("money", sure, "unit", sure);
         };
         ClassifierLlm answersNothing = new ClassifierLlm() {
             @Override public List<RegionProposal> proposeRegions(RegionLayoutPrompt prompt) { return List.of(); }
@@ -94,9 +113,25 @@ class DecisionPoolReplayTest {
                 parseRunId = rs.getLong(1);
             }
             List<String> scopeNames = List.of(System.getProperty("tev.replay.scope", "B  S").split(","));
-            Set<Long> scope = new ClassifyService(answersNothing).withSheetScope(scopeNames)
-                    .resolveScope(repo, parseRunId);
+            Set<Long> scope = "*".equals(scopeNames.get(0).trim())
+                    ? null // the whole workbook
+                    : new ClassifyService(answersNothing).withSheetScope(scopeNames).resolveScope(repo, parseRunId);
 
+            if (oracleMode) {
+                Map<Long, InterpretationCellView> byId = new HashMap<>();
+                repo.selectInterpretationCellsForParseRun(parseRunId).forEach(c -> byId.put(c.cellId(), c));
+                for (CellReading r : repo.selectCellReadingsForParseRun(parseRunId)) {
+                    before.put(r.cellId(), r);
+                    InterpretationCellView c = byId.get(r.cellId());
+                    if (c != null && (scope == null || scope.contains(c.worksheetId()))) {
+                        String key = oracleKey(c.coord(), c.displayValue() == null ? "" : c.displayValue(),
+                                c.formulaText() == null ? "" : c.formulaText());
+                        if (oracle.put(key, r) != null) {
+                            ambiguous.add(key); // the same coord, display and formula on two sheets
+                        }
+                    }
+                }
+            }
             LlmStats.GLOBAL.reset();
             new CellReadingWriter()
                     .withTuning(new ClassifyTuning(15, 10, 8), scope)
@@ -104,12 +139,128 @@ class DecisionPoolReplayTest {
                     .replace(repo, parseRunId, answersNothing);
 
             report.append(analyse(repo, parseRunId, asked, scope));
+            if (oracleMode) {
+                report.append(compareWithStored(repo, parseRunId, asked, scope, before));
+            }
+            String dump = System.getProperty("tev.replay.dump");
+            if (dump != null && !dump.isBlank()) {
+                dumpReadings(repo, parseRunId, scope, Path.of(dump));
+            }
         }
         String out = System.getProperty("tev.replay.out");
         if (out != null && !out.isBlank()) {
             Files.writeString(Path.of(out), report.toString());
         }
         System.err.print(report);
+    }
+
+    /** One line per in-scope formula cell: where it is, its formula and how it was read, to diff two builds. */
+    private static void dumpReadings(WorkspaceRepository repo, long parseRunId, Set<Long> scope, Path file)
+            throws Exception {
+        Map<Long, InterpretationCellView> byId = new HashMap<>();
+        repo.selectInterpretationCellsForParseRun(parseRunId).forEach(c -> byId.put(c.cellId(), c));
+        Map<Long, String> sheets = new HashMap<>();
+        for (WorksheetRef sheet : repo.selectWorksheetsForParseRun(parseRunId)) {
+            sheets.put(sheet.worksheetId(), sheet.sheetName());
+        }
+        Set<Long> formulas = new HashSet<>();
+        repo.selectFormulaLinksForParseRun(parseRunId).forEach(l -> formulas.add(l.fromCellId()));
+        List<String> lines = new ArrayList<>();
+        for (CellReading r : repo.selectCellReadingsForParseRun(parseRunId)) {
+            InterpretationCellView c = byId.get(r.cellId());
+            if (c == null || !formulas.contains(c.cellId()) || (scope != null && !scope.contains(c.worksheetId()))) {
+                continue;
+            }
+            lines.add(String.join("\t", sheets.get(c.worksheetId()) + "!" + c.coord(),
+                    c.formulaText() == null ? "" : c.formulaText(), String.valueOf(r.kind()),
+                    String.valueOf(r.scale()), String.valueOf(r.typeSource()), String.valueOf(r.refusal())));
+        }
+        java.util.Collections.sort(lines);
+        Files.write(file, lines);
+    }
+
+    private static String oracleKey(String coord, String display, String formula) {
+        return coord + "|" + display + "|" + formula;
+    }
+
+    /**
+     * Cells typed now against what the stored run said, split by how they were typed this time:
+     * asked of the model (which here repeats the stored answer, so they agree by construction)
+     * or settled without it (dictionary or arithmetic), where a disagreement is a real difference.
+     */
+    private static String compareWithStored(
+            WorkspaceRepository repo, long parseRunId, List<Asked> asked, Set<Long> scope,
+            Map<Long, CellReading> before) throws Exception {
+        Map<Long, InterpretationCellView> byId = new HashMap<>();
+        repo.selectInterpretationCellsForParseRun(parseRunId).forEach(c -> byId.put(c.cellId(), c));
+        Map<Long, String> sheets = new HashMap<>();
+        for (WorksheetRef sheet : repo.selectWorksheetsForParseRun(parseRunId)) {
+            sheets.put(sheet.worksheetId(), sheet.sheetName());
+        }
+        Set<String> askedKeys = new HashSet<>();
+        asked.forEach(a -> askedKeys.add(oracleKey(a.coord(), a.display(), a.formula())));
+        Set<Long> formulas = new HashSet<>();
+        repo.selectFormulaLinksForParseRun(parseRunId).forEach(l -> formulas.add(l.fromCellId()));
+
+        int comparable = 0;
+        int kindAgree = 0;
+        int bothAgree = 0;
+        int newlyUntyped = 0;
+        int newlyTyped = 0;
+        Map<String, Integer> pairs = new TreeMap<>();
+        List<String> samples = new ArrayList<>();
+        for (CellReading now : repo.selectCellReadingsForParseRun(parseRunId)) {
+            InterpretationCellView c = byId.get(now.cellId());
+            if (c == null || !formulas.contains(c.cellId()) || (scope != null && !scope.contains(c.worksheetId()))) {
+                continue;
+            }
+            String key = oracleKey(c.coord(), c.displayValue() == null ? "" : c.displayValue(),
+                    c.formulaText() == null ? "" : c.formulaText());
+            if (askedKeys.contains(key)) {
+                continue; // the model's own answer, copied from the stored run
+            }
+            CellReading was = before.get(now.cellId());
+            boolean wasTyped = was != null && was.kind() != null;
+            boolean isTyped = now.kind() != null;
+            if (wasTyped && !isTyped) {
+                newlyUntyped++;
+                pairs.merge("typed before, " + now.refusal() + " now", 1, Integer::sum);
+                continue;
+            }
+            if (!wasTyped && isTyped) {
+                newlyTyped++;
+                continue;
+            }
+            if (!wasTyped) {
+                continue;
+            }
+            comparable++;
+            boolean kindSame = was.kind().equals(now.kind());
+            boolean scaleSame = !"money".equals(now.kind()) || java.util.Objects.equals(was.scale(), now.scale());
+            if (kindSame) {
+                kindAgree++;
+            }
+            if (kindSame && scaleSame) {
+                bothAgree++;
+            } else {
+                pairs.merge(was.kind() + "/" + was.scale() + " -> " + now.kind() + "/" + now.scale(), 1, Integer::sum);
+                if (samples.size() < 12) {
+                    samples.add(sheets.get(c.worksheetId()) + "!" + c.coord() + "  " + c.formulaText()
+                            + "  stored " + was.kind() + "/" + was.scale() + "  now " + now.kind() + "/" + now.scale()
+                            + " (" + now.typeSource() + ")");
+                }
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("[replay] settled without the model, against the stored run:\n");
+        sb.append(String.format("[replay]   %d typed in both; kind agrees %d, kind and scale agree %d%n",
+                comparable, kindAgree, bothAgree));
+        sb.append(String.format("[replay]   typed before but not now: %d; untyped before, typed now: %d%n",
+                newlyUntyped, newlyTyped));
+        pairs.entrySet().stream().sorted((a, b) -> b.getValue() - a.getValue()).limit(10)
+                .forEach(e -> sb.append(String.format("[replay]   %5d  %s%n", e.getValue(), e.getKey())));
+        samples.forEach(x -> sb.append("[replay]   e.g. ").append(x).append('\n'));
+        return sb.toString();
     }
 
     /** The pool is the in-scope numeric cells still untypable once no model could settle anything. */
@@ -200,9 +351,13 @@ class DecisionPoolReplayTest {
         sb.append("[replay] typed by dictionary (cells_typed_dictionary): ")
                 .append(stat("cells_typed_dictionary")).append('\n');
         sb.append("[replay] reached the decision model (cells_to_decision_model): ")
-                .append(stat("cells_to_decision_model")).append(" (asked: ").append(asked.size())
+                .append(stat("cells_to_decision_model")).append(", settled: ")
+                .append(stat("cells_settled_decision_model")).append(" (asked: ").append(asked.size())
                 .append(", of which with a formula: ").append(askedWithFormula).append(")\n");
         sb.append("[replay] reached the chat model (cells_to_chat): ").append(stat("cells_to_chat")).append('\n');
+        sb.append("[replay] followed by arithmetic after a stage (cells_typed_repropagation): ")
+                .append(stat("cells_typed_repropagation")).append(", decision rounds: ")
+                .append(stat("decision_rounds")).append('\n');
         sb.append("[replay] untypable at the end = the pool: ").append(pool.size())
                 .append(" (formulas: ").append(formulasInPool).append(")\n");
         sb.append("[replay] why pool cells wait:\n");
