@@ -82,4 +82,56 @@ class ScopedBindingTest {
 
         assertThat(sheetsBound).as("sheets the model was asked to bind").containsOnly("ONE");
     }
+    @Test
+    void sheetsTheNamedSheetOnlyReadsThroughFormulasAreNeitherLaidOutDescribedNorBound() throws Exception {
+        Path xlsx = tempDir.resolve("deps.xlsx");
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet one = workbook.createSheet("ONE");
+            Sheet two = workbook.createSheet("TWO");
+            workbook.createSheet("THREE").createRow(0).createCell(0).setCellValue(1);
+            for (int r = 0; r < 4; r++) {
+                two.createRow(r).createCell(1).setCellValue(100.0 * (r + 1));
+                Row row = one.createRow(r);
+                row.createCell(0).setCellValue("Line " + r);
+                row.createCell(1).setCellFormula("TWO!B" + (r + 1));   // ONE reads TWO
+            }
+            try (FileOutputStream out = new FileOutputStream(xlsx.toFile())) {
+                workbook.write(out);
+            }
+        }
+        Path db = tempDir.resolve("deps.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 42L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        Set<String> laidOut = ConcurrentHashMap.newKeySet();
+        Set<String> described = ConcurrentHashMap.newKeySet();
+        Set<String> bound = ConcurrentHashMap.newKeySet();
+        ClassifierLlm llm = new ClassifierLlm() {
+            @Override
+            public List<RegionProposal> proposeRegions(RegionLayoutPrompt prompt) {
+                laidOut.add(prompt.sheetName());
+                return List.of(new RegionProposal("main", "A1:B4", "schedule", "unit-test region"));
+            }
+
+            @Override
+            public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
+                described.add(prompt.sheetName());
+                return new LayerAJudgment(
+                        ScheduleFamily.CAPEX_DETAIL, Triage.MAIN, Relevance.PRIMARY,
+                        List.of(), List.of(), null, "Expense schedule.");
+            }
+
+            @Override
+            public List<LayerBAssignment> bindLayerB(LayerBPrompt prompt) {
+                bound.add(prompt.sheetName());
+                return List.of();
+            }
+        };
+
+        new ClassifyService(llm).withSheetScope(List.of("ONE")).classify(db, ingest.parseRunId());
+
+        assertThat(laidOut).as("sheets sent for region layout").containsOnly("ONE");
+        assertThat(described).as("sheets whose regions were described").containsOnly("ONE");
+        assertThat(bound).as("sheets bound").containsOnly("ONE");
+    }
 }

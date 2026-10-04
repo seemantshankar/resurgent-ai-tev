@@ -56,7 +56,14 @@ public final class ClassifyService {
 
     private ClassifyTuning tuning = ClassifyTuning.sequential();
     private java.util.Set<String> scopeSheetNames; // lower-case; null means the whole workbook
+    /** Sheets whose cells may go to the model for typing: the named sheets and every sheet their formulas read. */
     private java.util.Set<Long> scopeWorksheetIds; // resolved per run; null means every sheet
+    /**
+     * Sheets that get the structure steps (region layout, Layer A, header geometry, binding): only
+     * the sheets that were named. Dependency sheets are typed so formula types can flow, but laying
+     * out, describing and binding them is most of a run and is not what was asked for.
+     */
+    private java.util.Set<Long> structureWorksheetIds; // null means every sheet
 
     /** Batch sizes and concurrency for the LLM stages. */
     public ClassifyService withTuning(ClassifyTuning tuning) {
@@ -87,10 +94,10 @@ public final class ClassifyService {
     }
 
     private void deleteDispositions(WorkspaceRepository repo, long parseRunId) throws SQLException {
-        if (scopeWorksheetIds == null) {
+        if (structureWorksheetIds == null) {
             repo.deletePacketDispositionsForParseRun(parseRunId);
         } else {
-            repo.deletePacketDispositionsForWorksheets(parseRunId, scopeWorksheetIds);
+            repo.deletePacketDispositionsForWorksheets(parseRunId, structureWorksheetIds);
         }
     }
 
@@ -99,7 +106,7 @@ public final class ClassifyService {
     }
 
     private boolean inScope(long worksheetId) {
-        return scopeWorksheetIds == null || scopeWorksheetIds.contains(worksheetId);
+        return structureWorksheetIds == null || structureWorksheetIds.contains(worksheetId);
     }
 
     /**
@@ -109,6 +116,7 @@ public final class ClassifyService {
     java.util.Set<Long> resolveScope(WorkspaceRepository repo, long parseRunId)
             throws SQLException, ClassifyException {
         if (scopeSheetNames == null) {
+            structureWorksheetIds = null;
             return null;
         }
         List<WorksheetRef> sheets = repo.selectWorksheetsForParseRun(parseRunId);
@@ -129,6 +137,7 @@ public final class ClassifyService {
         if (!missing.isEmpty()) {
             throw new ClassifyException("sheet not in parse run: " + String.join(", ", missing));
         }
+        structureWorksheetIds = new java.util.LinkedHashSet<>(scope); // the named sheets, before dependencies join
         Map<Long, Long> sheetOfCell = new HashMap<>();
         for (var cell : repo.selectInterpretationCellsForParseRun(parseRunId)) {
             sheetOfCell.put(cell.cellId(), cell.worksheetId());
@@ -153,7 +162,7 @@ public final class ClassifyService {
         System.err.println("[classify] Scope: " + String.join(", ", scopeSheetNames)
                 + (pulledIn.isEmpty() ? " (no other sheet is read by their formulas)"
                         : " + " + pulledIn.stream().map(names::get).toList()
-                                + " pulled in because their formulas read them"));
+                                + " typed too, because their formulas read them (they are not laid out, described or bound)"));
         System.err.flush();
         return scope;
     }
@@ -562,10 +571,10 @@ public final class ClassifyService {
         }
 
         deleteDispositions(repo, parseRunId);
-        if (scopeWorksheetIds == null) {
+        if (structureWorksheetIds == null) {
             repo.deleteNarrowCandidatesForParseRun(parseRunId);
         } else {
-            repo.deleteNarrowCandidatesForWorksheets(parseRunId, scopeWorksheetIds);
+            repo.deleteNarrowCandidatesForWorksheets(parseRunId, structureWorksheetIds);
         }
         for (WorksheetRef sheet : sheets) {
             CandidateRow coverage = coverageBySheet.get(sheet.worksheetId());
