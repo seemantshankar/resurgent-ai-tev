@@ -120,7 +120,7 @@ class HttpCompletionsClientTimeoutTest {
         var last = OpenRouterClassifierLlm.deadlinesFor(2, 3);
         var only = OpenRouterClassifierLlm.deadlinesFor(0, 1);
 
-        assertThat(first.small()).isEqualTo(Duration.ofSeconds(45));
+        assertThat(first.small()).isEqualTo(Duration.ofSeconds(30));
         assertThat(middle).isEqualTo(first);
         assertThat(last.small()).isGreaterThan(first.small());
         assertThat(last.large()).isGreaterThan(first.large());

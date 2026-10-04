@@ -153,7 +153,7 @@ class ParallelBindingTest {
         int maxTokens = OpenRouterClassifierLlm.bindMaxCompletionTokens(3_000);
 
         assertThat(OpenRouterClassifierLlm.Deadlines.FAIL_FAST.forRequest(3_000, maxTokens))
-                .isEqualTo(Duration.ofSeconds(45));
+                .isEqualTo(Duration.ofSeconds(30));
     }
 
     @Test

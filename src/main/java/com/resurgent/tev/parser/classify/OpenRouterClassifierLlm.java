@@ -75,7 +75,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
     /** Whole-exchange limits: {@code small} for ordinary calls, {@code large} for big batches. */
     record Deadlines(Duration small, Duration large) {
-        static final Deadlines FAIL_FAST = new Deadlines(Duration.ofSeconds(45), Duration.ofSeconds(180));
+        static final Deadlines FAIL_FAST = new Deadlines(Duration.ofSeconds(30), Duration.ofSeconds(180));
         static final Deadlines LAST_RESORT = new Deadlines(Duration.ofSeconds(120), Duration.ofSeconds(240));
 
         /** A prompt this long, or a completion cap this high, is treated as a big batch. */

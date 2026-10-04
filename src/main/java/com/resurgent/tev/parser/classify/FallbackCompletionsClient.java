@@ -20,7 +20,7 @@ final class FallbackCompletionsClient implements CompletionsClient {
     /** A model is set aside when this many of its last {@link #WINDOW} calls failed. */
     static final int MAX_FAILURES_IN_WINDOW = 3;
     static final int WINDOW = 10;
-    static final long COOL_OFF_NANOS = 5L * 60L * 1_000_000_000L;
+    static final long COOL_OFF_NANOS = 90L * 1_000_000_000L;
 
     /** One model in the chain. */
     record Link(String model, CompletionsClient client) {}
@@ -143,7 +143,7 @@ final class FallbackCompletionsClient implements CompletionsClient {
             skipUntil[i] = nanoClock.getAsLong() + COOL_OFF_NANOS;
             recent[i].clear(); // a fresh chance once the cool-off ends
             System.err.println("[llm-fallback] model " + model + " failed " + failures + " of its last "
-                    + WINDOW + " calls; skipping it for 5 minutes");
+                    + WINDOW + " calls; skipping it for " + COOL_OFF_NANOS / 1_000_000_000L + " seconds");
             System.err.flush();
         }
     }
