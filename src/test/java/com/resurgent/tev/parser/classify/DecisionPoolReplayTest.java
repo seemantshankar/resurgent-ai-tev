@@ -224,6 +224,39 @@ class DecisionPoolReplayTest {
                         settled == 0 ? 0.0 : 100.0 * settledAgree / settled));
             }
         }
+        // What each threshold would settle on the inputs variant, and how often those answers agree.
+        if (inputsRun != null) {
+            sb.append(String.format("[live] threshold sweep, inputs variant (agreement is with the stored run, "
+                    + "which is itself a guess)%n"));
+            sb.append(String.format("[live] %-9s %-12s %6s %9s %10s%n", "threshold", "cells", "n", "settled", "agree"));
+            for (var subset : List.of(Map.entry("all", common), Map.entry("with inputs", (Set<String>) withInputs))) {
+                for (double cut : new double[] {0.70, 0.80, 0.85, 0.90, 0.95}) {
+                    int n = 0;
+                    int settled = 0;
+                    int agree = 0;
+                    for (String k : subset.getValue()) {
+                        CellReading was = stored.get(k);
+                        if (was == null || was.kind() == null || ambiguous.contains(k)) {
+                            continue;
+                        }
+                        Answer a = inputsRun.get(k);
+                        n++;
+                        if (settledAt(a, cut)) {
+                            settled++;
+                            boolean scaleOk = !a.askedScale() || !"money".equals(was.kind()) || was.scale() == null
+                                    || java.util.Objects.equals(a.decision().scale(), was.scale());
+                            if (a.decision().kind().equals(was.kind()) && scaleOk) {
+                                agree++;
+                            }
+                        }
+                    }
+                    if (n > 0) {
+                        sb.append(String.format(Locale.ROOT, "[live] %-9.2f %-12s %6d %8.1f%% %9.1f%%%n", cut,
+                                subset.getKey(), n, 100.0 * settled / n, settled == 0 ? 0.0 : 100.0 * agree / settled));
+                    }
+                }
+            }
+        }
         // The settled answers that differ from the stored run, so a person can say which is right.
         if (inputsRun != null) {
             int shown = 0;
@@ -254,6 +287,11 @@ class DecisionPoolReplayTest {
             }
         }
         return sb.toString();
+    }
+
+    private static boolean settledAt(Answer a, double cut) {
+        return a.decision().kindConfidence() >= cut
+                && (!a.askedScale() || !"money".equals(a.decision().kind()) || a.decision().scaleConfidence() >= cut);
     }
 
     private static Set<String> intersect(Set<String> a, Set<String> b) {

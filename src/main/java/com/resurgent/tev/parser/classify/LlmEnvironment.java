@@ -21,6 +21,8 @@ public final class LlmEnvironment {
     static final String STRUCTURED_DECISION_MODEL_ID = "Excel_Structured_Decision_Model_id";
     static final String CELL_DECISION_COMPARE = "Excel_Enrichment_Cell_decision_compare";
     static final String CELL_DECISION_MIN_CONFIDENCE = "Excel_Enrichment_Cell_decision_min_confidence";
+    static final String CELL_DECISION_MIN_CONFIDENCE_BY_MODEL =
+            "Excel_Enrichment_Cell_decision_min_confidence_by_model";
     static final String CELL_DECISION_CONCURRENCY = "Excel_Enrichment_Cell_decision_concurrency";
     static final String MODEL3_ID = "Excel_Enrichment_Model3_id";
 
@@ -113,9 +115,55 @@ public final class LlmEnvironment {
         return new OpenRouterDecisionClient(key, model);
     }
 
+    /**
+     * The confidence the decision model {@code modelId} must reach to settle a cell. Confidence does
+     * not mean the same across models (one reports a formula over its probabilities, another "its own
+     * estimate"), so a threshold chosen for one does not carry to another. In order: the model's own
+     * entry in {@code Excel_Enrichment_Cell_decision_min_confidence_by_model} ({@code id=0.9,id2=0.85};
+     * the exact id first, then the id without its {@code -YYYYMMDD} build or {@code :variant}), the
+     * global {@code Excel_Enrichment_Cell_decision_min_confidence}, then 0.90.
+     */
+    static double decisionMinConfidence(Map<String, String> env, String modelId) {
+        String perModel = env.get(CELL_DECISION_MIN_CONFIDENCE_BY_MODEL);
+        if (perModel != null && modelId != null && !modelId.isBlank()) {
+            Map<String, Double> byModel = new java.util.HashMap<>();
+            for (String entry : perModel.split("[,;]")) {
+                int eq = entry.lastIndexOf('=');
+                if (eq <= 0) {
+                    continue;
+                }
+                try {
+                    double parsed = Double.parseDouble(entry.substring(eq + 1).trim());
+                    if (parsed > 0 && parsed <= 1) {
+                        byModel.put(entry.substring(0, eq).trim(), parsed);
+                        continue;
+                    }
+                } catch (NumberFormatException ignored) {
+                    // reported below
+                }
+                System.err.println("[cell-decision] ignoring " + CELL_DECISION_MIN_CONFIDENCE_BY_MODEL
+                        + " entry '" + entry.trim() + "'");
+            }
+            String id = modelId.trim();
+            String noVariant = id.contains(":") ? id.substring(0, id.indexOf(':')) : id;
+            String noBuild = noVariant.replaceFirst("-\\d{8}$", "");
+            for (String candidate : new String[] {id, noVariant, noBuild}) {
+                Double own = byModel.get(candidate);
+                if (own != null) {
+                    return own;
+                }
+            }
+        }
+        return decisionMinConfidence(env);
+    }
+
     /** {@code Excel_Enrichment_Cell_decision_min_confidence}, default 0.90; ignored when not a number in (0, 1]. */
     static double decisionMinConfidence() {
-        String v = load().get(CELL_DECISION_MIN_CONFIDENCE);
+        return decisionMinConfidence(load());
+    }
+
+    private static double decisionMinConfidence(Map<String, String> env) {
+        String v = env.get(CELL_DECISION_MIN_CONFIDENCE);
         if (v != null) {
             try {
                 double parsed = Double.parseDouble(v.trim());
@@ -158,7 +206,7 @@ public final class LlmEnvironment {
         boolean decisionOn = decision != null && env.get(API_KEY) != null;
         stats.putText("run", "decision_model", decisionOn ? decision : "none");
         if (decisionOn) {
-            stats.put("run", "decision_min_confidence", decisionMinConfidence());
+            stats.put("run", "decision_min_confidence", decisionMinConfidence(env, decision));
             stats.put("run", "decision_concurrency", decisionConcurrency());
             stats.put("run", "decision_shadow_compare", decisionCompareRequested() ? 1 : 0);
         }

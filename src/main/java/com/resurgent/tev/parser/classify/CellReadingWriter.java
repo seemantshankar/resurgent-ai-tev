@@ -167,7 +167,8 @@ public final class CellReadingWriter {
                     boolean fromEnvironment = decisionModelOverride == null;
                     classifier.withDecisionModel(decisionModel)
                             .withDecisionTuning(
-                                    fromEnvironment ? LlmEnvironment.decisionMinConfidence()
+                                    fromEnvironment
+                                            ? LlmEnvironment.decisionMinConfidence(LlmEnvironment.load(), decisionModel.model())
                                             : CellTypeClassifierLlm.DEFAULT_DECISION_MIN_CONFIDENCE,
                                     fromEnvironment ? LlmEnvironment.decisionConcurrency()
                                             : CellTypeClassifierLlm.DEFAULT_DECISION_CONCURRENCY);

@@ -36,6 +36,11 @@ interface CellDecisionClient {
         }
     }
 
+    /** The model id this client asks, for per-model settings; empty when it does not say. */
+    default String model() {
+        return "";
+    }
+
     /** Decide from the cell's plain-text description; throws when the call or its answer fails. */
     Decision decide(String state) throws Exception;
 

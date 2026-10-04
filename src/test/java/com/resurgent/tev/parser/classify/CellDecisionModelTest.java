@@ -279,6 +279,20 @@ class CellDecisionModelTest {
     }
 
     @Test
+    void theBuildThatAnsweredIsRecordedWithTheRun() {
+        LlmStats.GLOBAL.reset();
+        var client = new OpenRouterDecisionClient("key", "liquid/d1");
+
+        client.noteServedModel("liquid/d1-20260930");
+
+        assertThat(LlmStats.GLOBAL.stats()).anySatisfy(stat -> {
+            assertThat(stat.name()).isEqualTo("decision_model_served");
+            assertThat(stat.text()).isEqualTo("liquid/d1-20260930");
+        });
+        LlmStats.GLOBAL.reset();
+    }
+
+    @Test
     void structuredStateGoesToTheDecisionsApiAsAnObjectAndPlainTextStaysText() throws Exception {
         var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
 

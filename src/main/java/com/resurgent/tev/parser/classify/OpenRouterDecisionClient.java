@@ -56,7 +56,8 @@ final class OpenRouterDecisionClient implements CellDecisionClient {
         this.model = Objects.requireNonNull(model, "model");
     }
 
-    String model() {
+    @Override
+    public String model() {
         return model;
     }
 
@@ -79,6 +80,7 @@ final class OpenRouterDecisionClient implements CellDecisionClient {
             String body = post(requestBody(model, state, askScale, legacyWording));
             Decision decision = parse(body, askScale);
             JsonNode usage = MAPPER.readTree(body).path("usage");
+            noteServedModel(MAPPER.readTree(body).path("model").asText(""));
             LlmStats.GLOBAL.recordCall(model, usage.path("input_tokens").asLong(0),
                     usage.path("output_tokens").asLong(0),
                     usage.path("cost").isNumber() ? usage.path("cost").asDouble() : null,
@@ -91,6 +93,19 @@ final class OpenRouterDecisionClient implements CellDecisionClient {
             throw e;
         } finally {
             LlmActivity.GLOBAL.end(activityId, succeeded);
+        }
+    }
+
+    private volatile String servedModel = "";
+
+    /**
+     * The model that actually answered (OpenRouter's response names the dated build behind an alias),
+     * recorded with the run: a threshold is only valid for the build it was chosen on.
+     */
+    void noteServedModel(String served) {
+        if (!served.isBlank() && !served.equals(servedModel)) {
+            servedModel = served;
+            LlmStats.GLOBAL.putText("layer-b", "decision_model_served", served);
         }
     }
 
