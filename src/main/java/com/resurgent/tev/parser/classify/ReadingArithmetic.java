@@ -44,6 +44,31 @@ final class ReadingArithmetic {
         }
     }
 
+    private static final java.util.regex.Pattern CELL_REF = java.util.regex.Pattern.compile(
+            "(?<![A-Za-z0-9_])(?:(?:'[^']+'|[A-Za-z0-9_.]+)!)?\\$?[A-Za-z]{1,3}\\$?\\d+(?::\\$?[A-Za-z]{1,3}\\$?\\d+)?(?![A-Za-z0-9_(])");
+
+    /**
+     * True when the formula only adds, subtracts or folds cells together (+, -, SUM, AVERAGE, MIN, MAX):
+     * everything it reads then has to be one kind of quantity, which is what lets an untyped addend be
+     * read from the typed ones. Any product, quotient, comparison, other function or text says nothing.
+     */
+    static boolean additive(String formula) {
+        if (formula == null || formula.isBlank()) {
+            return false;
+        }
+        String body = formula.trim();
+        if (body.startsWith("=")) {
+            body = body.substring(1);
+        }
+        String rest = CELL_REF.matcher(body).replaceAll(" ");
+        if (rest.equals(body)) {
+            return false; // reads no cell
+        }
+        rest = rest.replaceAll("(?i)\\b(?:SUM|AVERAGE|MIN|MAX)\\s*\\(", "(");
+        rest = rest.replaceAll("[0-9.]+", " ");
+        return rest.matches("[\\s(),+\\-]*");
+    }
+
     private static final class Parser {
         private final String text;
         private final long worksheetId;
@@ -574,6 +599,13 @@ final class ReadingArithmetic {
         if (isQuantity(right.kind) && ReadingOutcome.RATE.equals(left.kind)) {
             return money(right, left);
         }
+        // Revenue / 365 * debtor days: a number of days is a time multiplier, not a quantity of goods.
+        if (ReadingOutcome.MONEY.equals(left.kind) && isDuration(right)) {
+            return left;
+        }
+        if (ReadingOutcome.MONEY.equals(right.kind) && isDuration(left)) {
+            return right;
+        }
         // Money × Rate = Money (e.g., principal × interest rate, or any money × dimensionless multiplier)
         if (ReadingOutcome.MONEY.equals(left.kind) && ReadingOutcome.RATE.equals(right.kind)) {
             return left;
@@ -683,6 +715,15 @@ final class ReadingArithmetic {
             return left; // divided by a dimensionless multiple
         }
         return Val.refused(ReadingOutcome.KIND_CONFLICT);
+    }
+
+    private static boolean isDuration(Val value) {
+        if (!isQuantity(value.kind) || value.unit == null) {
+            return false;
+        }
+        String unit = value.unit.toLowerCase(java.util.Locale.ROOT);
+        return unit.equals("days") || unit.equals("day") || unit.equals("months") || unit.equals("month")
+                || unit.equals("years") || unit.equals("year") || unit.equals("weeks") || unit.equals("week");
     }
 
     private static boolean isQuantity(String kind) {

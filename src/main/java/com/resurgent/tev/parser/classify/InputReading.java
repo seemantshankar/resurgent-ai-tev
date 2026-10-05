@@ -19,6 +19,9 @@ final class InputReading {
             "(?i)(?:\\b(?:year|yr|fy)\\b|\\b(?:19|20)\\d{2}\\b)");
     private static final Pattern EXPLICIT_COUNT = Pattern.compile(
             "(?i)(?:\\bno\\.?\\s*of\\b|\\bnumber\\s+of\\b|\\bqty\\b|\\bquantity\\b|\\bnos\\.?\\b|\\bcount\\b)");
+    /** "Debtors Days", "Inventory Days", "(in days)": a number of days, whatever the noun before it. Not "per day". */
+    private static final Pattern DAYS = Pattern.compile(
+            "(?i)^(?!.*\\b(?:per|/)\\s*day)[^0-9]*\\bdays?\\s*[)\\].:]*\\s*$|\\(\\s*(?:in\\s+)?days?\\s*\\)");
     private static final Pattern EXPLICIT_QUANTITY = Pattern.compile("(?i)(?:\\barea\\b|\\bcapacity\\b)");
     private static final Pattern MEASURED = Pattern.compile("(?i)\\b(sq\\.?\\s*ft|sqft|sqm)\\b");
     private static final Pattern COLUMN_NOUN = Pattern.compile(
@@ -134,8 +137,12 @@ final class InputReading {
                     || KindTokens.CURRENCY.matcher(text).find();
             String kind;
             String unit = null;
-            if (KindTokens.PERCENT_TOKEN.matcher(text).find()) {
+            // "Margin (%)" is a percent; "OD @9.5%" and "(2.5% of civil cost)" carry a rate as a parameter.
+            if (KindTokens.PERCENT_UNIT.matcher(text).find()) {
                 kind = ReadingOutcome.PERCENT;
+            } else if (DAYS.matcher(text.trim()).find()) {
+                kind = ReadingOutcome.QUANTITY;
+                unit = "days";
             } else if (measured != null && (moneyish || PER.matcher(text).find())) {
                 kind = ReadingOutcome.RATE;
                 unit = measured;

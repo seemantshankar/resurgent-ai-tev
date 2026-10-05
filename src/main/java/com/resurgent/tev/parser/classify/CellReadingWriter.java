@@ -330,7 +330,7 @@ public final class CellReadingWriter {
             UnstatedScales unknowns) {
         boolean progressed = true;
         while (progressed) {
-            progressed = false;
+            progressed = inferAddends(formulas, precedents, numericIds, settled, unknowns);
             for (InterpretationCellView cell : formulas) {
                 if (settled.containsKey(cell.cellId())) {
                     continue;
@@ -347,6 +347,89 @@ public final class CellReadingWriter {
         for (InterpretationCellView cell : formulas) {
             settled.putIfAbsent(cell.cellId(), ReadingOutcome.refused(ReadingOutcome.UNTYPABLE));
         }
+    }
+
+    /**
+     * Addition needs one kind of quantity. A formula that only adds (SUM, +, -) cells together and reads some
+     * typed inputs and some inputs nothing could type tells what the untyped ones are: the kind, and the
+     * scale, of the typed ones. A subtotal over "Catering sales", "Restaurant sales" and a row nobody labelled
+     * is money in all three, and is then derived by arithmetic instead of being guessed by a model. Applies
+     * only when the typed addends agree and outnumber the untyped ones, every other thing it reads is typed, and the cell to type is a
+     * plain input (no formula, not refused). Returns whether it typed anything.
+     */
+    private static boolean inferAddends(
+            List<InterpretationCellView> formulas,
+            Map<Long, Set<Long>> precedents,
+            Set<Long> numericIds,
+            Map<Long, ReadingOutcome> settled,
+            UnstatedScales unknowns) {
+        boolean any = false;
+        for (InterpretationCellView cell : formulas) {
+            if (settled.containsKey(cell.cellId()) || !ReadingArithmetic.additive(cell.formulaText())) {
+                continue;
+            }
+            List<Long> bare = new ArrayList<>();
+            List<ReadingOutcome> typed = new ArrayList<>();
+            boolean blocked = false;
+            for (long pred : precedents.getOrDefault(cell.cellId(), Set.of())) {
+                if (!numericIds.contains(pred)) {
+                    continue;
+                }
+                ReadingOutcome o = settled.get(pred);
+                if (o == null) {
+                    blocked = true; // a formula not typed yet: wait for it
+                    break;
+                }
+                if (o.typed()) {
+                    typed.add(o);
+                } else if (o.refusal == null && !precedents.containsKey(pred)) {
+                    bare.add(pred); // an input nothing could type
+                } else {
+                    blocked = true; // refused, or a formula nothing could type
+                    break;
+                }
+            }
+            // The typed addends must clearly outnumber the untyped ones: one typed cell among several untyped
+            // ones is the weakest evidence, and a wrong typed cell would be copied onto all of them.
+            if (blocked || bare.isEmpty() || typed.size() <= bare.size()) {
+                continue;
+            }
+            String kind = typed.get(0).kind;
+            String unit = typed.get(0).unit;
+            Set<CellScale> known = new java.util.LinkedHashSet<>();
+            boolean agree = true;
+            for (ReadingOutcome o : typed) {
+                agree &= kind.equals(o.kind) && unit.equals(o.unit);
+                if (o.scale != null && !o.scaleUnstated()) {
+                    known.add(o.scale);
+                }
+            }
+            if (!agree || known.size() > 1) {
+                continue;
+            }
+            String currency = typed.stream().map(o -> o.currency).filter(c -> !c.isEmpty()).findFirst().orElse("");
+            for (long input : bare) {
+                ReadingOutcome inferred;
+                if (!ReadingOutcome.MONEY.equals(kind)) {
+                    inferred = ReadingOutcome.typed(kind, CellScale.UNIT, unit, "", ReadingOutcome.DERIVED);
+                } else if (known.size() == 1) {
+                    CellScale scale = known.iterator().next();
+                    inferred = ReadingOutcome.typed(kind, scale, unit, currency, ReadingOutcome.DERIVED)
+                            .withScale(scale, true);
+                } else {
+                    int fresh = unknowns.fresh(input);
+                    ReadingOutcome sibling = typed.stream().filter(ReadingOutcome::scaleUnstated).findFirst().orElse(null);
+                    if (sibling != null) {
+                        unknowns.same(fresh, sibling.scaleUnknown);
+                    }
+                    inferred = ReadingOutcome.unstated(unit, currency, ReadingOutcome.DERIVED, fresh);
+                }
+                settled.put(input, inferred);
+                LlmStats.GLOBAL.add("layer-b", "cells_typed_by_addends", 1);
+                any = true;
+            }
+        }
+        return any;
     }
 
     /** What the formula's own arithmetic says of this cell, given what its precedents are typed as now. */

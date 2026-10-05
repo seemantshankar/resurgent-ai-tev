@@ -591,6 +591,161 @@ class CellReadingWriterTest {
         assertThat(readings.get("B4").kind()).isEqualTo("money");
     }
 
+    /** B1 and B2 are money by their labels; B3 has no cue at all; B4 sums the three; B5 is built on B4. */
+    private static void sumWithOneUnlabelledAddend(Sheet sheet, String thirdLabel, String sumFormula) {
+        sheet.createRow(0).createCell(0).setCellValue("Catering sales (in Rs.)");
+        sheet.getRow(0).createCell(1).setCellValue(100);
+        sheet.createRow(1).createCell(0).setCellValue("Restaurant sales (in Rs.)");
+        sheet.getRow(1).createCell(1).setCellValue(50);
+        sheet.createRow(2).createCell(0).setCellValue(thirdLabel);
+        sheet.getRow(2).createCell(1).setCellValue(30);
+        sheet.createRow(3).createCell(0).setCellValue("Subtotal");
+        sheet.getRow(3).createCell(1).setCellFormula(sumFormula);
+        sheet.createRow(4).createCell(0).setCellValue("Next");
+        sheet.getRow(4).createCell(1).setCellFormula("B4*2");
+    }
+
+    /**
+     * Addition needs one kind: B3, which nothing labels, is added to two money cells, so it is money. The
+     * subtotal and what is built on it then follow by arithmetic and no model is asked about them.
+     */
+    @Test
+    void anUntypedAddendTakesTheKindOfTheCellsItIsAddedTo() throws Exception {
+        var decisions = new RecordingDecisions(Map.of());
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> sumWithOneUnlabelledAddend(sheet, "Misc", "SUM(B1:B3)")), decisions, new SilentChat());
+
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").typeSource()).isEqualTo("derived");
+        assertThat(readings.get("B4").kind()).isEqualTo("money");
+        assertThat(readings.get("B5").kind()).isEqualTo("money");
+        assertThat(decisions.asked).doesNotContain("B4").doesNotContain("B5");
+    }
+
+    @Test
+    void addedWithPlusOrMinusIsTheSameAsASum() throws Exception {
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> sumWithOneUnlabelledAddend(sheet, "Misc", "B1+B2-B3")),
+                new RecordingDecisions(Map.of()), new SilentChat());
+
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+        assertThat(readings.get("B4").kind()).isEqualTo("money");
+    }
+
+    /** Multiplying two cells does not make them one kind: an untyped factor stays untyped. */
+    @Test
+    void anUntypedFactorIsNotInferredFromTheCellItIsMultipliedBy() throws Exception {
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> sumWithOneUnlabelledAddend(sheet, "Misc", "B1*B3")),
+                new RecordingDecisions(Map.of()), new SilentChat());
+
+        assertThat(readings.get("B3").kind()).isNull();
+    }
+
+    /** Addends that already disagree say nothing about the one that is untyped. */
+    @Test
+    void addendsOfDifferentKindsLeaveTheUntypedOneUntyped() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Catering sales (in Rs.)");
+            sheet.getRow(0).createCell(1).setCellValue(100);
+            sheet.createRow(1).createCell(0).setCellValue("Growth (%)");
+            sheet.getRow(1).createCell(1).setCellValue(0.1);
+            sheet.createRow(2).createCell(0).setCellValue("Misc");
+            sheet.getRow(2).createCell(1).setCellValue(30);
+            sheet.createRow(3).createCell(0).setCellValue("Subtotal");
+            sheet.getRow(3).createCell(1).setCellFormula("SUM(B1:B3)");
+        }), new RecordingDecisions(Map.of()), new SilentChat());
+
+        assertThat(readings.get("B3").kind()).isNull();
+    }
+
+    /** A percent sign after a number is a parameter in the label ("OD @9.5%"), not the unit of the cell. */
+    @Test
+    void aPercentSignAfterANumberInALabelDoesNotMakeTheCellAPercent() throws Exception {
+        Map<String, CellReading> readings = read(book(workbook -> {
+            Sheet sheet = workbook.createSheet("Model");
+            sheet.createRow(0).createCell(0).setCellValue("OD @9.5%");
+            sheet.getRow(0).createCell(1).setCellValue(250);
+            sheet.createRow(1).createCell(0).setCellValue("Margin (%)");
+            sheet.getRow(1).createCell(1).setCellValue(12);
+        }));
+
+        assertThat(readings.get("B1").kind()).isNotEqualTo("percent");
+        assertThat(readings.get("B2").kind()).isEqualTo("percent");
+    }
+
+    /** Revenue / 365 * debtor days is money: a number of days is a time multiplier, not a quantity of goods. */
+    @Test
+    void moneyTimesANumberOfDaysIsMoney() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Revenue from operations (in Rs.)");
+            sheet.getRow(0).createCell(1).setCellValue(3650);
+            sheet.createRow(1).createCell(0).setCellValue("Debtors Days");
+            sheet.getRow(1).createCell(1).setCellValue(60);
+            sheet.createRow(2).createCell(0).setCellValue("Debtors");
+            sheet.getRow(2).createCell(1).setCellFormula("B1/365*B2");
+        }));
+
+        assertThat(readings.get("B2").kind()).isEqualTo("quantity");
+        assertThat(readings.get("B2").unit()).isEqualTo("days");
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").refusal()).isNull();
+    }
+
+    /** Only time is a multiplier: money times a quantity of goods is still a contradiction. */
+    @Test
+    void moneyTimesAQuantityOfGoodsStaysARefusal() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Revenue from operations (in Rs.)");
+            sheet.getRow(0).createCell(1).setCellValue(3650);
+            sheet.createRow(1).createCell(0).setCellValue("Built-up area (sqm)");
+            sheet.getRow(1).createCell(1).setCellValue(60);
+            sheet.createRow(2).createCell(0).setCellValue("Debtors");
+            sheet.getRow(2).createCell(1).setCellFormula("B1*B2");
+        }));
+
+        assertThat(readings.get("B3").refusal()).isEqualTo("kind_conflict");
+    }
+
+    /**
+     * Inventory Days + Debtors Days - Creditors Days: one typed addend (wrongly money, from the word "Creditors")
+     * must not be copied onto two untyped ones. Typed addends have to outnumber the untyped.
+     */
+    @Test
+    void oneTypedAddendDoesNotTypeTwoUntypedOnes() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Alpha");
+            sheet.getRow(0).createCell(1).setCellValue(25);
+            sheet.createRow(1).createCell(0).setCellValue("Beta");
+            sheet.getRow(1).createCell(1).setCellValue(40);
+            sheet.createRow(2).createCell(0).setCellValue("Total cost (in Rs.)");
+            sheet.getRow(2).createCell(1).setCellValue(25);
+            sheet.createRow(3).createCell(0).setCellValue("Net");
+            sheet.getRow(3).createCell(1).setCellFormula("B1+B2-B3");
+        }), new RecordingDecisions(Map.of()), new SilentChat());
+
+        assertThat(readings.get("B1").kind()).isNull();
+        assertThat(readings.get("B2").kind()).isNull();
+    }
+
+    /** "Creditors Days" is a number of days, not money: the noun before "Days" does not decide. */
+    @Test
+    void aLabelEndingInDaysIsANumberOfDays() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Creditors Days");
+            sheet.getRow(0).createCell(1).setCellValue(25);
+            sheet.createRow(1).createCell(0).setCellValue("Interest per day (Rs.)");
+            sheet.getRow(1).createCell(1).setCellValue(4);
+            sheet.createRow(2).createCell(0).setCellValue("Interest for 365 days (Rs.)");
+            sheet.getRow(2).createCell(1).setCellValue(1460);
+        }));
+
+        assertThat(readings.get("B1").kind()).isEqualTo("quantity");
+        assertThat(readings.get("B1").unit()).isEqualTo("days");
+        assertThat(readings.get("B2").kind()).isNotEqualTo("quantity");
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+    }
+
     private static void restore(String property, String value) {
         if (value == null) {
             System.clearProperty(property);
