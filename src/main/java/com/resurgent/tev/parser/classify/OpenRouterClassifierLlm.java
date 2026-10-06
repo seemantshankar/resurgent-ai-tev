@@ -12,6 +12,7 @@ import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.DoubleAdder;
 import java.util.concurrent.atomic.LongAdder;
@@ -30,6 +31,28 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
     private static final int LAYER_A_RETRY_MAX_COMPLETION_TOKENS = 49_152;
     public static final int REGION_LAYOUT_MAX_COMPLETION_TOKENS = 32_768;
     public static final int LAYER_A_LABEL_MAX_ITEMS = 32;
+
+    /** Xiaomi's own pay-as-you-go endpoint (OpenAI-compatible). */
+    static final String XIAOMI_URL = "https://api.xiaomimimo.com/v1/chat/completions";
+
+    /** Xiaomi MiMo models are asked without thinking; see {@link HttpCompletionsClient#requestBody}. */
+    private static final String MIMO_PREFIX = "xiaomi/mimo";
+
+    /** Which API a client talks to; it decides the request shape and where the cost comes from. */
+    enum Route {
+        OPENROUTER("OpenRouter"),
+        XIAOMI("Xiaomi");
+
+        final String label;
+
+        Route(String label) {
+            this.label = label;
+        }
+    }
+
+    static boolean isMimo(String model) {
+        return model.startsWith(MIMO_PREFIX);
+    }
 
     /** The reply budget for a Layer A call over {@code candidates} regions: it grows with them, up to a bound. */
     static int layerAMaxCompletionTokens(int candidates) {
@@ -60,19 +83,44 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
     /** Models in the order to try them; a failed request moves to the next model. */
     public OpenRouterClassifierLlm(String apiKey, List<String> models) {
-        this(chainOf(apiKey, models));
+        this(chainOf(apiKey, null, models));
     }
 
-    private static CompletionsClient chainOf(String apiKey, List<String> models) {
+    /**
+     * As above, and a Xiaomi MiMo model is called on Xiaomi's own API with {@code xiaomiKey}
+     * (its own rate limit, not the pool OpenRouter's users share) when that key is given.
+     */
+    public OpenRouterClassifierLlm(String apiKey, String xiaomiKey, List<String> models) {
+        this(chainOf(apiKey, xiaomiKey, models));
+    }
+
+    private static CompletionsClient chainOf(String apiKey, String xiaomiKey, List<String> models) {
         if (models.size() == 1) {
-            return new HttpCompletionsClient(apiKey, models.get(0), DEFAULT_URL, deadlinesFor(0, 1));
+            return clientFor(apiKey, xiaomiKey, models.get(0), deadlinesFor(models.get(0), 0, 1));
         }
         List<FallbackCompletionsClient.Link> links = new java.util.ArrayList<>();
         for (int i = 0; i < models.size(); i++) {
-            links.add(new FallbackCompletionsClient.Link(models.get(i),
-                    new HttpCompletionsClient(apiKey, models.get(i), DEFAULT_URL, deadlinesFor(i, models.size()))));
+            String model = models.get(i);
+            links.add(new FallbackCompletionsClient.Link(model,
+                    clientFor(apiKey, xiaomiKey, model, deadlinesFor(model, i, models.size()))));
         }
         return new FallbackCompletionsClient(links);
+    }
+
+    private static HttpCompletionsClient clientFor(
+            String apiKey, String xiaomiKey, String model, Deadlines deadlines) {
+        if (isMimo(model) && xiaomiKey != null && !xiaomiKey.isBlank()) {
+            return new HttpCompletionsClient(xiaomiKey, model, XIAOMI_URL, deadlines, Route.XIAOMI);
+        }
+        return new HttpCompletionsClient(apiKey, model, DEFAULT_URL, deadlines, Route.OPENROUTER);
+    }
+
+    /** The limits for {@code model} at {@code index} in a chain of {@code chainLength}. */
+    static Deadlines deadlinesFor(String model, int index, int chainLength) {
+        if (isMimo(model)) {
+            return index == chainLength - 1 ? Deadlines.LAST_RESORT : Deadlines.SLOW_WRITER;
+        }
+        return deadlinesFor(index, chainLength);
     }
 
     /**
@@ -98,6 +146,12 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         /** A slower middle model: its healthy small calls reached 31s in that run, so it gets 45s. */
         static final Deadlines FALLBACK = new Deadlines(Duration.ofSeconds(45), Duration.ofSeconds(180));
         static final Deadlines LAST_RESORT = new Deadlines(Duration.ofSeconds(120), Duration.ofSeconds(240));
+        /**
+         * MiMo-Flash writes about 60 tokens a second, so a 750-token answer takes about 12s and
+         * the slowest of 12 probed calls took 20s: 15s timed out calls that were working. A
+         * Layer A or region-layout answer of several thousand tokens needs minutes, not seconds.
+         */
+        static final Deadlines SLOW_WRITER = new Deadlines(Duration.ofSeconds(45), Duration.ofSeconds(300));
 
         /** A prompt this long, or a completion cap this high, is treated as a big batch. */
         static final int LARGE_PROMPT_CHARS = 40_000;
@@ -368,9 +422,14 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         private final LongAdder costMissing = new LongAdder();
 
         private final Deadlines deadlines;
+        private final Route route;
 
         HttpCompletionsClient(String apiKey, String model, String url) {
             this(apiKey, model, url, Deadlines.LAST_RESORT);
+        }
+
+        HttpCompletionsClient(String apiKey, String model, String url, Deadlines deadlines) {
+            this(apiKey, model, url, deadlines, Route.OPENROUTER);
         }
 
         /**
@@ -378,22 +437,25 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
          * timeout alone only covers waiting for the response to begin: a provider that sends
          * headers and then goes quiet would otherwise block the run indefinitely.
          */
-        HttpCompletionsClient(String apiKey, String model, String url, Deadlines deadlines) {
+        HttpCompletionsClient(String apiKey, String model, String url, Deadlines deadlines, Route route) {
             Objects.requireNonNull(apiKey, "apiKey");
             this.model = Objects.requireNonNull(model, "model");
             this.deadlines = Objects.requireNonNull(deadlines, "deadlines");
+            this.route = Objects.requireNonNull(route, "route");
             URI uri = URI.create(url);
             HttpClient http = HttpClient.newBuilder()
                     .connectTimeout(Duration.ofSeconds(20))
                     .build();
             this.exchange = (body, deadline) -> {
-                HttpRequest request = HttpRequest.newBuilder(uri)
+                HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
                         .timeout(deadline)
                         .header("Authorization", "Bearer " + apiKey)
-                        .header("Content-Type", "application/json")
-                        .header("HTTP-Referer",
-                                "https://github.com/seemantshankar/resurgent-ai-tev")
-                        .header("X-OpenRouter-Title", "TEV Parser")
+                        .header("Content-Type", "application/json");
+                if (route == Route.OPENROUTER) {
+                    builder.header("HTTP-Referer", "https://github.com/seemantshankar/resurgent-ai-tev")
+                            .header("X-OpenRouter-Title", "TEV Parser");
+                }
+                HttpRequest request = builder
                         .POST(HttpRequest.BodyPublishers.ofString(body))
                         .build();
                 java.util.concurrent.CompletableFuture<HttpResponse<String>> pending =
@@ -425,10 +487,12 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             try {
                 System.err.println("[http-client] completeJson: model=" + model + ", maxTokens=" + maxCompletionTokens + ", userLen=" + user.length());
                 System.err.flush();
-                return post(requestBody(model, system, user, null, maxCompletionTokens),
+                return post(requestBody(model, system, user, null, maxCompletionTokens, route),
                         deadlines.forRequest(user.length(), maxCompletionTokens));
+            } catch (IllegalStateException e) {
+                throw e; // already says what failed (a timeout, an HTTP error, an empty reply)
             } catch (Exception e) {
-                throw new IllegalStateException("OpenRouter request build failed: " + e.getMessage(), e);
+                throw new IllegalStateException("OpenRouter request could not be built: " + e.getMessage(), e);
             }
         }
 
@@ -441,10 +505,13 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                         system,
                         user,
                         layerAResponseFormat(scheduleFamilies),
-                        LAYER_A_MAX_COMPLETION_TOKENS),
+                        LAYER_A_MAX_COMPLETION_TOKENS,
+                        route),
                         deadlines.forRequest(user.length(), LAYER_A_MAX_COMPLETION_TOKENS));
+            } catch (IllegalStateException e) {
+                throw e;
             } catch (Exception e) {
-                throw new IllegalStateException("OpenRouter request build failed: " + e.getMessage(), e);
+                throw new IllegalStateException("OpenRouter request could not be built: " + e.getMessage(), e);
             }
         }
 
@@ -466,7 +533,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             if (result.completionTokens() != null) {
                 completionTokens.add(result.completionTokens());
             }
-            Double cost = costUsd(body);
+            Double cost = route == Route.XIAOMI ? xiaomiCostUsd(body) : costUsd(body);
             if (cost == null) {
                 costMissing.increment();
             } else {
@@ -485,6 +552,30 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                 return MAPPER.readTree(body).path("usage").path("prompt_tokens_details").path("cached_tokens").asLong(0);
             } catch (Exception ignored) {
                 return 0;
+            }
+        }
+
+        /**
+         * Xiaomi's reply carries token counts and no cost, so the cost is worked out from its
+         * published per-million-token prices (input, input served from cache, output). A model
+         * missing from the table has no known cost and is counted as such.
+         */
+        Double xiaomiCostUsd(String body) {
+            double[] price = XIAOMI_PRICES.get(wireModel(model));
+            if (price == null) {
+                return null;
+            }
+            try {
+                JsonNode usage = MAPPER.readTree(body).path("usage");
+                if (!usage.path("prompt_tokens").isNumber() || !usage.path("completion_tokens").isNumber()) {
+                    return null;
+                }
+                long prompt = usage.path("prompt_tokens").asLong();
+                long cached = Math.min(prompt, cachedTokens(body));
+                long completion = usage.path("completion_tokens").asLong();
+                return ((prompt - cached) * price[0] + cached * price[1] + completion * price[2]) / 1_000_000.0;
+            } catch (Exception e) {
+                return null;
             }
         }
 
@@ -508,7 +599,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             long activityId = LlmActivity.GLOBAL.begin(model);
             boolean succeeded = false;
             try {
-                System.err.println("[http-client] Sending request to " + model + " via OpenRouter...");
+                System.err.println("[http-client] Sending request to " + model + " via " + route.label + "...");
                 System.err.flush();
                 ExchangeResponse response = exchange.send(body, deadline);
                 long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000;
@@ -516,7 +607,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                 System.err.flush();
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
                     throw new IllegalStateException(
-                            "OpenRouter HTTP " + response.statusCode()
+                            route.label + " HTTP " + response.statusCode()
                                     + " " + snippet(response.body()));
                 }
                 CompletionResult result = contentWithUsage(response.body());
@@ -529,12 +620,12 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                 long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000;
                 System.err.println("[http-client] HTTP TIMEOUT after " + elapsedMs + "ms");
                 System.err.flush();
-                throw new IllegalStateException("OpenRouter call timed out after " + elapsedMs + "ms", e);
+                throw new IllegalStateException(route.label + " call timed out after " + elapsedMs + "ms", e);
             } catch (Exception e) {
                 long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000;
                 System.err.println("[http-client] HTTP ERROR after " + elapsedMs + "ms: " + e.getClass().getSimpleName() + ": " + e.getMessage());
                 System.err.flush();
-                throw new IllegalStateException("OpenRouter call failed: " + e.getMessage(), e);
+                throw new IllegalStateException(route.label + " call failed: " + e.getMessage(), e);
             } finally {
                 if (!succeeded) {
                     LlmStats.GLOBAL.recordFailedCall(model, (System.nanoTime() - startNanos) / 1_000_000);
@@ -550,13 +641,52 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                 ObjectNode responseFormat,
                 int maxCompletionTokens)
                 throws Exception {
+            return requestBody(model, system, user, responseFormat, maxCompletionTokens, Route.OPENROUTER);
+        }
+
+        /** Xiaomi's USD per million tokens: input, input served from cache, output. */
+        private static final Map<String, double[]> XIAOMI_PRICES = Map.of(
+                "mimo-v2.6-flash", new double[] {0.14, 0.0028, 0.28},
+                "mimo-v2.6-pro", new double[] {0.435, 0.0036, 0.87});
+
+        /** Xiaomi's own name for a model: OpenRouter's id without the vendor prefix. */
+        static String wireModel(String model) {
+            return model.startsWith("xiaomi/") ? model.substring("xiaomi/".length()) : model;
+        }
+
+        static String requestBody(
+                String model,
+                String system,
+                String user,
+                ObjectNode responseFormat,
+                int maxCompletionTokens,
+                Route route)
+                throws Exception {
             ObjectNode root = MAPPER.createObjectNode();
+            if (route == Route.XIAOMI) {
+                // Xiaomi's API takes its own model name and its own thinking switch, and has no
+                // provider routing. Thinking is on by default and then ignores our temperature.
+                root.put("model", wireModel(model));
+                root.put("temperature", 0.05);
+                root.put("max_completion_tokens", maxCompletionTokens);
+                root.putObject("thinking").put("type", "disabled");
+                // The Layer A json_schema is not offered here; the reply parser checks the values.
+                root.putObject("response_format").put("type", "json_object");
+                addMessages(root, system, user);
+                return MAPPER.writeValueAsString(root);
+            }
             root.put("model", model);
             root.put("temperature", 0.05);
             root.put("max_completion_tokens", maxCompletionTokens);
             ObjectNode reasoning = root.putObject("reasoning");
-            reasoning.put("effort", "low");
             ObjectNode provider = root.putObject("provider");
+            if (isMimo(model)) {
+                // MiMo spent hundreds of reasoning tokens on a 500-character answer and
+                // sometimes left no content, so it is asked without reasoning here too.
+                reasoning.put("enabled", false);
+            } else {
+                reasoning.put("effort", "low");
+            }
             provider.put("data_collection", "deny");
             if (responseFormat != null) {
                 root.set("response_format", responseFormat);
@@ -564,6 +694,11 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                 ObjectNode format = root.putObject("response_format");
                 format.put("type", "json_object");
             }
+            addMessages(root, system, user);
+            return MAPPER.writeValueAsString(root);
+        }
+
+        private static void addMessages(ObjectNode root, String system, String user) {
             ArrayNode messages = root.putArray("messages");
             ObjectNode systemNode = messages.addObject();
             systemNode.put("role", "system");
@@ -571,7 +706,6 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
             ObjectNode userNode = messages.addObject();
             userNode.put("role", "user");
             userNode.put("content", user);
-            return MAPPER.writeValueAsString(root);
         }
 
         private static ObjectNode layerAResponseFormat(List<String> families) {
