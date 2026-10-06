@@ -127,6 +127,21 @@ public final class LlmEnvironment {
     }
 
     /**
+     * The decision model that gives each region an independent opinion on whether it is scratch
+     * (the same model and key as the cell decisions), or null when none is configured.
+     */
+    static RegionTriageClient regionTriageClientOrNull() {
+        Map<String, String> env = load();
+        String key = env.get(API_KEY);
+        String model = decisionModelId(env);
+        if (key == null || key.isBlank() || model == null) {
+            return null;
+        }
+        System.err.println("[region-triage] using decision model " + model);
+        return new OpenRouterRegionTriageClient(key, model);
+    }
+
+    /**
      * The confidence the decision model {@code modelId} must reach to settle a cell. Confidence does
      * not mean the same across models (one reports a formula over its probabilities, another "its own
      * estimate"), so a threshold chosen for one does not carry to another. In order: the model's own

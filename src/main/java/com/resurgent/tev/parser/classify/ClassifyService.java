@@ -65,6 +65,19 @@ public final class ClassifyService {
      */
     private java.util.Set<Long> structureWorksheetIds; // null means every sheet
 
+    private RegionTriageClient regionTriage; // null: no second opinion on region layout's scratch calls
+
+    /** Give each region a decision model's independent opinion, as {@link RegionTriageStage} describes. */
+    ClassifyService withRegionTriage(RegionTriageClient client) {
+        this.regionTriage = client;
+        return this;
+    }
+
+    /** The same, with the decision model the environment configures (none, when it configures none). */
+    public ClassifyService withRegionTriageFromEnvironment() {
+        return withRegionTriage(LlmEnvironment.regionTriageClientOrNull());
+    }
+
     /** Batch sizes and concurrency for the LLM stages. */
     public ClassifyService withTuning(ClassifyTuning tuning) {
         this.tuning = Objects.requireNonNull(tuning, "tuning");
@@ -236,10 +249,13 @@ public final class ClassifyService {
                 sheetNames.put(sheet.worksheetId(), sheet.sheetName());
             }
 
+            Map<Long, RegionTriageStage.Verdict> triage = askRegionTriage(repo, parseRunId, all, sheetNames);
             List<CandidateRow> eligible = new ArrayList<>();
             int skipped = 0;
             for (CandidateRow candidate : all) {
-                if (isEligible(candidate) && inScope(candidate.worksheetId())) {
+                RegionTriageStage.Verdict verdict = triage.get(candidate.candidateId());
+                boolean escalated = verdict != null && verdict.escalated();
+                if ((isEligible(candidate) || escalated) && inScope(candidate.worksheetId())) {
                     eligible.add(candidate);
                 } else {
                     skipped++;
@@ -258,7 +274,7 @@ public final class ClassifyService {
                 Packet packet = packetSession.build(candidate.candidateId());
                 Packet redacted = PacketRedactor.redact(packet, false);
                 prepared.add(new PreparedPacket(
-                        candidate,
+                        isEligible(candidate) ? candidate : withStructuralRole(candidate, "helper"),
                         redacted,
                         sheetNames.getOrDefault(candidate.worksheetId(), "")));
             }
@@ -294,6 +310,7 @@ public final class ClassifyService {
                 for (PacketDisposition disposition : dispositions) {
                     repo.insertPacketDisposition(disposition);
                 }
+                saveRegionTriage(repo, parseRunId, triage);
                 findHeaderGeometry(repo, parseRunId, dispositions);
                 Progress.phase("classify", "STAGE 3/3 START - Layer B (typing every numeric cell)");
                 stageStarted = System.nanoTime();
@@ -1572,6 +1589,14 @@ public final class ClassifyService {
                 }
             }
         }
+        // A cell can sit in two regions (a helper band inside a main schedule); once any region
+        // has a binding for it, no other region may add another.
+        Set<Long> boundCells = new HashSet<>();
+        for (List<LayerBBinder.Draft> drafts : draftsByCandidate.values()) {
+            for (LayerBBinder.Draft draft : drafts) {
+                boundCells.add(draft.cellId());
+            }
+        }
         int added = 0;
         for (CandidateRow candidate : candidates) {
             String sheet = sheetByCandidate.get(candidate.candidateId());
@@ -1591,14 +1616,6 @@ public final class ClassifyService {
                 }
                 String formula = cell.formulaText() == null ? "" : cell.formulaText().trim();
                 if (formula.startsWith("=")) {
-        // A cell can sit in two regions (a helper band inside a main schedule); once any region
-        // has a binding for it, no other region may add another.
-        Set<Long> boundCells = new HashSet<>();
-        for (List<LayerBBinder.Draft> drafts : draftsByCandidate.values()) {
-            for (LayerBBinder.Draft draft : drafts) {
-                boundCells.add(draft.cellId());
-            }
-        }
                     formula = formula.substring(1).trim();
                 }
                 if (!formula.matches("(?i)\\+?(?:'[^']+'|[A-Za-z][A-Za-z0-9_ ]*)!\\$?[A-Z]{1,3}\\$?\\d+")) {
@@ -1629,6 +1646,7 @@ public final class ClassifyService {
                         helper.amountRole(),
                         helper.verbatim()));
                 local.put(helper.coord(), helper);
+                boundCells.add(helper.cellId());
                 bySheetCoord.put(sheet + "!" + helper.coord(), helper);
                 added++;
             }
@@ -1646,7 +1664,6 @@ public final class ClassifyService {
             List<String> catalog,
             boolean retry,
             java.util.function.LongFunction<String> contextOf)
-                boundCells.add(helper.cellId());
             throws ClassifyException {
         Set<String> unbound = new HashSet<>();
         for (BindCellRow cell : missing) {
@@ -1682,10 +1699,66 @@ public final class ClassifyService {
      * but a helper bbox Layer A triaged as scratch or orphan is not bound.
      */
     static boolean isBindEligible(CandidateRow candidate, PacketDisposition disposition) {
-        if (!isEligible(candidate)) {
+        // A scratch region has a disposition only when it was sent to Layer A for a second look
+        // (see RegionTriageStage); Layer A's answer then decides, not region layout's label.
+        if (!isEligible(candidate) && disposition == null) {
             return false;
         }
         return !isSoftTriage(disposition);
+    }
+
+    private static CandidateRow withStructuralRole(CandidateRow c, String role) {
+        return new CandidateRow(c.candidateId(), c.parseRunId(), c.worksheetId(), c.candidateKind(),
+                c.parentCandidateId(), c.bboxMinRow(), c.bboxMinCol(), c.bboxMaxRow(), c.bboxMaxCol(),
+                c.internalWhitespaceJson(), c.anchorsJson(), c.structuralSignaturesJson(),
+                c.isolatedHiddenWorksheet(), c.structuralConfidence(), c.structuralConfidenceRationale(),
+                c.explanation(), c.createdAt(), role);
+    }
+
+    /**
+     * Region layout's scratch calls get a second opinion; see {@link RegionTriageStage}. Returns the
+     * verdict for every region region layout drew, or nothing when there is none to give.
+     */
+    private Map<Long, RegionTriageStage.Verdict> askRegionTriage(
+            WorkspaceRepository repo, long parseRunId, List<CandidateRow> all, Map<Long, String> sheetNames)
+            throws SQLException {
+        Map<Long, List<com.resurgent.tev.parser.db.InterpretationCellView>> cellsBySheet = new HashMap<>();
+        for (com.resurgent.tev.parser.db.InterpretationCellView cell :
+                repo.selectInterpretationCellsForParseRun(parseRunId)) {
+            cellsBySheet.computeIfAbsent(cell.worksheetId(), id -> new ArrayList<>()).add(cell);
+        }
+        List<RegionTriageStage.Region> regions = new ArrayList<>();
+        for (CandidateRow candidate : all) {
+            if (!"child".equals(candidate.candidateKind()) || !inScope(candidate.worksheetId())
+                    || candidate.bboxMinRow() == null || candidate.bboxMaxRow() == null
+                    || candidate.bboxMinCol() == null || candidate.bboxMaxCol() == null) {
+                continue;
+            }
+            regions.add(new RegionTriageStage.Region(
+                    candidate,
+                    sheetNames.getOrDefault(candidate.worksheetId(), ""),
+                    cellsBySheet.getOrDefault(candidate.worksheetId(), List.of())));
+        }
+        LlmStats.GLOBAL.enterStage("layer-a"); // the stats tables accept no other new stage
+        return RegionTriageStage.run(regions, regionTriage, LlmEnvironment.decisionConcurrency());
+    }
+
+    private void saveRegionTriage(
+            WorkspaceRepository repo, long parseRunId, Map<Long, RegionTriageStage.Verdict> triage)
+            throws SQLException {
+        if (regionTriage == null) {
+            return;
+        }
+        repo.deleteRegionTriageOpinions(parseRunId);
+        for (Map.Entry<Long, RegionTriageStage.Verdict> entry : triage.entrySet()) {
+            RegionTriageClient.Opinion opinion = entry.getValue().opinion();
+            if (opinion == null) {
+                continue;
+            }
+            repo.insertRegionTriageOpinion(parseRunId, entry.getKey(), regionTriage.model(), opinion.choice(),
+                    opinion.confidence(), opinion.probabilities().get("main"), opinion.probabilities().get("scratch"),
+                    opinion.probabilities().get("orphan"), entry.getValue().escalated());
+        }
     }
 
     private static boolean isSoftTriage(PacketDisposition disposition) {

@@ -153,7 +153,8 @@ public final class ClassifyCommand implements Callable<Integer> {
                             cellBatchSize != null ? cellBatchSize : ClassifyTuning.DEFAULT_CELL_BATCH_SIZE,
                             layerABatchSize != null ? layerABatchSize : ClassifyTuning.DEFAULT_LAYER_A_BATCH_SIZE,
                             limits.parallelism()))
-                    .withSheetScope(onlySheets);
+                    .withSheetScope(onlySheets)
+                    .withRegionTriageFromEnvironment();
             if (sheets != null && !sheets.isEmpty()) {
                 BindSummary bound = service.bindSheets(db, parseRunId, sheets);
                 out.printf(

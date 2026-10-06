@@ -96,14 +96,16 @@ class ClassifyServiceTest {
 
             long eligible = candidates.stream().filter(ClassifyService::isEligible).count();
             assertThat(eligible).isEqualTo(2);
-            assertThat(summary.eligibleCount()).isEqualTo(2);
-            assertThat(summary.skippedCount()).isEqualTo(2); // coverage + scratch
-            assertThat(layerACalls.get()).isEqualTo(2);
-            assertThat(rolesSeen).containsExactlyInAnyOrder("main", "helper");
+            // No decision model is configured here, so nothing confirms region layout's scratch call
+            // on P6 (a lone number): it goes to Layer A too, and is shown to it as a helper, not scratch.
+            assertThat(summary.eligibleCount()).isEqualTo(3);
+            assertThat(summary.skippedCount()).isEqualTo(1); // coverage
+            assertThat(layerACalls.get()).isEqualTo(3);
+            assertThat(rolesSeen).containsExactlyInAnyOrder("main", "helper", "helper");
 
             List<PacketDisposition> dispositions =
                     repo.selectPacketDispositionsForParseRun(ingest.parseRunId());
-            assertThat(dispositions).hasSize(2);
+            assertThat(dispositions).hasSize(3);
             assertThat(dispositions).allMatch(d -> d.about().contains("Capex item table"));
 
             // The normal classify run saves each cell's row/column labels (not only classify --sheet).

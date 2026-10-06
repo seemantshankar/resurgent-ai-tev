@@ -1113,6 +1113,36 @@ public final class WorkspaceRepository {
         }
     }
 
+    public void deleteRegionTriageOpinions(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM region_triage_opinion WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.executeUpdate();
+        }
+    }
+
+    /** A decision model's opinion of one region; {@code escalated} when it sent a scratch region to Layer A. */
+    public void insertRegionTriageOpinion(long parseRunId, long candidateId, String model, String choice,
+            double confidence, Double pMain, Double pScratch, Double pOrphan, boolean escalated)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT OR REPLACE INTO region_triage_opinion (parse_run_id, candidate_id, model, choice,"
+                        + " confidence, p_main, p_scratch, p_orphan, escalated, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, candidateId);
+            ps.setString(3, model);
+            ps.setString(4, choice);
+            ps.setDouble(5, confidence);
+            ps.setObject(6, pMain);
+            ps.setObject(7, pScratch);
+            ps.setObject(8, pOrphan);
+            ps.setInt(9, escalated ? 1 : 0);
+            ps.setString(10, Timestamps.now());
+            ps.executeUpdate();
+        }
+    }
+
     /** Header geometry by region, for the label resolver; regions without one are absent. */
     public Map<Long, HeaderGeometry> selectHeaderGeometry(long parseRunId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
