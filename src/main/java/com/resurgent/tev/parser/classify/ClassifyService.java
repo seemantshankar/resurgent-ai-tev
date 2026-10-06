@@ -1045,8 +1045,19 @@ public final class ClassifyService {
             sb.append("INPUT:\n").append(userMsg).append("\n\n");
             sb.append("TASK: For each candidate (by index 1-").append(batch.size()).append("), provide:\n");
             sb.append("1. scheduleFamily: one of {").append(String.join(", ", scheduleFamilies)).append("}\n");
-            sb.append("2. triage: MAIN or HELPER only\n");
-            sb.append("3. relevance: PRIMARY, SECONDARY, or TERTIARY only\n");
+            sb.append("2. triage: main | scratch | orphan\n")
+                    .append("   main = part of the financial model: a schedule, a labelled summary or total block, a driver or")
+                    .append(" assumption block, or a calculation that supports or explains the schedules. A region is main")
+                    .append(" even when it is only a continuation of a table, a fragment, or a total nobody else reads;")
+                    .append(" structuralRole \"helper\" is only a geometry hint and never means scratch.\n")
+                    .append("   scratch = the author's own working that is not model content: a check or reconciliation row")
+                    .append(" (values about zero, 'Diff', 'Check'), an empty template or form with no values, or an unlabelled side")
+                    .append(" calculation whose meaning cannot be told.\n")
+                    .append("   orphan = stray floating cells or notes with no relationship to any schedule.\n");
+            sb.append("3. relevance: primary | supporting | noise\n")
+                    .append("   primary = the schedule itself; supporting = summaries, drivers, assumptions and calculations that")
+                    .append(" feed or explain it; noise = scratch and orphan. scratch and orphan are always noise; main is")
+                    .append(" never noise. When unsure between main and scratch choose main.\n");
             sb.append("4. rowLabels: array of row label strings (can be empty [])\n");
             sb.append("5. columnHeaders: array of column header strings (can be empty [])\n");
             sb.append("6. packetDefaultHead: string or null\n");
@@ -1060,8 +1071,8 @@ public final class ClassifyService {
             sb.append("Wrap the ").append(batch.size()).append(" classification objects in a JSON object with key 'results':\n");
             sb.append("{\n");
             sb.append("  \"results\": [\n");
-            sb.append("    {\"index\":1,\"scheduleFamily\":\"assets\",\"triage\":\"MAIN\",\"relevance\":\"PRIMARY\",\"rowLabels\":[\"Fixed Assets\"],\"columnHeaders\":[],\"packetDefaultHead\":\"Assets\",\"statedScale\":null,\"scaleCell\":null,\"about\":\"List of company assets.\"},\n");
-            sb.append("    {\"index\":2,\"scheduleFamily\":\"liabilities\",\"triage\":\"HELPER\",\"relevance\":\"SECONDARY\",\"rowLabels\":[],\"columnHeaders\":[],\"packetDefaultHead\":null,\"statedScale\":null,\"scaleCell\":null,\"about\":\"Supporting detail.\"}\n");
+            sb.append("    {\"index\":1,\"scheduleFamily\":\"assets\",\"triage\":\"main\",\"relevance\":\"primary\",\"rowLabels\":[\"Fixed Assets\"],\"columnHeaders\":[],\"packetDefaultHead\":\"Assets\",\"statedScale\":null,\"scaleCell\":null,\"about\":\"List of company assets.\"},\n");
+            sb.append("    {\"index\":2,\"scheduleFamily\":\"liabilities\",\"triage\":\"main\",\"relevance\":\"supporting\",\"rowLabels\":[],\"columnHeaders\":[],\"packetDefaultHead\":null,\"statedScale\":null,\"scaleCell\":null,\"about\":\"Supporting detail.\"}\n");
             sb.append("  ]\n");
             sb.append("}\n\n");
             sb.append("CRITICAL: Return ONLY the JSON object with 'results' key containing the array. Nothing else.\n");
@@ -1119,29 +1130,10 @@ public final class ClassifyService {
                 resolvedFamily = suggestedFamily;
             }
 
-            // Normalize and map triage and relevance
-            if (triage != null) {
-                triage = triage.toLowerCase(java.util.Locale.ROOT);
-                // Map LLM triage values to database values
-                if (triage.equals("main")) {
-                    triage = "main";
-                } else if (triage.equals("helper")) {
-                    triage = "scratch";
-                } else if (!triage.equals("scratch") && !triage.equals("orphan")) {
-                    triage = "scratch"; // Default unknown values to scratch
-                }
-            }
-            if (relevance != null) {
-                relevance = relevance.toLowerCase(java.util.Locale.ROOT);
-                // Map LLM relevance values to database values
-                if (relevance.equals("primary")) {
-                    relevance = Relevance.PRIMARY;
-                } else if (relevance.equals("secondary") || relevance.equals("tertiary")) {
-                    relevance = Relevance.SUPPORTING;
-                } else if (relevance.equals("noise")) {
-                    relevance = Relevance.NOISE;
-                }
-            }
+            // The stored vocabulary; a "helper" is a main region that supports the model, never scratch.
+            String[] normalized = LayerATriageNormalizer.normalize(triage, relevance);
+            triage = normalized[0];
+            relevance = normalized[1];
 
             java.util.List<String> rowLabels = new java.util.ArrayList<>();
             if (node.has("rowLabels") && node.get("rowLabels").isArray()) {
@@ -1167,8 +1159,6 @@ public final class ClassifyService {
                 // Skip this candidate and continue with next, or throw?
                 // For now, use defaults to avoid breaking
                 if (resolvedFamily == null) resolvedFamily = "assumptions";
-                if (triage == null) triage = "scratch";
-                if (relevance == null) relevance = "supporting";
                 if (about == null) about = "Unclassified";
             }
 

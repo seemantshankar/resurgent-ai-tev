@@ -173,6 +173,58 @@ class ClassifyScopeAndTuningTest {
         assertThat(new ArrayList<>(llm.layerABatchCalls)).isNotEmpty();
     }
 
+    /** Answers a Layer A batch the way the old prompt invited: every region "HELPER". */
+    private static final class HelperAnsweringLlm implements ClassifierLlm {
+        final List<String> prompts = new CopyOnWriteArrayList<>();
+
+        @Override
+        public List<RegionProposal> proposeRegions(RegionLayoutPrompt prompt) {
+            return List.of(GOOD);
+        }
+
+        @Override
+        public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
+            throw new IllegalStateException("only the batch path is expected");
+        }
+
+        @Override
+        public String classifyLayerAJson(String userPrompt, int maxTokens) {
+            prompts.add(userPrompt);
+            int n = Integer.parseInt(userPrompt.replaceAll("(?s).*Classify exactly (\\d+) regions.*", "$1"));
+            StringBuilder json = new StringBuilder("{\"results\":[");
+            for (int i = 1; i <= n; i++) {
+                json.append(i > 1 ? "," : "").append("{\"index\":").append(i)
+                        .append(",\"scheduleFamily\":\"assumptions\",\"triage\":\"HELPER\",\"relevance\":\"SECONDARY\",")
+                        .append("\"rowLabels\":[],\"columnHeaders\":[],\"packetDefaultHead\":null,")
+                        .append("\"about\":\"A supporting block.\"}");
+            }
+            return json.append("]}").toString();
+        }
+    }
+
+    /**
+     * "Helper" is a region that supports the model. It used to be stored as scratch, which the rest of the pipeline
+     * treats as noise and never binds. It is kept (main, supporting), and the prompt offers the stored vocabulary.
+     */
+    @Test
+    void aRegionTheModelCallsHelperIsKeptAsSupportingNotThrownAwayAsScratch() throws Exception {
+        var llm = new HelperAnsweringLlm();
+
+        new ClassifyService(llm).withTuning(new ClassifyTuning(15, 100, 1)).classify(dbPath, parseRunId);
+
+        assertThat(llm.prompts).isNotEmpty();
+        assertThat(llm.prompts.get(0)).contains("triage: main | scratch | orphan").doesNotContain("HELPER only");
+        try (WorkspaceDatabase database = WorkspaceDatabase.open(dbPath)) {
+            var dispositions = new WorkspaceRepository(database.connection())
+                    .selectPacketDispositionsForParseRun(parseRunId);
+            assertThat(dispositions).isNotEmpty()
+                    .allSatisfy(d -> {
+                        assertThat(d.triage()).isEqualTo("main");
+                        assertThat(d.relevance()).isEqualTo("supporting");
+                    });
+        }
+    }
+
     @Test
     void tuningRejectsNonsense() {
         assertThatThrownBy(() -> new ClassifyTuning(0, 10, 1)).isInstanceOf(IllegalArgumentException.class);
