@@ -67,7 +67,7 @@ class OpenRouterRequestShapeTest {
     void mimoGetsTimeToWriteItsAnswerEvenWhenItIsFirstInTheChain() {
         var first = OpenRouterClassifierLlm.deadlinesFor("xiaomi/mimo-v2.6-flash", 0, 3);
         assertThat(first.forRequest(5_000, 12_288)).isEqualTo(Duration.ofSeconds(45));
-        assertThat(first.forRequest(300_000, 32_768)).isEqualTo(Duration.ofSeconds(300));
+        assertThat(first.forRequest(300_000, 32_768)).isEqualTo(Duration.ofSeconds(150));
         // Other models keep the fail-fast limit that was measured for them.
         assertThat(OpenRouterClassifierLlm.deadlinesFor("openai/gpt-6-luna", 0, 3).forRequest(5_000, 12_288))
                 .isEqualTo(Duration.ofSeconds(15));

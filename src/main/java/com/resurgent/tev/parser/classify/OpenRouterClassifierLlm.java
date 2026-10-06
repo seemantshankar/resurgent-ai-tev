@@ -148,10 +148,14 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
         static final Deadlines LAST_RESORT = new Deadlines(Duration.ofSeconds(120), Duration.ofSeconds(240));
         /**
          * MiMo-Flash writes about 60 tokens a second, so a 750-token answer takes about 12s and
-         * the slowest of 12 probed calls took 20s: 15s timed out calls that were working. A
-         * Layer A or region-layout answer of several thousand tokens needs minutes, not seconds.
+         * the slowest of 12 probed calls took 20s: 15s timed out calls that were working. Across
+         * three full runs (about 1,900 calls) the slowest healthy large call took 141s and only five
+         * took over 95s, while a stalled one never answers: at 300s each stall held a run for five
+         * minutes (three of them added about ten minutes to one run). 150s clears every healthy call
+         * measured and gives up on a stall two and a half minutes sooner; the request then goes to
+         * the next model.
          */
-        static final Deadlines SLOW_WRITER = new Deadlines(Duration.ofSeconds(45), Duration.ofSeconds(300));
+        static final Deadlines SLOW_WRITER = new Deadlines(Duration.ofSeconds(45), Duration.ofSeconds(150));
 
         /** A prompt this long, or a completion cap this high, is treated as a big batch. */
         static final int LARGE_PROMPT_CHARS = 40_000;
