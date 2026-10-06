@@ -1584,11 +1584,21 @@ public final class ClassifyService {
                 local.put(draft.coord(), draft);
             }
             for (BindCellRow cell : cellsByCandidate.getOrDefault(candidate.candidateId(), List.of())) {
-                if (cell.error() || local.containsKey(cell.coord().toUpperCase(Locale.ROOT))) {
+                if (cell.error()
+                        || boundCells.contains(cell.cellId())
+                        || local.containsKey(cell.coord().toUpperCase(Locale.ROOT))) {
                     continue;
                 }
                 String formula = cell.formulaText() == null ? "" : cell.formulaText().trim();
                 if (formula.startsWith("=")) {
+        // A cell can sit in two regions (a helper band inside a main schedule); once any region
+        // has a binding for it, no other region may add another.
+        Set<Long> boundCells = new HashSet<>();
+        for (List<LayerBBinder.Draft> drafts : draftsByCandidate.values()) {
+            for (LayerBBinder.Draft draft : drafts) {
+                boundCells.add(draft.cellId());
+            }
+        }
                     formula = formula.substring(1).trim();
                 }
                 if (!formula.matches("(?i)\\+?(?:'[^']+'|[A-Za-z][A-Za-z0-9_ ]*)!\\$?[A-Z]{1,3}\\$?\\d+")) {
@@ -1636,6 +1646,7 @@ public final class ClassifyService {
             List<String> catalog,
             boolean retry,
             java.util.function.LongFunction<String> contextOf)
+                boundCells.add(helper.cellId());
             throws ClassifyException {
         Set<String> unbound = new HashSet<>();
         for (BindCellRow cell : missing) {
