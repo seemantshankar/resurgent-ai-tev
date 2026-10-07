@@ -450,18 +450,26 @@ CREATE TABLE formula_link (
 Foreign keys: `to_cell_id` -> `cell.cell_id`; `from_cell_id` -> `cell.cell_id`
 
 
-### `formula_reach`  (rows: run 1 = 3,229,383, run 2 = 3,229,383)
+### Lineage: what feeds a cell (there is no `formula_reach` table any more)
+
+Databases from before 2026-10-08 carry a `formula_reach` table: every cell paired with everything it depends on, directly or through other cells. It was 3.2 million rows for the RKA workbook and 49 million (2.2 GB) for the BSPL one, nothing in the pipeline read it, and it is no longer written. `formula_link` (cell A reads cell B) has all the information; ask the lineage question with a recursive query. Use the same query on old and new databases.
+
+What a cell reads, directly or through other cells, with the fewest steps (replace the two `?`: sheet name and coordinate):
 
 ```sql
-CREATE TABLE formula_reach (
-    from_cell_id    INTEGER NOT NULL REFERENCES cell (cell_id),
-    to_cell_id      INTEGER NOT NULL REFERENCES cell (cell_id),
-    depth           INTEGER NOT NULL CHECK (depth >= 1),
-    PRIMARY KEY (from_cell_id, to_cell_id)
-)
+WITH RECURSIVE origin(cell_id) AS (
+    SELECT c.cell_id FROM cell c JOIN worksheet w ON w.worksheet_id = c.worksheet_id
+    WHERE w.sheet_name = ? AND c.coord = ?),
+walk(cell_id, depth) AS (
+    SELECT l.to_cell_id, 1 FROM formula_link l WHERE l.from_cell_id IN (SELECT cell_id FROM origin)
+    UNION
+    SELECT l.to_cell_id, walk.depth + 1 FROM formula_link l JOIN walk ON l.from_cell_id = walk.cell_id
+    WHERE walk.depth < 200)
+SELECT other.coord, MIN(walk.depth) AS depth FROM walk
+JOIN cell other ON other.cell_id = walk.cell_id GROUP BY other.cell_id, other.coord;
 ```
 
-Foreign keys: `to_cell_id` -> `cell.cell_id`; `from_cell_id` -> `cell.cell_id`
+What reads a cell (its dependents) is the same query with `from_cell_id` and `to_cell_id` swapped. A cell on a cycle appears in `formula_gap` with reason `cycle`, and so does every cell that reads one.
 
 
 ### `ingest_rejection`  (rows: run 1 = 0, run 2 = 0)
@@ -968,7 +976,6 @@ Foreign keys: `worksheet_id` -> `worksheet.worksheet_id`
 * `external_link`: `CREATE INDEX idx_external_link_index ON external_link (workbook_id, link_index)`
 * `external_link`: `CREATE INDEX idx_external_link_workbook      ON external_link (workbook_id)`
 * `formula_link`: `CREATE INDEX idx_formula_link_to ON formula_link (to_cell_id)`
-* `formula_reach`: `CREATE INDEX idx_formula_reach_to ON formula_reach (to_cell_id)`
 * `ingest_rejection`: `CREATE INDEX idx_ingest_rejection_file       ON ingest_rejection (mandate_id, file_hash)`
 * `ingest_rejection`: `CREATE INDEX idx_ingest_rejection_source_file ON ingest_rejection (source_file_id)`
 * `llm_usage`: `CREATE INDEX idx_llm_usage_model ON llm_usage (model_id)`

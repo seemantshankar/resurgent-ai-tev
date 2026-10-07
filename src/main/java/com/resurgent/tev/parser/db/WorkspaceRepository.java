@@ -392,22 +392,6 @@ public final class WorkspaceRepository {
         }
     }
 
-    public void insertFormulaReach(List<FormulaReach> rows) throws SQLException {
-        if (rows.isEmpty()) {
-            return;
-        }
-        try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO formula_reach (from_cell_id, to_cell_id, depth) VALUES (?, ?, ?)")) {
-            for (FormulaReach row : rows) {
-                ps.setLong(1, row.fromCellId());
-                ps.setLong(2, row.toCellId());
-                ps.setInt(3, row.depth());
-                ps.addBatch();
-            }
-            ps.executeBatch();
-        }
-    }
-
     public void insertFormulaGaps(List<FormulaGap> gaps) throws SQLException {
         if (gaps.isEmpty()) {
             return;

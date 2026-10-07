@@ -4,7 +4,6 @@ import com.resurgent.tev.parser.db.CellCoordRef;
 import com.resurgent.tev.parser.db.CellReferenceEdge;
 import com.resurgent.tev.parser.db.FormulaGap;
 import com.resurgent.tev.parser.db.FormulaLink;
-import com.resurgent.tev.parser.db.FormulaReach;
 import com.resurgent.tev.parser.db.PersistedCellReference;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import java.sql.SQLException;
@@ -58,18 +57,11 @@ public final class FormulaGraphBuilder {
             expandRange(from, edge.targetWorksheetId(), edge.targetRange(), cellsByWorksheet, direct);
         }
 
-        Set<Long> cycleNodes = cycleParticipants(direct);
-        List<FormulaReach> reach = new ArrayList<>();
+        // A cell is cyclic when it is on a cycle or reads, through any chain, a cell that is. That is found by
+        // walking back from the cycle cells to what reads them, once, not by listing everything every cell reaches.
+        Set<Long> cyclicCells = cellsReadingACycle(cycleParticipants(direct), direct);
         for (long origin : direct.keySet()) {
-            Map<Long, Integer> depths = shortestPrecedents(origin, direct);
-            boolean cyclic = cycleNodes.contains(origin);
-            for (Map.Entry<Long, Integer> entry : depths.entrySet()) {
-                reach.add(new FormulaReach(origin, entry.getKey(), entry.getValue()));
-                if (cycleNodes.contains(entry.getKey())) {
-                    cyclic = true;
-                }
-            }
-            if (cyclic) {
+            if (cyclicCells.contains(origin)) {
                 gaps.add(gap(origin, CYCLE, ""));
             }
         }
@@ -81,7 +73,6 @@ public final class FormulaGraphBuilder {
             }
         }
         repo.insertFormulaLinks(links);
-        repo.insertFormulaReach(reach);
         repo.insertFormulaGaps(new ArrayList<>(gaps));
     }
 
@@ -155,35 +146,27 @@ public final class FormulaGraphBuilder {
         color.put(node, 2);
     }
 
-    private static Map<Long, Integer> shortestPrecedents(long origin, Map<Long, Set<Long>> direct) {
-        Map<Long, Integer> best = new HashMap<>();
-        ArrayDeque<long[]> queue = new ArrayDeque<>();
-        for (long next : direct.getOrDefault(origin, Set.of())) {
-            best.put(next, 1);
-            queue.add(new long[] {next, 1});
+    /** The cycle cells and every cell that reads one of them, directly or through other cells. */
+    private static Set<Long> cellsReadingACycle(Set<Long> cycleNodes, Map<Long, Set<Long>> direct) {
+        Set<Long> found = new HashSet<>(cycleNodes);
+        if (cycleNodes.isEmpty()) {
+            return found;
         }
-        int guard = direct.size() + 1;
+        Map<Long, List<Long>> readers = new HashMap<>();
+        for (Map.Entry<Long, Set<Long>> entry : direct.entrySet()) {
+            for (long read : entry.getValue()) {
+                readers.computeIfAbsent(read, k -> new ArrayList<>()).add(entry.getKey());
+            }
+        }
+        ArrayDeque<Long> queue = new ArrayDeque<>(cycleNodes);
         while (!queue.isEmpty()) {
-            long[] step = queue.removeFirst();
-            long node = step[0];
-            int depth = (int) step[1];
-            if (depth > guard) {
-                continue;
-            }
-            Integer known = best.get(node);
-            if (known != null && known < depth) {
-                continue;
-            }
-            for (long next : direct.getOrDefault(node, Set.of())) {
-                int newDepth = depth + 1;
-                Integer nextKnown = best.get(next);
-                if (nextKnown == null || nextKnown > newDepth) {
-                    best.put(next, newDepth);
-                    queue.add(new long[] {next, newDepth});
+            for (long reader : readers.getOrDefault(queue.removeFirst(), List.of())) {
+                if (found.add(reader)) {
+                    queue.add(reader);
                 }
             }
         }
-        return best;
+        return found;
     }
 
     private static String gapReason(CellReferenceEdge edge) {

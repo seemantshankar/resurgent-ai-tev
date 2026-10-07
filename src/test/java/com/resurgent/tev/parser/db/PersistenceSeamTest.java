@@ -124,7 +124,7 @@ class PersistenceSeamTest {
                     "project_fact_field", "packet_disposition", "schedule_family");
             assertThat(tables).contains(
                     "nomenclature_binding", "cell_interpretation", "cell_interpretation_evidence",
-                    "formula_link", "formula_reach", "formula_gap", "cell_reading");
+                    "formula_link", "formula_gap", "cell_reading");
             assertThat(tables).doesNotContain("cell_type", "aggregation");
             assertThat(tables).doesNotContain("region", "cost_head");
 

@@ -787,17 +787,20 @@ class IngestServiceTest {
 
     private static Set<String> reach(Connection c, String sheet, String coord, boolean precedents)
             throws Exception {
-        String sql = precedents
-                ? "SELECT other.coord, r.depth FROM formula_reach r"
-                        + " JOIN cell origin ON origin.cell_id = r.from_cell_id"
-                        + " JOIN worksheet ow ON ow.worksheet_id = origin.worksheet_id"
-                        + " JOIN cell other ON other.cell_id = r.to_cell_id"
-                        + " WHERE ow.sheet_name = ? AND origin.coord = ?"
-                : "SELECT other.coord, r.depth FROM formula_reach r"
-                        + " JOIN cell origin ON origin.cell_id = r.to_cell_id"
-                        + " JOIN worksheet ow ON ow.worksheet_id = origin.worksheet_id"
-                        + " JOIN cell other ON other.cell_id = r.from_cell_id"
-                        + " WHERE ow.sheet_name = ? AND origin.coord = ?";
+        // What a cell reads (or what reads it), directly or through other cells, with the fewest steps: a
+        // recursive query over the direct links, the same one the database guide gives.
+        String near = precedents ? "from_cell_id" : "to_cell_id";
+        String far = precedents ? "to_cell_id" : "from_cell_id";
+        String sql = "WITH RECURSIVE origin(cell_id) AS ("
+                + " SELECT c.cell_id FROM cell c JOIN worksheet w ON w.worksheet_id = c.worksheet_id"
+                + " WHERE w.sheet_name = ? AND c.coord = ?),"
+                + " walk(cell_id, depth) AS ("
+                + " SELECT l." + far + ", 1 FROM formula_link l WHERE l." + near + " IN (SELECT cell_id FROM origin)"
+                + " UNION"
+                + " SELECT l." + far + ", walk.depth + 1 FROM formula_link l JOIN walk ON l." + near + " = walk.cell_id"
+                + " WHERE walk.depth < 200)"
+                + " SELECT other.coord AS coord, MIN(walk.depth) AS depth FROM walk"
+                + " JOIN cell other ON other.cell_id = walk.cell_id GROUP BY other.cell_id, other.coord";
         try (var ps = c.prepareStatement(sql)) {
             ps.setString(1, sheet);
             ps.setString(2, coord);
