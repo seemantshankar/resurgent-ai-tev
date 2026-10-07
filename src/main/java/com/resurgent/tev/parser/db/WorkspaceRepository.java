@@ -1687,6 +1687,34 @@ public final class WorkspaceRepository {
     }
 
     /**
+     * Get a sample of text values from cells in a worksheet for content analysis.
+     * Useful for detecting industry, project type, etc. from cell contents.
+     *
+     * @param worksheetId worksheet to sample
+     * @param limit maximum number of cells to return
+     * @return list of non-null text values from cells
+     */
+    public List<String> selectCellTextsForWorksheet(long worksheetId, int limit) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT DISTINCT c.text_value"
+                        + " FROM cell c"
+                        + " WHERE c.worksheet_id = ? AND c.text_value IS NOT NULL"
+                        + " AND LENGTH(c.text_value) > 0"
+                        + " ORDER BY c.row_num, c.col_num"
+                        + " LIMIT ?")) {
+            ps.setLong(1, worksheetId);
+            ps.setInt(2, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<String> texts = new ArrayList<>();
+                while (rs.next()) {
+                    texts.add(rs.getString("text_value"));
+                }
+                return texts;
+            }
+        }
+    }
+
+    /**
      * Same-sheet resolved formula edges for helper tagging: {@code [fromCellId, toCellId]}.
      */
     public List<long[]> selectSameSheetResolvedEdges(long worksheetId) throws SQLException {

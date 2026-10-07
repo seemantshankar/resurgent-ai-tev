@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Formula Dependency Graph</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.css" rel="stylesheet" type="text/css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            display: flex;
+            height: 100vh;
+        }
+        
+        .sidebar {
+            width: 350px;
+            background: white;
+            border-right: 1px solid #ddd;
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: 2px 0 8px rgba(0,0,0,0.1);
+        }
+        
+        .sidebar h2 {
+            font-size: 16px;
+            margin-bottom: 15px;
+            color: #333;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+        }
+        
+        .info-section {
+            margin-bottom: 20px;
+        }
+        
+        .info-section h3 {
+            font-size: 13px;
+            font-weight: 600;
+            color: #666;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .cell-info {
+            background: #f9f9f9;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            border-left: 4px solid #007bff;
+        }
+        
+        .cell-coord {
+            font-weight: bold;
+            color: #007bff;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+        
+        .cell-formula {
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            color: #555;
+            word-break: break-all;
+            background: white;
+            padding: 8px;
+            border-radius: 3px;
+            margin-top: 5px;
+        }
+        
+        .cell-value {
+            font-size: 12px;
+            color: #28a745;
+            margin-top: 5px;
+            font-weight: 500;
+        }
+        
+        .cell-type {
+            display: inline-block;
+            font-size: 10px;
+            padding: 3px 8px;
+            border-radius: 3px;
+            margin-top: 8px;
+        }
+        
+        .type-formula {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        
+        .type-hardcoded {
+            background: #f3e5f5;
+            color: #7b1fa2;
+        }
+        
+        .legend {
+            background: #f9f9f9;
+            padding: 12px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        
+        .legend-item {
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .legend-dot {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+        
+        .dot-formula {
+            background: #3498db;
+            box-shadow: 0 0 8px rgba(52, 152, 219, 0.5);
+        }
+        
+        .dot-hardcoded {
+            background: #e74c3c;
+            box-shadow: 0 0 8px rgba(231, 76, 60, 0.5);
+        }
+        
+        .dot-target {
+            background: #27ae60;
+            box-shadow: 0 0 10px rgba(39, 174, 96, 0.8);
+        }
+        
+        #network {
+            flex: 1;
+            background: white;
+        }
+        
+        .stats {
+            background: #f0f0f0;
+            padding: 12px;
+            border-top: 1px solid #ddd;
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+        
+        .stat-label {
+            font-weight: 600;
+        }
+        
+        @media (max-width: 768px) {
+            .sidebar {
+                width: 250px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h2>🔗 Formula Dependency Graph</h2>
+        
+        <div class="info-section">
+            <h3>Context: Sheet Structure</h3>
+            <div class="cell-info" style="border-left-color: #16a34a;">
+                <div style="font-size: 12px; font-weight: 600; color: #16a34a;">📊 Worksheet</div>
+                <div style="font-size: 13px; color: #333; margin-top: 5px;">1.2_PL_RK Group_Consol</div>
+                <div style="font-size: 11px; color: #666; margin-top: 8px;">📋 FORM-II: Operating Statement</div>
+            </div>
+        </div>
+
+        <div class="info-section">
+            <h3>Target Cell</h3>
+            <div class="cell-info">
+                <div class="cell-coord">AC5</div>
+                <div style="font-size: 11px; color: #999; margin-bottom: 5px;">📍 Row 5 (Year Ending Headers) × Col 29 (Mar '31)</div>
+                <div class="cell-formula">=Y5-Z5+AA5-AB5</div>
+                <div class="cell-value">Result: Mar '31 (FY2031)</div>
+                <div class="cell-type type-formula">Period Header Formula</div>
+            </div>
+        </div>
+        
+        <div class="info-section">
+            <h3>Direct Dependencies (Ancestors)</h3>
+            <div class="cell-info">
+                <div class="cell-coord">Y5</div>
+                <div style="font-size: 11px; color: #999; margin-bottom: 5px;">📅 Mar '27 (FY2027)</div>
+                <div class="cell-formula">=U5+V5+W5-X5</div>
+                <div class="cell-type type-formula">Formula</div>
+            </div>
+            <div class="cell-info">
+                <div class="cell-coord">Z5</div>
+                <div style="font-size: 11px; color: #999; margin-bottom: 5px;">📅 Mar '28 (FY2028)</div>
+                <div class="cell-value">Value: Hard-Coded</div>
+                <div class="cell-type type-hardcoded">Header Row</div>
+            </div>
+            <div class="cell-info">
+                <div class="cell-coord">AA5</div>
+                <div style="font-size: 11px; color: #999; margin-bottom: 5px;">📅 Mar '29 (FY2029)</div>
+                <div class="cell-value">Value: Hard-Coded</div>
+                <div class="cell-type type-hardcoded">Header Row</div>
+            </div>
+            <div class="cell-info">
+                <div class="cell-coord">AB5</div>
+                <div style="font-size: 11px; color: #999; margin-bottom: 5px;">📅 Mar '30 (FY2030)</div>
+                <div class="cell-formula">=AA5</div>
+                <div class="cell-type type-formula">Formula</div>
+            </div>
+        </div>
+        
+        <div class="info-section">
+            <h3>Dependents (What Uses This)</h3>
+            <div class="cell-info" style="border-left-color: #ff9800;">
+                <div class="cell-coord">AE5</div>
+                <div class="cell-formula">=AC5</div>
+                <div class="cell-type type-formula">Formula</div>
+            </div>
+            <div class="cell-info" style="border-left-color: #ff9800;">
+                <div class="cell-coord">AF5</div>
+                <div class="cell-formula">=AC5</div>
+                <div class="cell-type type-formula">Formula</div>
+            </div>
+            <div class="cell-info" style="border-left-color: #ff9800;">
+                <div class="cell-coord">AG5</div>
+                <div class="cell-formula">=AC5-AD5+AE5-AF5</div>
+                <div class="cell-type type-formula">Formula</div>
+            </div>
+            <p style="color: #999; font-size: 12px; margin-top: 8px;">+ 14 more dependents...</p>
+        </div>
+        
+        <div class="legend">
+            <h3 style="margin-bottom: 12px; font-size: 12px; text-transform: uppercase; color: #666;">Legend</h3>
+            <div class="legend-item">
+                <div class="legend-dot dot-target"></div>
+                <span>Target Cell (AC5)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-dot dot-formula"></div>
+                <span>Formula Cell</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-dot dot-hardcoded"></div>
+                <span>Hard-Coded Value</span>
+            </div>
+        </div>
+        
+        <div class="stats">
+            <div class="stat-row">
+                <span class="stat-label">📊 Spreadsheet:</span>
+                <span>1.2_PL_RK Group</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">📋 Form:</span>
+                <span>Operating Statement</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">📅 Period Coverage:</span>
+                <span>FY2023–FY2031</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">🔗 Dependencies:</span>
+                <span>17 cells consume this</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">📍 Cell Type:</span>
+                <span>Period Header (Row 5)</span>
+            </div>
+        </div>
+    </div>
+    
+    <div id="network"></div>
+    
+    <script type="text/javascript">
+        // Create nodes
+        var nodes = new vis.DataSet([
+            // Target node
+            { id: 'AC5', label: 'AC5\nYear Ending Header\nMar \'31', level: 0, color: { background: '#27ae60', border: '#1e8449', highlight: { background: '#2ecc71' } }, title: '[1.2_PL_RK Group_Consol]\nYear Ending Header - Mar \'31', font: { size: 13, bold: true } },
+
+            // Level 1 - Direct ancestors (all in Row 5: Year Ending Header Row)
+            { id: 'Y5', label: 'Y5\nYear Ending Header\nMar \'27', level: 1, color: { background: '#3498db', border: '#2874a6' }, title: '[1.2_PL_RK Group_Consol]\nYear Ending Header - Mar \'27' },
+            { id: 'Z5', label: 'Z5\nYear Ending Header\nMar \'28', level: 1, color: { background: '#e74c3c', border: '#c0392b' }, title: '[1.2_PL_RK Group_Consol]\nYear Ending Header - Mar \'28' },
+            { id: 'AA5', label: 'AA5\nYear Ending Header\nMar \'29', level: 1, color: { background: '#e74c3c', border: '#c0392b' }, title: '[1.2_PL_RK Group_Consol]\nYear Ending Header - Mar \'29' },
+            { id: 'AB5', label: 'AB5\nYear Ending Header\nMar \'30', level: 1, color: { background: '#3498db', border: '#2874a6' }, title: '[1.2_PL_RK Group_Consol]\nYear Ending Header - Mar \'30' },
+
+            // Level 2 - Ancestors of Y5 (also in Row 5)
+            { id: 'U5', label: 'U5\nYear Ending Header\nMar \'23', level: 2, color: { background: '#e74c3c', border: '#c0392b' }, title: '[1.2_PL_RK Group_Consol]\nYear Ending Header - Mar \'23' },
+            { id: 'V5', label: 'V5\nYear Ending Header\nMar \'24', level: 2, color: { background: '#e74c3c', border: '#c0392b' }, title: '[1.2_PL_RK Group_Consol]\nYear Ending Header - Mar \'24' },
+            { id: 'W5', label: 'W5\nYear Ending Header\nMar \'25', level: 2, color: { background: '#e74c3c', border: '#c0392b' }, title: '[1.2_PL_RK Group_Consol]\nYear Ending Header - Mar \'25' },
+            { id: 'X5', label: 'X5\nYear Ending Header\nMar \'26', level: 2, color: { background: '#e74c3c', border: '#c0392b' }, title: '[1.2_PL_RK Group_Consol]\nYear Ending Header - Mar \'26' },
+            
+            // Level -1 - Dependents (consumers of AC5, Mar'31 period header)
+            { id: 'AE5', label: 'AE5\nCurrent Liabilities\nMar \'30', level: -1, color: { background: '#f39c12', border: '#d68910' }, title: '[1.3_LIABILITY_RK Group]\nCurrent Liabilities: Year ending - Mar \'30' },
+            { id: 'AF5', label: 'AF5\nCurrent Liabilities\nMar \'31', level: -1, color: { background: '#f39c12', border: '#d68910' }, title: '[1.3_LIABILITY_RK Group]\nCurrent Liabilities: Year ending - Mar \'31' },
+            { id: 'AG5', label: 'AG5\nAxis Bank Debt\n31-Mar-2029 (Projected)', level: -1, color: { background: '#f39c12', border: '#d68910' }, title: '[Debt-profile Bank wise]\nAxis Bank - Debt as of 31-Mar-2029\n(Roll-forward: Opening - New + Renewal - Repayment)' },
+            { id: 'AC40', label: 'AC40\nLicense Fees\nMar \'31 = 13.68%', level: -1, color: { background: '#f39c12', border: '#d68910' }, title: '[1.2_PL_RK Group_Consol]\nLicense Fees - Mar \'31 (Ratio)' },
+            { id: 'AC75', label: 'AC75\nSubtotal - SUMIF\nMar \'31', level: -1, color: { background: '#f39c12', border: '#d68910' }, title: '[1.2_PL_RK Group_Consol]\nLine Item Subtotal - Mar \'31' },
+            { id: 'AC76', label: 'AC76\nSubtotal - SUMIF\nMar \'31', level: -1, color: { background: '#f39c12', border: '#d68910' }, title: '[1.2_PL_RK Group_Consol]\nLine Item Subtotal - Mar \'31' },
+        ]);
+        
+        // Create edges
+        var edges = new vis.DataSet([
+            // AC5 -> ancestors
+            { from: 'AC5', to: 'Y5', arrows: 'from', color: { color: '#34495e', highlight: '#2c3e50' }, width: 2 },
+            { from: 'AC5', to: 'Z5', arrows: 'from', color: { color: '#34495e', highlight: '#2c3e50' }, width: 2 },
+            { from: 'AC5', to: 'AA5', arrows: 'from', color: { color: '#34495e', highlight: '#2c3e50' }, width: 2 },
+            { from: 'AC5', to: 'AB5', arrows: 'from', color: { color: '#34495e', highlight: '#2c3e50' }, width: 2 },
+            
+            // Y5 -> ancestors
+            { from: 'Y5', to: 'U5', arrows: 'from', color: { color: '#7f8c8d' } },
+            { from: 'Y5', to: 'V5', arrows: 'from', color: { color: '#7f8c8d' } },
+            { from: 'Y5', to: 'W5', arrows: 'from', color: { color: '#7f8c8d' } },
+            { from: 'Y5', to: 'X5', arrows: 'from', color: { color: '#7f8c8d' } },
+            
+            // AB5 -> AA5
+            { from: 'AB5', to: 'AA5', arrows: 'from', color: { color: '#7f8c8d' } },
+            
+            // AC5 -> dependents (reverse - from dependent to AC5)
+            { from: 'AE5', to: 'AC5', arrows: 'to', color: { color: '#e67e22', highlight: '#d35400' }, width: 2, dashes: true },
+            { from: 'AF5', to: 'AC5', arrows: 'to', color: { color: '#e67e22', highlight: '#d35400' }, width: 2, dashes: true },
+            { from: 'AG5', to: 'AC5', arrows: 'to', color: { color: '#e67e22', highlight: '#d35400' }, width: 2, dashes: true },
+            { from: 'AC40', to: 'AC5', arrows: 'to', color: { color: '#e67e22', highlight: '#d35400' }, width: 2, dashes: true },
+            { from: 'AC75', to: 'AC5', arrows: 'to', color: { color: '#e67e22', highlight: '#d35400' }, width: 2, dashes: true },
+            { from: 'AC76', to: 'AC5', arrows: 'to', color: { color: '#e67e22', highlight: '#d35400' }, width: 2, dashes: true },
+        ]);
+        
+        // Create a network
+        var container = document.getElementById('network');
+        var data = {
+            nodes: nodes,
+            edges: edges
+        };
+        var options = {
+            layout: {
+                hierarchical: {
+                    enabled: true,
+                    levelSeparation: 200,
+                    nodeSpacing: 150,
+                    direction: 'UD',
+                    sortMethod: 'directed'
+                }
+            },
+            physics: {
+                enabled: false
+            },
+            interaction: {
+                navigationButtons: true,
+                keyboard: true,
+                zoomView: true,
+                dragView: true
+            },
+            nodes: {
+                shape: 'box',
+                margin: 10,
+                widthConstraint: {
+                    maximum: 150
+                },
+                font: {
+                    size: 12,
+                    face: 'Courier New',
+                    align: 'center'
+                },
+                shadow: {
+                    enabled: true,
+                    color: 'rgba(0, 0, 0, 0.1)',
+                    size: 8,
+                    x: 2,
+                    y: 2
+                }
+            },
+            edges: {
+                font: { size: 10 },
+                smooth: {
+                    type: 'cubicBezier'
+                },
+                shadow: {
+                    enabled: true,
+                    color: 'rgba(0, 0, 0, 0.05)',
+                    size: 4,
+                    x: 1,
+                    y: 1
+                }
+            }
+        };
+        
+        var network = new vis.Network(container, data, options);
+        
+        // Double-click to expand node info
+        network.on("doubleClick", function(params) {
+            if (params.nodes.length > 0) {
+                var nodeId = params.nodes[0];
+                alert('Node: ' + nodeId + '\n\nThis node and its relationships are highlighted.\n\nFormula cells have blue backgrounds.\nHard-coded values have red backgrounds.\nDependents have orange backgrounds.');
+            }
+        });
+    </script>
+</body>
+</html>
