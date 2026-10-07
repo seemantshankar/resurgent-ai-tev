@@ -39,9 +39,9 @@ Each file has a read-only twin (`workspace.run1-final-20261005.db`, `workspace.r
 | Column | Meaning |
 | --- | --- |
 | `kind` | `money`, `quantity`, `rate` (money per quantity), `percent`, `count`, `ratio`. NULL when refused or untyped. |
-| `scale` | `unit`, `thousand`, `lakh`, `million`, `crore`, `billion`. **Only meaningful for money**; for other kinds it is `unit`. For money, NULL means the sheet states no scale and none could be inferred. |
-| `scale_basis` | `stated` (a label, region or sheet states it) or `inferred` (taken from the sheets that read this cell). |
-| `unit`, `currency` | Optional unit text (such as sqm; set on 157 cells in run 1) and currency code (`INR` on 1,583 cells, empty otherwise). |
+| `scale` | `unit`, `thousand`, `lakh`, `million`, `crore`, `billion`. **Only meaningful for money**; for other kinds it is `unit`. For money, **NULL means the scale is unknown. It does not mean rupees.** A money cell whose scale is `unit` is in plain currency units (stated, or judged for the amount of one item such as a salary). Read a NULL as "do not convert". |
+| `scale_basis` | `stated` (a label, region or sheet states it, or it follows through formulas from cells that do) or `inferred` (taken from the sheets that read this cell, or judged from the cell's labels and from how the rest of the workbook's stated money sits; the reason is in `cell_scale_inference` for the second kind). Treat `inferred` as a well-founded judgement, not a statement. |
+| `unit`, `currency` | Unit of measurement for quantity, count and rate cells (such as `sqm`, `MWh`, `kWh/day`; blank means unknown) and currency code (`INR` when stated, empty otherwise). When a model named the unit, `cell_unit_basis` says whether the labels state it (`stated`, with the words copied from them) or the model worked it out from the subject (`inferred`). A unit is never a currency or a scale. |
 | `absolute_amount` | For money with a scale: the cell's number times the scale factor, as text (a value of 4933.389 with scale `million` gives 4933389092.47 style base units, here 4,933,389,092.47). |
 | `type_source` | `input`: typed from labels, number format, the dictionary or a model. `derived`: typed by arithmetic over its precedents, or by a structural rule. Treat `derived` on a formula as stronger evidence than `input`. |
 | `refusal` | Set instead of `kind`: `untypable` (nothing could type it), `kind_conflict` (the arithmetic mixes incompatible kinds), `cycle`, `external_dependency`. |
@@ -53,6 +53,12 @@ Each file has a read-only twin (`workspace.run1-final-20261005.db`, `workspace.r
 * Formulas in `Debt-profile Bank wise` column U are typed inconsistently down the column (mostly money, some quantity).
 * A `%` inside a money label (for example "OD @9.5%") can be typed `percent`.
 * About 1% of typed cells (mostly `quantity`/`rate`) have row labels that read as plain money (Debentures, Term loan, Provision).
+**Scale and unit: how to read them (added after run 7).**
+* A NULL money scale is unknown. In earlier runs a model's guess ("lakh", "million") for money that nothing stated could be recorded as `stated`; that is fixed, and runs before 2026-10-08 may still carry such guesses.
+* `cell_scale_inference` (`cell_id`, `scale`, `evidence`): money whose scale was judged by a model from the row and column labels plus the scales the workbook states elsewhere and how large its money typically is. A salary per person can come out `unit` while totals on the same sheet are `crore`. Amounts under one unit, or thousands of times larger than the workbook's typical money, are rejected whatever the model says.
+* `cell_unit_basis` (`cell_id`, `unit`, `basis`, `evidence`): see the `unit` row above.
+* Check `kind` before using a path: a percent or ratio cell can sit on a money path ("PBT (%)" on `Profit & Loss > PBT`).
+
 * 2,124 of the 13,838 money cells have a NULL scale (nothing states one and none could be inferred). The run log also reports 73 money cells whose scale differs from the one their region or sheet states.
 * Region labelling (`triage`) varies run to run: compare run 1 and run 2.
 * Overall: 86% of typed cells are money, 6% percent, 4% ratio, 3% quantity.

@@ -720,10 +720,12 @@ public class CellTypeClassifierLlm {
                     + " but the sheet states " + stated.wireName() + "; using " + stated.wireName());
             scale = stated;
         }
-        if (ReadingOutcome.MONEY.equals(response.kind) && stated == null && scale == CellScale.UNIT) {
-            // "Unit" is what a model says when it finds no scale word, not a reading: money nothing
-            // states has no scale rather than rupees, and the sheets that read it may fix it. Unless
-            // the cell's own labels say rupees, it is left unstated like the dictionary leaves it.
+        if (ReadingOutcome.MONEY.equals(response.kind) && stated == null) {
+            // Nothing the sheet or region says gives this money a scale. A model's "unit" is what it says
+            // when it finds no scale word, and its "lakh" or "million" is a guess no better: neither is a
+            // reading, and a guess would be recorded as stated. Money nothing states has no scale, and the
+            // sheets that read it may fix it. Only the cell's own labels can give it one, and they win over
+            // the model.
             CellScale labelled = extractScaleFromLabels(
                     KindTokens.normalizeLabel(ctx.rowLabel(cell)), KindTokens.normalizeLabel(ctx.columnLabel(cell)), cell);
             if (labelled == null) {

@@ -294,7 +294,31 @@ class CellTypeClassifierLearningTest {
         var settled = runAndSettle(new DynamicKindTokens(dir), llm, ctx, 1);
 
         assertThat(llm.prompts).hasSize(1);
-        assertThat(settled.get(1L).scale).isEqualTo(CellScale.LAKH);
+        // The model said lakh, but nothing on the sheet or in the labels does: its guess is not recorded.
+        assertThat(settled.get(1L).kind).isEqualTo("money");
+        assertThat(settled.get(1L).scaleUnstated()).isTrue();
+    }
+
+    @Test
+    void aModelsScaleForMoneyNothingStatesIsNeverRecordedWhateverItSays() {
+        for (String guess : new String[] {"lakh", "crore", "million", "thousand", "unit"}) {
+            var llm = RecordingLlm.always("money", guess);
+            var ctx = new TestContext("wb1").cell(1, "Fire Fighting Work", "FY23", EXPENSES);
+
+            var settled = runAndSettle(new DynamicKindTokens(dir), llm, ctx, 1);
+
+            assertThat(settled.get(1L).scaleUnstated()).as("model said " + guess).isTrue();
+        }
+    }
+
+    @Test
+    void theCellsOwnLabelsBeatTheModelsScale() {
+        var llm = RecordingLlm.always("money", "lakh");
+        var ctx = new TestContext("wb1").cell(1, "Fire Fighting Work", "FY23 (Rs. in Crores)", EXPENSES);
+
+        var settled = runAndSettle(new DynamicKindTokens(dir), llm, ctx, 1);
+
+        assertThat(settled.get(1L).scale).isEqualTo(CellScale.CRORE);
     }
 
     @Test
@@ -329,8 +353,9 @@ class CellTypeClassifierLearningTest {
 
     @Test
     void oddCaseKindAndScaleSpellingsAreAccepted() {
+        // The scale is stated by the column header, so it is read; the model's spelling must not break the answer.
         var llm = RecordingLlm.always("Money", "lacs");
-        var ctx = new TestContext("wb1").cell(1, "Fire Fighting Work", "FY23", EXPENSES);
+        var ctx = new TestContext("wb1").cell(1, "Fire Fighting Work", "FY23 (Rs. in Lakhs)", EXPENSES);
 
         var settled = runAndSettle(new DynamicKindTokens(dir), llm, ctx, 1);
 

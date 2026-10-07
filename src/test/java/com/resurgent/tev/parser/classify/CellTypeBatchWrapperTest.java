@@ -55,6 +55,7 @@ class CellTypeBatchWrapperTest {
 
         assertThat(settled.get(1L).refusal).isNull();
         assertThat(settled.get(1L).kind).isEqualTo(ReadingOutcome.MONEY);
-        assertThat(settled.get(1L).scale).isEqualTo(CellScale.LAKH);
+        // Nothing states a scale here, so the model's "lakh" is a guess, not a reading.
+        assertThat(settled.get(1L).scaleUnstated()).isTrue();
     }
 }

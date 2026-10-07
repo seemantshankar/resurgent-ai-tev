@@ -1113,6 +1113,29 @@ public final class WorkspaceRepository {
         }
     }
 
+    /** Replaces the scale inferences of a parse run. */
+    public void replaceCellScaleInferences(long parseRunId, java.util.List<CellScaleInference> rows)
+            throws SQLException {
+        try (PreparedStatement delete = connection.prepareStatement(
+                "DELETE FROM cell_scale_inference WHERE parse_run_id = ?")) {
+            delete.setLong(1, parseRunId);
+            delete.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cell_scale_inference (parse_run_id, cell_id, scale, evidence, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?)")) {
+            for (CellScaleInference row : rows) {
+                ps.setLong(1, parseRunId);
+                ps.setLong(2, row.cellId());
+                ps.setString(3, row.scale());
+                ps.setString(4, row.evidence());
+                ps.setString(5, Timestamps.now());
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
+    }
+
     /** Replaces the unit bases of a parse run: how each model-named unit is known. */
     public void replaceCellUnitBases(long parseRunId, java.util.List<CellUnitBasis> rows) throws SQLException {
         try (PreparedStatement delete = connection.prepareStatement(

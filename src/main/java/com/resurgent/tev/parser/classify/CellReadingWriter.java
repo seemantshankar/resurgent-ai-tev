@@ -2,6 +2,7 @@ package com.resurgent.tev.parser.classify;
 
 import com.resurgent.tev.parser.db.CandidateRow;
 import com.resurgent.tev.parser.db.CellReading;
+import com.resurgent.tev.parser.db.CellScaleInference;
 import com.resurgent.tev.parser.db.CellUnitBasis;
 import com.resurgent.tev.parser.db.FormulaGap;
 import com.resurgent.tev.parser.db.FormulaLink;
@@ -222,6 +223,8 @@ public final class CellReadingWriter {
         CellContext labelContext = new ResolverCellContext(
                 parseRunId, cache, owners, members, candidatesById, dispositions, sheetNames,
                 repo.selectSourceFileHashForParseRun(parseRunId), stated);
+        Map<Long, ScaleInference.Inference> scaleInferences = ScaleInference.apply(
+                cells, settled, unknowns, sheetNames, labelContext, llm, tuning.concurrency());
         reportScaleConflicts(cells, settled, stated);
         Map<Long, UnitNamingStage.Note> unitNotes = new LinkedHashMap<>();
         if (llm != null) {
@@ -246,6 +249,12 @@ public final class CellReadingWriter {
             unitBases.add(new CellUnitBasis(entry.getKey(), note.unit(), note.basis(), note.evidence()));
         }
         repo.replaceCellUnitBases(parseRunId, unitBases);
+        List<CellScaleInference> scaleRows = new ArrayList<>();
+        for (Map.Entry<Long, ScaleInference.Inference> entry : scaleInferences.entrySet()) {
+            scaleRows.add(new CellScaleInference(
+                    entry.getKey(), entry.getValue().scale().wireName(), entry.getValue().evidence()));
+        }
+        repo.replaceCellScaleInferences(parseRunId, scaleRows);
 
     }
 
