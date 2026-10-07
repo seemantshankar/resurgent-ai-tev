@@ -212,7 +212,12 @@ public final class CellReadingWriter {
             }
         }
 
+        resolveSumConflicts(formulas, precedents, numericIds, byId, sheetIds, settled, stated, unknowns, sheetNames);
         reconcile(formulas, precedents, numericIds, byId, sheetIds, settled, stated, unknowns, sheetNames);
+        CellContext percentContext = new ResolverCellContext(
+                parseRunId, cache, owners, members, candidatesById, dispositions, sheetNames,
+                repo.selectSourceFileHashForParseRun(parseRunId), stated);
+        readRatiosLabelledPercentAsPercent(formulas, settled, percentContext);
 
         long untypedFinal = numericIds.stream()
                 .map(settled::get)
@@ -512,6 +517,181 @@ public final class CellReadingWriter {
      * <p>Only the dimension is overridden (money, rate, ratio or percent, count or quantity): a percent
      * the label chose over the arithmetic's ratio, a count over a quantity, is the same dimension and stays.
      */
+    /**
+     * A sum whose addends disagree on kind is refused. The author put these cells in one SUM, so they are
+     * meant to be one kind: when most addends agree and the odd one is a formula that itself reads cells of
+     * that kind, its label is what is wrong. "Insurance Cost - % of EPC" names an item, its formula copies
+     * the Basic Cost row of a money table, and Excel adds it into a total of money. The odd addend takes the
+     * majority's kind and the sums refused for it are typed again. A typed-in constant that disagrees, a
+     * tie, or an odd addend whose formula reads nothing of the majority's kind leaves the sum refused.
+     */
+    private static int resolveSumConflicts(
+            List<InterpretationCellView> formulas,
+            Map<Long, Set<Long>> precedents,
+            Set<Long> numericIds,
+            Map<Long, InterpretationCellView> byId,
+            Map<String, Long> sheetIds,
+            Map<Long, ReadingOutcome> settled,
+            StatedScales stated,
+            UnstatedScales unknowns,
+            Map<Long, String> sheetNames) {
+        int retyped = 0;
+        int sums = 0;
+        List<String> samples = new ArrayList<>();
+        for (InterpretationCellView cell : formulas) {
+            ReadingOutcome now = settled.get(cell.cellId());
+            if (now == null || !ReadingOutcome.KIND_CONFLICT.equals(now.refusal)
+                    || !ReadingArithmetic.pureSum(cell.formulaText())) {
+                continue;
+            }
+            List<Long> addends = new ArrayList<>();
+            boolean complete = true;
+            for (long pred : precedents.getOrDefault(cell.cellId(), Set.of())) {
+                if (!numericIds.contains(pred)) {
+                    continue;
+                }
+                ReadingOutcome o = settled.get(pred);
+                if (o == null || !o.typed()) {
+                    complete = false; // an addend with no kind: the identity says nothing about it
+                    break;
+                }
+                addends.add(pred);
+            }
+            if (!complete || addends.size() < 3) {
+                continue;
+            }
+            Map<String, List<Long>> byKind = new java.util.TreeMap<>();
+            for (long id : addends) {
+                byKind.computeIfAbsent(settled.get(id).kind, k -> new ArrayList<>()).add(id);
+            }
+            String majority = null;
+            int best = 0;
+            boolean tie = false;
+            for (Map.Entry<String, List<Long>> e : byKind.entrySet()) {
+                if (e.getValue().size() > best) {
+                    best = e.getValue().size();
+                    majority = e.getKey();
+                    tie = false;
+                } else if (e.getValue().size() == best) {
+                    tie = true;
+                }
+            }
+            if (tie || majority == null || best < 3 || best * 2 <= addends.size()) {
+                continue; // no clear majority kind: leave it refused
+            }
+            List<ReadingOutcome> peers = new ArrayList<>();
+            byKind.get(majority).forEach(id -> peers.add(settled.get(id)));
+            Set<CellScale> known = new java.util.LinkedHashSet<>();
+            for (ReadingOutcome o : peers) {
+                if (o.scale != null && !o.scaleUnstated()) {
+                    known.add(o.scale);
+                }
+            }
+            if (known.size() > 1) {
+                continue; // the majority disagrees on scale: not a plain mistake of kind
+            }
+            String unit = peers.stream().map(o -> o.unit).distinct().count() == 1 ? peers.get(0).unit : "";
+            String currency = peers.stream().map(o -> o.currency).filter(c -> !c.isEmpty()).findFirst().orElse("");
+            int retypedBefore = retyped;
+            for (Map.Entry<String, List<Long>> e : byKind.entrySet()) {
+                if (e.getKey().equals(majority)) {
+                    continue;
+                }
+                for (long id : e.getValue()) {
+                    if (!readsMostlyKind(id, majority, precedents, numericIds, settled)) {
+                        continue; // nothing but its label says it differs: no evidence to overrule that
+                    }
+                    ReadingOutcome before = settled.get(id);
+                    ReadingOutcome fixed;
+                    if (!ReadingOutcome.MONEY.equals(majority)) {
+                        fixed = ReadingOutcome.typed(majority, CellScale.UNIT, unit, "", ReadingOutcome.DERIVED);
+                    } else if (known.size() == 1) {
+                        CellScale scale = known.iterator().next();
+                        fixed = ReadingOutcome.typed(majority, scale, unit, currency, ReadingOutcome.DERIVED)
+                                .withScale(scale, true);
+                    } else {
+                        int fresh = unknowns.fresh(id);
+                        ReadingOutcome sibling = peers.stream().filter(ReadingOutcome::scaleUnstated).findFirst().orElse(null);
+                        if (sibling != null) {
+                            unknowns.same(fresh, sibling.scaleUnknown);
+                        }
+                        fixed = ReadingOutcome.unstated(unit, currency, ReadingOutcome.DERIVED, fresh);
+                    }
+                    settled.put(id, fixed);
+                    retyped++;
+                    if (samples.size() < 40) {
+                        samples.add(where(byId.get(id), sheetNames) + " " + before.kind + "->" + majority);
+                    }
+                }
+            }
+            if (retyped > retypedBefore) {
+                sums++;
+            }
+        }
+        if (retyped > 0) {
+            // The sums, and the formulas that read them and were left untypable or conflicting, are worked out again.
+            for (InterpretationCellView cell : formulas) {
+                ReadingOutcome o = settled.get(cell.cellId());
+                if (o != null && (ReadingOutcome.KIND_CONFLICT.equals(o.refusal)
+                        || ReadingOutcome.UNTYPABLE.equals(o.refusal))) {
+                    settled.remove(cell.cellId());
+                }
+            }
+            propagate(formulas, precedents, numericIds, byId, sheetIds, settled, stated, unknowns);
+            LlmStats.GLOBAL.add("layer-b", "cells_retyped_by_sum_identity", retyped);
+            System.err.println("[cell-reading] sum identity: " + retyped + " cells retyped to the kind of the cells "
+                    + "they are added with, in " + sums + " refused sums; first "
+                    + samples.size() + ": " + String.join("; ", samples));
+            System.err.flush();
+        }
+        return retyped;
+    }
+
+    /** Whether {@code id} is a formula and at least half of the typed numbers it reads are {@code kind}. */
+    private static boolean readsMostlyKind(
+            long id, String kind, Map<Long, Set<Long>> precedents, Set<Long> numericIds,
+            Map<Long, ReadingOutcome> settled) {
+        int typed = 0;
+        int matching = 0;
+        for (long pred : precedents.getOrDefault(id, Set.of())) {
+            ReadingOutcome o = numericIds.contains(pred) ? settled.get(pred) : null;
+            if (o != null && o.typed()) {
+                typed++;
+                if (kind.equals(o.kind)) {
+                    matching++;
+                }
+            }
+        }
+        return typed > 0 && matching * 2 >= typed;
+    }
+
+    /**
+     * Arithmetic gives a ratio for money over money, and percent and ratio are one dimension. When the
+     * cell's own labels say percent ("Margin (%)"), the reading is percent: the label chooses between
+     * the two, the arithmetic only rules out the other dimensions.
+     */
+    private static void readRatiosLabelledPercentAsPercent(
+            List<InterpretationCellView> formulas, Map<Long, ReadingOutcome> settled, CellContext context) {
+        int changed = 0;
+        for (InterpretationCellView cell : formulas) {
+            ReadingOutcome now = settled.get(cell.cellId());
+            if (now == null || !now.typed() || !ReadingOutcome.RATIO.equals(now.kind)) {
+                continue;
+            }
+            String labels = KindTokens.normalizeLabel(context.rowLabel(cell) + " " + context.columnLabel(cell));
+            if (ReadingOutcome.PERCENT.equals(CellTypeClassifierLlm.staticKind(labels))) {
+                settled.put(cell.cellId(),
+                        ReadingOutcome.typed(ReadingOutcome.PERCENT, CellScale.UNIT, "", "", now.typeSource));
+                changed++;
+            }
+        }
+        if (changed > 0) {
+            LlmStats.GLOBAL.add("layer-b", "ratios_read_as_percent_by_label", changed);
+            System.err.println("[cell-reading] " + changed + " arithmetic ratios read as percent: their labels say percent");
+            System.err.flush();
+        }
+    }
+
     private static void reconcile(
             List<InterpretationCellView> formulas,
             Map<Long, Set<Long>> precedents,

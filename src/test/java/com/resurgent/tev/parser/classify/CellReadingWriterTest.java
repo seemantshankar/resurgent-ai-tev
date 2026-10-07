@@ -581,6 +581,57 @@ class CellReadingWriterTest {
         assertThat(readings.get("B4").kind()).isEqualTo("percent");
     }
 
+    /**
+     * Three money rows and an "Insurance Cost - % of EPC" row added into one total. The row's formula reads
+     * the money in B1; only its label says percent. {@code oddCell} is the formula, or a typed-in number.
+     */
+    private static void moneyRowsAndAnItemNamedWithAPercentSign(Sheet sheet, boolean oddIsAFormula) {
+        sheet.createRow(0).createCell(0).setCellValue("Basic cost (in Rs.)");
+        sheet.getRow(0).createCell(1).setCellValue(100);
+        sheet.createRow(1).createCell(0).setCellValue("Rent (in Rs.)");
+        sheet.getRow(1).createCell(1).setCellFormula("B1*0.5");
+        sheet.createRow(2).createCell(0).setCellValue("Salaries (in Rs.)");
+        sheet.getRow(2).createCell(1).setCellFormula("B1*0.2");
+        sheet.createRow(3).createCell(0).setCellValue("Utilities (in Rs.)");
+        sheet.getRow(3).createCell(1).setCellValue(7);
+        sheet.createRow(4).createCell(0).setCellValue("Insurance Cost - % of EPC");
+        if (oddIsAFormula) {
+            sheet.getRow(4).createCell(2).setCellFormula("SQRT(B1)"); // own column: nothing to take a consensus from
+        } else {
+            sheet.getRow(4).createCell(2).setCellValue(5);
+        }
+        sheet.createRow(5).createCell(0).setCellValue("Aggregate"); // no cue of its own: not "Total" or "cost", which the label rules would type first
+        sheet.getRow(5).createCell(3).setCellFormula("SUM(B2,B3,B4,C5)"); // its own column, as is C5: no consensus to take
+        sheet.createRow(6).createCell(0).setCellValue("Next");
+        sheet.getRow(6).createCell(3).setCellFormula("D6*2");
+    }
+
+    /**
+     * The odd addend is a formula that reads money, in a sum the author made of money rows: its label names the
+     * item, its number is an amount. It takes the sum's kind, and the total and what reads it are typed.
+     */
+    @Test
+    void aFormulaAddedIntoATotalOfMoneyThatReadsMoneyIsMoneyWhateverItsLabelSays() throws Exception {
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> moneyRowsAndAnItemNamedWithAPercentSign(sheet, true)),
+                new RecordingDecisions(Map.of()), new SilentChat());
+
+        assertThat(readings.get("C5").kind()).isEqualTo("money");
+        assertThat(readings.get("D6").kind()).isEqualTo("money");
+        assertThat(readings.get("D7").kind()).isEqualTo("money");
+    }
+
+    /** A typed-in number that disagrees has nothing but its label: the sum stays refused rather than be guessed. */
+    @Test
+    void aTypedInNumberThatDisagreesWithTheRestOfASumIsNotOverruled() throws Exception {
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> moneyRowsAndAnItemNamedWithAPercentSign(sheet, false)),
+                new RecordingDecisions(Map.of()), new SilentChat());
+
+        assertThat(readings.get("C5").kind()).isEqualTo("percent");
+        assertThat(readings.get("D6").kind()).isNull();
+    }
+
     /** Arithmetic that cannot read the formula says nothing: the label's answer stands. */
     @Test
     void aFormulaTheArithmeticCannotReadKeepsItsLabelsAnswer() throws Exception {

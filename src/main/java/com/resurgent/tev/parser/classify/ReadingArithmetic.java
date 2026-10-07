@@ -69,6 +69,27 @@ final class ReadingArithmetic {
         return rest.matches("[\\s(),+\\-]*");
     }
 
+    /**
+     * True when the formula is nothing but a sum of cells: {@code SUM(...)} calls and {@code +}, no
+     * subtraction, no number typed into it, no other function. The cells' stored values then add up to the
+     * formula's stored value, which says they are all in one unit.
+     */
+    static boolean pureSum(String formula) {
+        if (formula == null || formula.isBlank()) {
+            return false;
+        }
+        String body = formula.trim();
+        if (body.startsWith("=")) {
+            body = body.substring(1);
+        }
+        String rest = CELL_REF.matcher(body).replaceAll(" ");
+        if (rest.equals(body)) {
+            return false; // reads no cell
+        }
+        rest = rest.replaceAll("(?i)\\bSUM\\s*\\(", "(");
+        return rest.matches("[\\s(),+]*");
+    }
+
     private static final class Parser {
         private final String text;
         private final long worksheetId;
