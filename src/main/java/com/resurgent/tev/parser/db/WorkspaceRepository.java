@@ -1113,6 +1113,29 @@ public final class WorkspaceRepository {
         }
     }
 
+    /** Replaces the unit bases of a parse run: how each model-named unit is known. */
+    public void replaceCellUnitBases(long parseRunId, java.util.List<CellUnitBasis> rows) throws SQLException {
+        try (PreparedStatement delete = connection.prepareStatement(
+                "DELETE FROM cell_unit_basis WHERE parse_run_id = ?")) {
+            delete.setLong(1, parseRunId);
+            delete.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cell_unit_basis (parse_run_id, cell_id, unit, basis, evidence, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?)")) {
+            for (CellUnitBasis row : rows) {
+                ps.setLong(1, parseRunId);
+                ps.setLong(2, row.cellId());
+                ps.setString(3, row.unit());
+                ps.setString(4, row.basis());
+                ps.setString(5, row.evidence());
+                ps.setString(6, Timestamps.now());
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
+    }
+
     public void deleteRegionTriageOpinions(long parseRunId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "DELETE FROM region_triage_opinion WHERE parse_run_id = ?")) {

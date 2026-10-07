@@ -592,12 +592,14 @@ class DecisionPoolReplayTest {
         List<String> lines = new ArrayList<>();
         for (CellReading r : repo.selectCellReadingsForParseRun(parseRunId)) {
             InterpretationCellView c = byId.get(r.cellId());
-            if (c == null || !formulas.contains(c.cellId()) || (scope != null && !scope.contains(c.worksheetId()))) {
+            if (c == null || (scope != null && !scope.contains(c.worksheetId()))
+                    || (!formulas.contains(c.cellId()) && !Boolean.getBoolean("tev.replay.dump.inputs"))) {
                 continue;
             }
             lines.add(String.join("\t", sheets.get(c.worksheetId()) + "!" + c.coord(),
                     c.formulaText() == null ? "" : c.formulaText(), String.valueOf(r.kind()),
-                    String.valueOf(r.scale()), String.valueOf(r.typeSource()), String.valueOf(r.refusal())));
+                    String.valueOf(r.scale()), String.valueOf(r.typeSource()), String.valueOf(r.refusal()),
+                    String.valueOf(r.unit())));
         }
         java.util.Collections.sort(lines);
         Files.write(file, lines);

@@ -152,9 +152,9 @@ final class InputReading {
             } else if (measured != null || EXPLICIT_QUANTITY.matcher(text).find()) {
                 kind = ReadingOutcome.QUANTITY;
                 unit = measured;
-            } else if (column && COLUMN_NOUN.matcher(text).find()) {
+            } else if (column && columnNoun(text) != null) {
                 kind = ReadingOutcome.QUANTITY;
-                unit = nounUnit(text);
+                unit = KindTokens.normalizeUnit(columnNoun(text));
             } else if (moneyish) {
                 kind = ReadingOutcome.MONEY;
             } else {
@@ -203,12 +203,21 @@ final class InputReading {
             return "";
         }
 
-        private static String nounUnit(String text) {
+        /**
+         * The noun a column counts (keys, rooms, days...), or null. A noun straight after "per" or "/"
+         * is the period or unit the figure is spread over, not the thing counted: "Units (kw) per day"
+         * is a column of generation, not of days.
+         */
+        private static String columnNoun(String text) {
             Matcher matcher = COLUMN_NOUN.matcher(text);
-            if (!matcher.find()) {
-                return "";
+            while (matcher.find()) {
+                String before = text.substring(0, matcher.start()).stripTrailing();
+                boolean denominator = before.endsWith("/") || before.toLowerCase(Locale.ROOT).matches("(?s).*\\bper");
+                if (!denominator) {
+                    return matcher.group();
+                }
             }
-            return KindTokens.normalizeUnit(matcher.group());
+            return null;
         }
 
         private static String explicitCurrency(String text) {

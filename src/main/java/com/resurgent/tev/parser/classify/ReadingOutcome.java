@@ -76,6 +76,11 @@ final class ReadingOutcome {
         return new ReadingOutcome(kind, known, unit, currency, null, typeSource, -1, inferred);
     }
 
+    /** The same reading with its unit of measurement replaced. */
+    ReadingOutcome withUnit(String newUnit) {
+        return new ReadingOutcome(kind, scale, newUnit, currency, refusal, typeSource, scaleUnknown, scaleInferred);
+    }
+
     /** The same reading, attributed to {@code source}; an unknown scale stays unknown. */
     ReadingOutcome as(String source) {
         return new ReadingOutcome(kind, scale, unit, currency, refusal, source, scaleUnknown, scaleInferred);

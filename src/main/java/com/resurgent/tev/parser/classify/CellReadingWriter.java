@@ -2,6 +2,7 @@ package com.resurgent.tev.parser.classify;
 
 import com.resurgent.tev.parser.db.CandidateRow;
 import com.resurgent.tev.parser.db.CellReading;
+import com.resurgent.tev.parser.db.CellUnitBasis;
 import com.resurgent.tev.parser.db.FormulaGap;
 import com.resurgent.tev.parser.db.FormulaLink;
 import com.resurgent.tev.parser.db.InterpretationCellView;
@@ -218,7 +219,17 @@ public final class CellReadingWriter {
                 .count();
         LlmStats.GLOBAL.put("layer-b", "cells_untypable_final", untypedFinal);
         settleUnstatedScales(cells, settled, unknowns, sheetNames);
+        CellContext labelContext = new ResolverCellContext(
+                parseRunId, cache, owners, members, candidatesById, dispositions, sheetNames,
+                repo.selectSourceFileHashForParseRun(parseRunId), stated);
         reportScaleConflicts(cells, settled, stated);
+        Map<Long, UnitNamingStage.Note> unitNotes = new LinkedHashMap<>();
+        if (llm != null) {
+            unitNotes.putAll(UnitNamingStage.run(cells, settled, labelContext, llm, dynamicDict, tuning.concurrency()));
+            if (dynamicDict != null) {
+                dynamicDict.persist(); // what the unit step learned
+            }
+        }
 
         List<CellReading> rows = new ArrayList<>();
         for (InterpretationCellView cell : cells) {
@@ -229,6 +240,12 @@ public final class CellReadingWriter {
             rows.add(toRow(parseRunId, cell, outcome));
         }
         repo.replaceCellReadings(parseRunId, rows);
+        List<CellUnitBasis> unitBases = new ArrayList<>();
+        for (Map.Entry<Long, UnitNamingStage.Note> entry : unitNotes.entrySet()) {
+            UnitNamingStage.Note note = entry.getValue();
+            unitBases.add(new CellUnitBasis(entry.getKey(), note.unit(), note.basis(), note.evidence()));
+        }
+        repo.replaceCellUnitBases(parseRunId, unitBases);
 
     }
 
