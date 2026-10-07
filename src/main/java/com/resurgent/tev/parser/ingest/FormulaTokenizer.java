@@ -74,6 +74,10 @@ public final class FormulaTokenizer {
 
         String cleanFormula = formulaText.startsWith("=") ? formulaText.substring(1) : formulaText;
 
+        // Strip Excel function prefix _xlfn. (for newer functions like MINIFS, MAXIFS, IFS)
+        // This handles formulas from Excel that use the _xlfn. notation for compatibility
+        cleanFormula = cleanFormula.replaceAll("_xlfn\\.([A-Za-z_][A-Za-z0-9_]*)", "$1");
+
         XSSFWorkbook dummyWb = getOrCreateSharedWorkbook(definedNames);
         registerSheetNames(cleanFormula, dummyWb);
 

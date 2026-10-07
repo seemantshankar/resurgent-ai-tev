@@ -1,10 +1,12 @@
 package com.resurgent.tev.parser.ingest;
 
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * Safe formula normalization per ADR 0003 / 0013:
  * <ul>
+ *   <li>Strip Excel function prefix {@code _xlfn.} (newer Excel functions like MINIFS, MAXIFS).</li>
  *   <li>Strip legacy {@code =+} only at the start.</li>
  *   <li>Collapse whitespace only outside string literals and quoted sheet names.</li>
  *   <li>Uppercase only outside those quoted regions ({@link Locale#ROOT}).</li>
@@ -13,6 +15,8 @@ import java.util.Locale;
  * </ul>
  */
 public final class FormulaNormalizer {
+
+    private static final Pattern XLFN_PREFIX = Pattern.compile("_xlfn\\.([A-Za-z_][A-Za-z0-9_]*)");
 
     private FormulaNormalizer() {
     }
@@ -27,6 +31,10 @@ public final class FormulaNormalizer {
         }
 
         String work = formula;
+
+        // Strip Excel function prefix _xlfn. (for newer functions like MINIFS, MAXIFS, IFS)
+        work = XLFN_PREFIX.matcher(work).replaceAll("$1");
+
         if (work.startsWith("=+")) {
             work = work.substring(2);
         } else if (work.startsWith("=")) {
