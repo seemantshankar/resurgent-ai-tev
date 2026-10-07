@@ -17,6 +17,8 @@ public final class LlmEnvironment {
     static final String API_KEY = "OPENROUTER_API_KEY";
     /** Key for Xiaomi's own API; when set, a Xiaomi MiMo model is called there, not through OpenRouter. */
     static final String XIAOMI_KEY = "xiaomi_mimo_api_key";
+    /** Optional model that region layout and Layer A batches try first; the other calls keep the usual order. */
+    static final String LARGE_MODEL_ID = "Excel_Enrichment_Large_model_id";
     static final String MODEL_ID = "Excel_Enrichment_Model_id";
     static final String MODEL2_ID = "Excel_Enrichment_Model2_id";
     static final String CELL_DECISION_MODEL_ID = "Excel_Enrichment_Cell_decision_model_id";
@@ -38,6 +40,7 @@ public final class LlmEnvironment {
         Map<String, String> values = new LinkedHashMap<>();
         putIfPresent(values, API_KEY, System.getenv(API_KEY));
         putIfPresent(values, XIAOMI_KEY, System.getenv(XIAOMI_KEY));
+        putIfPresent(values, LARGE_MODEL_ID, System.getenv(LARGE_MODEL_ID));
         putIfPresent(values, MODEL_ID, System.getenv(MODEL_ID));
         putIfPresent(values, MODEL2_ID, System.getenv(MODEL2_ID));
         putIfPresent(values, MODEL3_ID, System.getenv(MODEL3_ID));
@@ -80,7 +83,7 @@ public final class LlmEnvironment {
         if (key == null || key.isBlank() || models.isEmpty()) {
             return new UnconfiguredClassifierLlm();
         }
-        return new OpenRouterClassifierLlm(key, env.get(XIAOMI_KEY), models);
+        return new OpenRouterClassifierLlm(key, env.get(XIAOMI_KEY), models, env.get(LARGE_MODEL_ID));
     }
 
     /** The configured model ids in the order they are tried, for the run banner. */
@@ -92,9 +95,13 @@ public final class LlmEnvironment {
         }
         String xiaomiKey = env.get(XIAOMI_KEY);
         boolean direct = xiaomiKey != null && !xiaomiKey.isBlank();
-        return models.stream()
+        String chain = models.stream()
                 .map(m -> direct && OpenRouterClassifierLlm.isMimo(m) ? m + " (Xiaomi API)" : m)
                 .collect(java.util.stream.Collectors.joining("  ->  "));
+        String large = env.get(LARGE_MODEL_ID);
+        return large == null || large.isBlank() || large.trim().equals(models.get(0))
+                ? chain
+                : chain + "   [big calls (region layout, Layer A batches): " + large.trim() + " first]";
     }
 
     /**

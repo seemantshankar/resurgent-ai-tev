@@ -76,6 +76,8 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
     }
 
     private final CompletionsClient client;
+    /** Takes the big calls (region layout, Layer A batches); the same chain as {@link #client} unless a large-call model is set. */
+    private final CompletionsClient largeClient;
 
     public OpenRouterClassifierLlm(String apiKey, String model) {
         this(new HttpCompletionsClient(apiKey, model, DEFAULT_URL));
@@ -92,6 +94,30 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
      */
     public OpenRouterClassifierLlm(String apiKey, String xiaomiKey, List<String> models) {
         this(chainOf(apiKey, xiaomiKey, models));
+    }
+
+    /**
+     * As above, and the big calls (region layout and Layer A batches) try {@code largeModel} first,
+     * then the rest of the chain. A slow model that writes about 60 tokens a second can stall for
+     * minutes on a big call, while a fast one answers in seconds; small calls keep the cheap order.
+     */
+    public OpenRouterClassifierLlm(String apiKey, String xiaomiKey, List<String> models, String largeModel) {
+        this(chainOf(apiKey, xiaomiKey, models), largeChainOf(apiKey, xiaomiKey, models, largeModel));
+    }
+
+    private static CompletionsClient largeChainOf(
+            String apiKey, String xiaomiKey, List<String> models, String largeModel) {
+        if (largeModel == null || largeModel.isBlank() || largeModel.trim().equals(models.get(0))) {
+            return null; // the ordinary chain already starts with it
+        }
+        List<String> order = new java.util.ArrayList<>();
+        order.add(largeModel.trim());
+        for (String model : models) {
+            if (!order.contains(model)) {
+                order.add(model);
+            }
+        }
+        return chainOf(apiKey, xiaomiKey, order);
     }
 
     private static CompletionsClient chainOf(String apiKey, String xiaomiKey, List<String> models) {
@@ -169,11 +195,23 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
     }
 
     OpenRouterClassifierLlm(CompletionsClient client) {
+        this(client, null);
+    }
+
+    OpenRouterClassifierLlm(CompletionsClient client, CompletionsClient largeClient) {
         this.client = Objects.requireNonNull(client, "client");
+        this.largeClient = largeClient != null ? largeClient : client;
     }
 
     public UsageTotals usageTotals() {
-        return client.usageTotals();
+        UsageTotals ordinary = client.usageTotals();
+        if (largeClient == client) {
+            return ordinary;
+        }
+        UsageTotals large = largeClient.usageTotals();
+        return new UsageTotals(ordinary.calls() + large.calls(), ordinary.promptTokens() + large.promptTokens(),
+                ordinary.completionTokens() + large.completionTokens(), ordinary.costUsd() + large.costUsd(),
+                ordinary.costMissing() + large.costMissing());
     }
 
     /** Sum of OpenRouter {@code usage} across calls made by this client. */
@@ -190,7 +228,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
 
     @Override
     public List<RegionProposal> proposeRegions(RegionLayoutPrompt prompt) {
-        return client.perModel(c -> {
+        return largeClient.perModel(c -> {
             String system = RegionLayoutPromptAssembler.SYSTEM;
             String user = RegionLayoutPromptAssembler.userMessage(prompt);
             CompletionResult result = c.completeJson(system, user, REGION_LAYOUT_MAX_COMPLETION_TOKENS);
@@ -269,7 +307,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                 For each region, determine: scheduleFamily, triage (MAIN/HELPER), relevance (PRIMARY/SECONDARY/TERTIARY),
                 row labels, column headers, packet default head, and a brief description.
                 Return a JSON array with one object per candidate.""";
-        return client.perModel(c -> {
+        return largeClient.perModel(c -> {
             CompletionResult result = c.completeJson(systemPrompt, userPrompt, maxTokens);
             if (result.truncated()) {
                 // The reply ran out of room mid-answer: that is the request's budget, not a failed model, and
@@ -289,7 +327,7 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
     @Override
     public java.util.Map<String, List<RegionProposal>> proposeRegionsBatch(
             java.util.List<RegionLayoutPrompt> prompts) {
-        return client.perModel(c -> {
+        return largeClient.perModel(c -> {
             String system = """
                     You classify regions on multiple Excel worksheets for a TEV clean financial-model extract.
                     For each worksheet, return ONLY JSON (no markdown):
