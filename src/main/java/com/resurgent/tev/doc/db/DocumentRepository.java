@@ -110,6 +110,22 @@ public final class DocumentRepository {
         }
     }
 
+    /** Every version that carries these exact bytes (any logical document). */
+    public List<Long> findVersionIdsByHash(String fileHash) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT document_version_id FROM document_version WHERE file_hash = ?"
+                        + " ORDER BY document_version_id")) {
+            ps.setString(1, fileHash);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<Long> ids = new ArrayList<>();
+                while (rs.next()) {
+                    ids.add(rs.getLong(1));
+                }
+                return ids;
+            }
+        }
+    }
+
     public long insertDocumentVersion(long documentId, String versionLabel, String fileName,
             String fileHash, String fileExt, String fileRole, Integer pageCount,
             boolean ocrRequired, Long sourceFileId, String rawMetadata) throws SQLException {

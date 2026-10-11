@@ -187,6 +187,16 @@ class DocumentIngestLayoutTest {
         assertThat(second.parseRunId()).isEqualTo(first.parseRunId());
         assertThat(second.reused()).isFalse();
 
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            try (var rs = workspace.connection().createStatement().executeQuery(
+                    "SELECT relation_kind FROM document_relation"
+                            + " WHERE from_document_version_id = " + first.documentVersionId()
+                            + " AND to_document_version_id = " + second.documentVersionId())) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString(1)).isEqualTo("duplicate_of");
+            }
+        }
+
         // Layout once, then clone for the twin logical doc — no second PDF parse.
         DocumentLayoutService.LayoutResult firstLayout = new DocumentLayoutService().layout(
                 first.documentVersionId(), db, blobs);

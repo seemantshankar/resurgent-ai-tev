@@ -121,6 +121,7 @@ public final class DocumentIngestService {
                 long documentVersionId = docs.insertDocumentVersion(documentId, versionLabel,
                         file.getFileName().toString(), fileHash, fileExt, fileRole, probe.pageCount(),
                         probe.ocrRequired(), sourceFileId, rawMetadata);
+                linkDuplicates(docs, documentVersionId, fileHash);
 
                 // Page placeholders — layout fills geometry and text.
                 for (int i = 1; i <= probe.pageCount(); i++) {
@@ -159,6 +160,29 @@ public final class DocumentIngestService {
         }
         throw new SQLException("document_version " + row.documentVersionId()
                 + " has no source_file_id; cannot attach parse_run");
+    }
+
+    /**
+     * Same bytes under another logical document is a duplicate, not new truth.
+     * Record {@code document_relation.duplicate_of} (Architecture §6.2) so
+     * reviewers see the twin instead of double-counting later.
+     */
+    private static void linkDuplicates(DocumentRepository docs, long documentVersionId,
+            String fileHash) throws SQLException {
+        for (Long other : docs.findVersionIdsByHash(fileHash)) {
+            if (other == documentVersionId) {
+                continue;
+            }
+            try {
+                docs.insertRelation(other, documentVersionId, "duplicate_of",
+                        "same sha256 " + fileHash.substring(0, 12));
+            } catch (SQLException e) {
+                if (e.getMessage() == null
+                        || !e.getMessage().contains("UNIQUE constraint failed")) {
+                    throw e;
+                }
+            }
+        }
     }
 
     /**

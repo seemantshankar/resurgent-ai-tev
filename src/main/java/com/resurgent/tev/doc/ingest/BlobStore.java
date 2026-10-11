@@ -59,7 +59,30 @@ public final class BlobStore {
     public Path storePagePng(String sha256, int pageIndex, byte[] pngBytes) throws IOException {
         Path target = pagePath(sha256, pageIndex);
         Files.createDirectories(target.getParent());
-        Files.write(target, pngBytes);
+        // One canonical name per page. Finder-style "p001 2.png" siblings are junk
+        // from overlapping writes — remove them so the blob dir stays one copy.
+        try (var stream = Files.list(target.getParent())) {
+            stream.filter(p -> {
+                String n = p.getFileName().toString();
+                return n.startsWith(String.format(Locale.ROOT, "p%03d", pageIndex))
+                        && n.endsWith(".png")
+                        && !n.equals(target.getFileName().toString());
+            }).forEach(p -> {
+                try {
+                    Files.deleteIfExists(p);
+                } catch (IOException ignored) {
+                    // best-effort cleanup
+                }
+            });
+        }
+        Path tmp = target.resolveSibling(target.getFileName() + ".tmp");
+        Files.write(tmp, pngBytes);
+        try {
+            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
+        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+        }
         return target;
     }
 
