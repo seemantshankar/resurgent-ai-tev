@@ -27,6 +27,11 @@ final class RegionLayoutPromptAssembler {
             - Document title / units may be one small main OR absorbed into the first section main
               — but do NOT put floating scratch digits into main.
 
+            UNITS AND NOTES BESIDE THE AMOUNTS
+            - Text that qualifies the amounts beside it belongs in the SAME bbox as those amounts:
+              a unit column (SQM, Rs., %), a remarks / status column, a basis note. Do not stop
+              the bbox one column short of it.
+
             HELPER (keep separate from mains)
             - Inline BoQ / vendor quote / green-style breakout blocks.
             - Side variance/scenario pads: alternate + difference columns. Prefer one helper bbox

@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -26,6 +27,7 @@ import org.junit.jupiter.params.provider.MethodSource;
  * Integration proof for coverage-only discover against client FMs under
  * {@code Project Docs/}. Narrow regions are classify's job.
  */
+@Tag("slow")
 class RealWorkbookDiscoverIT {
 
     private static final Path OM_ARHAM =
@@ -88,34 +90,6 @@ class RealWorkbookDiscoverIT {
                         .filter(c -> c.worksheetId() == worksheet.worksheetId())
                         .findFirst()
                         .orElseThrow();
-                assertThat(new HashSet<>(repo.selectCandidateMemberCellIds(parent.candidateId())))
-                        .isEqualTo(cellIds);
-            }
-        }
-    }
-
-    @Test
-    void everyWorksheetHasExactlyOneCoverageParentContainingAllPersistedCells() throws Exception {
-        assertThat(discover.coverageCheckPassed()).isTrue();
-        assertThat(discover.candidateCount()).isEqualTo(discover.worksheetCount());
-
-        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
-            WorkspaceRepository repo = new WorkspaceRepository(workspace.connection());
-            List<WorksheetRef> worksheets = repo.selectWorksheetsForParseRun(ingest.parseRunId());
-            assertThat(worksheets).hasSize(discover.worksheetCount());
-
-            List<CandidateRow> candidates = repo.selectCandidatesForParseRun(ingest.parseRunId());
-            assertThat(candidates).hasSize(discover.worksheetCount());
-
-            for (WorksheetRef worksheet : worksheets) {
-                CandidateRow parent = candidates.stream()
-                        .filter(c -> c.worksheetId() == worksheet.worksheetId())
-                        .findFirst()
-                        .orElseThrow();
-                Set<Long> cellIds = new HashSet<>();
-                for (CellCoordRef cell : repo.selectCellsForWorksheet(worksheet.worksheetId())) {
-                    cellIds.add(cell.cellId());
-                }
                 assertThat(new HashSet<>(repo.selectCandidateMemberCellIds(parent.candidateId())))
                         .isEqualTo(cellIds);
             }

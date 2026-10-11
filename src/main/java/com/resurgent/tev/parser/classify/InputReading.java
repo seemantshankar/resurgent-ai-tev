@@ -10,7 +10,8 @@ import java.util.regex.Pattern;
 /**
  * Types a hardcoded number or a constant-only formula from its row label, and
  * from the column header only when that row is an entity name (ADR 0020).
- * A formula divisor states scale before either label. Percent is stated.
+ * A formula divisor states scale before either label; a label's scale word beats the
+ * region or sheet statement. Money none of them scales is left unstated. Percent is stated.
  */
 final class InputReading {
 
@@ -18,6 +19,9 @@ final class InputReading {
             "(?i)(?:\\b(?:year|yr|fy)\\b|\\b(?:19|20)\\d{2}\\b)");
     private static final Pattern EXPLICIT_COUNT = Pattern.compile(
             "(?i)(?:\\bno\\.?\\s*of\\b|\\bnumber\\s+of\\b|\\bqty\\b|\\bquantity\\b|\\bnos\\.?\\b|\\bcount\\b)");
+    /** "Debtors Days", "Inventory Days", "(in days)": a number of days, whatever the noun before it. Not "per day". */
+    private static final Pattern DAYS = Pattern.compile(
+            "(?i)^(?!.*\\b(?:per|/)\\s*day)[^0-9]*\\bdays?\\s*[)\\].:]*\\s*$|\\(\\s*(?:in\\s+)?days?\\s*\\)");
     private static final Pattern EXPLICIT_QUANTITY = Pattern.compile("(?i)(?:\\barea\\b|\\bcapacity\\b)");
     private static final Pattern MEASURED = Pattern.compile("(?i)\\b(sq\\.?\\s*ft|sqft|sqm)\\b");
     private static final Pattern COLUMN_NOUN = Pattern.compile(
@@ -27,12 +31,20 @@ final class InputReading {
 
     private InputReading() {}
 
+    /**
+     * {@code statedScale} is the scale the cell's region or sheet states for its money
+     * (for example {@code Rs. In Lacs} in the title). It applies to money inputs whose own
+     * labels and formula carry no scale word. Money with none of the three gets a fresh
+     * unknown from {@code unknowns}, not {@code unit}: nothing said it was rupees.
+     */
     static ReadingOutcome type(
             InterpretationCellView cell,
             String rowLabel,
             String columnHeader,
             String numberFormat,
-            String homeCurrency) {
+            String homeCurrency,
+            CellScale statedScale,
+            UnstatedScales unknowns) {
         Label row = Label.read(rowLabel, false);
         boolean entity = rowLabel != null && !rowLabel.isBlank() && row.kind == null && !periodOnly(rowLabel);
         Label column = entity ? Label.read(columnHeader, true) : Label.none();
@@ -50,7 +62,9 @@ final class InputReading {
         CellScale divisor = InterpretationEvidenceResolver.formulaDivisorScale(cell.formulaText());
         CellScale scale = divisor != null
                 ? divisor
-                : chosen.scale != null ? chosen.scale : CellScale.UNIT;
+                : chosen.scale != null
+                        ? chosen.scale
+                        : ReadingOutcome.MONEY.equals(kind) ? statedScale : CellScale.UNIT;
         if (ReadingOutcome.PERCENT.equals(kind)) {
             scale = CellScale.UNIT;
         }
@@ -68,6 +82,9 @@ final class InputReading {
         }
         if (!ReadingOutcome.MONEY.equals(kind) && !ReadingOutcome.RATE.equals(kind)) {
             currency = "";
+        }
+        if (scale == null) {
+            return ReadingOutcome.unstated(unit, currency, ReadingOutcome.INPUT, unknowns.fresh(cell.cellId()));
         }
         return ReadingOutcome.typed(kind, scale, unit, currency, ReadingOutcome.INPUT);
     }
@@ -120,8 +137,12 @@ final class InputReading {
                     || KindTokens.CURRENCY.matcher(text).find();
             String kind;
             String unit = null;
-            if (KindTokens.PERCENT_TOKEN.matcher(text).find()) {
+            // "Margin (%)" is a percent; "OD @9.5%" and "(2.5% of civil cost)" carry a rate as a parameter.
+            if (KindTokens.PERCENT_UNIT.matcher(text).find()) {
                 kind = ReadingOutcome.PERCENT;
+            } else if (DAYS.matcher(text.trim()).find()) {
+                kind = ReadingOutcome.QUANTITY;
+                unit = "days";
             } else if (measured != null && (moneyish || PER.matcher(text).find())) {
                 kind = ReadingOutcome.RATE;
                 unit = measured;
@@ -131,9 +152,9 @@ final class InputReading {
             } else if (measured != null || EXPLICIT_QUANTITY.matcher(text).find()) {
                 kind = ReadingOutcome.QUANTITY;
                 unit = measured;
-            } else if (column && COLUMN_NOUN.matcher(text).find()) {
+            } else if (column && columnNoun(text) != null) {
                 kind = ReadingOutcome.QUANTITY;
-                unit = nounUnit(text);
+                unit = KindTokens.normalizeUnit(columnNoun(text));
             } else if (moneyish) {
                 kind = ReadingOutcome.MONEY;
             } else {
@@ -160,7 +181,7 @@ final class InputReading {
             if (named != null) {
                 return named;
             }
-            if (text.matches("(?i).*\\b(?:amt\\.?\\s*in\\s+rs\\.?|in\\s+rs\\.?)\\b.*")) {
+            if (SheetScaleStatement.statesRupees(text)) {
                 return CellScale.UNIT;
             }
             return null;
@@ -182,12 +203,21 @@ final class InputReading {
             return "";
         }
 
-        private static String nounUnit(String text) {
+        /**
+         * The noun a column counts (keys, rooms, days...), or null. A noun straight after "per" or "/"
+         * is the period or unit the figure is spread over, not the thing counted: "Units (kw) per day"
+         * is a column of generation, not of days.
+         */
+        private static String columnNoun(String text) {
             Matcher matcher = COLUMN_NOUN.matcher(text);
-            if (!matcher.find()) {
-                return "";
+            while (matcher.find()) {
+                String before = text.substring(0, matcher.start()).stripTrailing();
+                boolean denominator = before.endsWith("/") || before.toLowerCase(Locale.ROOT).matches("(?s).*\\bper");
+                if (!denominator) {
+                    return matcher.group();
+                }
             }
-            return KindTokens.normalizeUnit(matcher.group());
+            return null;
         }
 
         private static String explicitCurrency(String text) {

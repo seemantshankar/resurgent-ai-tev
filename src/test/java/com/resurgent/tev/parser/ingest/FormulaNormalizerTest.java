@@ -42,4 +42,18 @@ class FormulaNormalizerTest {
             Locale.setDefault(previous);
         }
     }
+
+    @Test
+    void stripsExcelFunctionPrefix_xlfn() {
+        // Newer Excel functions use _xlfn. prefix (e.g., MINIFS, MAXIFS, IFS)
+        assertThat(FormulaNormalizer.normalize("_xlfn.MINIFS(a1:a10, b1:b10, \">5\")"))
+                .isEqualTo("MINIFS(A1:A10, B1:B10, \">5\")");
+        assertThat(FormulaNormalizer.normalize("_xlfn.IFS(a1>0, \"yes\", true, \"no\")"))
+                .isEqualTo("IFS(A1>0, \"yes\", TRUE, \"no\")");
+        assertThat(FormulaNormalizer.normalize("=_xlfn.MAXIFS(a:a, b:b, 10)"))
+                .isEqualTo("MAXIFS(A:A, B:B, 10)");
+        // Multiple function prefixes in one formula
+        assertThat(FormulaNormalizer.normalize("_xlfn.IFS(_xlfn.MINIFS(a1:a5)>0, \"high\", true, \"low\")"))
+                .isEqualTo("IFS(MINIFS(A1:A5)>0, \"high\", TRUE, \"low\")");
+    }
 }

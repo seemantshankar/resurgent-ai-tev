@@ -73,6 +73,12 @@ public final class DiscoverService {
                     throw new DiscoverException(
                             "coverage check failed: a worksheet's coverage parent omitted a cell");
                 }
+
+                // Detect industry from worksheet structure and cell contents
+                long mandateId = repo.selectParseRunMandateId(parseRunId);
+                IndustryDetector detector = new IndustryDetector(repo);
+                detector.detectAndPersist(parseRunId, mandateId);
+
                 repo.commit();
                 return new DiscoverSummary(
                         parseRunId,

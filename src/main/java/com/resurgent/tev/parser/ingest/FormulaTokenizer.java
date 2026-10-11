@@ -42,7 +42,30 @@ public final class FormulaTokenizer {
     private static final int MAX_ROWS = SpreadsheetVersion.EXCEL2007.getMaxRows();
     private static final int MAX_COLS = SpreadsheetVersion.EXCEL2007.getMaxColumns();
 
+    private static XSSFWorkbook sharedDummyWb;
+    private static Map<String, String> lastDefinedNames;
+
     private FormulaTokenizer() {}
+
+    private static synchronized XSSFWorkbook getOrCreateSharedWorkbook(Map<String, String> definedNames) {
+        if (sharedDummyWb == null || !isSameDefinedNames(definedNames, lastDefinedNames)) {
+            if (sharedDummyWb != null) {
+                try {
+                    sharedDummyWb.close();
+                } catch (Exception ignored) {}
+            }
+            sharedDummyWb = new XSSFWorkbook();
+            registerDefinedNames(definedNames, sharedDummyWb);
+            lastDefinedNames = definedNames;
+        }
+        return sharedDummyWb;
+    }
+
+    private static boolean isSameDefinedNames(Map<String, String> a, Map<String, String> b) {
+        if (a == null && b == null) return true;
+        if (a == null || b == null) return false;
+        return a.equals(b);
+    }
 
     public static FormulaTokenizerResult tokenize(String formulaText, int formulaRow, int formulaCol, Map<String, String> definedNames) {
         if (formulaText == null || formulaText.isBlank()) {
@@ -51,10 +74,14 @@ public final class FormulaTokenizer {
 
         String cleanFormula = formulaText.startsWith("=") ? formulaText.substring(1) : formulaText;
 
-        try (XSSFWorkbook dummyWb = new XSSFWorkbook()) {
-            registerSheetNames(cleanFormula, dummyWb);
-            registerDefinedNames(definedNames, dummyWb);
+        // Strip Excel function prefix _xlfn. (for newer functions like MINIFS, MAXIFS, IFS)
+        // This handles formulas from Excel that use the _xlfn. notation for compatibility
+        cleanFormula = cleanFormula.replaceAll("_xlfn\\.([A-Za-z_][A-Za-z0-9_]*)", "$1");
 
+        XSSFWorkbook dummyWb = getOrCreateSharedWorkbook(definedNames);
+        registerSheetNames(cleanFormula, dummyWb);
+
+        try {
             XSSFEvaluationWorkbook fpw = XSSFEvaluationWorkbook.create(dummyWb);
             Ptg[] ptgs = FormulaParser.parse(cleanFormula, fpw, FormulaType.CELL, -1);
 

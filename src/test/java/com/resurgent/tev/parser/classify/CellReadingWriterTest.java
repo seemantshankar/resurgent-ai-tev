@@ -7,6 +7,7 @@ import com.resurgent.tev.parser.db.CellReading;
 import com.resurgent.tev.parser.db.InterpretationCellView;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
+import com.resurgent.tev.parser.db.WorksheetRef;
 import com.resurgent.tev.parser.ingest.IngestService;
 import com.resurgent.tev.parser.ingest.IngestSummary;
 import java.io.OutputStream;
@@ -104,8 +105,9 @@ class CellReadingWriterTest {
         CellReading amount = readings.get("B6");
         assertThat(amount.kind()).isEqualTo("money");
         assertThat(amount.currency()).isEqualTo("INR");
-        assertThat(amount.scale()).isEqualTo("unit");
-        assertThat(new BigDecimal(amount.absoluteAmount())).isEqualByComparingTo("10");
+        // A currency format names the currency, not the scale: nothing says these are rupees.
+        assertThat(amount.scale()).isNull();
+        assertThat(amount.absoluteAmount()).isNull();
     }
 
     @Test
@@ -148,7 +150,667 @@ class CellReadingWriterTest {
         assertThat(mixed.refusal()).isEqualTo("kind_conflict");
     }
 
+    @Test
+    void sheetTitleScaleTypesBareMoneyInputs() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lacs)");
+            sheet.createRow(2).createCell(0).setCellValue("Land cost");
+            sheet.getRow(2).createCell(1).setCellValue(12.5);
+            sheet.createRow(3).createCell(0).setCellValue("Occupancy %");
+            sheet.getRow(3).createCell(1).setCellValue(70);
+        }));
+
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").scale()).isEqualTo("lakh");
+        assertThat(readings.get("B4").kind()).isEqualTo("percent");
+        assertThat(readings.get("B4").scale()).isEqualTo("unit");
+    }
+
+    @Test
+    void labelScaleBeatsTheSheetTitle() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lacs)");
+            sheet.createRow(2).createCell(0).setCellValue("Machinery cost (Rs. crore)");
+            sheet.getRow(2).createCell(1).setCellValue(3);
+        }));
+
+        assertThat(readings.get("B3").scale()).isEqualTo("crore");
+    }
+
+    @Test
+    void twoDifferentTitleScalesStateNothing() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lacs)");
+            sheet.createRow(1).createCell(0).setCellValue("Detail (Amount in Rs)");
+            sheet.createRow(3).createCell(0).setCellValue("Land cost");
+            sheet.getRow(3).createCell(1).setCellValue(12.5);
+        }));
+
+        assertThat(readings.get("B4").kind()).isEqualTo("money");
+        assertThat(readings.get("B4").scale()).isNull();
+        assertThat(readings.get("B4").absoluteAmount()).isNull();
+    }
+
+    @Test
+    void moneyNothingStatesHasNoScaleRatherThanRupees() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Land cost");
+            sheet.getRow(0).createCell(1).setCellValue(12.5);
+            sheet.createRow(1).createCell(0).setCellValue("Building cost");
+            sheet.getRow(1).createCell(1).setCellValue(30);
+            sheet.createRow(2).createCell(1).setCellFormula("B1+B2");
+        }));
+
+        for (String coord : List.of("B1", "B2", "B3")) {
+            assertThat(readings.get(coord).kind()).isEqualTo("money");
+            assertThat(readings.get(coord).scale()).isNull();
+            assertThat(readings.get(coord).scaleBasis()).isNull();
+            assertThat(readings.get(coord).absoluteAmount()).isNull();
+        }
+    }
+
+    /**
+     * The OM Arham chain: an interest schedule with no unit text, read by a cash flow and a
+     * balance sheet that both state lakhs. The readers keep their statement, and the schedule
+     * takes it from them instead of the totals refusing as mixed scale.
+     */
+    @Test
+    void aStatedSheetReadingUnstatedMoneyFixesItsScale() throws Exception {
+        Map<String, CellReading> readings = read(book(workbook -> {
+            Sheet interest = workbook.createSheet("Interest");
+            interest.createRow(0).createCell(0).setCellValue("Statement of interest and repayment");
+            interest.createRow(2).createCell(0).setCellValue("Opening principal");
+            interest.getRow(2).createCell(1).setCellValue(2640);
+            interest.createRow(3).createCell(0).setCellValue("Repayment");
+            interest.getRow(3).createCell(1).setCellValue(15);
+            interest.createRow(4).createCell(0).setCellValue("Closing balance");
+            interest.getRow(4).createCell(1).setCellFormula("B3-B4");
+
+            Sheet cash = workbook.createSheet("CASH FLOW");
+            cash.createRow(0).createCell(0).setCellValue("Rs. In Lakhs");
+            cash.createRow(2).createCell(0).setCellValue("Repayment of term loan");
+            cash.getRow(2).createCell(1).setCellFormula("Interest!B4");
+
+            Sheet bs = workbook.createSheet("B S");
+            bs.createRow(0).createCell(0).setCellValue("Rs. In Lakhs");
+            bs.createRow(2).createCell(0).setCellValue("Secured term loan");
+            bs.getRow(2).createCell(1).setCellFormula("Interest!B5-'CASH FLOW'!B3");
+            bs.createRow(3).createCell(0).setCellValue("Current portion of loan");
+            bs.getRow(3).createCell(1).setCellFormula("'CASH FLOW'!B3");
+            bs.createRow(4).createCell(0).setCellValue("Share capital");
+            bs.getRow(4).createCell(1).setCellValue(1200);
+            bs.createRow(5).createCell(0).setCellValue("Total liabilities");
+            bs.getRow(5).createCell(1).setCellFormula("SUM(B3:B5)");
+        }));
+
+        assertThat(readings.get("CASH FLOW!B3").scale()).isEqualTo("lakh");
+        assertThat(readings.get("CASH FLOW!B3").scaleBasis()).isEqualTo("stated");
+        assertThat(readings.get("B S!B3").scale()).isEqualTo("lakh");
+        assertThat(readings.get("B S!B6").scale()).isEqualTo("lakh");
+        assertThat(readings.get("B S!B6").refusal()).isNull();
+        for (String coord : List.of("Interest!B3", "Interest!B4", "Interest!B5")) {
+            assertThat(readings.get(coord).scale()).as(coord).isEqualTo("lakh");
+            assertThat(readings.get(coord).scaleBasis()).as(coord).isEqualTo("inferred");
+        }
+        assertThat(new BigDecimal(readings.get("Interest!B3").absoluteAmount())).isEqualByComparingTo("264000000");
+    }
+
+    // ---- formulas follow the cells typed before them, whichever stage typed those ----------
+
+    /** A decision model that asks nothing of the sheet but records which coordinates it was asked about. */
+    private static final class RecordingDecisions implements CellDecisionClient {
+        private final java.util.Map<String, Decision> answers;
+        final List<String> asked = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        /** Coordinates not listed get a decision no threshold accepts. */
+        RecordingDecisions(java.util.Map<String, Decision> answers) {
+            this.answers = answers;
+        }
+
+        @Override
+        public Decision decide(String state) throws Exception {
+            String coord = new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readTree(state).path("cell").path("coord").asText();
+            asked.add(coord);
+            return answers.getOrDefault(coord, new Decision("money", 0.1, "unit", 0.1));
+        }
+    }
+
+    /** A chat model that types nothing, or records what it was sent. */
+    private static class SilentChat implements ClassifierLlm {
+        final List<String> prompts = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        @Override public List<RegionProposal> proposeRegions(RegionLayoutPrompt prompt) { return List.of(); }
+        @Override public LayerAJudgment classifyLayerA(LayerAPrompt prompt) { return null; }
+        @Override public String classifyCellJson(String systemPrompt, String userPrompt, int maxTokens) {
+            prompts.add(userPrompt);
+            return "";
+        }
+    }
+
+    private static void seedAndTwoFormulas(Sheet sheet, String secondLabel) {
+        sheet.createRow(0).createCell(0).setCellValue("Seed");
+        sheet.getRow(0).createCell(1).setCellValue(5);
+        sheet.createRow(1).createCell(0).setCellValue(secondLabel);
+        sheet.getRow(1).createCell(1).setCellFormula("B1*2");
+        sheet.createRow(2).createCell(0).setCellValue("Subtotal");
+        sheet.getRow(2).createCell(1).setCellFormula("B2*0.5");
+    }
+
+    /**
+     * B2 is typed by its label (the dictionary); B3 only waits on B2. Once B2 is typed, B3 follows
+     * it by arithmetic: no model is asked about B3.
+     */
+    @Test
+    void aFormulaWaitingOnADictionaryTypedCellFollowsItWithoutAModel() throws Exception {
+        var decisions = new RecordingDecisions(Map.of());
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> seedAndTwoFormulas(sheet, "Total cost (in Rs.)")), decisions, new SilentChat());
+
+        assertThat(readings.get("B2").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").typeSource()).isEqualTo("derived");
+        assertThat(decisions.asked).doesNotContain("B3");
+    }
+
+    /**
+     * B2 reads an input nothing can type, so it is ready to be asked; B3 waits on B2. The model is
+     * asked about B2 only, and B3 follows from its answer.
+     */
+    @Test
+    void theDecisionModelIsAskedOnlyAboutCellsNotWaitingOnAnotherUntypedFormula() throws Exception {
+        var decisions = new RecordingDecisions(
+                Map.of("B2", new CellDecisionClient.Decision("money", 0.97, "unit", 0.95)));
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> seedAndTwoFormulas(sheet, "Gross")), decisions, new SilentChat());
+
+        assertThat(decisions.asked).contains("B2").doesNotContain("B3");
+        assertThat(readings.get("B2").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").typeSource()).isEqualTo("derived");
+    }
+
+    /** A ready cell the decision model is unsure about goes to chat in the same round; B3 never does. */
+    @Test
+    void aDeferredReadyCellGoesToChatAndItsDependentStillFollowsByArithmetic() throws Exception {
+        var decisions = new RecordingDecisions(Map.of());
+        var chat = new SilentChat() {
+            @Override public String classifyCellJson(String systemPrompt, String userPrompt, int maxTokens) {
+                prompts.add(userPrompt);
+                return new CellTypeClassifierLlmTest.FakeClassifierLlm()
+                        .classifyCellJson(systemPrompt, userPrompt, maxTokens);
+            }
+        };
+        Map<String, CellReading> readings = read(workbook(sheet -> seedAndTwoFormulas(sheet, "Gross")), decisions, chat);
+
+        assertThat(readings.get("B2").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").typeSource()).isEqualTo("derived");
+        assertThat(chat.prompts).noneMatch(prompt -> prompt.contains("B3"));
+    }
+
+    /**
+     * A model's "unit" for money nothing states a scale for is its default, not a reading. It must not
+     * follow the formulas built on it as a firm scale: the lakh sheet that reads them fixes theirs.
+     */
+    @Test
+    void aModelsDefaultUnitScaleForMoneyDoesNotOverrideWhatTheReadingSheetStates() throws Exception {
+        var decisions = new RecordingDecisions(
+                Map.of("B2", new CellDecisionClient.Decision("money", 0.97, "unit", 0.95)));
+        Map<String, CellReading> readings = read(book(workbook -> {
+            Sheet model = workbook.createSheet("Model");
+            seedAndTwoFormulas(model, "Gross");
+            Sheet report = workbook.createSheet("Report");
+            report.createRow(0).createCell(0).setCellValue("Rs. In Lakhs");
+            report.createRow(2).createCell(0).setCellValue("Result");
+            report.getRow(2).createCell(1).setCellFormula("Model!B3");
+        }), decisions, new SilentChat());
+
+        assertThat(readings.get("Model!B2").kind()).isEqualTo("money");
+        assertThat(readings.get("Report!B3").scale()).isEqualTo("lakh");
+        assertThat(readings.get("Model!B3").scale()).isEqualTo("lakh");
+        assertThat(readings.get("Model!B2").scale()).isEqualTo("lakh");
+    }
+
+    /** Nothing can type the chain: it ends untyped, and no cell is put to the decision model twice. */
+    @Test
+    void anUntypableChainEndsUntypedAndIsNotAskedTwice() throws Exception {
+        var decisions = new RecordingDecisions(Map.of());
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> seedAndTwoFormulas(sheet, "Gross")), decisions, new SilentChat());
+
+        assertThat(readings.get("B2").refusal()).isEqualTo("untypable");
+        assertThat(readings.get("B3").refusal()).isEqualTo("untypable");
+        assertThat(decisions.asked).doesNotHaveDuplicates();
+    }
+
+    /** Workbooks pad sheet names ("P  L "); a reference to one must still find its sheet. */
+    @Test
+    void aFormulaReadingAPaddedSheetNameFollowsItsPrecedent() throws Exception {
+        Map<String, CellReading> readings = read(book(workbook -> {
+            Sheet padded = workbook.createSheet("P  L ");
+            padded.createRow(0).createCell(0).setCellValue("Area (sqm)");
+            padded.getRow(0).createCell(1).setCellValue(100);
+
+            Sheet calc = workbook.createSheet("Calc");
+            calc.createRow(0).createCell(1).setCellFormula("'P  L '!B1");
+        }));
+
+        CellReading area = readings.get("Calc!B1");
+        assertThat(area.refusal()).isNull();
+        assertThat(area.kind()).isEqualTo("quantity");
+        assertThat(area.unit()).isEqualTo("sqm");
+        assertThat(area.typeSource()).isEqualTo("derived");
+    }
+
+    @Test
+    void readersThatDisagreeLeaveTheScaleUnstated() throws Exception {
+        Map<String, CellReading> readings = read(book(workbook -> {
+            Sheet source = workbook.createSheet("Source");
+            source.createRow(0).createCell(0).setCellValue("Loan amount");
+            source.getRow(0).createCell(1).setCellValue(50);
+
+            Sheet lakhs = workbook.createSheet("Lakhs");
+            lakhs.createRow(0).createCell(0).setCellValue("Rs. In Lakhs");
+            lakhs.createRow(2).createCell(0).setCellValue("Loan");
+            lakhs.getRow(2).createCell(1).setCellFormula("Source!B1");
+
+            Sheet crores = workbook.createSheet("Crores");
+            crores.createRow(0).createCell(0).setCellValue("Rs. In Crores");
+            crores.createRow(2).createCell(0).setCellValue("Loan");
+            crores.getRow(2).createCell(1).setCellFormula("Source!B1");
+        }));
+
+        assertThat(readings.get("Source!B1").kind()).isEqualTo("money");
+        assertThat(readings.get("Source!B1").scale()).isNull();
+        assertThat(readings.get("Lakhs!B3").scale()).isEqualTo("lakh");
+        assertThat(readings.get("Crores!B3").scale()).isEqualTo("crore");
+    }
+
+    @Test
+    void unstatedMoneyDividedIntoLakhsWasRupees() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Land cost");
+            sheet.getRow(0).createCell(1).setCellValue(2_500_000);
+            sheet.getRow(0).createCell(2).setCellFormula("B1/100000");
+        }));
+
+        assertThat(readings.get("C1").scale()).isEqualTo("lakh");
+        assertThat(readings.get("C1").scaleBasis()).isEqualTo("stated");
+        assertThat(readings.get("B1").scale()).isEqualTo("unit");
+        assertThat(readings.get("B1").scaleBasis()).isEqualTo("inferred");
+    }
+
+    @Test
+    void rupeesDividedByHundredThousandAreLakhs() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Detail (Amount in Rs)");
+            sheet.createRow(2).createCell(0).setCellValue("Land cost");
+            sheet.getRow(2).createCell(1).setCellValue(2_500_000);
+            sheet.getRow(2).createCell(2).setCellFormula("B3/100000");
+        }));
+
+        assertThat(readings.get("B3").scale()).isEqualTo("unit");
+        assertThat(readings.get("C3").kind()).isEqualTo("money");
+        assertThat(readings.get("C3").scale()).isEqualTo("lakh");
+        assertThat(readings.get("C3").typeSource()).isEqualTo("derived");
+    }
+
+    @Test
+    void lakhsTimesHundredThousandAreRupees() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lacs)");
+            sheet.createRow(2).createCell(0).setCellValue("Land cost");
+            sheet.getRow(2).createCell(1).setCellValue(25);
+            sheet.getRow(2).createCell(2).setCellFormula("B3*100000");
+        }));
+
+        assertThat(readings.get("C3").scale()).isEqualTo("unit");
+    }
+
+    @Test
+    void aConversionThatLandsOnNoScaleIsRefusedNotGuessed() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lacs)");
+            sheet.createRow(2).createCell(0).setCellValue("Land cost");
+            sheet.getRow(2).createCell(1).setCellValue(25);
+            sheet.getRow(2).createCell(2).setCellFormula("B3/100000");
+        }));
+
+        assertThat(readings.get("C3").kind()).isNull();
+        assertThat(readings.get("C3").refusal()).isEqualTo("kind_conflict");
+    }
+
+    @Test
+    void aRatioTimesOneHundredIsAPercent() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Profit (in Rs. Lakhs)");
+            sheet.getRow(0).createCell(1).setCellValue(12);
+            sheet.createRow(1).createCell(0).setCellValue("Sales (in Rs. Lakhs)");
+            sheet.getRow(1).createCell(1).setCellValue(80);
+            sheet.createRow(2).createCell(1).setCellFormula("B1/B2*100");
+            sheet.createRow(3).createCell(1).setCellFormula("B1/B2");
+        }));
+
+        assertThat(readings.get("B3").kind()).isEqualTo("percent");
+        assertThat(readings.get("B3").scale()).isEqualTo("unit");
+        assertThat(readings.get("B4").kind()).isEqualTo("ratio");
+    }
+
+    /** A ratio is a dimensionless multiple: a proration keeps the kind of what it prorates. */
+    @Test
+    void aRatioScalesWhatItMultipliesOrDividesWithoutChangingItsKind() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Part (in Rs. Lakhs)");
+            sheet.getRow(0).createCell(1).setCellValue(100);
+            sheet.createRow(1).createCell(0).setCellValue("Whole (in Rs. Lakhs)");
+            sheet.getRow(1).createCell(1).setCellValue(400);
+            sheet.createRow(2).createCell(0).setCellValue("Charge (in Rs. Lakhs)");
+            sheet.getRow(2).createCell(1).setCellValue(50);
+            sheet.createRow(3).createCell(1).setCellFormula("B1/B2*B3");
+            sheet.createRow(4).createCell(1).setCellFormula("B3/(B1/B2)");
+            sheet.createRow(5).createCell(1).setCellFormula("(B1/B2)*(B1/B2)");
+        }));
+
+        assertThat(readings.get("B4").kind()).isEqualTo("money");
+        assertThat(readings.get("B4").scale()).isEqualTo("lakh");
+        assertThat(readings.get("B5").kind()).isEqualTo("money");
+        assertThat(readings.get("B5").scale()).isEqualTo("lakh");
+        assertThat(readings.get("B6").kind()).isEqualTo("ratio");
+    }
+
+    @Test
+    void aPlainFractionDoesNotChangeScale() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lacs)");
+            sheet.createRow(2).createCell(0).setCellValue("Land cost");
+            sheet.getRow(2).createCell(1).setCellValue(100);
+            sheet.getRow(2).createCell(2).setCellFormula("B3*0.35");
+        }));
+
+        assertThat(readings.get("C3").scale()).isEqualTo("lakh");
+    }
+
+    /**
+     * B1 is a formula the arithmetic cannot read, so a model types it. B2 and B3 wait on it. B4 divides
+     * B2 by B3 and carries {@code label}, so the dictionary types it before B1 is known; B5 follows B4.
+     */
+    private static void aRatioLabelledAsMoney(Sheet sheet, String label, String ratioFormula) {
+        sheet.createRow(0).createCell(0).setCellValue("Seed");
+        sheet.getRow(0).createCell(2).setCellValue(25);
+        sheet.getRow(0).createCell(1).setCellFormula("SQRT(C1)");
+        sheet.createRow(1).createCell(0).setCellValue("Left");
+        sheet.getRow(1).createCell(1).setCellFormula("B1*2");
+        sheet.createRow(2).createCell(0).setCellValue("Right");
+        sheet.getRow(2).createCell(1).setCellFormula("B1*3");
+        sheet.createRow(3).createCell(0).setCellValue(label);
+        sheet.getRow(3).createCell(1).setCellFormula(ratioFormula);
+        sheet.createRow(4).createCell(0).setCellValue("Next");
+        sheet.getRow(4).createCell(1).setCellFormula("B4*2");
+    }
+
+    private static RecordingDecisions seedIsMoney() {
+        return new RecordingDecisions(
+                Map.of("B1", new CellDecisionClient.Decision("money", 0.97, "unit", 0.95)));
+    }
+
+    /**
+     * The label typed B4 as money while B2 and B3 were still waiting. Once they are money, B2/B3 is a ratio:
+     * the formula's own arithmetic beats the earlier answer, and B5, built on B4, follows the corrected cell.
+     */
+    @Test
+    void aFormulaTypedByItsLabelIsCorrectedByItsOwnArithmeticOnceItsInputsAreTyped() throws Exception {
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> aRatioLabelledAsMoney(sheet, "Total cost (in Rs.)", "B2/B3")),
+                seedIsMoney(), new SilentChat());
+
+        assertThat(readings.get("B2").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+        assertThat(readings.get("B4").kind()).isEqualTo("ratio");
+        assertThat(readings.get("B4").typeSource()).isEqualTo("derived");
+        assertThat(readings.get("B5").kind()).isEqualTo("ratio");
+    }
+
+    /** Percent and ratio are the same dimension: a percent the label chose is not overridden by "ratio". */
+    @Test
+    void aPercentTheLabelChoseIsNotReplacedByTheRatioTheArithmeticGives() throws Exception {
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> aRatioLabelledAsMoney(sheet, "Margin (%)", "B2/B3")),
+                seedIsMoney(), new SilentChat());
+
+        assertThat(readings.get("B4").kind()).isEqualTo("percent");
+    }
+
+    /**
+     * Three money rows and an "Insurance Cost - % of EPC" row added into one total. The row's formula reads
+     * the money in B1; only its label says percent. {@code oddCell} is the formula, or a typed-in number.
+     */
+    private static void moneyRowsAndAnItemNamedWithAPercentSign(Sheet sheet, boolean oddIsAFormula) {
+        sheet.createRow(0).createCell(0).setCellValue("Basic cost (in Rs.)");
+        sheet.getRow(0).createCell(1).setCellValue(100);
+        sheet.createRow(1).createCell(0).setCellValue("Rent (in Rs.)");
+        sheet.getRow(1).createCell(1).setCellFormula("B1*0.5");
+        sheet.createRow(2).createCell(0).setCellValue("Salaries (in Rs.)");
+        sheet.getRow(2).createCell(1).setCellFormula("B1*0.2");
+        sheet.createRow(3).createCell(0).setCellValue("Utilities (in Rs.)");
+        sheet.getRow(3).createCell(1).setCellValue(7);
+        sheet.createRow(4).createCell(0).setCellValue("Insurance Cost - % of EPC");
+        if (oddIsAFormula) {
+            sheet.getRow(4).createCell(2).setCellFormula("SQRT(B1)"); // own column: nothing to take a consensus from
+        } else {
+            sheet.getRow(4).createCell(2).setCellValue(5);
+        }
+        sheet.createRow(5).createCell(0).setCellValue("Aggregate"); // no cue of its own: not "Total" or "cost", which the label rules would type first
+        sheet.getRow(5).createCell(3).setCellFormula("SUM(B2,B3,B4,C5)"); // its own column, as is C5: no consensus to take
+        sheet.createRow(6).createCell(0).setCellValue("Next");
+        sheet.getRow(6).createCell(3).setCellFormula("D6*2");
+    }
+
+    /**
+     * The odd addend is a formula that reads money, in a sum the author made of money rows: its label names the
+     * item, its number is an amount. It takes the sum's kind, and the total and what reads it are typed.
+     */
+    @Test
+    void aFormulaAddedIntoATotalOfMoneyThatReadsMoneyIsMoneyWhateverItsLabelSays() throws Exception {
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> moneyRowsAndAnItemNamedWithAPercentSign(sheet, true)),
+                new RecordingDecisions(Map.of()), new SilentChat());
+
+        assertThat(readings.get("C5").kind()).isEqualTo("money");
+        assertThat(readings.get("D6").kind()).isEqualTo("money");
+        assertThat(readings.get("D7").kind()).isEqualTo("money");
+    }
+
+    /** A typed-in number that disagrees has nothing but its label: the sum stays refused rather than be guessed. */
+    @Test
+    void aTypedInNumberThatDisagreesWithTheRestOfASumIsNotOverruled() throws Exception {
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> moneyRowsAndAnItemNamedWithAPercentSign(sheet, false)),
+                new RecordingDecisions(Map.of()), new SilentChat());
+
+        assertThat(readings.get("C5").kind()).isEqualTo("percent");
+        assertThat(readings.get("D6").kind()).isNull();
+    }
+
+    /** Arithmetic that cannot read the formula says nothing: the label's answer stands. */
+    @Test
+    void aFormulaTheArithmeticCannotReadKeepsItsLabelsAnswer() throws Exception {
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> aRatioLabelledAsMoney(sheet, "Total cost (in Rs.)", "SQRT(B2)")),
+                seedIsMoney(), new SilentChat());
+
+        assertThat(readings.get("B4").kind()).isEqualTo("money");
+    }
+
+    /** B1 and B2 are money by their labels; B3 has no cue at all; B4 sums the three; B5 is built on B4. */
+    private static void sumWithOneUnlabelledAddend(Sheet sheet, String thirdLabel, String sumFormula) {
+        sheet.createRow(0).createCell(0).setCellValue("Catering sales (in Rs.)");
+        sheet.getRow(0).createCell(1).setCellValue(100);
+        sheet.createRow(1).createCell(0).setCellValue("Restaurant sales (in Rs.)");
+        sheet.getRow(1).createCell(1).setCellValue(50);
+        sheet.createRow(2).createCell(0).setCellValue(thirdLabel);
+        sheet.getRow(2).createCell(1).setCellValue(30);
+        sheet.createRow(3).createCell(0).setCellValue("Subtotal");
+        sheet.getRow(3).createCell(1).setCellFormula(sumFormula);
+        sheet.createRow(4).createCell(0).setCellValue("Next");
+        sheet.getRow(4).createCell(1).setCellFormula("B4*2");
+    }
+
+    /**
+     * Addition needs one kind: B3, which nothing labels, is added to two money cells, so it is money. The
+     * subtotal and what is built on it then follow by arithmetic and no model is asked about them.
+     */
+    @Test
+    void anUntypedAddendTakesTheKindOfTheCellsItIsAddedTo() throws Exception {
+        var decisions = new RecordingDecisions(Map.of());
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> sumWithOneUnlabelledAddend(sheet, "Misc", "SUM(B1:B3)")), decisions, new SilentChat());
+
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").typeSource()).isEqualTo("derived");
+        assertThat(readings.get("B4").kind()).isEqualTo("money");
+        assertThat(readings.get("B5").kind()).isEqualTo("money");
+        assertThat(decisions.asked).doesNotContain("B4").doesNotContain("B5");
+    }
+
+    @Test
+    void addedWithPlusOrMinusIsTheSameAsASum() throws Exception {
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> sumWithOneUnlabelledAddend(sheet, "Misc", "B1+B2-B3")),
+                new RecordingDecisions(Map.of()), new SilentChat());
+
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+        assertThat(readings.get("B4").kind()).isEqualTo("money");
+    }
+
+    /** Multiplying two cells does not make them one kind: an untyped factor stays untyped. */
+    @Test
+    void anUntypedFactorIsNotInferredFromTheCellItIsMultipliedBy() throws Exception {
+        Map<String, CellReading> readings = read(
+                workbook(sheet -> sumWithOneUnlabelledAddend(sheet, "Misc", "B1*B3")),
+                new RecordingDecisions(Map.of()), new SilentChat());
+
+        assertThat(readings.get("B3").kind()).isNull();
+    }
+
+    /** Addends that already disagree say nothing about the one that is untyped. */
+    @Test
+    void addendsOfDifferentKindsLeaveTheUntypedOneUntyped() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Catering sales (in Rs.)");
+            sheet.getRow(0).createCell(1).setCellValue(100);
+            sheet.createRow(1).createCell(0).setCellValue("Growth (%)");
+            sheet.getRow(1).createCell(1).setCellValue(0.1);
+            sheet.createRow(2).createCell(0).setCellValue("Misc");
+            sheet.getRow(2).createCell(1).setCellValue(30);
+            sheet.createRow(3).createCell(0).setCellValue("Subtotal");
+            sheet.getRow(3).createCell(1).setCellFormula("SUM(B1:B3)");
+        }), new RecordingDecisions(Map.of()), new SilentChat());
+
+        assertThat(readings.get("B3").kind()).isNull();
+    }
+
+    /** A percent sign after a number is a parameter in the label ("OD @9.5%"), not the unit of the cell. */
+    @Test
+    void aPercentSignAfterANumberInALabelDoesNotMakeTheCellAPercent() throws Exception {
+        Map<String, CellReading> readings = read(book(workbook -> {
+            Sheet sheet = workbook.createSheet("Model");
+            sheet.createRow(0).createCell(0).setCellValue("OD @9.5%");
+            sheet.getRow(0).createCell(1).setCellValue(250);
+            sheet.createRow(1).createCell(0).setCellValue("Margin (%)");
+            sheet.getRow(1).createCell(1).setCellValue(12);
+        }));
+
+        assertThat(readings.get("B1").kind()).isNotEqualTo("percent");
+        assertThat(readings.get("B2").kind()).isEqualTo("percent");
+    }
+
+    /** Revenue / 365 * debtor days is money: a number of days is a time multiplier, not a quantity of goods. */
+    @Test
+    void moneyTimesANumberOfDaysIsMoney() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Revenue from operations (in Rs.)");
+            sheet.getRow(0).createCell(1).setCellValue(3650);
+            sheet.createRow(1).createCell(0).setCellValue("Debtors Days");
+            sheet.getRow(1).createCell(1).setCellValue(60);
+            sheet.createRow(2).createCell(0).setCellValue("Debtors");
+            sheet.getRow(2).createCell(1).setCellFormula("B1/365*B2");
+        }));
+
+        assertThat(readings.get("B2").kind()).isEqualTo("quantity");
+        assertThat(readings.get("B2").unit()).isEqualTo("days");
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+        assertThat(readings.get("B3").refusal()).isNull();
+    }
+
+    /** Only time is a multiplier: money times a quantity of goods is still a contradiction. */
+    @Test
+    void moneyTimesAQuantityOfGoodsStaysARefusal() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Revenue from operations (in Rs.)");
+            sheet.getRow(0).createCell(1).setCellValue(3650);
+            sheet.createRow(1).createCell(0).setCellValue("Built-up area (sqm)");
+            sheet.getRow(1).createCell(1).setCellValue(60);
+            sheet.createRow(2).createCell(0).setCellValue("Debtors");
+            sheet.getRow(2).createCell(1).setCellFormula("B1*B2");
+        }));
+
+        assertThat(readings.get("B3").refusal()).isEqualTo("kind_conflict");
+    }
+
+    /**
+     * Inventory Days + Debtors Days - Creditors Days: one typed addend (wrongly money, from the word "Creditors")
+     * must not be copied onto two untyped ones. Typed addends have to outnumber the untyped.
+     */
+    @Test
+    void oneTypedAddendDoesNotTypeTwoUntypedOnes() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Alpha");
+            sheet.getRow(0).createCell(1).setCellValue(25);
+            sheet.createRow(1).createCell(0).setCellValue("Beta");
+            sheet.getRow(1).createCell(1).setCellValue(40);
+            sheet.createRow(2).createCell(0).setCellValue("Total cost (in Rs.)");
+            sheet.getRow(2).createCell(1).setCellValue(25);
+            sheet.createRow(3).createCell(0).setCellValue("Net");
+            sheet.getRow(3).createCell(1).setCellFormula("B1+B2-B3");
+        }), new RecordingDecisions(Map.of()), new SilentChat());
+
+        assertThat(readings.get("B1").kind()).isNull();
+        assertThat(readings.get("B2").kind()).isNull();
+    }
+
+    /** "Creditors Days" is a number of days, not money: the noun before "Days" does not decide. */
+    @Test
+    void aLabelEndingInDaysIsANumberOfDays() throws Exception {
+        Map<String, CellReading> readings = read(workbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Creditors Days");
+            sheet.getRow(0).createCell(1).setCellValue(25);
+            sheet.createRow(1).createCell(0).setCellValue("Interest per day (Rs.)");
+            sheet.getRow(1).createCell(1).setCellValue(4);
+            sheet.createRow(2).createCell(0).setCellValue("Interest for 365 days (Rs.)");
+            sheet.getRow(2).createCell(1).setCellValue(1460);
+        }));
+
+        assertThat(readings.get("B1").kind()).isEqualTo("quantity");
+        assertThat(readings.get("B1").unit()).isEqualTo("days");
+        assertThat(readings.get("B2").kind()).isNotEqualTo("quantity");
+        assertThat(readings.get("B3").kind()).isEqualTo("money");
+    }
+
+    private static void restore(String property, String value) {
+        if (value == null) {
+            System.clearProperty(property);
+        } else {
+            System.setProperty(property, value);
+        }
+    }
+
     private Map<String, CellReading> read(XSSFWorkbook workbook) throws Exception {
+        return read(workbook, null, null);
+    }
+
+    private Map<String, CellReading> read(XSSFWorkbook workbook, CellDecisionClient decision, ClassifierLlm chat)
+            throws Exception {
         Path xlsx = tempDir.resolve("reading.xlsx");
         try (OutputStream out = Files.newOutputStream(xlsx)) {
             XSSFFormulaEvaluator.evaluateAllFormulaCells(workbook);
@@ -161,53 +823,94 @@ class CellReadingWriterTest {
             WorkspaceRepository repo = new WorkspaceRepository(database.connection());
             List<InterpretationCellView> cells =
                     repo.selectInterpretationCellsForParseRun(summary.parseRunId());
-            int minRow = Integer.MAX_VALUE;
-            int minCol = Integer.MAX_VALUE;
-            int maxRow = 1;
-            int maxCol = 1;
-            long worksheetId = cells.get(0).worksheetId();
-            List<Long> members = new ArrayList<>();
+            Map<Long, String> sheetNames = new HashMap<>();
+            for (WorksheetRef sheet : repo.selectWorksheetsForParseRun(summary.parseRunId())) {
+                sheetNames.put(sheet.worksheetId(), sheet.sheetName());
+            }
             Map<Long, String> coords = new HashMap<>();
             for (InterpretationCellView cell : cells) {
                 coords.put(cell.cellId(), cell.coord());
-                if (cell.worksheetId() != worksheetId) {
-                    continue;
-                }
-                members.add(cell.cellId());
-                minRow = Math.min(minRow, cell.rowNum());
-                minCol = Math.min(minCol, cell.colNum());
-                maxRow = Math.max(maxRow, cell.rowNum());
-                maxCol = Math.max(maxCol, cell.colNum());
             }
-            repo.insertCandidate(new CandidateWrite(
-                    summary.parseRunId(),
-                    worksheetId,
-                    "child",
-                    null,
-                    minRow,
-                    minCol,
-                    maxRow,
-                    maxCol,
-                    null,
-                    null,
-                    null,
-                    false,
-                    null,
-                    null,
-                    "synthetic block",
-                    "main"), members);
-            new CellReadingWriter().replace(repo, summary.parseRunId());
+            for (long worksheetId : sheetNames.keySet()) {
+                insertBlock(repo, summary.parseRunId(), worksheetId, cells);
+            }
+            // A model means the classifier runs, and it persists the learned dictionary: keep that out of ~/.tev-parser.
+            String oldDir = System.getProperty(DynamicKindTokens.DIR_PROPERTY);
+            String oldLearn = System.getProperty(DynamicKindTokens.LEARN_PROPERTY);
+            System.setProperty(DynamicKindTokens.DIR_PROPERTY, tempDir.resolve("dictionaries").toString());
+            System.setProperty(DynamicKindTokens.LEARN_PROPERTY, "false");
+            try {
+                new CellReadingWriter().withDecisionModel(decision).replace(repo, summary.parseRunId(), chat);
+            } finally {
+                restore(DynamicKindTokens.DIR_PROPERTY, oldDir);
+                restore(DynamicKindTokens.LEARN_PROPERTY, oldLearn);
+            }
             Map<String, CellReading> byCoord = new HashMap<>();
+            Map<Long, Long> sheetOf = new HashMap<>();
+            for (InterpretationCellView cell : cells) {
+                sheetOf.put(cell.cellId(), cell.worksheetId());
+            }
             for (CellReading reading : repo.selectCellReadingsForParseRun(summary.parseRunId())) {
-                byCoord.put(coords.get(reading.cellId()), reading);
+                String sheet = sheetNames.get(sheetOf.get(reading.cellId()));
+                byCoord.put(sheet + "!" + coords.get(reading.cellId()), reading);
+                if (sheetNames.size() == 1) {
+                    byCoord.put(coords.get(reading.cellId()), reading);
+                }
             }
             return byCoord;
         }
     }
 
+    /** One synthetic block over the whole sheet, so labels resolve. */
+    private static void insertBlock(
+            WorkspaceRepository repo, long parseRunId, long worksheetId, List<InterpretationCellView> cells)
+            throws Exception {
+        int minRow = Integer.MAX_VALUE;
+        int minCol = Integer.MAX_VALUE;
+        int maxRow = 1;
+        int maxCol = 1;
+        List<Long> members = new ArrayList<>();
+        for (InterpretationCellView cell : cells) {
+            if (cell.worksheetId() != worksheetId) {
+                continue;
+            }
+            members.add(cell.cellId());
+            minRow = Math.min(minRow, cell.rowNum());
+            minCol = Math.min(minCol, cell.colNum());
+            maxRow = Math.max(maxRow, cell.rowNum());
+            maxCol = Math.max(maxCol, cell.colNum());
+        }
+        if (members.isEmpty()) {
+            return;
+        }
+        repo.insertCandidate(new CandidateWrite(
+                parseRunId,
+                worksheetId,
+                "child",
+                null,
+                minRow,
+                minCol,
+                maxRow,
+                maxCol,
+                null,
+                null,
+                null,
+                false,
+                null,
+                null,
+                "synthetic block",
+                "main"), members);
+    }
+
     private XSSFWorkbook workbook(SheetSetup setup) {
         XSSFWorkbook workbook = new XSSFWorkbook();
         setup.build(workbook.createSheet("Model"));
+        return workbook;
+    }
+
+    private XSSFWorkbook book(java.util.function.Consumer<XSSFWorkbook> setup) {
+        XSSFWorkbook workbook = new XSSFWorkbook();
+        setup.accept(workbook);
         return workbook;
     }
 

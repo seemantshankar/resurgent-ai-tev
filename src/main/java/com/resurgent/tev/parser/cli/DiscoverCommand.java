@@ -28,8 +28,16 @@ public final class DiscoverCommand implements Callable<Integer> {
     public Integer call() {
         PrintWriter out = spec.commandLine().getOut();
         PrintWriter err = spec.commandLine().getErr();
+        com.resurgent.tev.parser.classify.LlmStats.GLOBAL.reset();
+        java.time.Instant started = java.time.Instant.now();
         try {
             DiscoverSummary summary = new DiscoverService().discover(db, parseRunId);
+            var stats = com.resurgent.tev.parser.classify.LlmStats.GLOBAL;
+            stats.put("discover", "worksheets", summary.worksheetCount());
+            stats.put("discover", "candidates", summary.candidateCount());
+            stats.put("discover", "isolated_hidden_worksheets", summary.isolatedHiddenWorksheetCount());
+            stats.timing("discover", started, java.time.Instant.now(), summary.candidateCount());
+            StatsRecorder.persist(out, db, parseRunId);
             out.printf(
                     "Discovered parse_run %d: %d worksheets, %d candidates"
                             + " (%d isolated hidden), coverage %s.%n",

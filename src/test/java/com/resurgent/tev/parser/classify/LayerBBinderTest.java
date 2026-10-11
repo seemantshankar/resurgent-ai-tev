@@ -60,6 +60,39 @@ class LayerBBinderTest {
     }
 
     @Test
+    void aLabelledRowOffEverySumKeepsItsPathWithNoRoleButSideArithmeticStaysUnbound() {
+        String path = "Profit & Loss > Operating Expenses";
+        List<BindCellRow> cells = List.of(
+                cell(1, "B4", 4, 2, "text", "Salaries", null, false, false, null),
+                cell(2, "C4", 4, 3, "number", null, null, false, false, null),
+                cell(3, "B5", 5, 2, "text", "Rent", null, false, false, null),
+                cell(4, "C5", 5, 3, "number", null, null, false, false, null),
+                cell(5, "B6", 6, 2, "text", "Total Expenses", null, false, false, null),
+                cell(6, "C6", 6, 3, "number", null, "SUM(C4:C5)", false, false, null),
+                // A labelled row whose amounts are a difference, and a figure typed in: both off the SUM.
+                cell(7, "B7", 7, 2, "text", "Other Expenses", null, false, false, null),
+                cell(8, "C7", 7, 3, "number", null, "C6-C4", false, false, null),
+                cell(9, "D7", 7, 4, "number", null, null, false, false, null),
+                // Arithmetic with no label on its row, beside the table.
+                cell(10, "F9", 9, 6, "number", null, "C6-C4", false, false, null));
+        List<LayerBAssignment> llm = List.of(
+                new LayerBAssignment(4, null, "economic", path),
+                new LayerBAssignment(5, null, "economic", path),
+                new LayerBAssignment(6, null, "economic", path),
+                new LayerBAssignment(7, null, "economic", path),
+                new LayerBAssignment(null, "F9", "economic", path));
+        Map<String, LayerBBinder.Draft> byCoord = LayerBBinder.bind(cells, llm, LayerBBinder.aliasIndex()).stream()
+                .collect(java.util.stream.Collectors.toMap(LayerBBinder.Draft::coord, d -> d));
+
+        assertThat(byCoord.get("C4").amountRole()).isEqualTo("add");
+        assertThat(byCoord.get("C6").amountRole()).isEqualTo("total");
+        assertThat(byCoord.get("C7").path()).isEqualTo(path);
+        assertThat(byCoord.get("C7").amountRole()).isNull();
+        assertThat(byCoord.get("D7").path()).isEqualTo(path);
+        assertThat(byCoord).doesNotContainKey("F9");
+    }
+
+    @Test
     void promoterAliasesShareOnePathAndMachineryAliasDoesNotPaintSideArithmetic() {
         Map<String, String> aliases = new java.util.LinkedHashMap<>(LayerBBinder.aliasIndex());
         aliases.put(LayerBBinder.norm("Promoter Name"), LayerBBinder.PARTNERS);

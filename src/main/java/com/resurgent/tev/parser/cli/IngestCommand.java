@@ -50,6 +50,8 @@ public final class IngestCommand implements Callable<Integer> {
     public Integer call() {
         PrintWriter out = spec.commandLine().getOut();
         PrintWriter err = spec.commandLine().getErr();
+        com.resurgent.tev.parser.classify.LlmStats.GLOBAL.reset();
+        java.time.Instant started = java.time.Instant.now();
         ParserConfig parserConfig;
         try {
             parserConfig = ConfigLoader.load(config);
@@ -78,6 +80,14 @@ public final class IngestCommand implements Callable<Integer> {
                         summary.fileName(), summary.worksheetName(), summary.cellCount(),
                         summary.rowCount(), summary.dbPath(), summary.sourceFileId(),
                         summary.parseRunId(), summary.fileHash().substring(0, 12));
+            }
+            if (!summary.existingRun()) {
+                var stats = com.resurgent.tev.parser.classify.LlmStats.GLOBAL;
+                stats.putText("ingest", "input_file", summary.fileName());
+                stats.put("ingest", "rows", summary.rowCount());
+                stats.put("ingest", "cells", summary.cellCount());
+                stats.timing("ingest", started, java.time.Instant.now(), summary.cellCount());
+                StatsRecorder.persist(out, db, summary.parseRunId());
             }
             if (!"success".equals(summary.status())) {
                 err.println("WARNING: parse run finished with status '" + summary.status()

@@ -212,8 +212,19 @@ final class InterpretationEvidenceResolver {
         for (CandidateRow scope : peers) {
             ScopeIndex scopeIndex = cache.scope(scope, membersByCandidate, candidatesById);
             InterpretationCellView focus = focusCell(target, cache, scopeIndex);
-            rowChains.add(rowHeaderChain(focus, scopeIndex));
-            colChains.add(columnHeaderChain(focus, scopeIndex));
+            rowChains.add(rowHeaderChain(focus, scopeIndex, cache));
+            colChains.add(columnHeaderChain(focus, scopeIndex, cache));
+        }
+        HeaderGeometry geometry = cache.geometryFor(peers);
+        if (geometry != null) {
+            HeaderChain geometryColumns = geometryColumnChain(geometry, target, cache);
+            if (geometryColumns != null) {
+                colChains = List.of(geometryColumns);
+            }
+            HeaderChain geometryRows = geometryRowChain(geometry, target, cache);
+            if (geometryRows != null) {
+                rowChains = List.of(geometryRows);
+            }
         }
         List<InterpretationEvidence> out = new ArrayList<>();
         out.addAll(mergeHeaderRole(
@@ -416,13 +427,15 @@ final class InterpretationEvidenceResolver {
         return target;
     }
 
-    private static HeaderChain rowHeaderChain(InterpretationCellView focus, ScopeIndex scope) {
+    private static HeaderChain rowHeaderChain(
+            InterpretationCellView focus, ScopeIndex scope, ResolveCache cache) {
         List<InterpretationCellView> left = new ArrayList<>();
+        Set<String> seenMerges = new HashSet<>();
         for (InterpretationCellView cell : scope.row(focus.worksheetId(), focus.rowNum())) {
             if (cell.colNum() >= focus.colNum()) {
                 continue;
             }
-            if (labelText(cell) == null) {
+            if (labelText(cell) == null || !countsAsHeader(cell, cache, seenMerges, false)) {
                 continue;
             }
             left.add(cell);
@@ -431,7 +444,9 @@ final class InterpretationEvidenceResolver {
         return HeaderChain.from(left);
     }
 
-    private static HeaderChain columnHeaderChain(InterpretationCellView focus, ScopeIndex scope) {
+    private static HeaderChain columnHeaderChain(
+            InterpretationCellView focus, ScopeIndex scope, ResolveCache cache) {
+        Set<String> seenMerges = new HashSet<>();
         // Nearest header band above focus: skip body/numeric rows until the first header,
         // then stop at the first gap (stacked upper schedules stay out).
         Map<Integer, List<InterpretationCellView>> byRow = new HashMap<>();
@@ -439,7 +454,7 @@ final class InterpretationEvidenceResolver {
             if (cell.rowNum() >= focus.rowNum()) {
                 continue;
             }
-            if (!isColumnHeaderCandidate(cell)) {
+            if (!isColumnHeaderCandidate(cell) || !countsAsHeader(cell, cache, seenMerges, true)) {
                 continue;
             }
             byRow.computeIfAbsent(cell.rowNum(), r -> new ArrayList<>()).add(cell);
@@ -459,6 +474,103 @@ final class InterpretationEvidenceResolver {
             // Not started: keep scanning through body rows toward the local header.
         }
         return HeaderChain.from(band);
+    }
+
+    /**
+     * The column header the LLM's geometry names for this cell: the nearest header band above it
+     * that governs its column. Null when no band does, so the grid walk still answers.
+     */
+    private static HeaderChain geometryColumnChain(
+            HeaderGeometry geometry, InterpretationCellView target, ResolveCache cache) {
+        List<HeaderGeometry.Band> bands = new ArrayList<>(geometry.bandsAbove(target.rowNum(), target.colNum()));
+        bands.sort(Comparator.comparingInt(HeaderGeometry.Band::colMin));
+        Set<String> seenMerges = new HashSet<>();
+        List<InterpretationCellView> cells = new ArrayList<>();
+        for (HeaderGeometry.Band band : bands) {
+            for (int row = band.rowMin(); row <= band.rowMax(); row++) {
+                InterpretationCellView cell = cache.cellAt(target.worksheetId(), row, target.colNum());
+                if (cell != null && isColumnHeaderCandidate(cell) && countsAsHeader(cell, cache, seenMerges, true)) {
+                    cells.add(cell);
+                }
+            }
+        }
+        return cells.isEmpty() ? null : HeaderChain.fromGeometry(cells);
+    }
+
+    /**
+     * The row labels the geometry's label columns hold on this cell's row, left to right. A whole
+     * number there is a period label (the years 1, 2, 3 under "Month/Year"), so it is taken as a
+     * label and carries its column's heading, which is what says what the number counts.
+     */
+    private static HeaderChain geometryRowChain(
+            HeaderGeometry geometry, InterpretationCellView target, ResolveCache cache) {
+        Set<String> seenMerges = new HashSet<>();
+        List<InterpretationCellView> cells = new ArrayList<>();
+        for (int col : geometry.rowLabelColumns()) {
+            if (col >= target.colNum()) {
+                continue;
+            }
+            InterpretationCellView cell = cache.cellAt(target.worksheetId(), target.rowNum(), col);
+            if (cell == null || !countsAsHeader(cell, cache, seenMerges, false)) {
+                continue;
+            }
+            if (labelText(cell) != null) {
+                cells.add(cell);
+            } else if (isWholeNumber(cell)) {
+                cells.addAll(headingOfColumn(geometry, cell, cache));
+                cells.add(cell);
+            }
+        }
+        return cells.isEmpty() ? null : HeaderChain.fromGeometry(cells);
+    }
+
+    /** The header text sitting over {@code cell}'s column in the nearest band above it. */
+    private static List<InterpretationCellView> headingOfColumn(
+            HeaderGeometry geometry, InterpretationCellView cell, ResolveCache cache) {
+        List<InterpretationCellView> heading = new ArrayList<>();
+        for (HeaderGeometry.Band band : geometry.bandsAbove(cell.rowNum(), cell.colNum())) {
+            for (int row = band.rowMin(); row <= band.rowMax(); row++) {
+                InterpretationCellView above = cache.cellAt(cell.worksheetId(), row, cell.colNum());
+                if (above != null && labelText(above) != null) {
+                    heading.add(above);
+                }
+            }
+        }
+        return heading;
+    }
+
+    private static boolean isWholeNumber(InterpretationCellView cell) {
+        if (!"number".equals(cell.valueType()) || cell.numericValue() == null || cell.numericValue().isBlank()) {
+            return false;
+        }
+        try {
+            double value = Double.parseDouble(cell.numericValue());
+            return value == Math.rint(value);
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Error cells never name anything. A merged header is one label: its participants repeat
+     * the anchor's text, so one that sits on the anchor's own axis line (same column for a
+     * column header, same row for a row header) adds nothing, and one that does not is counted
+     * once per merge.
+     */
+    private static boolean countsAsHeader(
+            InterpretationCellView cell, ResolveCache cache, Set<String> seenMerges, boolean columnAxis) {
+        if (cell.isError() || "error".equals(cell.valueType())) {
+            return false;
+        }
+        if (!cell.isMergedParticipant() || cell.mergedRange() == null) {
+            return true;
+        }
+        for (InterpretationCellView anchor : cache.mergedAnchors(cell.worksheetId(), cell.mergedRange())) {
+            if (columnAxis ? anchor.colNum() == cell.colNum() : anchor.rowNum() == cell.rowNum()) {
+                return false;
+            }
+        }
+        return seenMerges.add(cell.worksheetId() + "|" + cell.mergedRange());
     }
 
     /**
@@ -538,7 +650,7 @@ final class InterpretationEvidenceResolver {
                     ordinal++,
                     EvidenceResolution.RESOLVED,
                     null,
-                    "nearest_in_scope"));
+                    chain.ruleId()));
         }
         return rows;
     }
@@ -777,13 +889,22 @@ final class InterpretationEvidenceResolver {
 
     private record Cue(Long sourceCellId, String sourceText, String normalizedValue, String ruleId) {}
 
-    private record HeaderChain(List<InterpretationCellView> cells, String signature) {
+    private record HeaderChain(List<InterpretationCellView> cells, String signature, String ruleId) {
         static HeaderChain from(List<InterpretationCellView> cells) {
+            return of(cells, "nearest_in_scope");
+        }
+
+        /** A chain the LLM's header geometry named, not one found by walking the grid. */
+        static HeaderChain fromGeometry(List<InterpretationCellView> cells) {
+            return of(cells, "llm_geometry");
+        }
+
+        private static HeaderChain of(List<InterpretationCellView> cells, String ruleId) {
             StringBuilder sig = new StringBuilder();
             for (InterpretationCellView cell : cells) {
                 sig.append(cell.cellId()).append(':').append(headerDisplay(cell)).append('|');
             }
-            return new HeaderChain(List.copyOf(cells), sig.toString());
+            return new HeaderChain(List.copyOf(cells), sig.toString(), ruleId);
         }
     }
 
@@ -929,6 +1050,8 @@ final class InterpretationEvidenceResolver {
 
     private record AxisKey(long worksheetId, int index) {}
 
+    private record CellKey(long worksheetId, int row, int col) {}
+
     private record MergeKey(long worksheetId, String mergedRange) {}
 
     /**
@@ -943,6 +1066,8 @@ final class InterpretationEvidenceResolver {
         private final Map<Long, ScopeIndex> scopeByCandidate = new HashMap<>();
         private final Map<Long, Set<Long>> cellIdsByWorksheet = new HashMap<>();
         private Map<MergeKey, List<InterpretationCellView>> anchorsByMerge;
+        private Map<Long, HeaderGeometry> geometryByCandidate = Map.of();
+        private Map<CellKey, InterpretationCellView> byPosition = Map.of();
 
         ResolveCache(Map<Long, InterpretationCellView> byId) {
             this.byId = Objects.requireNonNull(byId, "byId");
@@ -950,6 +1075,41 @@ final class InterpretationEvidenceResolver {
 
         Map<Long, InterpretationCellView> byId() {
             return byId;
+        }
+
+        /** Header geometry per region, from the LLM; regions without one keep the grid walk. */
+        void useGeometry(Map<Long, HeaderGeometry> geometry) {
+            this.geometryByCandidate = Map.copyOf(geometry);
+            Map<CellKey, InterpretationCellView> positions = new HashMap<>();
+            if (!geometry.isEmpty()) {
+                for (InterpretationCellView cell : byId.values()) {
+                    positions.put(new CellKey(cell.worksheetId(), cell.rowNum(), cell.colNum()), cell);
+                }
+            }
+            this.byPosition = positions;
+        }
+
+        /** The geometry of the narrowest owning region that has one. */
+        HeaderGeometry geometryFor(List<CandidateRow> peers) {
+            if (geometryByCandidate.isEmpty()) {
+                return null;
+            }
+            HeaderGeometry fallback = null;
+            for (CandidateRow peer : peers) {
+                HeaderGeometry found = geometryByCandidate.get(peer.candidateId());
+                if (found == null) {
+                    continue;
+                }
+                if (!"coverage_parent".equals(peer.candidateKind())) {
+                    return found;
+                }
+                fallback = found;
+            }
+            return fallback;
+        }
+
+        InterpretationCellView cellAt(long worksheetId, int row, int col) {
+            return byPosition.get(new CellKey(worksheetId, row, col));
         }
 
         ScopeIndex scope(

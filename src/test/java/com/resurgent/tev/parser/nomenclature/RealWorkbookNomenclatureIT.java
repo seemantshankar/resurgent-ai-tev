@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.io.TempDir;
  * {@code Project Docs/}. Skips when that file is absent. Asserts labels only —
  * never financial amounts or gold-filed coordinates.
  */
+@Tag("slow")
 class RealWorkbookNomenclatureIT {
 
     private static final Path WORKBOOK =

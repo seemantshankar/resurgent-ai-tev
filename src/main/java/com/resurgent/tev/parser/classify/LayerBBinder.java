@@ -16,8 +16,9 @@ import java.util.regex.Pattern;
 /**
  * Assigns one nomenclature path to each eligible cell. Formula errors are
  * omitted. Amount role comes from the formula graph: a single-cell restatement
- * is a helper, a SUM is a total, and a SUM member is an add. Residuals that are
- * not members stay unbound.
+ * is a helper, a SUM is a total, and a SUM member is an add. A cell off every SUM
+ * keeps its path, with no role, when its row's label is bound to the same path;
+ * otherwise (arithmetic beside a schedule) it stays unbound.
  */
 final class LayerBBinder {
 
@@ -523,6 +524,7 @@ final class LayerBBinder {
         }
         Set<String> sumMembers = sumMembers(cells);
         boolean hasSum = !sumMembers.isEmpty();
+        Map<Integer, List<BindCellRow>> rows = rowsOf(cells);
         List<String> drop = new ArrayList<>();
         for (BindCellRow cell : cells) {
             Draft draft = out.get(cell.coord().toUpperCase(Locale.ROOT));
@@ -551,6 +553,11 @@ final class LayerBBinder {
                     role = "helper";
                 } else if (!hasSum || sumMembers.contains(cell.coord().toUpperCase(Locale.ROOT))) {
                     role = "add";
+                } else if (rowIsLabelledWith(cell, path, rows, out)) {
+                    // Off every SUM, but the row's own label carries this path: the row's amount (a
+                    // difference, a sum with other terms, a figure typed in), whose role the formula
+                    // graph cannot tell. 1,728 such cells were being dropped from one statement workbook.
+                    role = null;
                 } else {
                     drop.add(cell.coord().toUpperCase(Locale.ROOT));
                     continue;
@@ -562,6 +569,24 @@ final class LayerBBinder {
         for (String coord : drop) {
             out.remove(coord);
         }
+    }
+
+    /**
+     * Whether a text cell on this cell's row is bound to the same economic path: the row names the
+     * amount. A formula beside a schedule with no label of its own on its row is side arithmetic.
+     */
+    private static boolean rowIsLabelledWith(
+            BindCellRow cell, String path, Map<Integer, List<BindCellRow>> rows, Map<String, Draft> out) {
+        for (BindCellRow other : rows.getOrDefault(cell.rowNum(), List.of())) {
+            if (other.error() || !"text".equals(other.valueType())) {
+                continue;
+            }
+            Draft draft = out.get(other.coord().toUpperCase(Locale.ROOT));
+            if (draft != null && "economic".equals(draft.pathRoot()) && path.equals(draft.path())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     static String amountRole(BindCellRow cell, String pathRoot, String path) {

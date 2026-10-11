@@ -55,8 +55,23 @@ public final class WorkspaceDatabase implements AutoCloseable {
             "db/migration/V31__nomenclature_binding.sql",
             "db/migration/V32__cell_interpretation_evidence.sql",
             "db/migration/V33__formula_graph.sql",
-            "db/migration/V34__cell_reading.sql"
+            "db/migration/V34__cell_reading.sql",
+            "db/migration/V35__packet_disposition_stated_scale.sql",
+            "db/migration/V36__cell_reading_unstated_scale.sql",
+            "db/migration/V37__llm_usage.sql",
+            "db/migration/V38__run_timing.sql",
+            "db/migration/V39__llm_stats_context.sql",
+            "db/migration/V40__region_header_geometry.sql",
+            "db/migration/V41__region_triage_opinion.sql",
+            "db/migration/V42__cell_unit_basis.sql",
+            "db/migration/V43__cell_scale_inference.sql",
+            "db/migration/V44__drop_formula_reach.sql"
     };
+
+    /** Number of bundled migrations, i.e. the schema version a fully migrated database reports. */
+    public static int latestVersion() {
+        return MIGRATIONS.length;
+    }
 
     private final Connection connection;
 

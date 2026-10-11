@@ -5,9 +5,13 @@ import com.resurgent.tev.parser.classify.ClassifierLlm;
 import com.resurgent.tev.parser.classify.ClassifyException;
 import com.resurgent.tev.parser.classify.ClassifyLimits;
 import com.resurgent.tev.parser.classify.ClassifyService;
+import com.resurgent.tev.parser.classify.ClassifyTuning;
 import com.resurgent.tev.parser.classify.ClassifySummary;
 import com.resurgent.tev.parser.classify.LlmEnvironment;
+import com.resurgent.tev.parser.classify.LlmStats;
 import com.resurgent.tev.parser.classify.OpenRouterClassifierLlm;
+import com.resurgent.tev.parser.db.WorkspaceDatabase;
+import com.resurgent.tev.parser.db.WorkspaceRepository;
 import com.resurgent.tev.parser.discover.DiscoverService;
 import java.io.PrintWriter;
 import java.nio.file.Path;
@@ -19,7 +23,6 @@ import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Spec;
-
 /** {@code tev-parse classify}: Layer A disposition + about for main/helper Candidates. */
 @Command(
         name = "classify",
@@ -36,6 +39,22 @@ public final class ClassifyCommand implements Callable<Integer> {
             names = "--sheet",
             description = "Bind Layer B on this sheet (repeatable). Skips region layout and Layer A.")
     List<String> sheets;
+
+    @Option(
+            names = "--only-sheet",
+            description = "Send only this sheet (repeatable) to the model, plus any sheet its formulas"
+                    + " read. All cells and formula links stay loaded so formulas still resolve.")
+    List<String> onlySheets;
+
+    @Option(
+            names = "--cell-batch-size",
+            description = "Cells per Layer B call (default: " + ClassifyTuning.DEFAULT_CELL_BATCH_SIZE + ")")
+    Integer cellBatchSize;
+
+    @Option(
+            names = "--layer-a-batch-size",
+            description = "Candidates per Layer A call (default: " + ClassifyTuning.DEFAULT_LAYER_A_BATCH_SIZE + ")")
+    Integer layerABatchSize;
 
     @Option(
             names = "--parallelism",
@@ -66,6 +85,13 @@ public final class ClassifyCommand implements Callable<Integer> {
     }
 
     private void printUsage(PrintWriter out) {
+        printChatUsage(out);
+        // The whole run, every model it called: the decision model keeps its own counter, so the line
+        // above (the chat models only) does not include it.
+        com.resurgent.tev.parser.classify.UsageReport.lines(LlmStats.GLOBAL.usageRows()).forEach(out::println);
+    }
+
+    private void printChatUsage(PrintWriter out) {
         if (!(llm instanceof OpenRouterClassifierLlm open)) {
             return;
         }
@@ -109,8 +135,26 @@ public final class ClassifyCommand implements Callable<Integer> {
             err.println("invalid classify limits: " + e.getMessage());
             return 2;
         }
-        try {
-            ClassifyService service = new ClassifyService(llm, new DiscoverService(), limits);
+        java.io.PrintStream originalErr = System.err;
+        System.setErr(com.resurgent.tev.parser.TimestampedStream.wrap(originalErr));
+        LlmStats.GLOBAL.reset();
+        LlmEnvironment.recordSettings(LlmStats.GLOBAL);
+        LlmStats.GLOBAL.put("run", "cell_batch_size",
+                cellBatchSize != null ? cellBatchSize : ClassifyTuning.DEFAULT_CELL_BATCH_SIZE);
+        LlmStats.GLOBAL.put("run", "layer_a_batch_size",
+                layerABatchSize != null ? layerABatchSize : ClassifyTuning.DEFAULT_LAYER_A_BATCH_SIZE);
+        LlmStats.GLOBAL.put("run", "parallelism", limits.parallelism());
+        LlmStats.GLOBAL.putText("run", "scope",
+                onlySheets == null || onlySheets.isEmpty() ? "whole workbook" : String.join(", ", onlySheets));
+        System.err.println("[classify] models in order: " + LlmEnvironment.describeModels());
+        try (Heartbeat heartbeat = new Heartbeat(30)) {
+            ClassifyService service = new ClassifyService(llm, new DiscoverService(), limits)
+                    .withTuning(new ClassifyTuning(
+                            cellBatchSize != null ? cellBatchSize : ClassifyTuning.DEFAULT_CELL_BATCH_SIZE,
+                            layerABatchSize != null ? layerABatchSize : ClassifyTuning.DEFAULT_LAYER_A_BATCH_SIZE,
+                            limits.parallelism()))
+                    .withSheetScope(onlySheets)
+                    .withRegionTriageFromEnvironment();
             if (sheets != null && !sheets.isEmpty()) {
                 BindSummary bound = service.bindSheets(db, parseRunId, sheets);
                 out.printf(
@@ -133,10 +177,17 @@ public final class ClassifyCommand implements Callable<Integer> {
         } catch (ClassifyException e) {
             err.println("classify rejected: " + e.getMessage());
             return 3;
-        } catch (Exception e) {
-            String msg = e.getMessage() != null ? e.getMessage() : e.toString();
-            err.println("classify failed: " + msg);
-            return 1;
+        } finally {
+            System.setErr(originalErr);
+            persistStats(out, parseRunId);
         }
     }
+    /** Saves per-stage, per-model usage, settings, counts and timings; also after a failed run. */
+    private void persistStats(PrintWriter out, long parseRunId) {
+        if (LlmStats.GLOBAL.usageRows().isEmpty() && LlmStats.GLOBAL.timings().isEmpty()) {
+            return;
+        }
+        StatsRecorder.persist(out, db, parseRunId);
+    }
+
 }

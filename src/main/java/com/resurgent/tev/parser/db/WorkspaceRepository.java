@@ -2,6 +2,7 @@ package com.resurgent.tev.parser.db;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.resurgent.tev.parser.classify.HeaderGeometry;
 import com.resurgent.tev.parser.classify.InterpretationEvidence;
 import com.resurgent.tev.parser.classify.PacketDisposition;
 import com.resurgent.tev.parser.nomenclature.ProjectFactField;
@@ -391,22 +392,6 @@ public final class WorkspaceRepository {
         }
     }
 
-    public void insertFormulaReach(List<FormulaReach> rows) throws SQLException {
-        if (rows.isEmpty()) {
-            return;
-        }
-        try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO formula_reach (from_cell_id, to_cell_id, depth) VALUES (?, ?, ?)")) {
-            for (FormulaReach row : rows) {
-                ps.setLong(1, row.fromCellId());
-                ps.setLong(2, row.toCellId());
-                ps.setInt(3, row.depth());
-                ps.addBatch();
-            }
-            ps.executeBatch();
-        }
-    }
-
     public void insertFormulaGaps(List<FormulaGap> gaps) throws SQLException {
         if (gaps.isEmpty()) {
             return;
@@ -487,8 +472,8 @@ public final class WorkspaceRepository {
         }
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO cell_reading (parse_run_id, cell_id, kind, scale, unit, currency,"
-                        + " absolute_amount, type_source, refusal)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                        + " absolute_amount, type_source, refusal, scale_basis)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
             for (CellReading row : readings) {
                 ps.setLong(1, parseRunId);
                 ps.setLong(2, row.cellId());
@@ -499,6 +484,7 @@ public final class WorkspaceRepository {
                 setNullableString(ps, 7, row.absoluteAmount());
                 setNullableString(ps, 8, row.typeSource());
                 setNullableString(ps, 9, row.refusal());
+                setNullableString(ps, 10, row.scaleBasis());
                 ps.addBatch();
             }
             ps.executeBatch();
@@ -508,7 +494,7 @@ public final class WorkspaceRepository {
     public List<CellReading> selectCellReadingsForParseRun(long parseRunId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT parse_run_id, cell_id, kind, scale, unit, currency, absolute_amount,"
-                        + " type_source, refusal FROM cell_reading WHERE parse_run_id = ?"
+                        + " type_source, refusal, scale_basis FROM cell_reading WHERE parse_run_id = ?"
                         + " ORDER BY cell_id")) {
             ps.setLong(1, parseRunId);
             try (ResultSet rs = ps.executeQuery()) {
@@ -523,7 +509,8 @@ public final class WorkspaceRepository {
                             rs.getString("currency"),
                             rs.getString("absolute_amount"),
                             rs.getString("type_source"),
-                            rs.getString("refusal")));
+                            rs.getString("refusal"),
+                            rs.getString("scale_basis")));
                 }
                 return rows;
             }
@@ -986,6 +973,60 @@ public final class WorkspaceRepository {
         }
     }
 
+    /** Delete narrow candidates on just these worksheets, leaving other sheets' regions alone. */
+    public void deleteNarrowCandidatesForWorksheets(long parseRunId, java.util.Collection<Long> worksheetIds)
+            throws SQLException {
+        if (worksheetIds.isEmpty()) {
+            return;
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM candidate WHERE parse_run_id = ? AND candidate_kind != 'coverage_parent'"
+                        + " AND worksheet_id IN (" + placeholders(worksheetIds.size()) + ")")) {
+            ps.setLong(1, parseRunId);
+            int index = 2;
+            for (Long id : worksheetIds) {
+                ps.setLong(index++, id);
+            }
+            ps.executeUpdate();
+        }
+    }
+
+    /** Delete Layer A dispositions of candidates on just these worksheets. */
+    public void deletePacketDispositionsForWorksheets(long parseRunId, java.util.Collection<Long> worksheetIds)
+            throws SQLException {
+        if (worksheetIds.isEmpty()) {
+            return;
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM region_header_geometry WHERE parse_run_id = ? AND candidate_id IN"
+                        + " (SELECT candidate_id FROM candidate WHERE parse_run_id = ? AND worksheet_id IN ("
+                        + placeholders(worksheetIds.size()) + "))")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, parseRunId);
+            int index = 3;
+            for (Long id : worksheetIds) {
+                ps.setLong(index++, id);
+            }
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM packet_disposition WHERE parse_run_id = ? AND candidate_id IN"
+                        + " (SELECT candidate_id FROM candidate WHERE parse_run_id = ? AND worksheet_id IN ("
+                        + placeholders(worksheetIds.size()) + "))")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, parseRunId);
+            int index = 3;
+            for (Long id : worksheetIds) {
+                ps.setLong(index++, id);
+            }
+            ps.executeUpdate();
+        }
+    }
+
+    private static String placeholders(int n) {
+        return String.join(",", java.util.Collections.nCopies(n, "?"));
+    }
+
     public List<Long> selectCellIdsInBbox(
             long worksheetId, int minRow, int minCol, int maxRow, int maxCol)
             throws SQLException {
@@ -1009,6 +1050,11 @@ public final class WorkspaceRepository {
     }
 
     public void deletePacketDispositionsForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM region_header_geometry WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.executeUpdate();
+        }
         try (PreparedStatement ps = connection.prepareStatement(
                 "DELETE FROM packet_disposition WHERE parse_run_id = ?")) {
             ps.setLong(1, parseRunId);
@@ -1039,12 +1085,117 @@ public final class WorkspaceRepository {
         }
     }
 
+    public void insertHeaderGeometry(long parseRunId, HeaderGeometry geometry) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT OR REPLACE INTO region_header_geometry (parse_run_id, candidate_id, geometry_json,"
+                        + " created_at) VALUES (?, ?, ?, ?)")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, geometry.candidateId());
+            ps.setString(3, geometry.toJson());
+            ps.setString(4, Timestamps.now());
+            ps.executeUpdate();
+        }
+    }
+
+    /** Replaces the scale inferences of a parse run. */
+    public void replaceCellScaleInferences(long parseRunId, java.util.List<CellScaleInference> rows)
+            throws SQLException {
+        try (PreparedStatement delete = connection.prepareStatement(
+                "DELETE FROM cell_scale_inference WHERE parse_run_id = ?")) {
+            delete.setLong(1, parseRunId);
+            delete.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cell_scale_inference (parse_run_id, cell_id, scale, evidence, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?)")) {
+            for (CellScaleInference row : rows) {
+                ps.setLong(1, parseRunId);
+                ps.setLong(2, row.cellId());
+                ps.setString(3, row.scale());
+                ps.setString(4, row.evidence());
+                ps.setString(5, Timestamps.now());
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
+    }
+
+    /** Replaces the unit bases of a parse run: how each model-named unit is known. */
+    public void replaceCellUnitBases(long parseRunId, java.util.List<CellUnitBasis> rows) throws SQLException {
+        try (PreparedStatement delete = connection.prepareStatement(
+                "DELETE FROM cell_unit_basis WHERE parse_run_id = ?")) {
+            delete.setLong(1, parseRunId);
+            delete.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cell_unit_basis (parse_run_id, cell_id, unit, basis, evidence, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?)")) {
+            for (CellUnitBasis row : rows) {
+                ps.setLong(1, parseRunId);
+                ps.setLong(2, row.cellId());
+                ps.setString(3, row.unit());
+                ps.setString(4, row.basis());
+                ps.setString(5, row.evidence());
+                ps.setString(6, Timestamps.now());
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
+    }
+
+    public void deleteRegionTriageOpinions(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM region_triage_opinion WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.executeUpdate();
+        }
+    }
+
+    /** A decision model's opinion of one region; {@code escalated} when it sent a scratch region to Layer A. */
+    public void insertRegionTriageOpinion(long parseRunId, long candidateId, String model, String choice,
+            double confidence, Double pMain, Double pScratch, Double pOrphan, boolean escalated)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT OR REPLACE INTO region_triage_opinion (parse_run_id, candidate_id, model, choice,"
+                        + " confidence, p_main, p_scratch, p_orphan, escalated, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, candidateId);
+            ps.setString(3, model);
+            ps.setString(4, choice);
+            ps.setDouble(5, confidence);
+            ps.setObject(6, pMain);
+            ps.setObject(7, pScratch);
+            ps.setObject(8, pOrphan);
+            ps.setInt(9, escalated ? 1 : 0);
+            ps.setString(10, Timestamps.now());
+            ps.executeUpdate();
+        }
+    }
+
+    /** Header geometry by region, for the label resolver; regions without one are absent. */
+    public Map<Long, HeaderGeometry> selectHeaderGeometry(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT candidate_id, geometry_json FROM region_header_geometry WHERE parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                Map<Long, HeaderGeometry> byCandidate = new HashMap<>();
+                while (rs.next()) {
+                    long candidateId = rs.getLong("candidate_id");
+                    byCandidate.put(candidateId, HeaderGeometry.fromJson(candidateId, rs.getString("geometry_json")));
+                }
+                return byCandidate;
+            }
+        }
+    }
+
     public long insertPacketDisposition(PacketDisposition row) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO packet_disposition (parse_run_id, candidate_id, schedule_family,"
                         + " triage, relevance, row_labels, column_headers, packet_default_head,"
-                        + " about, parent_candidate_id, cheap_pass, created_at)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        + " about, parent_candidate_id, cheap_pass, created_at,"
+                        + " stated_scale, scale_evidence_cell)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, row.parseRunId());
             ps.setLong(2, row.candidateId());
@@ -1058,6 +1209,8 @@ public final class WorkspaceRepository {
             setLong(ps, 10, row.parentCandidateId());
             ps.setInt(11, row.cheapPass() ? 1 : 0);
             ps.setString(12, Timestamps.now());
+            ps.setString(13, row.statedScale());
+            ps.setString(14, row.scaleEvidenceCell());
             ps.executeUpdate();
             return generatedId(ps);
         }
@@ -1068,7 +1221,7 @@ public final class WorkspaceRepository {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT candidate_id, parse_run_id, schedule_family, triage, relevance,"
                         + " row_labels, column_headers, packet_default_head, about,"
-                        + " parent_candidate_id, cheap_pass"
+                        + " parent_candidate_id, cheap_pass, stated_scale, scale_evidence_cell"
                         + " FROM packet_disposition WHERE parse_run_id = ?"
                         + " ORDER BY disposition_id")) {
             ps.setLong(1, parseRunId);
@@ -1086,7 +1239,9 @@ public final class WorkspaceRepository {
                             rs.getString("packet_default_head"),
                             rs.getString("about"),
                             getNullableLong(rs, "parent_candidate_id"),
-                            rs.getInt("cheap_pass") == 1));
+                            rs.getInt("cheap_pass") == 1,
+                            rs.getString("stated_scale"),
+                            rs.getString("scale_evidence_cell")));
                 }
                 return rows;
             }
@@ -1462,6 +1617,19 @@ public final class WorkspaceRepository {
         }
     }
 
+    /** The ingested file's content hash for a parse run, or {@code ""} when unknown. */
+    public String selectSourceFileHashForParseRun(long parseRunId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT sf.file_hash FROM parse_run pr"
+                        + " JOIN source_file sf ON sf.source_file_id = pr.source_file_id"
+                        + " WHERE pr.parse_run_id = ?")) {
+            ps.setLong(1, parseRunId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() && rs.getString(1) != null ? rs.getString(1) : "";
+            }
+        }
+    }
+
     public List<WorksheetRef> selectWorksheetsForParseRun(long parseRunId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT worksheet_id, sheet_name, sheet_index, sheet_state"
@@ -1544,6 +1712,34 @@ public final class WorkspaceRepository {
                             rs.getString("merged_range")));
                 }
                 return rows;
+            }
+        }
+    }
+
+    /**
+     * Get a sample of text values from cells in a worksheet for content analysis.
+     * Useful for detecting industry, project type, etc. from cell contents.
+     *
+     * @param worksheetId worksheet to sample
+     * @param limit maximum number of cells to return
+     * @return list of non-null text values from cells
+     */
+    public List<String> selectCellTextsForWorksheet(long worksheetId, int limit) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT DISTINCT c.text_value"
+                        + " FROM cell c"
+                        + " WHERE c.worksheet_id = ? AND c.text_value IS NOT NULL"
+                        + " AND LENGTH(c.text_value) > 0"
+                        + " ORDER BY c.row_num, c.col_num"
+                        + " LIMIT ?")) {
+            ps.setLong(1, worksheetId);
+            ps.setInt(2, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<String> texts = new ArrayList<>();
+                while (rs.next()) {
+                    texts.add(rs.getString("text_value"));
+                }
+                return texts;
             }
         }
     }
@@ -2074,6 +2270,105 @@ public final class WorkspaceRepository {
             return Jsonb.fromJson(json, new TypeReference<List<String>>() {});
         } catch (JsonProcessingException e) {
             throw new SQLException("failed to parse string list", e);
+        }
+    }
+
+    /**
+     * Forget everything recorded for one stage of a parse run, so a re-run replaces the stage as a
+     * whole instead of leaving rows for models or stats the new run did not produce.
+     */
+    public void deleteStageStats(long parseRunId, String stage) throws SQLException {
+        for (String table : new String[] {"llm_usage", "run_stat", "run_timing"}) {
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "DELETE FROM " + table + " WHERE parse_run_id = ? AND stage = ?")) {
+                ps.setLong(1, parseRunId);
+                ps.setString(2, stage);
+                ps.executeUpdate();
+            }
+        }
+    }
+
+    /**
+     * One model's totals within one stage. Re-running a stage replaces its rows: the table
+     * describes the latest execution of each (stage, model).
+     */
+    public void recordLlmUsage(long parseRunId, String stage, String modelId, long calls, long failedCalls,
+            long failovers, long promptTokens, long completionTokens, Double costUsd, long costMissing,
+            long latencyMsTotal) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO llm_usage (parse_run_id, stage, model_id, calls, failed_calls, failovers,"
+                        + " prompt_tokens, completion_tokens, cost_usd, cost_missing, latency_ms_total)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        + " ON CONFLICT (parse_run_id, stage, model_id) DO UPDATE SET"
+                        + " calls = excluded.calls, failed_calls = excluded.failed_calls,"
+                        + " failovers = excluded.failovers, prompt_tokens = excluded.prompt_tokens,"
+                        + " completion_tokens = excluded.completion_tokens, cost_usd = excluded.cost_usd,"
+                        + " cost_missing = excluded.cost_missing,"
+                        + " latency_ms_total = excluded.latency_ms_total,"
+                        + " recorded_at = CURRENT_TIMESTAMP")) {
+            ps.setLong(1, parseRunId);
+            ps.setString(2, stage);
+            ps.setString(3, modelId);
+            ps.setLong(4, calls);
+            ps.setLong(5, failedCalls);
+            ps.setLong(6, failovers);
+            ps.setLong(7, promptTokens);
+            ps.setLong(8, completionTokens);
+            if (costUsd != null) {
+                ps.setDouble(9, costUsd);
+            } else {
+                ps.setNull(9, Types.DOUBLE);
+            }
+            ps.setLong(10, costMissing);
+            ps.setLong(11, latencyMsTotal);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Latest execution of a stage wins. */
+    public void recordRunTiming(long parseRunId, String stage, String startedAt, String finishedAt,
+            long durationMillis, Integer itemCount) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO run_timing (parse_run_id, stage, started_at, finished_at,"
+                        + " duration_millis, item_count)"
+                        + " VALUES (?, ?, ?, ?, ?, ?)"
+                        + " ON CONFLICT (parse_run_id, stage) DO UPDATE SET"
+                        + " started_at = excluded.started_at, finished_at = excluded.finished_at,"
+                        + " duration_millis = excluded.duration_millis, item_count = excluded.item_count,"
+                        + " recorded_at = CURRENT_TIMESTAMP")) {
+            ps.setLong(1, parseRunId);
+            ps.setString(2, stage);
+            ps.setString(3, startedAt);
+            ps.setString(4, finishedAt);
+            ps.setLong(5, durationMillis);
+            if (itemCount != null) {
+                ps.setInt(6, itemCount);
+            } else {
+                ps.setNull(6, Types.INTEGER);
+            }
+            ps.executeUpdate();
+        }
+    }
+
+    /** A setting or count for comparisons; exactly one of {@code num} and {@code text} is used. */
+    public void recordRunStat(long parseRunId, String stage, String name, Double num, String text)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO run_stat (parse_run_id, stage, name, value_num, value_text)"
+                        + " VALUES (?, ?, ?, ?, ?)"
+                        + " ON CONFLICT (parse_run_id, stage, name) DO UPDATE SET"
+                        + " value_num = excluded.value_num, value_text = excluded.value_text,"
+                        + " recorded_at = CURRENT_TIMESTAMP")) {
+            ps.setLong(1, parseRunId);
+            ps.setString(2, stage);
+            ps.setString(3, name);
+            if (num != null) {
+                ps.setDouble(4, num);
+            } else {
+                ps.setNull(4, Types.DOUBLE);
+            }
+            ps.setString(5, text);
+            ps.executeUpdate();
         }
     }
 

@@ -29,6 +29,28 @@ final class LayerAResponseParserTest {
     }
 
     @Test
+    void readsTheStatedScaleAndItsCell() {
+        LayerAJudgment judgment = LayerAResponseParser.parse("""
+                {"scheduleFamily": "pnl", "triage": "main", "relevance": "primary",
+                 "rowLabels": [], "columnHeaders": [], "packetDefaultHead": null,
+                 "statedScale": "Lakh", "scaleCell": " j6 ", "about": "Projected income statement."}
+                """);
+        assertThat(judgment.statedScale()).isEqualTo("lakh");
+        assertThat(judgment.scaleEvidenceCell()).isEqualTo("J6");
+    }
+
+    @Test
+    void anUnknownOrMissingScaleIsNull() {
+        LayerAJudgment unknown = LayerAResponseParser.parse("""
+                {"scheduleFamily": "pnl", "triage": "main", "relevance": "primary",
+                 "rowLabels": [], "columnHeaders": [], "packetDefaultHead": null,
+                 "statedScale": "zillion", "scaleCell": null, "about": "Projected income statement."}
+                """);
+        assertThat(unknown.statedScale()).isNull();
+        assertThat(unknown.scaleEvidenceCell()).isNull();
+    }
+
+    @Test
     void rejectsMissingAbout() {
         assertThatThrownBy(() -> LayerAResponseParser.parse("""
                 {
