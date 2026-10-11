@@ -25,6 +25,11 @@ public final class DocumentIngestService {
 
     public static final String PARSER_VERSION = "0.1.0-doc-m1";
 
+    static {
+        System.setProperty("java.awt.headless", "true");
+        System.setProperty("apple.awt.UIElement", "true");
+    }
+
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     public record IngestRequest(

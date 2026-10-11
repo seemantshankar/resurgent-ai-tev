@@ -18,6 +18,10 @@ public final class TevDocMain {
     }
 
     public static void main(String[] args) {
+        // PDF page rasters go through Java2D; without headless the AWT toolkit
+        // briefly registers a Dock app on macOS.
+        System.setProperty("java.awt.headless", "true");
+        System.setProperty("apple.awt.UIElement", "true");
         System.exit(commandLine().execute(args));
     }
 }

@@ -34,9 +34,16 @@ public final class PdfLayoutExtractor {
     /** Render DPI for page images used by the UI + later OCR. */
     public static final int PAGE_RENDER_DPI = 300;
 
+    static {
+        // Keep Java2D page rasterization off the macOS Dock.
+        System.setProperty("java.awt.headless", "true");
+        System.setProperty("apple.awt.UIElement", "true");
+    }
+
     public record PdfPageImage(int pageIndex, byte[] png, int widthPx, int heightPx) {}
 
-    public record Extraction(List<PageLayout> pages, List<PdfPageImage> images, int pageCount) {}
+    public record Extraction(List<PageLayout> pages, List<PdfPageImage> images, int pageCount,
+            boolean anyText) {}
 
     /** Extract layout + page rasters for every page. */
     public Extraction extract(java.nio.file.Path pdfPath) throws IOException {
@@ -45,6 +52,7 @@ public final class PdfLayoutExtractor {
             PDFRenderer renderer = new PDFRenderer(doc);
             List<PageLayout> pages = new ArrayList<>(pageCount);
             List<PdfPageImage> images = new ArrayList<>(pageCount);
+            boolean anyText = false;
             for (int i = 0; i < pageCount; i++) {
                 PDPage page = doc.getPage(i);
                 BufferedImage image = renderer.renderImageWithDPI(i, PAGE_RENDER_DPI,
@@ -53,10 +61,13 @@ public final class PdfLayoutExtractor {
                 images.add(new PdfPageImage(i + 1, png, image.getWidth(), image.getHeight()));
 
                 List<LayoutLine> lines = extractLines(doc, i + 1, page);
+                if (!lines.isEmpty()) {
+                    anyText = true;
+                }
                 pages.add(buildPageLayout(i + 1, page, image.getWidth(), image.getHeight(),
                         lines));
             }
-            return new Extraction(pages, images, pageCount);
+            return new Extraction(pages, images, pageCount, anyText);
         }
     }
 

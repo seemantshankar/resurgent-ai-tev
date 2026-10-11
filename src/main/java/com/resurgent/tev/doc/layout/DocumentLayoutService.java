@@ -105,13 +105,19 @@ public final class DocumentLayoutService {
             }
         }
 
-        docs.updateVersionPageCount(versionId, extraction.pageCount(), false);
+        // Scanned PDFs have page rasters but no embedded text: keep ocr_required and
+        // do not pretend digital layout succeeded.
+        boolean ocrRequired = !extraction.anyText() || version.ocrRequired();
+        String extractorId = extraction.anyText()
+                ? PdfLayoutExtractor.EXTRACTOR_ID
+                : "pdf-scan-page-raster";
+        docs.updateVersionPageCount(versionId, extraction.pageCount(), ocrRequired);
         docs.updateVersionIngestStatus(versionId, "layout_ok");
         recordLayoutRun(docs, repo, version, extraction.pageCount(), blocks, spans, tables,
-                PdfLayoutExtractor.EXTRACTOR_ID);
+                extractorId);
 
         return new LayoutResult(versionId, extraction.pageCount(), blocks, spans, tables,
-                false, PdfLayoutExtractor.EXTRACTOR_ID);
+                ocrRequired, extractorId);
     }
 
     private static int writeTable(DocumentRepository docs, long blockId, LayoutBlock block)
