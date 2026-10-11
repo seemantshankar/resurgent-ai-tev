@@ -20,6 +20,10 @@ public final class DocumentRepository {
 
     private final Connection connection;
 
+    /**
+     * Uses the supplied connection for all operations. The caller owns its lifecycle
+     * and transaction boundaries; repository methods do not commit or roll back.
+     */
     public DocumentRepository(Connection connection) {
         this.connection = connection;
     }
@@ -28,6 +32,12 @@ public final class DocumentRepository {
         return connection;
     }
 
+    /**
+     * Creates an active logical document with creation and update timestamps.
+     *
+     * @return the generated document ID
+     * @throws SQLException if the insert fails or yields no generated key
+     */
     public long insertDocument(long mandateId, String logicalName, String docFamily,
             String docTypeCode) throws SQLException {
         String now = Timestamps.now();
@@ -47,6 +57,12 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Returns the lowest ID matching mandate and logical name, excluding documents
+     * marked deleted_by_analyst, or empty when none match.
+     *
+     * @throws SQLException if the lookup fails
+     */
     public Optional<Long> findDocumentId(long mandateId, String logicalName) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT document_id FROM document WHERE mandate_id = ? AND logical_name = ?"
@@ -71,6 +87,11 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Returns the mandate owning the document.
+     *
+     * @throws SQLException if the document is unknown or the lookup fails
+     */
     public long findMandateId(long documentId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT mandate_id FROM document WHERE document_id = ?")) {
@@ -84,6 +105,12 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Updates the current-version pointer and document timestamp. Does nothing for
+     * an unknown document ID; does not check whether the version belongs to it.
+     *
+     * @throws SQLException if the update fails
+     */
     public void setCurrentVersion(long documentId, long documentVersionId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "UPDATE document SET current_version_id = ?, updated_at = ? WHERE document_id = ?")) {
@@ -94,6 +121,12 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Finds a version with matching bytes within one logical document, or returns
+     * empty when no version matches.
+     *
+     * @throws SQLException if the lookup fails
+     */
     public Optional<Long> findVersionIdByHash(long documentId, String fileHash)
             throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
@@ -126,6 +159,14 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Inserts a version with ingested status and the current ingest timestamp.
+     * Does not change the logical document's current-version pointer.
+     *
+     * @return the generated version ID
+     * @throws SQLException if constraints reject the version, the insert otherwise
+     *         fails, or no generated key is returned
+     */
     public long insertDocumentVersion(long documentId, String versionLabel, String fileName,
             String fileHash, String fileExt, String fileRole, Integer pageCount,
             boolean ocrRequired, Long sourceFileId, String rawMetadata) throws SQLException {
@@ -159,6 +200,12 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Returns stored version metadata, preserving absent page count and source
+     * file ID as null, or empty if the version does not exist.
+     *
+     * @throws SQLException if the lookup fails
+     */
     public Optional<DocumentVersionRow> findVersion(long documentVersionId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT document_version_id, document_id, version_label, file_name, file_hash,"
@@ -211,6 +258,16 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Creates a page row without writing an image file.
+     *
+     * @param pageIndex one-based page number within the version
+     * @param widthPx raster width in pixels, or null when unknown
+     * @param heightPx raster height in pixels, or null when unknown
+     * @param imagePath path relative to the blob root, or null when no raster is stored
+     * @return the generated page ID
+     * @throws SQLException if the insert fails or yields no generated key
+     */
     public long insertPage(long documentVersionId, int pageIndex, Integer widthPx,
             Integer heightPx, String imagePath) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
@@ -249,6 +306,13 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Deletes the version's provenance, table cells/grids, spans, blocks, and pages.
+     * Leaves the version row and blob files intact. Uses the caller's transaction;
+     * a failure can leave partial deletions when auto-commit is enabled.
+     *
+     * @throws SQLException if any deletion fails
+     */
     public void deleteLayoutForVersion(long documentVersionId) throws SQLException {
         // provenance_doc → spans/tables → blocks → pages. FKs are ON, so children first.
         try (PreparedStatement ps = connection.prepareStatement(
@@ -294,6 +358,17 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Inserts a block marked as not handwritten.
+     *
+     * @param blockIndex zero-based block position on the page
+     * @param x0 left box coordinate in PDF points from the page's top-left, or null
+     * @param y0 top box coordinate in PDF points from the page's top-left, or null
+     * @param x1 right box coordinate in PDF points from the page's top-left, or null
+     * @param y1 bottom box coordinate in PDF points from the page's top-left, or null
+     * @return the generated block ID
+     * @throws SQLException if the insert fails or yields no generated key
+     */
     public long insertBlock(long pageId, int blockIndex, String blockKind,
             Double x0, Double y0, Double x1, Double y1, String textRaw, String textNorm,
             Integer readingOrder, String extractor) throws SQLException {
@@ -323,6 +398,14 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Inserts a text span with nullable box coordinates in PDF points from the
+     * page's top-left and optional confidence.
+     *
+     * @param spanIndex zero-based span position within the block
+     * @return the generated span ID
+     * @throws SQLException if the insert fails or yields no generated key
+     */
     public long insertSpan(long blockId, int spanIndex, String textRaw,
             Double x0, Double y0, Double x1, Double y1, Double confidence) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
@@ -342,6 +425,12 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Inserts table dimensions and the number of leading header rows for a block.
+     *
+     * @return the generated grid ID
+     * @throws SQLException if the insert fails or yields no generated key
+     */
     public long insertTableGrid(long blockId, int nRows, int nCols, int headerRowCount)
             throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
@@ -357,6 +446,15 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Inserts an unmerged table cell with nullable box coordinates in PDF points
+     * from the page's top-left. Row and column spans are both one.
+     *
+     * @param rowIndex zero-based row position
+     * @param colIndex zero-based column position
+     * @return the generated cell ID
+     * @throws SQLException if the insert fails or yields no generated key
+     */
     public long insertTableCell(long tableGridId, int rowIndex, int colIndex, String textRaw,
             Double x0, Double y0, Double x1, Double y1, boolean isHeader) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
@@ -378,6 +476,14 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Links an entity to a verbatim source quote and optional layout anchors.
+     * Stores the supplied offsets, geometry, and confidence without deriving them;
+     * marks the provenance as not derived and leaves its quote hash unset.
+     *
+     * @return the generated provenance ID
+     * @throws SQLException if the insert fails or yields no generated key
+     */
     public long insertProvenance(String entityType, long entityId, long documentVersionId,
             Long pageId, Long blockId, Long spanId, Long tableCellId,
             Double x0, Double y0, Double x1, Double y1,
@@ -418,6 +524,14 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Creates a directed relation from one document version to another with the
+     * current timestamp. An existing identical edge is rejected by the database.
+     *
+     * @return the generated relation ID
+     * @throws SQLException if the insert fails, including for a duplicate edge,
+     *         or yields no generated key
+     */
     public long insertRelation(long fromVersionId, long toVersionId, String relationKind,
             String note) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
@@ -435,6 +549,12 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Returns page IDs in page-index order, or an empty list when the version
+     * has no page rows.
+     *
+     * @throws SQLException if the query fails
+     */
     public List<Long> selectPageIds(long documentVersionId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT page_id FROM page WHERE document_version_id = ? ORDER BY page_index")) {
@@ -461,7 +581,10 @@ public final class DocumentRepository {
         }
     }
 
-    /** True when this version already has a completed layout graph. */
+    /**
+     * Returns true when the version is marked layout_ok and has at least one
+     * page row. Text blocks and image files are not checked.
+     */
     public boolean hasLayout(long documentVersionId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT ingest_status FROM document_version WHERE document_version_id = ?")) {
@@ -511,6 +634,12 @@ public final class DocumentRepository {
     /**
      * Copy page/block/span/table rows from a sibling version of the same file
      * hash. Image paths stay shared under {@code blobs/{hash}/…}.
+     * The caller must ensure matching file hashes and clear destination pages.
+     * Does not copy provenance or update version status. Uses the caller's
+     * transaction, so auto-commit can leave a partial clone on failure.
+     *
+     * @return the number of page rows copied
+     * @throws SQLException if any insert fails, including page-index conflicts
      */
     public int cloneLayout(long fromVersionId, long toVersionId) throws SQLException {
         int pages = 0;

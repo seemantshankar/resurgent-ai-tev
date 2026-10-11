@@ -30,6 +30,12 @@ public final class DocLayoutCommand implements Callable<Integer> {
     @Spec
     CommandSpec spec;
 
+    /**
+     * Ensures layout for the configured version and prints the result.
+     *
+     * @return 0 on success, 3 for an IllegalArgumentException from the operation,
+     *         or 1 for another caught exception
+     */
     @Override
     public Integer call() {
         var out = spec.commandLine().getOut();

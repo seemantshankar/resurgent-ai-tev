@@ -26,6 +26,10 @@ public enum DocumentFileKind {
         return defaultFileRole;
     }
 
+    /**
+     * Classifies the filename extension without reading the file, ignoring case.
+     * Recognizes PDF, PNG, JPG/JPEG, TIF/TIFF, and WebP; otherwise returns UNKNOWN.
+     */
     public static DocumentFileKind fromPath(Path path) {
         String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
         if (name.endsWith(".pdf")) {
@@ -38,6 +42,10 @@ public enum DocumentFileKind {
         return UNKNOWN;
     }
 
+    /**
+     * Returns the filename suffix from its last dot, preserving case and the dot,
+     * or an empty string when there is no dot.
+     */
     public static String fileExt(Path path) {
         String name = path.getFileName().toString();
         int dot = name.lastIndexOf('.');
@@ -60,6 +68,10 @@ public enum DocumentFileKind {
         };
     }
 
+    /**
+     * Maps a normalized role to its default document family. Identity maps to
+     * certificate; unmapped roles, including fm_workbook, map to other.
+     */
     public static String defaultDocFamily(String fileRole) {
         return switch (fileRole) {
             case "agreement" -> "agreement";

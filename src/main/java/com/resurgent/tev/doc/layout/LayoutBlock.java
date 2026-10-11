@@ -30,6 +30,10 @@ public record LayoutBlock(
         return new LayoutBlock("table", bbox, textRaw, textNorm, lines, tableRows, rowBoxes);
     }
 
+    /**
+     * Returns true only for a table-kind block with non-null table rows;
+     * an empty row list still qualifies.
+     */
     public boolean isTable() {
         return "table".equals(blockKind) && tableRows != null;
     }

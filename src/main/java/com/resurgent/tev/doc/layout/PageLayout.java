@@ -7,6 +7,11 @@ import java.util.List;
 public record PageLayout(int pageIndex, double widthPt, double heightPt,
         Integer widthPx, Integer heightPx, List<LayoutBlock> blocks) {
 
+    /**
+     * Copies the block list into an unmodifiable list.
+     *
+     * @throws NullPointerException if the list or any block is null
+     */
     public PageLayout {
         blocks = List.copyOf(blocks);
     }

@@ -32,6 +32,22 @@ public final class DocumentLayoutService {
             boolean ocrRequired,
             String extractor) {}
 
+    /**
+     * Ensures a version has layout and returns its page, block, span, and table
+     * counts with OCR status and an extractor identifier. Opens and migrates the
+     * workspace; a version marked layout_ok with page rows is reused. Otherwise,
+     * layout from matching bytes is cloned when available, sharing image paths.
+     *
+     * <p>When extraction is needed, existing layout and provenance rows are deleted.
+     * PDFs produce text layout and selected page rasters; other files produce a
+     * single image placeholder requiring OCR. Writes are not wrapped in a transaction,
+     * so failed extraction or persistence can leave partial database or blob changes.
+     *
+     * @throws IllegalArgumentException if the version does not exist
+     * @throws IOException if a required original blob is missing or reading,
+     *         rendering, encoding, or storing images fails
+     * @throws java.sql.SQLException if workspace or layout database operations fail
+     */
     public LayoutResult layout(long documentVersionId, Path dbPath, BlobStore blobStore)
             throws Exception {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
@@ -76,6 +92,12 @@ public final class DocumentLayoutService {
         }
     }
 
+    /**
+     * Counts persisted layout rows and infers the extractor identifier from block
+     * count and the supplied version's OCR flag; does not read a recorded extractor.
+     *
+     * @throws java.sql.SQLException if querying the layout fails
+     */
     private static LayoutResult existingResult(DocumentRepository docs,
             DocumentRepository.DocumentVersionRow version) throws Exception {
         int pages = docs.countPages(version.documentVersionId());
@@ -180,6 +202,14 @@ public final class DocumentLayoutService {
                 ocrRequired, extractorId);
     }
 
+    /**
+     * Writes one table grid, treating the first row as a header. Cell boxes divide
+     * each row box evenly by the maximum column count, falling back to the block box
+     * when a row box is absent.
+     *
+     * @return one, the number of grids inserted
+     * @throws java.sql.SQLException if inserting the grid or cells fails
+     */
     private static int writeTable(DocumentRepository docs, long blockId, LayoutBlock block)
             throws Exception {
         List<List<String>> rows = block.tableRows();
@@ -200,6 +230,12 @@ public final class DocumentLayoutService {
         return 1;
     }
 
+    /**
+     * Creates or updates the shared layout run for the source file. Does nothing
+     * when the version has no source file.
+     *
+     * @throws java.sql.SQLException if finding the mandate or persisting the run fails
+     */
     private static void recordLayoutRun(DocumentRepository docs, WorkspaceRepository repo,
             DocumentRepository.DocumentVersionRow version, int pages, int blocks, int spans,
             int tables, String extractor) throws Exception {
@@ -221,6 +257,13 @@ public final class DocumentLayoutService {
         }
     }
 
+    /**
+     * Stores one page requiring OCR, with no text blocks. If the page image is
+     * absent, copies the original bytes to the page's PNG path without transcoding.
+     *
+     * @throws IOException if preparing or copying the page image fails
+     * @throws java.sql.SQLException if persisting the page, version, or run fails
+     */
     private LayoutResult layoutImagePlaceholder(DocumentRepository.DocumentVersionRow version,
             Path original, DocumentRepository docs, WorkspaceRepository repo, BlobStore blobStore)
             throws Exception {

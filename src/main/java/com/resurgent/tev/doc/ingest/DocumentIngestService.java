@@ -55,6 +55,29 @@ public final class DocumentIngestService {
             Path blobPath,
             Path dbPath) {}
 
+    /**
+     * Ingests a PDF or supported image into a workspace, creating its logical document
+     * when needed. Matching bytes reuse a version within the same logical document;
+     * a new version becomes current, receives page placeholders, and is linked to
+     * any other versions with the same hash.
+     *
+     * <p>A null or blank label defaults to {@code v1}; null or blank role and family
+     * use defaults
+     * for the extension and role, respectively. Images require OCR; PDFs use a
+     * sample of at most three pages to estimate that need. Page images are not
+     * created here. Reuse retains stored metadata and does not restore missing blobs.
+     *
+     * <p>Opens and migrates the workspace. Ingest database writes are committed
+     * together and rollback is attempted on failure; copied blobs can remain.
+     *
+     * @return stored identity, page/OCR metadata, paths, and whether a version was reused
+     * @throws IllegalArgumentException if the file extension is unsupported
+     * @throws IOException if the input is not a regular file, or reading the input,
+     *         probing the PDF, or storing its original bytes fails
+     * @throws SQLException if workspace or ingest database operations fail
+     * @throws RuntimeException if creating the logical document fails with a database error
+     * @throws NoSuchAlgorithmException if SHA-256 is unavailable
+     */
     public IngestResult ingest(IngestRequest request, Path dbPath, BlobStore blobStore)
             throws Exception {
         Path file = request.file().toAbsolutePath().normalize();
@@ -151,6 +174,11 @@ public final class DocumentIngestService {
         }
     }
 
+    /**
+     * Finds or creates the ingest run attached to a reused version's source file.
+     *
+     * @throws SQLException if the version has no source file or run persistence fails
+     */
     private static long ensureParseRun(WorkspaceRepository repo,
             DocumentRepository.DocumentVersionRow row, long mandateId, String fileHash)
             throws SQLException {
@@ -239,6 +267,12 @@ public final class DocumentIngestService {
 
     private record PageProbe(int pageCount, boolean ocrRequired) {}
 
+    /**
+     * Returns at least one page and an OCR estimate for PDFs; other kinds are
+     * represented as one page requiring OCR without decoding the image.
+     *
+     * @throws IOException if the PDF cannot be opened or closed
+     */
     private static PageProbe probePages(Path file, DocumentFileKind kind) throws IOException {
         if (kind == DocumentFileKind.PDF) {
             try (org.apache.pdfbox.pdmodel.PDDocument doc =
@@ -252,6 +286,10 @@ public final class DocumentIngestService {
         return new PageProbe(1, true);
     }
 
+    /**
+     * Estimates OCR need from the first three pages: returns true for no pages,
+     * fewer than 16 stripped text characters, or an IOException during text extraction.
+     */
     private static boolean hasNoTextLayer(org.apache.pdfbox.pdmodel.PDDocument doc)
             throws IOException {
         if (doc.getNumberOfPages() == 0) {

@@ -51,6 +51,10 @@ public final class PdfLayoutExtractor {
     /**
      * Text layout for every page. Page PNGs are produced only for pages that need
      * pixels (scan / embedded images / almost no text) — not for pure text pages.
+     *
+     * @return layouts for all pages with one-based indexes and only the selected
+     *         300 DPI PNGs; anyText is true when at least one text line was collected
+     * @throws IOException if opening, reading, rendering, encoding, or closing the PDF fails
      */
     public Extraction extractLayout(java.nio.file.Path pdfPath) throws IOException {
         return extract(pdfPath, false);
@@ -58,15 +62,20 @@ public final class PdfLayoutExtractor {
 
     /**
      * Force 300 DPI rasters for every page (debug / full UI export).
+     *
+     * @return text layouts and PNGs for every page, using one-based page indexes
+     * @throws IOException if opening, reading, rendering, encoding, or closing the PDF fails
      */
     public Extraction extractWithPageImages(java.nio.file.Path pdfPath) throws IOException {
         return extract(pdfPath, true);
     }
 
     /**
-     * Decide whether one page needs a raster before we know its text:
-     * image-only pages, pages with image XObjects (photos, scans-as-images,
-     * chart bitmaps), or pages with almost no extractable text.
+     * Requests a raster for fewer than 40 extracted characters or a directly
+     * referenced image XObject. Exceptions inspecting resources also request a raster.
+     *
+     * @param textCharCount total character count of the page's extracted lines
+     * @return the raster decision and its reason
      */
     public static PageNeedsRaster pageNeedsRaster(PDPage page, int textCharCount) {
         if (textCharCount < MIN_CHARS_FOR_TEXT_PAGE) {
@@ -82,6 +91,10 @@ public final class PdfLayoutExtractor {
     /** Below this many extracted characters a page is treated as scan/graphic. */
     public static final int MIN_CHARS_FOR_TEXT_PAGE = 40;
 
+    /**
+     * Checks the page's direct XObjects for an image. Missing resources return
+     * false; exceptions while inspecting resources conservatively return true.
+     */
     private static boolean hasImageXObject(PDPage page) {
         try {
             var resources = page.getResources();
@@ -172,6 +185,10 @@ public final class PdfLayoutExtractor {
         return new PageLayout(pageIndex, widthPt, heightPt, widthPx, heightPx, blocks);
     }
 
+    /**
+     * Returns the upper median of a nonempty list of line heights, each clamped
+     * to at least one PDF point.
+     */
     private static double medianLineHeight(List<LayoutLine> lines) {
         List<Double> heights = new ArrayList<>(lines.size());
         for (LayoutLine line : lines) {
@@ -181,7 +198,10 @@ public final class PdfLayoutExtractor {
         return heights.get(heights.size() / 2);
     }
 
-    /** Cluster consecutive lines when the vertical gap stays under a paragraph threshold. */
+    /**
+     * Groups lines in top-to-bottom, then left-to-right order, splitting on
+     * vertical gaps or sufficiently large indents accompanied by a smaller gap.
+     */
     private static List<List<LayoutLine>> groupLines(List<LayoutLine> lines, double medianHeight) {
         List<LayoutLine> sorted = new ArrayList<>(lines);
         sorted.sort(Comparator.comparingDouble(LayoutLine::yCenter)
@@ -249,8 +269,11 @@ public final class PdfLayoutExtractor {
     }
 
     /**
-     * Table heuristic: every line has the same count of word clusters (≥2), and those
-     * clusters share column x-origins within a small tolerance.
+     * Recognizes at least two rows with at least two spans each and aligned
+     * column x-origins. Later rows may differ from the first row by one span;
+     * output uses the first row's width, padding missing cells and dropping extras.
+     *
+     * @return trimmed cell text by row, or null when the table heuristic fails
      */
     private static List<List<String>> tryTableRows(List<LayoutLine> group) {
         if (group.size() < 2) {
@@ -305,6 +328,10 @@ public final class PdfLayoutExtractor {
         return table;
     }
 
+    /**
+     * Collapses Java regex whitespace runs to a single space and trims the result;
+     * returns null for null input.
+     */
     public static String normalizeWhitespace(String text) {
         return text == null ? null : text.replaceAll("\\s+", " ").trim();
     }

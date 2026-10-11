@@ -13,10 +13,17 @@ public final class TevDocMain {
 
     private TevDocMain() {}
 
+    /**
+     * Creates a fresh CLI with ingest and layout subcommands without executing it.
+     */
     public static CommandLine commandLine() {
         return new CommandLine(new TevDocMain());
     }
 
+    /**
+     * Enables headless AWT, executes the CLI arguments, and terminates the JVM
+     * with the command's exit code.
+     */
     public static void main(String[] args) {
         // PDF page rasters go through Java2D; without headless the AWT toolkit
         // briefly registers a Dock app on macOS.

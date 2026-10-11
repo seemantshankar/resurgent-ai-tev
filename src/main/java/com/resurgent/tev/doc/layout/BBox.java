@@ -3,6 +3,10 @@ package com.resurgent.tev.doc.layout;
 /** Axis-aligned box in PDF user space (points), origin top-left of the page. */
 public record BBox(double x0, double y0, double x1, double y1) {
 
+    /**
+     * Normalizes reversed endpoints independently on each axis. Coordinates use
+     * PDF points with the page's top-left as origin.
+     */
     public BBox {
         if (x1 < x0) {
             double t = x0;

@@ -25,11 +25,18 @@ public final class BlobStore {
         return root;
     }
 
-    /** Relative path stored in {@code page.image_path} / version metadata. */
+    /**
+     * Returns the original blob path relative to the root, lowercasing the extension
+     * and adding a leading dot if needed. A null or blank extension is omitted.
+     */
     public String originalRelativePath(String sha256, String ext) {
         return sha256 + "/original" + normalizeExt(ext);
     }
 
+    /**
+     * Returns the path relative to the blob root for a one-based page index,
+     * using at least three digits in the PNG filename. Does not create a file.
+     */
     public String pageRelativePath(String sha256, int pageIndex) {
         return String.format(Locale.ROOT, "%s/pages/p%03d.png", sha256, pageIndex);
     }
@@ -44,7 +51,10 @@ public final class BlobStore {
 
     /**
      * Writes immutable original bytes. If the blob already exists it is left alone
-     * (same sha256 ⇒ same content).
+     * (same sha256 ⇒ same content). The supplied hash is not checked against the bytes.
+     *
+     * @return the existing or newly copied original's path
+     * @throws IOException if creating directories or copying the source fails
      */
     public Path storeOriginal(String sha256, String ext, Path source) throws IOException {
         Path target = originalPath(sha256, ext);
@@ -56,6 +66,15 @@ public final class BlobStore {
         return target;
     }
 
+    /**
+     * Replaces the page image with the supplied bytes and returns its path.
+     * Creates parent directories and attempts to remove other PNGs whose names
+     * start with the same formatted page prefix. Individual deletion failures
+     * are ignored. Replacement uses an atomic move when supported.
+     *
+     * @param pageIndex one-based page index
+     * @throws IOException if directory creation/listing, writing, or replacement fails
+     */
     public Path storePagePng(String sha256, int pageIndex, byte[] pngBytes) throws IOException {
         Path target = pagePath(sha256, pageIndex);
         Files.createDirectories(target.getParent());
