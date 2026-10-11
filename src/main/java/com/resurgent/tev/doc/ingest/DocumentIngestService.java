@@ -85,55 +85,68 @@ public final class DocumentIngestService {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
             WorkspaceRepository repo = new WorkspaceRepository(db.connection());
             DocumentRepository docs = new DocumentRepository(db.connection());
+            db.connection().setAutoCommit(false);
+            try {
+                Optional<Long> existingDoc = docs.findDocumentId(request.mandateId(),
+                        request.logicalName());
+                long documentId = existingDoc.orElseGet(() -> {
+                    try {
+                        return docs.insertDocument(request.mandateId(), request.logicalName(),
+                                docFamily, null);
+                    } catch (SQLException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
 
-            Optional<Long> existingDoc = docs.findDocumentId(request.mandateId(),
-                    request.logicalName());
-            long documentId = existingDoc.orElseGet(() -> {
-                try {
-                    return docs.insertDocument(request.mandateId(), request.logicalName(),
-                            docFamily, null);
-                } catch (SQLException e) {
-                    throw new RuntimeException(e);
+                Optional<Long> existingVersion = docs.findVersionIdByHash(documentId, fileHash);
+                if (existingVersion.isPresent()) {
+                    DocumentRepository.DocumentVersionRow row =
+                            docs.findVersion(existingVersion.get()).orElseThrow();
+                    Path blob = blobStore.originalPath(fileHash, row.fileExt());
+                    long parseRunId = ensureParseRun(repo, row, request.mandateId(), fileHash);
+                    db.connection().commit();
+                    return new IngestResult(documentId, row.documentVersionId(), row.sourceFileId(),
+                            parseRunId, fileHash, row.fileName(), row.fileExt(), row.fileRole(),
+                            row.pageCount() == null ? 0 : row.pageCount(), row.ocrRequired(),
+                            true, blob, dbPath.toAbsolutePath().normalize());
                 }
-            });
 
-            Optional<Long> existingVersion = docs.findVersionIdByHash(documentId, fileHash);
-            if (existingVersion.isPresent()) {
-                DocumentRepository.DocumentVersionRow row =
-                        docs.findVersion(existingVersion.get()).orElseThrow();
-                Path blob = blobStore.originalPath(fileHash, row.fileExt());
-                long parseRunId = ensureParseRun(repo, row, request.mandateId(), fileHash);
-                return new IngestResult(documentId, row.documentVersionId(), row.sourceFileId(),
-                        parseRunId, fileHash, row.fileName(), row.fileExt(), row.fileRole(),
-                        row.pageCount() == null ? 0 : row.pageCount(), row.ocrRequired(),
-                        true, blob, dbPath.toAbsolutePath().normalize());
+                String now = Timestamps.now();
+                String rawMetadata = writeMetadata(kind, file);
+                long sourceFileId = ensureSourceFile(repo, request.mandateId(), file, fileHash,
+                        kind, rawMetadata, now);
+                Path blobPath = blobStore.storeOriginal(fileHash, fileExt, file);
+
+                PageProbe probe = probePages(file, kind);
+                long documentVersionId = docs.insertDocumentVersion(documentId, versionLabel,
+                        file.getFileName().toString(), fileHash, fileExt, fileRole, probe.pageCount(),
+                        probe.ocrRequired(), sourceFileId, rawMetadata);
+
+                // Page placeholders — layout fills geometry and text.
+                for (int i = 1; i <= probe.pageCount(); i++) {
+                    docs.insertPage(documentVersionId, i, null, null,
+                            blobStore.pageRelativePath(fileHash, i));
+                }
+                docs.setCurrentVersion(documentId, documentVersionId);
+                docs.touchDocument(documentId);
+
+                long parseRunId = ensureParseRun(repo, sourceFileId, request.mandateId(),
+                        "{\"stage\":\"ingest\",\"document_version_id\":" + documentVersionId + "}");
+
+                db.connection().commit();
+                return new IngestResult(documentId, documentVersionId, sourceFileId, parseRunId,
+                        fileHash, file.getFileName().toString(), fileExt, fileRole, probe.pageCount(),
+                        probe.ocrRequired(), false, blobPath, dbPath.toAbsolutePath().normalize());
+            } catch (Exception e) {
+                try {
+                    db.connection().rollback();
+                } catch (SQLException ignored) {
+                    // keep the original failure
+                }
+                throw e;
+            } finally {
+                db.connection().setAutoCommit(true);
             }
-
-            String now = Timestamps.now();
-            String rawMetadata = writeMetadata(kind, file);
-            long sourceFileId = ensureSourceFile(repo, request.mandateId(), file, fileHash,
-                    kind, rawMetadata, now);
-            Path blobPath = blobStore.storeOriginal(fileHash, fileExt, file);
-
-            PageProbe probe = probePages(file, kind);
-            long documentVersionId = docs.insertDocumentVersion(documentId, versionLabel,
-                    file.getFileName().toString(), fileHash, fileExt, fileRole, probe.pageCount(),
-                    probe.ocrRequired(), sourceFileId, rawMetadata);
-
-            // Page placeholders — layout fills geometry and text.
-            for (int i = 1; i <= probe.pageCount(); i++) {
-                docs.insertPage(documentVersionId, i, null, null,
-                        blobStore.pageRelativePath(fileHash, i));
-            }
-            docs.setCurrentVersion(documentId, documentVersionId);
-            docs.touchDocument(documentId);
-
-            long parseRunId = ensureParseRun(repo, sourceFileId, request.mandateId(),
-                    "{\"stage\":\"ingest\",\"document_version_id\":" + documentVersionId + "}");
-
-            return new IngestResult(documentId, documentVersionId, sourceFileId, parseRunId,
-                    fileHash, file.getFileName().toString(), fileExt, fileRole, probe.pageCount(),
-                    probe.ocrRequired(), false, blobPath, dbPath.toAbsolutePath().normalize());
         }
     }
 
