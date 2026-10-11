@@ -8,12 +8,9 @@ fixtures/private/*
 .env
 config.json
 .worktrees/
-# Client financial models are never committed (parser-strategy-v2 §13 fixture policy)
-Project Docs/*.xls
-Project Docs/*.xlsx
-Project Docs/*.xlsm
-Project Docs/*.docx
-Project Docs/*.html
+# Client packs, architecture notes, and run workspaces never enter the repo
+# (parser-strategy-v2 §13 fixture policy; keeps multi-GB scan blobs out of git)
+Project Docs/
 
 # Local tool config (may contain keys) and ad-hoc run output
 .kilo/kilo.jsonc
