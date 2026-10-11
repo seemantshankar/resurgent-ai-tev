@@ -66,21 +66,28 @@ public final class DocumentLayoutService {
             DocumentRepository docs, WorkspaceRepository repo, BlobStore blobStore)
             throws Exception {
         PdfLayoutExtractor extractor = new PdfLayoutExtractor();
-        PdfLayoutExtractor.Extraction extraction = extractor.extract(original);
+        // Per-page rasters only where pixels matter (scan / images / no text).
+        // Pure text pages keep the layout graph; UI can render those later.
+        // Vision/table extractors (M2 LlamaParse) read the original PDF anyway.
+        PdfLayoutExtractor.Extraction extraction = extractor.extractLayout(original);
 
         long versionId = version.documentVersionId();
         int blocks = 0;
         int spans = 0;
         int tables = 0;
 
+        java.util.Set<Integer> rastered = new java.util.HashSet<>();
         for (PdfLayoutExtractor.PdfPageImage image : extraction.images()) {
             blobStore.storePagePng(version.fileHash(), image.pageIndex(), image.png());
+            rastered.add(image.pageIndex());
         }
 
         for (PageLayout page : extraction.pages()) {
+            String imagePath = rastered.contains(page.pageIndex())
+                    ? blobStore.pageRelativePath(version.fileHash(), page.pageIndex())
+                    : null;
             long pageId = docs.insertPage(versionId, page.pageIndex(), page.widthPx(),
-                    page.heightPx(), blobStore.pageRelativePath(version.fileHash(),
-                            page.pageIndex()));
+                    page.heightPx(), imagePath);
             int blockIndex = 0;
             for (LayoutBlock block : page.blocks()) {
                 long blockId = docs.insertBlock(pageId, blockIndex, block.blockKind(),

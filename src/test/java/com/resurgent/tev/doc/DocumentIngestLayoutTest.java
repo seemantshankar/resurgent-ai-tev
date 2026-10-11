@@ -137,6 +137,18 @@ class DocumentIngestLayoutTest {
         assertThat(layout.blockCount()).isGreaterThanOrEqualTo(2);
         assertThat(layout.spanCount()).isGreaterThan(0);
         assertThat(layout.extractor()).isEqualTo("pdfbox-digital-text");
+        // Synthetic PDF is pure text: no pre-rendered page PNG required.
+        assertThat(blobs.pagePath(first.fileHash(), 1)).doesNotExist();
+        assertThat(blobs.originalPath(first.fileHash(), first.fileExt())).exists();
+
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            try (var rs = workspace.connection().createStatement().executeQuery(
+                    "SELECT image_path FROM page WHERE document_version_id = "
+                            + first.documentVersionId())) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString(1)).isNull();
+            }
+        }
 
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             DocumentRepository docs = new DocumentRepository(workspace.connection());
@@ -192,5 +204,7 @@ class DocumentIngestLayoutTest {
                 result.documentVersionId(), dbPath(), blobs);
         assertThat(layout.ocrRequired()).isTrue();
         assertThat(layout.extractor()).isEqualTo("image-placeholder");
+        // Scans keep a page raster for later OCR / UI.
+        assertThat(blobs.pagePath(result.fileHash(), 1)).exists();
     }
 }

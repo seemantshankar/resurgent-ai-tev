@@ -18,8 +18,9 @@ import org.apache.pdfbox.text.TextPosition;
  * Born-digital PDF → layout graph (Architecture §7.1 layout stage).
  * Deterministic geometry from embedded text; no LLM, no meaning.
  *
- * <p>Lines come from PDFBox writing order. Blocks are paragraphs/heads split on
- * vertical gaps. A block whose lines have ≥2 consistent column gaps becomes a table.
+ * <p>Page rasters are <em>not</em> produced here by default. A 300 DPI PNG is only
+ * needed for scanned pages (OCR / UI highlight of image-only docs). Digital pages
+ * keep text + bboxes in the layout graph and can be rasterized later on demand.
  */
 public final class PdfLayoutExtractor {
 
@@ -31,7 +32,7 @@ public final class PdfLayoutExtractor {
     /** A heading is a short first-of-group line with large font vs page median. */
     private static final double HEADING_SIZE_RATIO = 1.18;
 
-    /** Render DPI for page images used by the UI + later OCR. */
+    /** Render DPI for page images used by the UI + OCR (scans only by default). */
     public static final int PAGE_RENDER_DPI = 300;
 
     static {
@@ -42,30 +43,98 @@ public final class PdfLayoutExtractor {
 
     public record PdfPageImage(int pageIndex, byte[] png, int widthPx, int heightPx) {}
 
+    public record PageNeedsRaster(boolean raster, String reason) {}
+
     public record Extraction(List<PageLayout> pages, List<PdfPageImage> images, int pageCount,
             boolean anyText) {}
 
-    /** Extract layout + page rasters for every page. */
-    public Extraction extract(java.nio.file.Path pdfPath) throws IOException {
+    /**
+     * Text layout for every page. Page PNGs are produced only for pages that need
+     * pixels (scan / embedded images / almost no text) — not for pure text pages.
+     */
+    public Extraction extractLayout(java.nio.file.Path pdfPath) throws IOException {
+        return extract(pdfPath, false);
+    }
+
+    /**
+     * Force 300 DPI rasters for every page (debug / full UI export).
+     */
+    public Extraction extractWithPageImages(java.nio.file.Path pdfPath) throws IOException {
+        return extract(pdfPath, true);
+    }
+
+    /**
+     * Decide whether one page needs a raster before we know its text:
+     * image-only pages, pages with image XObjects (photos, scans-as-images,
+     * chart bitmaps), or pages with almost no extractable text.
+     */
+    public static PageNeedsRaster pageNeedsRaster(PDPage page, int textCharCount) {
+        if (textCharCount < MIN_CHARS_FOR_TEXT_PAGE) {
+            return new PageNeedsRaster(true,
+                    "low_text(" + textCharCount + " chars)");
+        }
+        if (hasImageXObject(page)) {
+            return new PageNeedsRaster(true, "image_xobject");
+        }
+        return new PageNeedsRaster(false, "text_layer");
+    }
+
+    /** Below this many extracted characters a page is treated as scan/graphic. */
+    public static final int MIN_CHARS_FOR_TEXT_PAGE = 40;
+
+    private static boolean hasImageXObject(PDPage page) {
+        try {
+            var resources = page.getResources();
+            if (resources == null) {
+                return false;
+            }
+            for (var name : resources.getXObjectNames()) {
+                var xobj = resources.getXObject(name);
+                if (xobj instanceof org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            // Defensive: a malformed XObject table should not fail layout.
+            return true;
+        }
+        return false;
+    }
+
+    private Extraction extract(java.nio.file.Path pdfPath, boolean forceAllImages)
+            throws IOException {
         try (PDDocument doc = Loader.loadPDF(pdfPath.toFile())) {
             int pageCount = doc.getNumberOfPages();
             PDFRenderer renderer = new PDFRenderer(doc);
             List<PageLayout> pages = new ArrayList<>(pageCount);
-            List<PdfPageImage> images = new ArrayList<>(pageCount);
+            List<PdfPageImage> images = new ArrayList<>();
             boolean anyText = false;
             for (int i = 0; i < pageCount; i++) {
                 PDPage page = doc.getPage(i);
-                BufferedImage image = renderer.renderImageWithDPI(i, PAGE_RENDER_DPI,
-                        ImageType.RGB);
-                byte[] png = encodePng(image);
-                images.add(new PdfPageImage(i + 1, png, image.getWidth(), image.getHeight()));
-
                 List<LayoutLine> lines = extractLines(doc, i + 1, page);
+                int textChars = lines.stream().mapToInt(l -> l.text().length()).sum();
                 if (!lines.isEmpty()) {
                     anyText = true;
                 }
-                pages.add(buildPageLayout(i + 1, page, image.getWidth(), image.getHeight(),
-                        lines));
+                PageNeedsRaster need = forceAllImages
+                        ? new PageNeedsRaster(true, "forced")
+                        : pageNeedsRaster(page, textChars);
+
+                Integer widthPx;
+                Integer heightPx;
+                if (need.raster()) {
+                    BufferedImage image = renderer.renderImageWithDPI(i, PAGE_RENDER_DPI,
+                            ImageType.RGB);
+                    byte[] png = encodePng(image);
+                    widthPx = image.getWidth();
+                    heightPx = image.getHeight();
+                    images.add(new PdfPageImage(i + 1, png, widthPx, heightPx));
+                } else {
+                    double scale = PAGE_RENDER_DPI / 72.0;
+                    widthPx = (int) Math.round(page.getMediaBox().getWidth() * scale);
+                    heightPx = (int) Math.round(page.getMediaBox().getHeight() * scale);
+                }
+                pages.add(buildPageLayout(i + 1, page, widthPx, heightPx, lines));
             }
             return new Extraction(pages, images, pageCount, anyText);
         }
@@ -87,8 +156,8 @@ public final class PdfLayoutExtractor {
         return collector.lines();
     }
 
-    private PageLayout buildPageLayout(int pageIndex, PDPage page, int widthPx, int heightPx,
-            List<LayoutLine> lines) {
+    private PageLayout buildPageLayout(int pageIndex, PDPage page, Integer widthPx,
+            Integer heightPx, List<LayoutLine> lines) {
         float heightPt = page.getMediaBox().getHeight();
         float widthPt = page.getMediaBox().getWidth();
         if (lines.isEmpty()) {
