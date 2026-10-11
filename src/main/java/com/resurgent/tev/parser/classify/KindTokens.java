@@ -31,7 +31,7 @@ final class KindTokens {
     static final Pattern QUANTITY_TOKEN = Pattern.compile(
             "(?i)(?:\\bno\\.?\\s*of\\b|\\bnumber\\s+of\\b|\\bqty\\b|\\bquantity\\b|\\bnos\\.?\\b|"
                     + "\\bunits?\\b|\\brooms?\\b|\\bkeys\\b|\\bbeds?\\b|\\bdays?\\b|"
-                    + "\\bmonths?\\b|\\byears?\\b|\\bsq\\.?\\s*ft\\b|\\bsqft\\b|\\bsqm\\b|"
+                    + "\\bmonths?\\b|\\byears?\\b(?!\\s*(?:19|20)\\d{2}\\b)|\\bsq\\.?\\s*ft\\b|\\bsqft\\b|\\bsqm\\b|"
                     + "\\barea\\b|\\bcapacity\\b|\\bcount\\b)");
 
     /**

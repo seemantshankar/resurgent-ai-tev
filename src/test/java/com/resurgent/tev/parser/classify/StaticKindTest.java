@@ -66,6 +66,19 @@ class StaticKindTest {
         }
     }
 
+    /**
+     * A column heading that names a calendar year is a period, not a duration: "Year 2025" over a
+     * movement column must not make the cells a quantity, while "5 years" still is one.
+     */
+    @Test
+    void aYearHeadingWithACalendarYearIsNotAQuantity() {
+        for (String label : new String[] {"Year 2025", "Year 2030", "FY 2026"}) {
+            assertThat(kind(label)).as(label).isNotEqualTo(ReadingOutcome.QUANTITY);
+        }
+        assertThat(kind("Salary payable Year 2025")).isEqualTo(ReadingOutcome.MONEY);
+        assertThat(kind("Lease term 5 years")).isEqualTo(ReadingOutcome.QUANTITY);
+    }
+
     @Test
     void aPeriodIsNotARateAndCountsStayCounts() {
         assertThat(kind("Revenue per annum")).isEqualTo(ReadingOutcome.MONEY);
