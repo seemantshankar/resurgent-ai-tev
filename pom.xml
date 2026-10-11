@@ -49,6 +49,12 @@
       <artifactId>poi-ooxml-lite</artifactId>
       <version>5.5.1</version>
     </dependency>
+    <!-- Document Intelligence: born-digital PDF text/layout + page rasters -->
+    <dependency>
+      <groupId>org.apache.pdfbox</groupId>
+      <artifactId>pdfbox</artifactId>
+      <version>3.0.3</version>
+    </dependency>
 
     <dependency>
       <groupId>org.junit.jupiter</groupId>

@@ -1,0 +1,211 @@
+package com.resurgent.tev.doc.ingest;
+
+import com.resurgent.tev.doc.db.DocumentRepository;
+import com.resurgent.tev.parser.db.Timestamps;
+import com.resurgent.tev.parser.db.WorkspaceDatabase;
+import com.resurgent.tev.parser.db.WorkspaceRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.sql.SQLException;
+import java.util.HexFormat;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * M1 ingest: immutable {@code document_version} + content-addressed blob + page rows.
+ * No classification and no meaning at ingest (Architecture principle 9).
+ */
+public final class DocumentIngestService {
+
+    public static final String PARSER_VERSION = "0.1.0-doc-m1";
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    public record IngestRequest(
+            Path file,
+            long mandateId,
+            String logicalName,
+            String versionLabel,
+            String fileRole,
+            String docFamily) {}
+
+    public record IngestResult(
+            long documentId,
+            long documentVersionId,
+            long sourceFileId,
+            long parseRunId,
+            String fileHash,
+            String fileName,
+            String fileExt,
+            String fileRole,
+            int pageCount,
+            boolean ocrRequired,
+            boolean reused,
+            Path blobPath,
+            Path dbPath) {}
+
+    public IngestResult ingest(IngestRequest request, Path dbPath, BlobStore blobStore)
+            throws Exception {
+        Path file = request.file().toAbsolutePath().normalize();
+        if (!Files.isRegularFile(file)) {
+            throw new IOException("not a file: " + file);
+        }
+        DocumentFileKind kind = DocumentFileKind.fromPath(file);
+        if (kind == DocumentFileKind.UNKNOWN) {
+            throw new IllegalArgumentException(
+                    "unsupported document extension: " + file.getFileName()
+                            + " (expected pdf or image)");
+        }
+        String fileExt = DocumentFileKind.fileExt(file);
+        if (fileExt.isEmpty()) {
+            fileExt = kind == DocumentFileKind.PDF ? ".pdf" : ".bin";
+        }
+        String fileRole = request.fileRole() == null || request.fileRole().isBlank()
+                ? kind.defaultFileRole()
+                : DocumentFileKind.normalizeFileRole(request.fileRole());
+        String docFamily = request.docFamily() == null || request.docFamily().isBlank()
+                ? DocumentFileKind.defaultDocFamily(fileRole)
+                : request.docFamily();
+        String versionLabel = request.versionLabel() == null || request.versionLabel().isBlank()
+                ? "v1"
+                : request.versionLabel();
+        String fileHash = sha256Hex(file);
+
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            DocumentRepository docs = new DocumentRepository(db.connection());
+
+            Optional<Long> existingDoc = docs.findDocumentId(request.mandateId(),
+                    request.logicalName());
+            long documentId = existingDoc.orElseGet(() -> {
+                try {
+                    return docs.insertDocument(request.mandateId(), request.logicalName(),
+                            docFamily, null);
+                } catch (SQLException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+
+            Optional<Long> existingVersion = docs.findVersionIdByHash(documentId, fileHash);
+            if (existingVersion.isPresent()) {
+                DocumentRepository.DocumentVersionRow row =
+                        docs.findVersion(existingVersion.get()).orElseThrow();
+                Path blob = blobStore.originalPath(fileHash, row.fileExt());
+                long parseRunId = ensureParseRun(repo, row, request.mandateId(), fileHash);
+                return new IngestResult(documentId, row.documentVersionId(), row.sourceFileId(),
+                        parseRunId, fileHash, row.fileName(), row.fileExt(), row.fileRole(),
+                        row.pageCount() == null ? 0 : row.pageCount(), row.ocrRequired(),
+                        true, blob, dbPath.toAbsolutePath().normalize());
+            }
+
+            String now = Timestamps.now();
+            String rawMetadata = writeMetadata(kind, file);
+            long sourceFileId = ensureSourceFile(repo, request.mandateId(), file, fileHash,
+                    kind, rawMetadata, now);
+            Path blobPath = blobStore.storeOriginal(fileHash, fileExt, file);
+
+            PageProbe probe = probePages(file, kind);
+            long documentVersionId = docs.insertDocumentVersion(documentId, versionLabel,
+                    file.getFileName().toString(), fileHash, fileExt, fileRole, probe.pageCount(),
+                    probe.ocrRequired(), sourceFileId, rawMetadata);
+
+            // Page placeholders — layout fills geometry and text.
+            for (int i = 1; i <= probe.pageCount(); i++) {
+                docs.insertPage(documentVersionId, i, null, null,
+                        blobStore.pageRelativePath(fileHash, i));
+            }
+            docs.setCurrentVersion(documentId, documentVersionId);
+            docs.touchDocument(documentId);
+
+            long parseRunId = repo.insertParseRun(sourceFileId, request.mandateId(),
+                    PARSER_VERSION, "m1", now, now, "success",
+                    "{\"stage\":\"ingest\",\"document_version_id\":" + documentVersionId + "}");
+
+            return new IngestResult(documentId, documentVersionId, sourceFileId, parseRunId,
+                    fileHash, file.getFileName().toString(), fileExt, fileRole, probe.pageCount(),
+                    probe.ocrRequired(), false, blobPath, dbPath.toAbsolutePath().normalize());
+        }
+    }
+
+    private static long ensureParseRun(WorkspaceRepository repo,
+            DocumentRepository.DocumentVersionRow row, long mandateId, String fileHash)
+            throws SQLException {
+        if (row.sourceFileId() != null) {
+            Long existing = repo.findParseRunId(row.sourceFileId(), PARSER_VERSION, "m1");
+            if (existing != null) {
+                return existing;
+            }
+            return repo.insertParseRun(row.sourceFileId(), mandateId, PARSER_VERSION, "m1",
+                    Timestamps.now(), Timestamps.now(), "success",
+                    "{\"stage\":\"ingest\",\"reused\":true,\"file_hash\":\"" + fileHash + "\"}");
+        }
+        throw new SQLException("document_version " + row.documentVersionId()
+                + " has no source_file_id; cannot attach parse_run");
+    }
+
+    private static long ensureSourceFile(WorkspaceRepository repo, long mandateId, Path file,
+            String fileHash, DocumentFileKind kind, String rawMetadata, String now)
+            throws SQLException {
+        return com.resurgent.tev.parser.ingest.ParseRunIdentity.ensureSourceFile(
+                mandateId, file.getFileName().toString(), fileHash, kind.sourceFileType(),
+                PARSER_VERSION, rawMetadata, now, repo);
+    }
+
+    private static String writeMetadata(DocumentFileKind kind, Path file) throws IOException {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("kind", kind.name().toLowerCase(Locale.ROOT));
+        meta.put("file_name", file.getFileName().toString());
+        meta.put("size_bytes", Files.size(file));
+        return MAPPER.writeValueAsString(meta);
+    }
+
+    private static String sha256Hex(Path file) throws IOException, NoSuchAlgorithmException {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try (var in = Files.newInputStream(file)) {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) >= 0) {
+                digest.update(buf, 0, n);
+            }
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private record PageProbe(int pageCount, boolean ocrRequired) {}
+
+    private static PageProbe probePages(Path file, DocumentFileKind kind) throws IOException {
+        if (kind == DocumentFileKind.PDF) {
+            try (org.apache.pdfbox.pdmodel.PDDocument doc =
+                    org.apache.pdfbox.Loader.loadPDF(file.toFile())) {
+                int pages = doc.getNumberOfPages();
+                boolean needsOcr = hasNoTextLayer(doc);
+                return new PageProbe(Math.max(pages, 1), needsOcr);
+            }
+        }
+        // Single-raster images: no embedded text layer.
+        return new PageProbe(1, true);
+    }
+
+    private static boolean hasNoTextLayer(org.apache.pdfbox.pdmodel.PDDocument doc)
+            throws IOException {
+        if (doc.getNumberOfPages() == 0) {
+            return true;
+        }
+        try {
+            org.apache.pdfbox.text.PDFTextStripper stripper =
+                    new org.apache.pdfbox.text.PDFTextStripper();
+            stripper.setStartPage(1);
+            stripper.setEndPage(Math.min(3, doc.getNumberOfPages()));
+            String text = stripper.getText(doc);
+            return text == null || text.strip().length() < 16;
+        } catch (IOException e) {
+            return true;
+        }
+    }
+}
