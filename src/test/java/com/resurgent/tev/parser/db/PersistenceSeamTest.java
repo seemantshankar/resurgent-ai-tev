@@ -119,12 +119,16 @@ class PersistenceSeamTest {
         try (WorkspaceDatabase db = openDb("candidate.db")) {
             List<String> tables = tableNames(db.connection());
             assertThat(tables).contains(
-                    "candidate", "candidate_member", "candidate_related",
+                    "candidate", "candidate_member",
                     "nomenclature_node", "nomenclature_alias", "mandate_industry",
                     "project_fact_field", "packet_disposition", "schedule_family");
+            assertThat(tables).doesNotContain("candidate_related");
             assertThat(tables).contains(
                     "nomenclature_binding", "cell_interpretation", "cell_interpretation_evidence",
                     "formula_link", "formula_gap", "cell_reading");
+            assertThat(tables).contains(
+                    "document", "document_version", "document_relation",
+                    "page", "block", "span", "table_grid", "table_cell", "provenance_doc");
             assertThat(tables).doesNotContain("cell_type", "aggregation");
             assertThat(tables).doesNotContain("region", "cost_head");
 
