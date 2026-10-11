@@ -155,6 +155,28 @@ class DocumentIngestLayoutTest {
     }
 
     @Test
+    void sameBytesUnderSecondLogicalDocSharesParseRun() throws Exception {
+        Path pdf = writeSamplePdf();
+        Path db = dbPath();
+        BlobStore blobs = BlobStore.besideDatabase(db);
+        DocumentIngestService.IngestResult first = new DocumentIngestService().ingest(
+                new DocumentIngestService.IngestRequest(
+                        pdf, 1L, "PPA", "v1", "agreement", "agreement"),
+                db, blobs);
+        // Same sha256 under a different logical name must not collide on parse_run.
+        DocumentIngestService.IngestResult second = new DocumentIngestService().ingest(
+                new DocumentIngestService.IngestRequest(
+                        pdf, 1L, "PPA copy", "v1", "agreement", "agreement"),
+                db, blobs);
+        assertThat(second.documentId()).isNotEqualTo(first.documentId());
+        assertThat(second.documentVersionId()).isNotEqualTo(first.documentVersionId());
+        assertThat(second.fileHash()).isEqualTo(first.fileHash());
+        assertThat(second.sourceFileId()).isEqualTo(first.sourceFileId());
+        assertThat(second.parseRunId()).isEqualTo(first.parseRunId());
+        assertThat(second.reused()).isFalse();
+    }
+
+    @Test
     void imageIngestMarksOcrRequired() throws Exception {
         Path png = tempDir.resolve("scan.png");
         var image = new java.awt.image.BufferedImage(8, 8, java.awt.image.BufferedImage.TYPE_INT_RGB);

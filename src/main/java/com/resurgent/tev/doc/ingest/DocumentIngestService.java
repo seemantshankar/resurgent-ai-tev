@@ -128,8 +128,7 @@ public final class DocumentIngestService {
             docs.setCurrentVersion(documentId, documentVersionId);
             docs.touchDocument(documentId);
 
-            long parseRunId = repo.insertParseRun(sourceFileId, request.mandateId(),
-                    PARSER_VERSION, "m1", now, now, "success",
+            long parseRunId = ensureParseRun(repo, sourceFileId, request.mandateId(),
                     "{\"stage\":\"ingest\",\"document_version_id\":" + documentVersionId + "}");
 
             return new IngestResult(documentId, documentVersionId, sourceFileId, parseRunId,
@@ -142,16 +141,35 @@ public final class DocumentIngestService {
             DocumentRepository.DocumentVersionRow row, long mandateId, String fileHash)
             throws SQLException {
         if (row.sourceFileId() != null) {
-            Long existing = repo.findParseRunId(row.sourceFileId(), PARSER_VERSION, "m1");
-            if (existing != null) {
-                return existing;
-            }
-            return repo.insertParseRun(row.sourceFileId(), mandateId, PARSER_VERSION, "m1",
-                    Timestamps.now(), Timestamps.now(), "success",
+            return ensureParseRun(repo, row.sourceFileId(), mandateId,
                     "{\"stage\":\"ingest\",\"reused\":true,\"file_hash\":\"" + fileHash + "\"}");
         }
         throw new SQLException("document_version " + row.documentVersionId()
                 + " has no source_file_id; cannot attach parse_run");
+    }
+
+    /**
+     * One {@code parse_run} per {@code (source_file_id, parser_version, config_hash)}.
+     * The same bytes can back several logical documents; they share this run.
+     */
+    private static long ensureParseRun(WorkspaceRepository repo, long sourceFileId,
+            long mandateId, String metrics) throws SQLException {
+        Long existing = repo.findParseRunId(sourceFileId, PARSER_VERSION, "m1");
+        if (existing != null) {
+            return existing;
+        }
+        try {
+            return repo.insertParseRun(sourceFileId, mandateId, PARSER_VERSION, "m1",
+                    Timestamps.now(), Timestamps.now(), "success", metrics);
+        } catch (SQLException e) {
+            if (e.getMessage() != null && e.getMessage().contains("UNIQUE constraint failed")) {
+                Long raced = repo.findParseRunId(sourceFileId, PARSER_VERSION, "m1");
+                if (raced != null) {
+                    return raced;
+                }
+            }
+            throw e;
+        }
     }
 
     private static long ensureSourceFile(WorkspaceRepository repo, long mandateId, Path file,
