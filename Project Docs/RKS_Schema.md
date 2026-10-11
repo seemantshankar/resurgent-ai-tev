@@ -407,7 +407,8 @@ FROM cell c
 JOIN worksheet w ON w.worksheet_id = c.worksheet_id
 LEFT JOIN cell_interpretation ci ON ci.cell_id = c.cell_id AND ci.parse_run_id = w.parse_run_id
 LEFT JOIN cell_reading r ON r.cell_id = c.cell_id AND r.parse_run_id = w.parse_run_id
-WHERE TRIM(w.sheet_name) = 'Schedule_BFP' AND c.coord = 'Q92';
+WHERE w.parse_run_id = 1
+  AND TRIM(w.sheet_name) = 'Schedule_BFP' AND c.coord = 'Q92';
 ```
 
 Result: `Q92` is `=H92-G92` (1,949.068 million), path `Balance Sheet > Total Debt`, amount role `add`, kind `money`, scale `million`, absolute amount 1,949,068,209.66.
@@ -416,17 +417,22 @@ Result: `Q92` is `=H92-G92` (1,949.068 million), path `Balance Sheet > Total Deb
 
 ```sql
 SELECT b.path,
+       TRIM(w.sheet_name) AS sheet,
        COUNT(*) AS cells,
        ROUND(SUM(CAST(r.absolute_amount AS REAL)) / 1e7, 2) AS crore
 FROM nomenclature_binding b
+JOIN cell c ON c.cell_id = b.cell_id
+JOIN worksheet w ON w.worksheet_id = c.worksheet_id AND w.parse_run_id = b.parse_run_id
 JOIN cell_reading r ON r.cell_id = b.cell_id AND r.parse_run_id = b.parse_run_id
 WHERE b.parse_run_id = 1
   AND b.amount_role = 'add'
   AND r.kind = 'money'
   AND r.absolute_amount IS NOT NULL
   AND b.path LIKE 'Means of Finance%'
-GROUP BY b.path
-ORDER BY b.path;
+  -- Scope to one entity/period before summing. Do not mix consolidated, RKA and BFP.
+  -- AND TRIM(w.sheet_name) = '1.1_Assumption sheet_RKA'
+GROUP BY b.path, TRIM(w.sheet_name)
+ORDER BY b.path, sheet;
 ```
 
 Result: `Means of Finance > Term Loan` 783 cells, 3,983.86 crore; `> Working Capital Assistance` 525 cells, 1,524.30 crore; `> Capex` 66 cells, 33.53 crore; `> Promoter / Partners' Capital` 6 cells, 300.00 crore; `> Unsecured Loans` 41 cells, 118.30 crore. Divide by `1e7` for crore, `1e5` for lakh, `1` for rupees. Report how many money cells had no absolute amount.
@@ -439,7 +445,8 @@ WITH RECURSIVE p(cid) AS (
   FROM formula_link fl
   JOIN cell c ON c.cell_id = fl.from_cell_id
   JOIN worksheet w ON w.worksheet_id = c.worksheet_id
-  WHERE TRIM(w.sheet_name) = 'Schedule_BFP' AND c.coord = 'Q92'
+  WHERE w.parse_run_id = 1
+    AND TRIM(w.sheet_name) = 'Schedule_BFP' AND c.coord = 'Q92'
   UNION
   SELECT fl.to_cell_id FROM formula_link fl JOIN p ON fl.from_cell_id = p.cid
 )
@@ -455,10 +462,12 @@ SELECT TRIM(w.sheet_name) AS sheet, c.coord, c.formula_text
 FROM formula_link fl
 JOIN cell c ON c.cell_id = fl.from_cell_id
 JOIN worksheet w ON w.worksheet_id = c.worksheet_id
-WHERE fl.to_cell_id = (
+WHERE w.parse_run_id = 1
+  AND fl.to_cell_id = (
   SELECT c2.cell_id FROM cell c2
   JOIN worksheet w2 ON w2.worksheet_id = c2.worksheet_id
-  WHERE TRIM(w2.sheet_name) = 'Schedule_BFP' AND c2.coord = 'G92'
+  WHERE w2.parse_run_id = 1
+    AND TRIM(w2.sheet_name) = 'Schedule_BFP' AND c2.coord = 'G92'
 );
 ```
 
@@ -467,12 +476,14 @@ Result: `Schedule_BFP!Q92` (`H92-G92`), `Schedule_BFP!R92`, `Schedule_BFP!G98` (
 ### R6 — The formula and its references for one formula cell
 
 ```sql
-SELECT r.token_index, r.raw_token, r.ref_kind, TRIM(r.target_sheet_name) AS target_sheet,
+SELECT c.formula_text,
+       r.token_index, r.raw_token, r.ref_kind, TRIM(r.target_sheet_name) AS target_sheet,
        r.target_range, r.resolved_cell_id
 FROM cell_reference r
 JOIN cell c ON c.cell_id = r.from_cell_id
 JOIN worksheet w ON w.worksheet_id = c.worksheet_id
-WHERE TRIM(w.sheet_name) = 'Schedule_BFP' AND c.coord = 'Q92'
+WHERE w.parse_run_id = 1
+  AND TRIM(w.sheet_name) = 'Schedule_BFP' AND c.coord = 'Q92'
 ORDER BY r.token_index;
 ```
 
@@ -484,7 +495,7 @@ SELECT p.candidate_id, c.structural_role, p.schedule_family, p.relevance,
 FROM packet_disposition p
 JOIN candidate c ON c.candidate_id = p.candidate_id
 JOIN worksheet w ON w.worksheet_id = c.worksheet_id
-WHERE c.candidate_kind = 'child' AND TRIM(w.sheet_name) = '1.2_PL_RK Group_Consol'
+WHERE p.parse_run_id = 1 AND c.candidate_kind = 'child' AND TRIM(w.sheet_name) = '1.2_PL_RK Group_Consol'
 ORDER BY p.candidate_id;
 ```
 
@@ -520,11 +531,14 @@ Result for `Schedule_BFP!Q92`: row header `Linked` (resolved); column header `Ca
 ### R10 — Cells for one period (for example 2027) with their path and amount
 
 ```sql
-SELECT TRIM(w.sheet_name) AS sheet, c.coord, b.path, b.amount_role, c.numeric_value
+SELECT TRIM(w.sheet_name) AS sheet, c.coord, b.path, b.amount_role,
+       c.numeric_value AS value_in_cell_scale,
+       rd.scale, rd.absolute_amount
 FROM cell_interpretation_evidence e
 JOIN cell c ON c.cell_id = e.cell_id
 JOIN worksheet w ON w.worksheet_id = c.worksheet_id
 JOIN nomenclature_binding b ON b.cell_id = c.cell_id AND b.parse_run_id = e.parse_run_id
+LEFT JOIN cell_reading rd ON rd.cell_id = c.cell_id AND rd.parse_run_id = e.parse_run_id
 WHERE e.parse_run_id = 1 AND e.role = 'period' AND e.normalized_value = '2027'
   AND b.amount_role = 'add'
 ORDER BY sheet, c.coord;
@@ -551,7 +565,7 @@ Result: `RK Associates & Hoteliers Pvt Ltd.` on `1.2_PL_RK Group_Consol!B1` and 
 SELECT TRIM(w.sheet_name) AS sheet, c.coord, c.text_value
 FROM cell c
 JOIN worksheet w ON w.worksheet_id = c.worksheet_id
-WHERE c.text_value LIKE '%term loan%'
+WHERE w.parse_run_id = 1 AND c.text_value LIKE '%term loan%'
 ORDER BY sheet, c.coord;
 ```
 
@@ -676,7 +690,7 @@ SELECT TRIM(w.sheet_name) AS sheet, COUNT(*) AS cells
 FROM candidate_member m
 JOIN candidate k ON k.candidate_id = m.candidate_id
 JOIN worksheet w ON w.worksheet_id = k.worksheet_id
-WHERE k.structural_confidence = 0.5
+WHERE w.parse_run_id = 1 AND k.structural_confidence = 0.5
 GROUP BY 1
 ORDER BY cells DESC;
 ```
@@ -689,8 +703,9 @@ Result: `Debt-profile Bank wise` 80; `1.1_Assumption sheet_RKA` 61; `2.1_Assumpt
 SELECT c.coord, c.numeric_value
 FROM cell c
 JOIN worksheet w ON w.worksheet_id = c.worksheet_id
-LEFT JOIN cell_reading r ON r.cell_id = c.cell_id
-WHERE w.sheet_name = 'Schedule_BFP'
+LEFT JOIN cell_reading r ON r.cell_id = c.cell_id AND r.parse_run_id = w.parse_run_id
+WHERE w.parse_run_id = 1
+  AND w.sheet_name = 'Schedule_BFP'
   AND c.col_num BETWEEN 5 AND 8
   AND c.numeric_value IS NOT NULL
   AND r.kind IS NULL

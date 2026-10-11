@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -63,32 +64,46 @@ public final class DocumentLayoutService {
                 return existingResult(docs, version);
             }
 
-            // Same bytes already laid out under another logical doc — clone rows
-            // instead of re-parsing / re-rasterizing the PDF.
-            Optional<Long> sibling = docs.findLayoutedSibling(documentVersionId,
-                    version.fileHash());
-            if (sibling.isPresent()) {
-                docs.deleteLayoutForVersion(documentVersionId);
-                docs.cloneLayout(sibling.get(), documentVersionId);
-                docs.updateVersionPageCount(documentVersionId, version.pageCount() == null
-                        ? docs.countPages(documentVersionId) : version.pageCount(),
-                        version.ocrRequired());
-                docs.updateVersionIngestStatus(documentVersionId, "layout_ok");
-                return existingResult(docs, version);
-            }
-
             Path original = blobStore.originalPath(version.fileHash(), version.fileExt());
             if (!Files.isRegularFile(original)) {
                 throw new IOException("blob missing for version " + documentVersionId
                         + ": " + original);
             }
 
-            docs.deleteLayoutForVersion(version.documentVersionId());
+            // One transaction: delete → clone/insert → status. A mid-way failure must
+            // not leave a version with no pages or partial blocks.
+            var conn = db.connection();
+            conn.setAutoCommit(false);
+            try {
+                Optional<Long> sibling = docs.findLayoutedSibling(documentVersionId,
+                        version.fileHash());
+                if (sibling.isPresent()) {
+                    docs.deleteLayoutForVersion(documentVersionId);
+                    docs.cloneLayout(sibling.get(), documentVersionId);
+                    docs.updateVersionPageCount(documentVersionId, version.pageCount() == null
+                            ? docs.countPages(documentVersionId) : version.pageCount(),
+                            version.ocrRequired());
+                    docs.updateVersionIngestStatus(documentVersionId, "layout_ok");
+                    conn.commit();
+                    return existingResult(docs, version);
+                }
 
-            if (isPdf(version)) {
-                return layoutPdf(version, original, docs, repo, blobStore);
+                docs.deleteLayoutForVersion(version.documentVersionId());
+                LayoutResult result = isPdf(version)
+                        ? layoutPdf(version, original, docs, repo, blobStore)
+                        : layoutImagePlaceholder(version, original, docs, repo, blobStore);
+                conn.commit();
+                return result;
+            } catch (Exception e) {
+                try {
+                    conn.rollback();
+                } catch (SQLException ignored) {
+                    // keep the original failure
+                }
+                throw e;
+            } finally {
+                conn.setAutoCommit(true);
             }
-            return layoutImagePlaceholder(version, original, docs, repo, blobStore);
         }
     }
 
