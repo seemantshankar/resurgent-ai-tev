@@ -1248,38 +1248,6 @@ public final class WorkspaceRepository {
         }
     }
 
-    public void insertCandidateRelated(
-            long candidateId, long relatedCandidateId, String relationshipKind)
-            throws SQLException {
-        try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO candidate_related (candidate_id, related_candidate_id, relationship_kind)"
-                        + " VALUES (?, ?, ?)")) {
-            ps.setLong(1, candidateId);
-            ps.setLong(2, relatedCandidateId);
-            ps.setString(3, relationshipKind);
-            ps.executeUpdate();
-        }
-    }
-
-    /** Directed related edges for Candidates belonging to the parse run. */
-    public List<long[]> selectCandidateRelatedForParseRun(long parseRunId) throws SQLException {
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT cr.candidate_id, cr.related_candidate_id"
-                        + " FROM candidate_related cr"
-                        + " JOIN candidate c ON c.candidate_id = cr.candidate_id"
-                        + " WHERE c.parse_run_id = ?"
-                        + " ORDER BY cr.candidate_id, cr.related_candidate_id")) {
-            ps.setLong(1, parseRunId);
-            try (ResultSet rs = ps.executeQuery()) {
-                List<long[]> rows = new ArrayList<>();
-                while (rs.next()) {
-                    rows.add(new long[] {rs.getLong(1), rs.getLong(2)});
-                }
-                return rows;
-            }
-        }
-    }
-
     public List<CellReferenceEdge> selectCellReferencesForParseRun(long parseRunId)
             throws SQLException {
         return selectPersistedCellReferencesForParseRun(parseRunId).stream()

@@ -265,9 +265,10 @@ class NomenclatureCatalogTest {
             }
             assertThat(tables).contains(
                     "nomenclature_node", "nomenclature_alias", "mandate_industry",
-                    "candidate", "candidate_member", "candidate_related",
+                    "candidate", "candidate_member",
                     "packet_disposition", "schedule_family",
                     "nomenclature_binding", "cell_interpretation", "cell_interpretation_evidence");
+            assertThat(tables).doesNotContain("candidate_related");
             assertThat(tables).doesNotContain("cell_type", "aggregation");
             assertThat(tables).doesNotContain("region", "cost_head");
 
