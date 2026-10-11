@@ -186,6 +186,20 @@ class DocumentIngestLayoutTest {
         assertThat(second.sourceFileId()).isEqualTo(first.sourceFileId());
         assertThat(second.parseRunId()).isEqualTo(first.parseRunId());
         assertThat(second.reused()).isFalse();
+
+        // Layout once, then clone for the twin logical doc — no second PDF parse.
+        DocumentLayoutService.LayoutResult firstLayout = new DocumentLayoutService().layout(
+                first.documentVersionId(), db, blobs);
+        DocumentLayoutService.LayoutResult secondLayout = new DocumentLayoutService().layout(
+                second.documentVersionId(), db, blobs);
+        assertThat(secondLayout.blockCount()).isEqualTo(firstLayout.blockCount());
+        assertThat(secondLayout.extractor()).isEqualTo(firstLayout.extractor());
+        // Second layout must not rewrite page rasters from a fresh parse; counts match.
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            DocumentRepository docs = new DocumentRepository(workspace.connection());
+            assertThat(docs.countBlocks(second.documentVersionId()))
+                    .isEqualTo(firstLayout.blockCount());
+        }
     }
 
     @Test

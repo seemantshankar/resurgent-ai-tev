@@ -24,6 +24,10 @@ public final class DocumentRepository {
         this.connection = connection;
     }
 
+    public Connection connection() {
+        return connection;
+    }
+
     public long insertDocument(long mandateId, String logicalName, String docFamily,
             String docTypeCode) throws SQLException {
         String now = Timestamps.now();
@@ -439,6 +443,142 @@ public final class DocumentRepository {
                 return rs.getInt(1);
             }
         }
+    }
+
+    /** True when this version already has a completed layout graph. */
+    public boolean hasLayout(long documentVersionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT ingest_status FROM document_version WHERE document_version_id = ?")) {
+            ps.setLong(1, documentVersionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() && "layout_ok".equals(rs.getString(1))
+                        && countPages(documentVersionId) > 0;
+            }
+        }
+    }
+
+    public int countPages(long documentVersionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COUNT(*) FROM page WHERE document_version_id = ?")) {
+            ps.setLong(1, documentVersionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getInt(1);
+            }
+        }
+    }
+
+    /**
+     * Another version of the same bytes that already has layout. Callers clone
+     * from this instead of re-parsing / re-rasterizing (no waste).
+     */
+    public Optional<Long> findLayoutedSibling(long documentVersionId, String fileHash)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT v.document_version_id FROM document_version v"
+                        + " WHERE v.file_hash = ? AND v.document_version_id != ?"
+                        + " AND v.ingest_status = 'layout_ok'"
+                        + " AND EXISTS (SELECT 1 FROM page p"
+                        + "  WHERE p.document_version_id = v.document_version_id)"
+                        + " ORDER BY v.document_version_id LIMIT 1")) {
+            ps.setString(1, fileHash);
+            ps.setLong(2, documentVersionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(rs.getLong(1));
+                }
+                return Optional.empty();
+            }
+        }
+    }
+
+    /**
+     * Copy page/block/span/table rows from a sibling version of the same file
+     * hash. Image paths stay shared under {@code blobs/{hash}/…}.
+     */
+    public int cloneLayout(long fromVersionId, long toVersionId) throws SQLException {
+        int pages = 0;
+        // pages
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO page (document_version_id, page_index, width_px, height_px, image_path)"
+                        + " SELECT ?, page_index, width_px, height_px, image_path"
+                        + " FROM page WHERE document_version_id = ?")) {
+            ps.setLong(1, toVersionId);
+            ps.setLong(2, fromVersionId);
+            pages = ps.executeUpdate();
+        }
+        // blocks (join via page_index)
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO block (page_id, block_index, block_kind, bbox_x0, bbox_y0,"
+                        + " bbox_x1, bbox_y1, text_raw, text_norm, reading_order,"
+                        + " is_handwritten, ocr_confidence, extractor)"
+                        + " SELECT tp.page_id, b.block_index, b.block_kind, b.bbox_x0, b.bbox_y0,"
+                        + "  b.bbox_x1, b.bbox_y1, b.text_raw, b.text_norm, b.reading_order,"
+                        + "  b.is_handwritten, b.ocr_confidence, b.extractor"
+                        + " FROM block b"
+                        + " JOIN page sp ON sp.page_id = b.page_id"
+                        + " JOIN page tp ON tp.document_version_id = ?"
+                        + "  AND tp.page_index = sp.page_index"
+                        + " WHERE sp.document_version_id = ?")) {
+            ps.setLong(1, toVersionId);
+            ps.setLong(2, fromVersionId);
+            ps.executeUpdate();
+        }
+        // spans
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO span (block_id, span_index, text_raw, bbox_x0, bbox_y0,"
+                        + " bbox_x1, bbox_y1, confidence)"
+                        + " SELECT tb.block_id, s.span_index, s.text_raw, s.bbox_x0, s.bbox_y0,"
+                        + "  s.bbox_x1, s.bbox_y1, s.confidence"
+                        + " FROM span s"
+                        + " JOIN block sb ON sb.block_id = s.block_id"
+                        + " JOIN page sp ON sp.page_id = sb.page_id"
+                        + " JOIN page tp ON tp.document_version_id = ?"
+                        + "  AND tp.page_index = sp.page_index"
+                        + " JOIN block tb ON tb.page_id = tp.page_id"
+                        + "  AND tb.block_index = sb.block_index"
+                        + " WHERE sp.document_version_id = ?")) {
+            ps.setLong(1, toVersionId);
+            ps.setLong(2, fromVersionId);
+            ps.executeUpdate();
+        }
+        // table grids + cells
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO table_grid (block_id, n_rows, n_cols, header_row_count)"
+                        + " SELECT tb.block_id, tg.n_rows, tg.n_cols, tg.header_row_count"
+                        + " FROM table_grid tg"
+                        + " JOIN block sb ON sb.block_id = tg.block_id"
+                        + " JOIN page sp ON sp.page_id = sb.page_id"
+                        + " JOIN page tp ON tp.document_version_id = ?"
+                        + "  AND tp.page_index = sp.page_index"
+                        + " JOIN block tb ON tb.page_id = tp.page_id"
+                        + "  AND tb.block_index = sb.block_index"
+                        + " WHERE sp.document_version_id = ?")) {
+            ps.setLong(1, toVersionId);
+            ps.setLong(2, fromVersionId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO table_cell (table_grid_id, row_index, col_index, text_raw,"
+                        + " bbox_x0, bbox_y0, bbox_x1, bbox_y1, row_span, col_span, is_header)"
+                        + " SELECT tnt.table_grid_id, tc.row_index, tc.col_index, tc.text_raw,"
+                        + "  tc.bbox_x0, tc.bbox_y0, tc.bbox_x1, tc.bbox_y1, tc.row_span,"
+                        + "  tc.col_span, tc.is_header"
+                        + " FROM table_cell tc"
+                        + " JOIN table_grid sgt ON sgt.table_grid_id = tc.table_grid_id"
+                        + " JOIN block sb ON sb.block_id = sgt.block_id"
+                        + " JOIN page sp ON sp.page_id = sb.page_id"
+                        + " JOIN page tp ON tp.document_version_id = ?"
+                        + "  AND tp.page_index = sp.page_index"
+                        + " JOIN block tb ON tb.page_id = tp.page_id"
+                        + "  AND tb.block_index = sb.block_index"
+                        + " JOIN table_grid tnt ON tnt.block_id = tb.block_id"
+                        + " WHERE sp.document_version_id = ?")) {
+            ps.setLong(1, toVersionId);
+            ps.setLong(2, fromVersionId);
+            ps.executeUpdate();
+        }
+        return pages;
     }
 
     private static long generatedId(PreparedStatement ps) throws SQLException {

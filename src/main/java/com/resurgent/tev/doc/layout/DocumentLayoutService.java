@@ -42,6 +42,25 @@ public final class DocumentLayoutService {
                             () -> new IllegalArgumentException(
                                     "unknown document_version " + documentVersionId));
 
+            // Already laid out — do not pay parse/raster cost again (no waste).
+            if (docs.hasLayout(documentVersionId)) {
+                return existingResult(docs, version);
+            }
+
+            // Same bytes already laid out under another logical doc — clone rows
+            // instead of re-parsing / re-rasterizing the PDF.
+            Optional<Long> sibling = docs.findLayoutedSibling(documentVersionId,
+                    version.fileHash());
+            if (sibling.isPresent()) {
+                docs.deleteLayoutForVersion(documentVersionId);
+                docs.cloneLayout(sibling.get(), documentVersionId);
+                docs.updateVersionPageCount(documentVersionId, version.pageCount() == null
+                        ? docs.countPages(documentVersionId) : version.pageCount(),
+                        version.ocrRequired());
+                docs.updateVersionIngestStatus(documentVersionId, "layout_ok");
+                return existingResult(docs, version);
+            }
+
             Path original = blobStore.originalPath(version.fileHash(), version.fileExt());
             if (!Files.isRegularFile(original)) {
                 throw new IOException("blob missing for version " + documentVersionId
@@ -55,6 +74,40 @@ public final class DocumentLayoutService {
             }
             return layoutImagePlaceholder(version, original, docs, repo, blobStore);
         }
+    }
+
+    private static LayoutResult existingResult(DocumentRepository docs,
+            DocumentRepository.DocumentVersionRow version) throws Exception {
+        int pages = docs.countPages(version.documentVersionId());
+        int blocks = docs.countBlocks(version.documentVersionId());
+        // spans/tables via version pages
+        int spans;
+        int tables;
+        try (var ps = docs.connection().prepareStatement(
+                "SELECT COUNT(*) FROM span s JOIN block b ON b.block_id=s.block_id"
+                        + " JOIN page p ON p.page_id=b.page_id"
+                        + " WHERE p.document_version_id = ?")) {
+            ps.setLong(1, version.documentVersionId());
+            try (var rs = ps.executeQuery()) {
+                rs.next();
+                spans = rs.getInt(1);
+            }
+        }
+        try (var ps = docs.connection().prepareStatement(
+                "SELECT COUNT(*) FROM table_grid tg JOIN block b ON b.block_id=tg.block_id"
+                        + " JOIN page p ON p.page_id=b.page_id"
+                        + " WHERE p.document_version_id = ?")) {
+            ps.setLong(1, version.documentVersionId());
+            try (var rs = ps.executeQuery()) {
+                rs.next();
+                tables = rs.getInt(1);
+            }
+        }
+        String extractor = version.ocrRequired() && blocks == 0
+                ? "pdf-scan-page-raster"
+                : (blocks == 0 ? "image-placeholder" : PdfLayoutExtractor.EXTRACTOR_ID);
+        return new LayoutResult(version.documentVersionId(), pages, blocks, spans, tables,
+                version.ocrRequired(), extractor);
     }
 
     private static boolean isPdf(DocumentRepository.DocumentVersionRow version) {
