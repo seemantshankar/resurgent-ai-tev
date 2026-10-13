@@ -196,6 +196,10 @@ public record ExtractResult(
 - `--tier fast|cost_effective|agentic|agentic_plus` overrides the layout-selected parse tier; with no override the `ParseTierSelector` result is used for both the LlamaParse run and the extract call.
 - No local OCR path in M2: versions with `ocr_required=1` may still be sent to LlamaExtract (it takes pixels); if the adapter reports empty text and no fields, record `partial` + `review_queue` category `extract_empty` rather than inventing values.
 
+**Standalone `tev-doc parse` (ratified at M2 review)**
+
+The LlamaParse client behind extract's job reuse is also exposed as a verb (S2.8): parse a document version with the tier resolved like extract (`--tier` override, else the layout `ParseTierSelector` result), persist per-page cleaned markdown into `cloud_parse_pages` (migration `V48__cloud_parse_pages.sql`), re-fetch an existing job with `--job`, and optionally dump one `pNNN.md` per page with `--out`. Extract still reuses an existing parse job id, so parse + extract spend is never double-counted (credits rule above).
+
 ### S2.4 Normalizers (deterministic, after extract)
 
 Shared with the Excel scale rules (architecture §7.4):
@@ -270,6 +274,10 @@ tev-doc induce   --mandate <id> --db <workspace.db> [--industry auto|<tag>] \
 
 tev-doc facts    --mandate <id> [--path <ontology path prefix>] [--document <id>] \
   [--kind money|...] [--current] [--json]
+
+tev-doc parse    --mandate <id> --version <document_version_id> --db <workspace.db> \
+  [--tier fast|cost_effective|agentic|agentic_plus] [--job <llama_parse_job_id>] \
+  [--out <dir>] [--blob-root ...]
 ```
 
 - picocli under `com.resurgent.tev.doc.cli`, same style as `DocIngestCommand` / `DocLayoutCommand`.
@@ -278,6 +286,7 @@ tev-doc facts    --mandate <id> [--path <ontology path prefix>] [--document <id>
 - `extract --pages` scopes the run to a 1-based page selection (e.g. `1-5,8`); it is validated against the document page count (out-of-range exits 3) and sent as LlamaExtract `configuration.target_pages`. Citations keep original page numbers, so provenance is unaffected. Omit for all pages.
 - `bind` prints bound/unbound counts and the ontology paths touched.
 - `facts` prints or JSON-exports retrievable facts **with evidence** (verbatim, page, bbox when known) — this is the retrieval API for all later consumers (discrepancy engine, report bullets, syndication docs).
+- `parse` runs LlamaParse on the version (tier like extract: `--tier` override, else layout selector), persists cleaned page markdown to `cloud_parse_pages`, prints tier / job id / page count, re-fetches with `--job`, and writes `pNNN.md` files with `--out`.
 - Both extract/bind accept `--db`; blob root resolution matches ingest (`--blob-root` or beside the db).
 - Exit codes: `0` success (including partial with warnings printed), `3` invalid arguments/pack, `1` runtime failure.
 
@@ -294,6 +303,7 @@ tev-doc facts    --mandate <id> [--path <ontology path prefix>] [--document <id>
 | `extract.primary` | `llama-extract` | primary adapter id |
 | `extract.max_usd_per_document` | none | abort/flag when exceeded |
 | `extract.timeout_ms` | 180000 | per document extract call |
+| `DOC_LLM_DEBUG` | unset | when set, doc LLM clients print raw replies (e.g. classify tie-break) to stderr for debugging |
 | `extract.timeout_ms` | — | secrets never in `workspace.db` or packs |
 
 ### S2.10 Testing boundaries
@@ -474,3 +484,4 @@ Sorted by path then confidence desc. This is the stable read surface for Phase-1
 - [x] T13: Induced-pack integration — induce on a non-solar synthetic cluster (e.g. hotel folio / manufacturing quotation wording) then extract+bind without hand-written pack — acceptance: no analyst step; published pack fields bind; required coverage gate measured (covers: S2.11; S2.10; depends: T12, T9)
 - [x] T14: `tev-doc classify` — file_role + identity_signals + tie-break LLM; writes `doc_type_code` + pack selection + reasons — acceptance: golden docs classify to the right pack; unknown type stays `unknown` and extract can still run open; `--force` re-classifies (covers: S2.12; depends: T2, T3)
 - [x] T15: Retrieval — `tev-doc facts` + `FactQuery` API with filters and evidence join — acceptance: JSON export lists value + verbatim + page/bbox for golden extracts; path/document/kind filters work; no PDF re-parse on read (covers: S2.13; depends: T7)
+- [x] T16: `tev-doc parse` verb + `V48__cloud_parse_pages.sql` (ratified at M2 review; built with extract's parse-job reuse, now declared in S2.3/S2.8) — acceptance: parse persists per-page markdown, `--job` re-fetches, `--out` dumps files, exit codes follow S2.8 (covers: S2.3; S2.8)
