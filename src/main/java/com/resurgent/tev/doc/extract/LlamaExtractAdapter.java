@@ -66,6 +66,10 @@ public final class LlamaExtractAdapter implements ExtractClient {
     /** Config key for the optional credit/spend guard. */
     public static final String KEY_MAX_USD = "extract.max_usd_per_document";
 
+    /** USD per LlamaParse credit (vendor list price: 1,000 credits = $1.20). */
+    public static final String KEY_CREDITS_USD_RATE = "llama.credits_usd_rate";
+    static final double DEFAULT_USD_PER_CREDIT = 0.0012;
+
     /**
      * Adapter option carrying the Parse tier Extract should run with (or mirror when a parse
      * job is reused). Set by the extract runner from the layout selector or {@code --tier}.
@@ -101,6 +105,7 @@ public final class LlamaExtractAdapter implements ExtractClient {
     private final String projectId;
     private final long defaultTimeoutMs;
     private final Double defaultMaxUsd;
+    private final double usdPerCredit;
     private final String defaultTier;
 
     /** Live adapter reading LlamaParse/LlamaCloud keys from process env and {@code .env}. */
@@ -115,6 +120,7 @@ public final class LlamaExtractAdapter implements ExtractClient {
      * @param env {@code LLAMA_CLOUD_API_KEY} (or {@code LLAMAPARSE_API_KEY} /
      *     {@code llamaparse_api_key}), optional {@code LLAMA_EXTRACT_BASE_URL} /
      *     {@code LLAMA_EXTRACT_MODEL} / {@code LLAMA_CLOUD_PROJECT_ID} /
+     *     {@code llama.credits_usd_rate} /
      *     {@code extract.timeout_ms} / {@code extract.max_usd_per_document}
      */
     public LlamaExtractAdapter(Map<String, String> env) {
@@ -131,6 +137,9 @@ public final class LlamaExtractAdapter implements ExtractClient {
                 DEFAULT_TIMEOUT_MS);
         this.defaultMaxUsd = parseDouble(
                 firstNonBlank(env, KEY_MAX_USD, envName(KEY_MAX_USD)));
+        Double rate = parseDouble(
+                firstNonBlank(env, KEY_CREDITS_USD_RATE, envName(KEY_CREDITS_USD_RATE)));
+        this.usdPerCredit = rate == null || rate <= 0 ? DEFAULT_USD_PER_CREDIT : rate;
         this.defaultTier = resolveDefaultTier(env);
     }
 
@@ -219,17 +228,19 @@ public final class LlamaExtractAdapter implements ExtractClient {
 
         try {
             // Cost guard before/around the call (S2.3): estimate the expected spend from
-            // the selected page count and the tier's credits-per-page rate and refuse
-            // pre-submit when the estimate exceeds the cap — no spend is incurred.
+            // the selected page count and the tier's credits-per-page rate, convert the
+            // credits to USD at the vendor rate, and refuse pre-submit when the estimate
+            // exceeds the USD cap — no spend is incurred.
             String tierWire = resolveTier(req.options());
             int pages = estimatePageCount(req);
             int creditsPerPage = ParseTier.fromWire(tierWire).creditsPerPage();
-            double estimated = (double) pages * creditsPerPage;
-            if (maxUsd != null && estimated > maxUsd) {
-                throw new ExtractException("LlamaExtract estimated spend " + estimated
+            double estimatedCredits = (double) pages * creditsPerPage;
+            double estimatedUsd = estimatedCredits * usdPerCredit;
+            if (maxUsd != null && estimatedUsd > maxUsd) {
+                throw new ExtractException("LlamaExtract estimated spend " + estimatedCredits
                         + " credits (" + pages + " pages × " + creditsPerPage
-                        + " credits/page on tier " + tierWire
-                        + ") exceeds extract.max_usd_per_document " + maxUsd
+                        + " credits/page on tier " + tierWire + ") ≈ $" + estimatedUsd
+                        + " exceeds extract.max_usd_per_document " + maxUsd
                         + "; refusing to submit");
             }
             // Prefer an existing LlamaParse job id (official file_input); else upload bytes.
@@ -256,8 +267,11 @@ public final class LlamaExtractAdapter implements ExtractClient {
                     .path("document_metadata");
             Mapping mapping = mapResult(extractResult, fieldMeta, schema);
             ExtractStats stats = statsFrom(job, startNanos, hasParseJob);
-            if (maxUsd != null && stats.costUsd() != null && stats.costUsd() > maxUsd) {
-                throw new ExtractException("LlamaExtract usage " + stats.costUsd()
+            Double spentCredits = stats.credits();
+            if (maxUsd != null && spentCredits != null
+                    && spentCredits * usdPerCredit > maxUsd) {
+                throw new ExtractException("LlamaExtract usage " + spentCredits
+                        + " credits ≈ $" + (spentCredits * usdPerCredit)
                         + " exceeds extract.max_usd_per_document " + maxUsd);
             }
             return new ExtractResult(model, job, mapping.facts(), mapping.citations(), stats);
@@ -644,7 +658,8 @@ public final class LlamaExtractAdapter implements ExtractClient {
         } else {
             credits = null;
         }
-        // credits are not USD; the credit total is stored in the cost slot for attribution
+        // LlamaCloud bills credits, not USD; the credit total is stored in the llm_usage
+        // cost slot for attribution, and the cost guard converts it via usdPerCredit.
         return new ExtractStats(1, 0, 0, 0, credits, latency);
     }
 

@@ -395,11 +395,12 @@ class LlamaExtractAdapterTest {
         job.put("status", "COMPLETED");
         job.putObject("extract_result").put("subject_name", "X");
         ObjectNode usage = job.putObject("usage");
-        usage.put("credits", 99.0);
+        usage.put("credits", 9000.0);
         getResponse = job.toString();
 
-        // estimate (1 page × 3 credits/page = 3) fits under the cap, so the job is
-        // submitted and the post-call usage verification is what rejects
+        // estimate (1 page × 3 credits/page = 3 credits ≈ $0.0036) fits under the cap,
+        // so the job is submitted and the post-call usage verification is what rejects:
+        // 9,000 credits × $0.0012 ≈ $10.80 > cap $10
         assertThatThrownBy(() -> new LlamaExtractAdapter(Map.of(
                         "LLAMA_CLOUD_API_KEY", "k",
                         "LLAMA_EXTRACT_BASE_URL", baseUrl,
@@ -407,16 +408,18 @@ class LlamaExtractAdapterTest {
                 .extractFieldSchema(request(writeOriginal()), sampleSchema()))
                 .isInstanceOf(ExtractException.class)
                 .hasMessageContaining("usage")
+                .hasMessageContaining("credits")
                 .hasMessageContaining("max_usd_per_document");
     }
 
     @Test
     void costGuardRefusesBeforeSubmitWhenEstimateExceedsCap() {
-        // 3 pages × 3 credits/page (cost_effective) = 9 > cap 5 — refused with zero spend
+        // 3 pages × 3 credits/page (cost_effective) = 9 credits × $0.0012 ≈ $0.0108
+        // > cap $0.01 — refused with zero spend
         assertThatThrownBy(() -> new LlamaExtractAdapter(Map.of(
                         "LLAMA_CLOUD_API_KEY", "k",
                         "LLAMA_EXTRACT_BASE_URL", baseUrl,
-                        "extract.max_usd_per_document", "5"))
+                        "extract.max_usd_per_document", "0.01"))
                 .extractFieldSchema(requestPages(writeOriginal(), List.of(1, 2, 3)),
                         sampleSchema()))
                 .isInstanceOf(ExtractException.class)
@@ -427,14 +430,30 @@ class LlamaExtractAdapterTest {
 
     @Test
     void costGuardPassesThroughWhenEstimateUnderCap() throws Exception {
+        // 9 credits ≈ $0.0108 < cap $0.05
         ExtractResult out = new LlamaExtractAdapter(Map.of(
                         "LLAMA_CLOUD_API_KEY", "k",
                         "LLAMA_EXTRACT_BASE_URL", baseUrl,
-                        "extract.max_usd_per_document", "50"))
+                        "extract.max_usd_per_document", "0.05"))
                 .extractFieldSchema(requestPages(writeOriginal(), List.of(1, 2, 3)),
                         sampleSchema());
         assertThat(out.extractorId()).isEqualTo(LlamaExtractAdapter.DEFAULT_MODEL);
         assertThat(captured.get()).isNotNull();
+    }
+
+    @Test
+    void costGuardHonorsCreditsUsdRateOverride() {
+        // 9 credits × $0.01 (override) = $0.09 > cap $0.05 — refused
+        assertThatThrownBy(() -> new LlamaExtractAdapter(Map.of(
+                        "LLAMA_CLOUD_API_KEY", "k",
+                        "LLAMA_EXTRACT_BASE_URL", baseUrl,
+                        "llama.credits_usd_rate", "0.01",
+                        "extract.max_usd_per_document", "0.05"))
+                .extractFieldSchema(requestPages(writeOriginal(), List.of(1, 2, 3)),
+                        sampleSchema()))
+                .isInstanceOf(ExtractException.class)
+                .hasMessageContaining("estimated spend");
+        assertThat(captured.get()).isNull();
     }
 
     @Test

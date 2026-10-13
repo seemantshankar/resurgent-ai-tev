@@ -183,7 +183,7 @@ public record ExtractResult(
 - **Parse tier is never a blanket `agentic`.** The runner resolves the effective tier (the `--tier` override, else the layout `ParseTierSelector` result) and passes it as the `llama_parse_tier` adapter option; the adapter puts exactly that tier in `configuration.tier`. With no option the floor is `LLAMA_EXTRACT_TIER`, else `cost_effective` — a document that reaches the adapter untiered is billed at 3 credits/page, not 10–45.
 - When a LlamaParse job backs the extract (`llama_parse_job_id`), the extract call's own spend is `extract_credits` and the parse job's credits are attributed separately (`llama_parse_credits`); without a reused job the extract's total `credits` are recorded, so parse+extract spend is never double-counted.
 - Failures: timeout, 4xx, or malformed payload throw `ExtractException`; the extract command marks `parse_run.status='failed'|'partial'`, writes `audit_log`, and does not leave a half-written fact set.
-- Cost guard: `extract.max_usd_per_document` and `extract.timeout_ms` honored before/around the call.
+- Cost guard: `extract.max_usd_per_document` and `extract.timeout_ms` honored before/around the call. LlamaExtract bills **credits**, not USD; the guard converts credits to USD at `llama.credits_usd_rate` (default `0.0012` — vendor list 1,000 credits = $1.20) and compares against the USD cap, pre-submit (pages × tier credits-per-page) and post-call (`extract_credits`/`credits`).
 
 **FixtureExtractClient (offline tests)**
 
@@ -302,6 +302,7 @@ tev-doc parse    --mandate <id> --version <document_version_id> --db <workspace.
 | `LLAMA_PARSE_TIER` | `cost_effective` | parse client floor when called without an explicit tier |
 | `extract.primary` | `llama-extract` | primary adapter id |
 | `extract.max_usd_per_document` | none | abort/flag when exceeded |
+| `llama.credits_usd_rate` | `0.0012` | USD per LlamaParse/LlamaExtract credit (vendor list: 1,000 credits = $1.20); converts vendor credits for the `extract.max_usd_per_document` guard |
 | `extract.timeout_ms` | 180000 | per document extract call |
 | `DOC_LLM_DEBUG` | unset | when set, doc LLM clients print raw replies (e.g. classify tie-break) to stderr for debugging |
 | `extract.timeout_ms` | — | secrets never in `workspace.db` or packs |

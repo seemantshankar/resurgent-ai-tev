@@ -585,11 +585,11 @@ public final class ExtractService {
      */
     private static void recordUsage(WorkspaceRepository repo, long parseRunId, String modelId,
             ExtractStats stats, Map<String, String> options) throws Exception {
-        if (stats != null && (stats.calls() > 0 || stats.costUsd() != null
+        if (stats != null && (stats.calls() > 0 || stats.credits() != null
                 || stats.promptTokens() > 0 || stats.completionTokens() > 0)) {
             repo.recordLlmUsage(parseRunId, "doc-extract", modelId, stats.calls(),
                     stats.failedCalls(), 0, stats.promptTokens(), stats.completionTokens(),
-                    stats.costUsd(), stats.costUsd() == null ? 1 : 0, stats.latencyMsTotal());
+                    stats.credits(), stats.credits() == null ? 1 : 0, stats.latencyMsTotal());
         }
         if (options == null) {
             return;

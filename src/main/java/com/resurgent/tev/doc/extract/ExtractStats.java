@@ -3,14 +3,17 @@ package com.resurgent.tev.doc.extract;
 import java.util.Objects;
 
 /**
- * Call counts / tokens / cost reported by an extractor. Mapped to {@code llm_usage}.
+ * Call counts / tokens / spend reported by an extractor. Mapped to {@code llm_usage}.
+ * The spend slot carries the extractor's <em>native</em> unit: LlamaExtract bills
+ * LlamaCloud <b>credits</b> (converted to USD only by the cost guard, never for
+ * storage); OpenRouter spend is USD and lives on {@code DocLlmClient.Usage}.
  */
 public record ExtractStats(
         int calls,
         int failedCalls,
         int promptTokens,
         int completionTokens,
-        Double costUsd,
+        Double credits,
         long latencyMsTotal) {
 
     public ExtractStats {
@@ -34,10 +37,10 @@ public record ExtractStats(
     public ExtractStats plus(ExtractStats other) {
         Objects.requireNonNull(other, "other");
         Double cost = null;
-        if (costUsd != null && other.costUsd != null) {
-            cost = costUsd + other.costUsd;
+        if (credits != null && other.credits != null) {
+            cost = credits + other.credits;
         } else {
-            cost = costUsd != null ? costUsd : other.costUsd;
+            cost = credits != null ? credits : other.credits;
         }
         return new ExtractStats(
                 calls + other.calls,
