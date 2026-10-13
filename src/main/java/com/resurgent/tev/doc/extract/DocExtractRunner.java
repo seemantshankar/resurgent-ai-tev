@@ -92,7 +92,8 @@ public final class DocExtractRunner {
                 ambiguous,
                 outcome.parseRunId(),
                 effectiveTier.wireName(),
-                "partial".equals(outcome.status()) || "failed".equals(outcome.status()));
+                outcome.status(),
+                outcome.message());
     }
 
     /**
@@ -177,7 +178,8 @@ public final class DocExtractRunner {
      * @param ambiguousCount ambiguous evidence count
      * @param parseRunId parse_run id
      * @param parseTier Parse tier used (selector result, or {@code --tier} override)
-     * @param partial true when status is partial or failed
+     * @param status extract outcome status: {@code success} | {@code partial} | {@code failed}
+     * @param message human-readable outcome detail (warning text for partial/failed)
      */
     public record Result(
             String packIdentity,
@@ -187,6 +189,7 @@ public final class DocExtractRunner {
             int ambiguousCount,
             long parseRunId,
             String parseTier,
-            boolean partial) {
+            String status,
+            String message) {
     }
 }

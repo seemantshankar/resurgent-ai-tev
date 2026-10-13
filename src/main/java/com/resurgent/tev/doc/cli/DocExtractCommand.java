@@ -67,7 +67,10 @@ public final class DocExtractCommand implements Callable<Integer> {
             out.printf("facts written: %d (missing required: %d, ambiguous: %d)%n",
                     result.factsWritten(), result.missingRequired(), result.ambiguousCount());
             out.printf("parse_run: %d%n", result.parseRunId());
-            return result.partial() ? 0 : 0;
+            if (!"success".equals(result.status())) {
+                err.println("warning: extract " + result.status() + ": " + result.message());
+            }
+            return exitCode(result.status());
         } catch (IllegalArgumentException e) {
             err.println("extract rejected: " + e.getMessage());
             return 3;
@@ -75,5 +78,17 @@ public final class DocExtractCommand implements Callable<Integer> {
             err.println("extract failed: " + (e.getMessage() != null ? e.getMessage() : e));
             return 1;
         }
+    }
+
+    /**
+     * Exit code for an extract outcome (spec S2.8): {@code 0} success — including
+     * partial, which prints warnings — and {@code 1} runtime failure. Invalid
+     * arguments/pack exit {@code 3} in {@link #call()}.
+     *
+     * @param status extract outcome status ({@code success} | {@code partial} | {@code failed})
+     * @return {@code 1} when failed, else {@code 0}
+     */
+    static int exitCode(String status) {
+        return "failed".equals(status) ? 1 : 0;
     }
 }
