@@ -30,6 +30,23 @@ public enum ParseTier {
     }
 
     /**
+     * Documented LlamaParse credits per page for this tier — the rates behind the
+     * adapter's pre-submit spend estimate ({@code fast} 1, {@code cost_effective} 3,
+     * {@code agentic} 10, {@code agentic_plus} 45; see the official tier guide, also
+     * referenced on {@code LlamaParseClient}).
+     *
+     * @return credits billed per processed page on this tier
+     */
+    public int creditsPerPage() {
+        return switch (this) {
+            case FAST -> 1;
+            case COST_EFFECTIVE -> 3;
+            case AGENTIC -> 10;
+            case AGENTIC_PLUS -> 45;
+        };
+    }
+
+    /**
      * Parses a tier name (case-insensitive; hyphens allowed).
      *
      * @throws IllegalArgumentException when the name is not a known tier

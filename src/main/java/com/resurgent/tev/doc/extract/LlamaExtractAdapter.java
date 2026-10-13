@@ -211,20 +211,34 @@ public final class LlamaExtractAdapter implements ExtractClient {
         }
 
         long timeoutMs = resolveLong(req.options(), KEY_TIMEOUT_MS, defaultTimeoutMs);
-        Double maxCredits = resolveDouble(req.options(), KEY_MAX_USD, defaultMaxUsd);
+        Double maxUsd = resolveDouble(req.options(), KEY_MAX_USD, defaultMaxUsd);
         long startNanos = System.nanoTime();
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(Math.min(timeoutMs, 30_000L)))
                 .build();
 
         try {
+            // Cost guard before/around the call (S2.3): estimate the expected spend from
+            // the selected page count and the tier's credits-per-page rate and refuse
+            // pre-submit when the estimate exceeds the cap — no spend is incurred.
+            String tierWire = resolveTier(req.options());
+            int pages = estimatePageCount(req);
+            int creditsPerPage = ParseTier.fromWire(tierWire).creditsPerPage();
+            double estimated = (double) pages * creditsPerPage;
+            if (maxUsd != null && estimated > maxUsd) {
+                throw new ExtractException("LlamaExtract estimated spend " + estimated
+                        + " credits (" + pages + " pages × " + creditsPerPage
+                        + " credits/page on tier " + tierWire
+                        + ") exceeds extract.max_usd_per_document " + maxUsd
+                        + "; refusing to submit");
+            }
             // Prefer an existing LlamaParse job id (official file_input); else upload bytes.
             String fileId = hasParseJob ? parseJobId.trim() : null;
             if (fileId == null) {
                 fileId = uploadFile(client, original, timeoutMs);
             }
             String jobId = createExtractJob(client, fileId, schema, req.instructions(),
-                    resolveTier(req.options()), PageSelection.wire(req.pageIndices()), timeoutMs);
+                    tierWire, PageSelection.wire(req.pageIndices()), timeoutMs);
             JsonNode job = pollJob(client, jobId, timeoutMs, startNanos);
             String status = job.path("status").asText("");
             if (!"COMPLETED".equals(status)) {
@@ -242,9 +256,9 @@ public final class LlamaExtractAdapter implements ExtractClient {
                     .path("document_metadata");
             Mapping mapping = mapResult(extractResult, fieldMeta, schema);
             ExtractStats stats = statsFrom(job, startNanos, hasParseJob);
-            if (maxCredits != null && stats.costUsd() != null && stats.costUsd() > maxCredits) {
+            if (maxUsd != null && stats.costUsd() != null && stats.costUsd() > maxUsd) {
                 throw new ExtractException("LlamaExtract usage " + stats.costUsd()
-                        + " exceeds extract.max_usd_per_document " + maxCredits);
+                        + " exceeds extract.max_usd_per_document " + maxUsd);
             }
             return new ExtractResult(model, job, mapping.facts(), mapping.citations(), stats);
         } catch (HttpTimeoutException e) {
@@ -579,6 +593,31 @@ public final class LlamaExtractAdapter implements ExtractClient {
         } catch (IllegalArgumentException e) {
             return defaultTier;
         }
+    }
+
+    /**
+     * Page count for the pre-submit spend estimate: the explicit {@code --pages}
+     * selection when given, else the laid-out page PNGs in {@code pageBundleDir/pages/},
+     * else 1 (unknown — the post-call usage verification still guards the actual spend).
+     */
+    private static int estimatePageCount(ExtractRequest req) {
+        if (req.pageIndices() != null && !req.pageIndices().isEmpty()) {
+            return req.pageIndices().size();
+        }
+        if (req.pageBundleDir() != null) {
+            Path pages = req.pageBundleDir().resolve("pages");
+            if (Files.isDirectory(pages)) {
+                try (var stream = Files.list(pages)) {
+                    long count = stream.filter(Files::isRegularFile).count();
+                    if (count > 0) {
+                        return (int) count;
+                    }
+                } catch (IOException ignored) {
+                    // fall through to the conservative default
+                }
+            }
+        }
+        return 1;
     }
 
     /**

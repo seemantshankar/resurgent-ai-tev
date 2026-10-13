@@ -390,7 +390,7 @@ class LlamaExtractAdapterTest {
     }
 
     @Test
-    void costGuardRejectsWhenCreditsExceedMax() {
+    void costGuardRejectsAfterCompletionWhenUsageExceedsMax() {
         ObjectNode job = MAPPER.createObjectNode();
         job.put("status", "COMPLETED");
         job.putObject("extract_result").put("subject_name", "X");
@@ -398,13 +398,43 @@ class LlamaExtractAdapterTest {
         usage.put("credits", 99.0);
         getResponse = job.toString();
 
+        // estimate (1 page × 3 credits/page = 3) fits under the cap, so the job is
+        // submitted and the post-call usage verification is what rejects
         assertThatThrownBy(() -> new LlamaExtractAdapter(Map.of(
                         "LLAMA_CLOUD_API_KEY", "k",
                         "LLAMA_EXTRACT_BASE_URL", baseUrl,
-                        "extract.max_usd_per_document", "1"))
+                        "extract.max_usd_per_document", "10"))
                 .extractFieldSchema(request(writeOriginal()), sampleSchema()))
                 .isInstanceOf(ExtractException.class)
+                .hasMessageContaining("usage")
                 .hasMessageContaining("max_usd_per_document");
+    }
+
+    @Test
+    void costGuardRefusesBeforeSubmitWhenEstimateExceedsCap() {
+        // 3 pages × 3 credits/page (cost_effective) = 9 > cap 5 — refused with zero spend
+        assertThatThrownBy(() -> new LlamaExtractAdapter(Map.of(
+                        "LLAMA_CLOUD_API_KEY", "k",
+                        "LLAMA_EXTRACT_BASE_URL", baseUrl,
+                        "extract.max_usd_per_document", "5"))
+                .extractFieldSchema(requestPages(writeOriginal(), List.of(1, 2, 3)),
+                        sampleSchema()))
+                .isInstanceOf(ExtractException.class)
+                .hasMessageContaining("estimated spend")
+                .hasMessageContaining("max_usd_per_document");
+        assertThat(captured.get()).isNull();
+    }
+
+    @Test
+    void costGuardPassesThroughWhenEstimateUnderCap() throws Exception {
+        ExtractResult out = new LlamaExtractAdapter(Map.of(
+                        "LLAMA_CLOUD_API_KEY", "k",
+                        "LLAMA_EXTRACT_BASE_URL", baseUrl,
+                        "extract.max_usd_per_document", "50"))
+                .extractFieldSchema(requestPages(writeOriginal(), List.of(1, 2, 3)),
+                        sampleSchema());
+        assertThat(out.extractorId()).isEqualTo(LlamaExtractAdapter.DEFAULT_MODEL);
+        assertThat(captured.get()).isNotNull();
     }
 
     @Test
