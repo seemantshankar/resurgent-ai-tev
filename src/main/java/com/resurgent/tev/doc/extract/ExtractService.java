@@ -137,6 +137,10 @@ public final class ExtractService {
             boolean empty = writes.isEmpty();
             String status = empty ? "partial" : "success";
             String message = empty ? "extractor returned no fields" : "ok";
+            // S2.3: the adapter reported empty text and no fields — nothing was extracted
+            // to cite (citations only ride on facts), so the run is partial and flagged
+            // for operational review instead of inventing values.
+            boolean emptyText = result.citations() == null || result.citations().isEmpty();
 
             db.connection().setAutoCommit(false);
             try {
@@ -174,6 +178,20 @@ public final class ExtractService {
                         "status", status));
                 facts.insertAuditLog(parseRunId, "extract_completed", Timestamps.now(),
                         auditPayload, empty ? "warn" : "info");
+
+                if (empty && emptyText) {
+                    // issue #131: keep operational review_queue rows for extract failures
+                    // in M2 — same table/categories the Excel side uses. A re-extract
+                    // replaces the flag instead of stacking duplicates.
+                    facts.deleteReviewQueueCategory(parseRunId, "extract_empty");
+                    repo.insertReviewQueue(parseRunId, "extract_empty",
+                            "extractor returned no fields for pack " + pack.identity(),
+                            MAPPER.writeValueAsString(Map.of(
+                                    "document_version_id", documentVersionId,
+                                    "extractor", client.id(),
+                                    "facts", 0)),
+                            "Pending", false, Timestamps.now(), null);
+                }
 
                 Map<String, Object> resultMeta = new LinkedHashMap<>();
                 resultMeta.put("facts", stats.factsInserted());

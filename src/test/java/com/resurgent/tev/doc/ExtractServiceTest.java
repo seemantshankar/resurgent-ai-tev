@@ -408,6 +408,34 @@ class ExtractServiceTest {
     }
 
     @Test
+    void emptyExtractWritesReviewQueueExtractEmptyRow() throws Exception {
+        ExtractService.ExtractOutcome outcome = new ExtractService().extract(
+                dbPath, documentVersionId, mandateId, netWorthPack(), client, "1");
+        assertThat(outcome.status()).isEqualTo("partial");
+
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            try (var st = db.connection().createStatement();
+                    var run = st.executeQuery(
+                            "SELECT status FROM parse_run WHERE parse_run_id = "
+                                    + outcome.parseRunId())) {
+                assertThat(run.next()).isTrue();
+                assertThat(run.getString(1)).isEqualTo("partial");
+            }
+            // S2.3: empty text and no fields → operational review_queue row (issue #131)
+            try (var st = db.connection().createStatement();
+                    var rs = st.executeQuery(
+                            "SELECT category, summary, status FROM review_queue"
+                                    + " WHERE parse_run_id = " + outcome.parseRunId())) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString(1)).isEqualTo("extract_empty");
+                assertThat(rs.getString(2)).contains("no fields");
+                assertThat(rs.getString(3)).isEqualTo("Pending");
+                assertThat(rs.next()).isFalse();
+            }
+        }
+    }
+
+    @Test
     void configHashFollowsSpecFormula() {
         assertThat(ExtractService.configHash(netWorthPack(), "bundle-2.5"))
                 .isEqualTo("extract:identity.promoter_net_worth@1.0.0:bundle-2.5");

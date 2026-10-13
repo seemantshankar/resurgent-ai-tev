@@ -517,6 +517,22 @@ public final class FactRepository {
         }
     }
 
+    /**
+     * Removes prior review_queue rows of one category for a parse_run, so a re-extract
+     * replaces its operational flag (e.g. {@code extract_empty}) instead of stacking
+     * duplicates. Callers re-insert when the new run still qualifies.
+     *
+     * @throws SQLException if the delete fails
+     */
+    public void deleteReviewQueueCategory(long parseRunId, String category) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM review_queue WHERE parse_run_id = ? AND category = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.setString(2, category);
+            ps.executeUpdate();
+        }
+    }
+
     // --- internals ---
 
     /** Resolved (or missing) layout anchors for one quote. */
