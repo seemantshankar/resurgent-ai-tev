@@ -58,4 +58,34 @@ class FixtureExtractClientTest {
                 MAPPER.createObjectNode());
         assertThat(result.facts()).isEmpty();
     }
+
+    @Test
+    void pageSelectionDropsFactsCitedOutsideTheRange() {
+        FixtureExtractClient client = new FixtureExtractClient();
+        com.fasterxml.jackson.databind.node.ObjectNode fixture = MAPPER.createObjectNode();
+        fixture.put("doc_type_code", "demo");
+        com.fasterxml.jackson.databind.node.ObjectNode fields = fixture.putObject("fields");
+        com.fasterxml.jackson.databind.node.ObjectNode onPage1 = fields.putObject("a");
+        onPage1.put("value", "one");
+        onPage1.put("quote", "one");
+        onPage1.put("page", 1);
+        com.fasterxml.jackson.databind.node.ObjectNode onPage3 = fields.putObject("b");
+        onPage3.put("value", "three");
+        onPage3.put("quote", "three");
+        onPage3.put("page", 3);
+        client.putFixture("demo", fixture);
+
+        ExtractResult result = client.extractFieldSchema(
+                new ExtractRequest(
+                        Path.of("."),
+                        Path.of("x.pdf"),
+                        java.util.List.of(1),
+                        "en",
+                        "demo",
+                        null,
+                        java.util.Map.of()),
+                FixtureExtractClient.textSchema("a", "b"));
+
+        assertThat(result.facts()).extracting(FactCandidate::key).containsExactly("a");
+    }
 }

@@ -224,7 +224,7 @@ public final class LlamaExtractAdapter implements ExtractClient {
                 fileId = uploadFile(client, original, timeoutMs);
             }
             String jobId = createExtractJob(client, fileId, schema, req.instructions(),
-                    resolveTier(req.options()), timeoutMs);
+                    resolveTier(req.options()), PageSelection.wire(req.pageIndices()), timeoutMs);
             JsonNode job = pollJob(client, jobId, timeoutMs, startNanos);
             String status = job.path("status").asText("");
             if (!"COMPLETED".equals(status)) {
@@ -280,7 +280,7 @@ public final class LlamaExtractAdapter implements ExtractClient {
     }
 
     private String createExtractJob(HttpClient client, String fileId, JsonNode schema,
-            String instructions, String tierWire, long timeoutMs)
+            String instructions, String tierWire, String targetPages, long timeoutMs)
             throws IOException, InterruptedException, ExtractException {
         ObjectNode payload = MAPPER.createObjectNode();
         payload.put("file_input", fileId);
@@ -291,6 +291,10 @@ public final class LlamaExtractAdapter implements ExtractClient {
         configuration.set("data_schema", schema);
         configuration.put("cite_sources", true);
         configuration.put("confidence_scores", true);
+        if (targetPages != null && !targetPages.isBlank()) {
+            // 1-based page selection (--pages); pages are processed in the order listed
+            configuration.put("target_pages", targetPages);
+        }
         if (instructions != null && !instructions.isBlank()) {
             configuration.put("system_prompt", instructions.trim());
         }

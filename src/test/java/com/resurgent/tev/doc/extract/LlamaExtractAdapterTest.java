@@ -412,4 +412,66 @@ class LlamaExtractAdapterTest {
         assertThat(new LlamaExtractAdapter(Map.of("LLAMA_CLOUD_API_KEY", "k")).id())
                 .isEqualTo("llama-extract-2.5-agentic");
     }
+
+    /** Spy server capturing the extract-create POST body (upload stubbed). */
+    private record CreateSpy(HttpServer server, AtomicReference<String> lastCreate) {}
+
+    private CreateSpy startCreateSpy() throws IOException {
+        AtomicReference<String> lastCreate = new AtomicReference<>();
+        HttpServer spy = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        spy.createContext("/api/v1/beta/files", ex -> {
+            ex.getRequestBody().readAllBytes();
+            write(ex, 200, "{\"id\":\"dfl-1\"}");
+        });
+        spy.createContext("/api/v2/extract", ex -> {
+            if ("POST".equals(ex.getRequestMethod())) {
+                lastCreate.set(new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+                write(ex, 200, "{\"id\":\"ext-1\"}");
+            } else {
+                write(ex, 200, """
+                        {"id":"ext-1","status":"COMPLETED","extract_result":{"subject_name":"X"}}
+                        """);
+            }
+        });
+        spy.start();
+        return new CreateSpy(spy, lastCreate);
+    }
+
+    private ExtractRequest requestPages(Path original, List<Integer> pages) {
+        return new ExtractRequest(temp, original, pages, "en", "identity.promoter_net_worth",
+                "Extract net worth fields", Map.of());
+    }
+
+    @Test
+    void sendsTargetPagesWhenAPageSubsetIsRequested() throws Exception {
+        CreateSpy spy = startCreateSpy();
+        try {
+            LlamaExtractAdapter a = new LlamaExtractAdapter(Map.of(
+                    "LLAMA_CLOUD_API_KEY", "k",
+                    "LLAMA_EXTRACT_BASE_URL",
+                    "http://127.0.0.1:" + spy.server().getAddress().getPort()));
+            a.extractFieldSchema(
+                    requestPages(writeOriginal(), List.of(1, 2, 3, 4, 5, 8)), sampleSchema());
+            JsonNode configuration = MAPPER.readTree(spy.lastCreate().get()).path("configuration");
+            assertThat(configuration.path("target_pages").asText()).isEqualTo("1-5,8");
+        } finally {
+            spy.server().stop(0);
+        }
+    }
+
+    @Test
+    void omitsTargetPagesWhenAllPagesRequested() throws Exception {
+        CreateSpy spy = startCreateSpy();
+        try {
+            LlamaExtractAdapter a = new LlamaExtractAdapter(Map.of(
+                    "LLAMA_CLOUD_API_KEY", "k",
+                    "LLAMA_EXTRACT_BASE_URL",
+                    "http://127.0.0.1:" + spy.server().getAddress().getPort()));
+            a.extractFieldSchema(requestPages(writeOriginal(), List.of()), sampleSchema());
+            JsonNode configuration = MAPPER.readTree(spy.lastCreate().get()).path("configuration");
+            assertThat(configuration.has("target_pages")).isFalse();
+        } finally {
+            spy.server().stop(0);
+        }
+    }
 }

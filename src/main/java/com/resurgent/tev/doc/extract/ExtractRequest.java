@@ -8,6 +8,11 @@ import java.util.Objects;
 /**
  * Input to an {@link ExtractClient}. Paths point at the blob bundle so adapters can
  * send the original file (preferred) or page rasters.
+ *
+ * <p>{@code pageIndices} is the 1-based page selection to process ({@code --pages}).
+ * An empty list means all pages. The live adapter sends a non-empty selection as
+ * LlamaExtract {@code configuration.target_pages}; citations keep original page
+ * numbers, so provenance is unaffected.
  */
 public record ExtractRequest(
         Path pageBundleDir,

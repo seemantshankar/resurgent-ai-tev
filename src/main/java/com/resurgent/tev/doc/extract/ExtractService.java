@@ -77,6 +77,21 @@ public final class ExtractService {
     public ExtractOutcome extract(Path dbPath, long documentVersionId, long mandateId,
             DocTypePack pack, ExtractClient client, String extractorBundleVersion,
             String instructions, Map<String, String> options) throws Exception {
+        return extract(dbPath, documentVersionId, mandateId, pack, client,
+                extractorBundleVersion, instructions, options, null);
+    }
+
+    /**
+     * Same as {@link #extract(Path, long, long, DocTypePack, ExtractClient, String, String, Map)}
+     * with an explicit page selection ({@code --pages}).
+     *
+     * @param pageIndices 1-based pages to process, or {@code null}/empty for all pages;
+     *     validated against the document page count (out-of-range pages are rejected)
+     */
+    public ExtractOutcome extract(Path dbPath, long documentVersionId, long mandateId,
+            DocTypePack pack, ExtractClient client, String extractorBundleVersion,
+            String instructions, Map<String, String> options, List<Integer> pageIndices)
+            throws Exception {
         String configHash = "extract:" + pack.code() + "@" + pack.version() + ":"
                 + extractorBundleVersion;
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
@@ -93,10 +108,13 @@ public final class ExtractService {
                         + " has no source_file_id; cannot create extract parse_run");
             }
 
+            List<Integer> pages = resolvePages(version.pageCount(), pageIndices);
+
             long parseRunId = ensureExtractRun(repo, version.sourceFileId(), mandateId, configHash);
 
             JsonNode schema = pack.toExtractSchema();
-            ExtractRequest request = buildRequest(dbPath, version, pack, instructions, options);
+            ExtractRequest request =
+                    buildRequest(dbPath, version, pack, instructions, options, pages);
 
             ExtractResult result;
             try {
@@ -626,20 +644,45 @@ public final class ExtractService {
 
     private static ExtractRequest buildRequest(Path dbPath,
             DocumentRepository.DocumentVersionRow version, DocTypePack pack,
-            String instructions, Map<String, String> options) {
+            String instructions, Map<String, String> options, List<Integer> pageIndices) {
         BlobStore blobs = BlobStore.besideDatabase(dbPath);
         Path bundleDir = blobs.root().resolve(version.fileHash());
         Path original = blobs.originalPath(version.fileHash(), version.fileExt());
-        List<Integer> pages = new ArrayList<>();
-        int pageCount = version.pageCount() == null ? 0 : version.pageCount();
-        for (int i = 1; i <= pageCount; i++) {
-            pages.add(i);
-        }
         String instructionsText = instructions != null ? instructions
                 : ("Extract fields for pack " + pack.identity()
                         + ". Return exact quotes from the source.");
-        return new ExtractRequest(bundleDir, original, pages, null, pack.code(),
+        return new ExtractRequest(bundleDir, original, pageIndices, null, pack.code(),
                 instructionsText, options);
+    }
+
+    /**
+     * Validates a requested page selection against the document's page count.
+     *
+     * @param pageCount document page count, or {@code null}/0 when unknown
+     * @param requested 1-based pages, or {@code null}/empty for all pages
+     * @return requested pages sorted and de-duplicated, or empty for all pages
+     * @throws IllegalArgumentException when a page is below 1 or above {@code pageCount}
+     */
+    static List<Integer> resolvePages(Integer pageCount, List<Integer> requested) {
+        if (requested == null || requested.isEmpty()) {
+            return List.of();
+        }
+        int total = pageCount == null ? 0 : pageCount;
+        java.util.TreeSet<Integer> pages = new java.util.TreeSet<>();
+        for (Integer raw : requested) {
+            if (raw == null) {
+                continue;
+            }
+            if (raw < 1) {
+                throw new IllegalArgumentException("--pages is 1-based; got " + raw);
+            }
+            if (total > 0 && raw > total) {
+                throw new IllegalArgumentException(
+                        "--pages " + raw + " is out of range 1.." + total);
+            }
+            pages.add(raw);
+        }
+        return List.copyOf(pages);
     }
 
     private static long ensureExtractRun(WorkspaceRepository repo, long sourceFileId,

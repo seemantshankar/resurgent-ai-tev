@@ -1,6 +1,7 @@
 package com.resurgent.tev.doc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -53,6 +54,7 @@ class ExtractServiceTest {
         final ObjectNode payload = MAPPER.createObjectNode();
         boolean fail;
         ExtractStats stats = ExtractStats.empty();
+        ExtractRequest lastRequest;
 
         @Override
         public String id() {
@@ -62,6 +64,7 @@ class ExtractServiceTest {
         @Override
         public ExtractResult extractFieldSchema(ExtractRequest req, JsonNode schema)
                 throws ExtractException {
+            lastRequest = req;
             if (fail) {
                 throw new ExtractException("simulated extractor failure");
             }
@@ -404,5 +407,26 @@ class ExtractServiceTest {
                 dbPath, documentVersionId, mandateId, netWorthPack(), client, "1", null, null);
         assertThat(second.parseRunId()).isEqualTo(first.parseRunId());
         assertThat(usageRows(second.parseRunId())).isEmpty();
+    }
+
+    @Test
+    void pageSelectionIsValidatedAndCarriedOnTheRequest() throws Exception {
+        client.facts.add(new FactCandidate("subject_name", ValueKind.TEXT)
+                .valueText("Ramesh Sharma").confidence(0.95).extractionMethod("llm_field"));
+        ExtractService.ExtractOutcome outcome = new ExtractService().extract(
+                dbPath, documentVersionId, mandateId, netWorthPack(), client, "1", null, null,
+                List.of(1));
+
+        assertThat(outcome.status()).isEqualTo("success");
+        assertThat(client.lastRequest.pageIndices()).containsExactly(1);
+    }
+
+    @Test
+    void outOfRangePageIsRejected() {
+        assertThatThrownBy(() -> new ExtractService().extract(
+                dbPath, documentVersionId, mandateId, netWorthPack(), client, "1", null, null,
+                List.of(9)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("out of range");
     }
 }

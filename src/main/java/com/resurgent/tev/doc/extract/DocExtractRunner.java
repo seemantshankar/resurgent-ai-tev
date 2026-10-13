@@ -30,7 +30,7 @@ public final class DocExtractRunner {
      * @param blobs blob store
      * @param packCode optional pack override
      * @param extractorId optional extractor override ({@code fixture} | {@code llama-extract})
-     * @param pages optional page range string (reserved; full document for now)
+     * @param pages optional page range ({@code 1-5,8}); blank means all pages
      * @param tier optional Parse tier override ({@code fast|cost_effective|agentic|agentic_plus})
      * @return extract summary
      * @throws Exception on runtime failure
@@ -52,6 +52,8 @@ public final class DocExtractRunner {
             throws Exception {
         DocTypePack pack = resolvePack(db, documentVersionId, packCode);
         ExtractClient client = resolveClient(extractorId);
+        PageSelection pageSelection = PageSelection.parseOptional(pages);
+        List<Integer> pageIndices = pageSelection == null ? null : pageSelection.indices();
 
         ParseTier override = tier == null || tier.isBlank() ? null : ParseTier.fromWire(tier);
         ParseTier effectiveTier;
@@ -79,7 +81,8 @@ public final class DocExtractRunner {
 
         ExtractService service = new ExtractService();
         ExtractService.ExtractOutcome outcome = service.extract(
-                db, documentVersionId, mandateId, pack, client, client.id(), null, options);
+                db, documentVersionId, mandateId, pack, client, client.id(), null, options,
+                pageIndices);
         int ambiguous = outcome.fieldsAmbiguous();
         return new Result(
                 pack.identity(),

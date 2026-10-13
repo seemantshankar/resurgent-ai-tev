@@ -149,7 +149,28 @@ public final class FixtureExtractClient implements ExtractClient {
         }
 
         long latencyMs = (System.nanoTime() - start) / 1_000_000L;
-        return new ExtractResult(ID, payload, facts, citations, ExtractStats.local(latencyMs));
+        return new ExtractResult(ID, payload, keepOnPages(facts, req.pageIndices()), citations,
+                ExtractStats.local(latencyMs));
+    }
+
+    /**
+     * Simulates {@code target_pages} offline: when a page subset is requested, drop facts
+     * whose citations all fall outside it. Facts with no citation are kept (nothing to
+     * disprove their page).
+     */
+    private static List<FactCandidate> keepOnPages(List<FactCandidate> facts,
+            List<Integer> pages) {
+        if (pages == null || pages.isEmpty()) {
+            return facts;
+        }
+        List<FactCandidate> kept = new ArrayList<>();
+        for (FactCandidate fact : facts) {
+            if (fact.citations().isEmpty()
+                    || fact.citations().stream().anyMatch(c -> pages.contains(c.pageIndex()))) {
+                kept.add(fact);
+            }
+        }
+        return kept;
     }
 
     private static ValueKind kindFor(JsonNode schema, String key) {

@@ -30,7 +30,8 @@ public final class DocExtractCommand implements Callable<Integer> {
     @Option(names = "--extractor", description = "llama-extract|fixture (default: config/env)")
     String extractor;
 
-    @Option(names = "--pages", description = "Page range, e.g. 1-5,8")
+    @Option(names = "--pages",
+            description = "1-based page range, e.g. 1-5,8 (default: all pages)")
     String pages;
 
     @Option(names = "--tier",
