@@ -1,0 +1,65 @@
+code: identity.promoter_net_worth
+version: 1.0.0
+family: certificate
+file_role: certificate
+industry_tags: [general]
+identity_signals:
+  any_of:
+    - "Net Worth"
+    - "Net Worth Certificate"
+    - "Certificate of Net Worth"
+    - "परिसंपत्ति"
+fields:
+  - key: subject_name
+    path: identity > Legal Name
+    path_root: identity
+    value_kind: text
+    required: true
+    prompt_hint: "Name of the person or company whose net worth is certified"
+    synonyms: ["Name of the Member", "In the name of", "Subject"]
+  - key: as_of_date
+    path: economic > Promoter Net Worth > As Of
+    path_root: economic
+    value_kind: date
+    required: true
+    prompt_hint: "As-of date of the net worth statement"
+    synonyms: ["as on", "as at", "As Of"]
+  - key: assets_total
+    path: economic > Promoter Net Worth > Assets
+    path_root: economic
+    value_kind: money
+    required: true
+    slots: [currency, scale]
+    prompt_hint: "Total assets of the subject"
+    synonyms: ["Total Assets", "Assets", "Gross Assets"]
+  - key: liabilities_total
+    path: economic > Promoter Net Worth > Liabilities
+    path_root: economic
+    value_kind: money
+    required: true
+    slots: [currency, scale]
+    prompt_hint: "Total liabilities of the subject"
+    synonyms: ["Total Liabilities", "Liabilities", "Loans and Advances"]
+  - key: net_worth
+    path: economic > Promoter Net Worth > Net Worth
+    path_root: economic
+    value_kind: money
+    required: true
+    slots: [currency, scale]
+    prompt_hint: "Net worth (assets minus liabilities) as stated, or leave blank to derive"
+    synonyms: ["Net Worth", "NW", "Net Worth of"]
+  - key: issuer_name
+    path: frame > Signature Block > Name
+    path_root: frame
+    value_kind: text
+    required: false
+    prompt_hint: "Name of the certifying CA / issuer in the signature block"
+  - key: issuer_membership_no
+    path: frame > Signature Block > Membership
+    path_root: frame
+    value_kind: text
+    required: false
+    prompt_hint: "Membership number of the certifying CA"
+tables: []
+checklist: []
+report_sections: [financial_viability, risk]

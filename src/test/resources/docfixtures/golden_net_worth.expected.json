@@ -1,0 +1,41 @@
+{
+  "doc_type_code": "identity.promoter_net_worth",
+  "fields": {
+    "subject_name": {
+      "value": "Ramesh Kumar Sharma",
+      "quote": "Mr. Ramesh Kumar Sharma",
+      "page": 1
+    },
+    "as_of_date": {
+      "value": "31st March 2026",
+      "quote": "as on 31st March 2026",
+      "page": 1
+    },
+    "assets_total": {
+      "value": "Rs. 2,45,00,000",
+      "quote": "Total Assets: Rs. 2,45,00,000",
+      "page": 1
+    },
+    "liabilities_total": {
+      "value": "Rs. 85,00,000",
+      "quote": "Total Liabilities: Rs. 85,00,000",
+      "page": 1
+    },
+    "net_worth": {
+      "value": "Rs. 1,60,00,000",
+      "quote": "Net Worth: Rs. 1,60,00,000",
+      "page": 1
+    },
+    "issuer_name": {
+      "value": "CA Anil Kumar Verma",
+      "quote": "CA Anil Kumar Verma",
+      "page": 1
+    },
+    "issuer_membership_no": {
+      "value": "123456",
+      "quote": "Membership No. 123456",
+      "page": 1
+    }
+  },
+  "line_items": []
+}

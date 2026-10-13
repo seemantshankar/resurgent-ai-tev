@@ -201,6 +201,26 @@ public final class DocumentRepository {
     }
 
     /**
+     * Returns the classified pack code for a version, if any ({@code doc_type_code},
+     * which is a pack code or {@code unknown}).
+     *
+     * @throws SQLException if the lookup fails
+     */
+    public Optional<String> findClassificationCode(long documentVersionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT doc_type_code FROM doc_classification WHERE document_version_id = ?")) {
+            ps.setLong(1, documentVersionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    String code = rs.getString(1);
+                    return code == null || code.isBlank() ? Optional.empty() : Optional.of(code);
+                }
+                return Optional.empty();
+            }
+        }
+    }
+
+    /**
      * Returns stored version metadata, preserving absent page count and source
      * file ID as null, or empty if the version does not exist.
      *
@@ -254,6 +274,45 @@ public final class DocumentRepository {
                 "UPDATE document_version SET ingest_status = ? WHERE document_version_id = ?")) {
             ps.setString(1, ingestStatus);
             ps.setLong(2, documentVersionId);
+            ps.executeUpdate();
+        }
+    }
+
+    /**
+     * Records (or refreshes) the registry row for a published induced pack. The YAML
+     * itself lives in the pack store; this row is the queryable metadata mirror.
+     *
+     * @param fileHash SHA-256 of the published YAML (required, non-null)
+     * @param yamlPath path relative to the pack store root
+     * @param inductionRunId opaque induction run id (e.g. {@code induce:<parse_run_id>})
+     * @throws SQLException if the upsert fails
+     */
+    public void upsertDocTypePack(String code, String version, String family, String fileRole,
+            String industryTag, String fileHash, String yamlPath, String sourceMandatesJson,
+            String inductionRunId, String status) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO doc_type_pack (code, version, family, file_role, industry_tag,"
+                        + " file_hash, yaml_path, source_mandates_json, induction_run_id, status,"
+                        + " created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        + " ON CONFLICT(code, version) DO UPDATE SET"
+                        + " family = excluded.family, file_role = excluded.file_role,"
+                        + " industry_tag = excluded.industry_tag, file_hash = excluded.file_hash,"
+                        + " yaml_path = excluded.yaml_path,"
+                        + " source_mandates_json = excluded.source_mandates_json,"
+                        + " induction_run_id = excluded.induction_run_id,"
+                        + " status = excluded.status")) {
+            ps.setString(1, code);
+            ps.setString(2, version);
+            ps.setString(3, family);
+            ps.setString(4, fileRole);
+            ps.setString(5, industryTag);
+            ps.setString(6, fileHash == null ? "" : fileHash);
+            ps.setString(7, yamlPath);
+            ps.setString(8, sourceMandatesJson);
+            ps.setString(9, inductionRunId);
+            ps.setString(10, status == null ? "published" : status);
+            ps.setString(11, Timestamps.now());
             ps.executeUpdate();
         }
     }
