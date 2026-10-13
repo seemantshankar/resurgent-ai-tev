@@ -16,6 +16,7 @@ import java.util.Map;
  *   DOC_LLM_MODEL        optional model id (falls back to Excel_Enrichment_Model_id)
  *   DOC_LLM_BASE_URL     optional OpenAI-compatible chat completions endpoint
  *   DOC_LLM_TIMEOUT_MS   optional per-call deadline (default 240000)
+ *   DOC_LLM_DEBUG        when set, doc LLM clients print raw replies to stderr
  * </pre>
  *
  * When no key/model is configured the caller keeps its offline path (fixture mining /
@@ -29,12 +30,13 @@ public final class DocLlmEnvironment {
     static final String FALLBACK_MODEL = "Excel_Enrichment_Model_id";
     static final String BASE_URL = "DOC_LLM_BASE_URL";
     static final String TIMEOUT_MS = "DOC_LLM_TIMEOUT_MS";
+    static final String DEBUG = "DOC_LLM_DEBUG";
 
     /** Process env wins; a {@code .env} found in this dir or an ancestor fills the gaps. */
     public static Map<String, String> load() {
         Map<String, String> values = new LinkedHashMap<>();
         for (String key : new String[] {API_KEY, DOC_MODEL, DOC_MODEL_ALIAS, FALLBACK_MODEL,
-                BASE_URL, TIMEOUT_MS}) {
+                BASE_URL, TIMEOUT_MS, DEBUG}) {
             putIfPresent(values, key, System.getenv(key));
         }
         Path dotenv = findDotenv();
@@ -75,6 +77,18 @@ public final class DocLlmEnvironment {
             }
         }
         return null;
+    }
+
+    /**
+     * True when {@code DOC_LLM_DEBUG} is set (process env, or a non-blank value in
+     * {@code .env}): doc LLM clients print raw replies to stderr for debugging.
+     * Behaviour is configured here so the doc LLM seam owns all of its env.
+     */
+    public static boolean debugEnabled() {
+        if (System.getenv(DEBUG) != null) {
+            return true;
+        }
+        return load().get(DEBUG) != null;
     }
 
     /** Human-readable description for the run banner. */

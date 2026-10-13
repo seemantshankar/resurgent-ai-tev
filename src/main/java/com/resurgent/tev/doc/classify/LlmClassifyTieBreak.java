@@ -2,6 +2,7 @@ package com.resurgent.tev.doc.classify;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.resurgent.tev.doc.llm.DocLlmClient;
+import com.resurgent.tev.doc.llm.DocLlmEnvironment;
 import com.resurgent.tev.doc.llm.DocLlmException;
 import com.resurgent.tev.doc.llm.DocLlmJson;
 import java.util.List;
@@ -60,7 +61,7 @@ public final class LlmClassifyTieBreak implements ClassifyTieBreak {
             DocLlmClient.Completion completion =
                     client.complete(SYSTEM, userPrompt(context), MAX_COMPLETION_TOKENS);
             report(completion.usage());
-            if (System.getenv("DOC_LLM_DEBUG") != null) {
+            if (DocLlmEnvironment.debugEnabled()) {
                 System.err.println("[doc-classify] raw reply: " + completion.content());
             }
             return interpret(completion.content(), context.candidates());
