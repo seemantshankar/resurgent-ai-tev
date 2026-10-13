@@ -2,9 +2,24 @@ package com.resurgent.tev.doc.extract;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.resurgent.tev.parser.classify.CellScale;
 import org.junit.jupiter.api.Test;
 
 class MoneyNormalizerTest {
+
+    @Test
+    void scaleMultipliersMatchCellScaleSourceOfTruth() {
+        // MoneyNormalizer re-declares the money multipliers that CellScale
+        // (parser/classify) owns (architecture §7.4); the two enums must stay
+        // identical or Excel scale rules and document money parsing drift apart.
+        for (MoneyNormalizer.Scale scale : MoneyNormalizer.Scale.values()) {
+            CellScale shared = CellScale.valueOf(scale.name());
+            assertThat(scale.multiplier())
+                    .as("multiplier for %s must equal CellScale.%s", scale.name(), shared.name())
+                    .isEqualTo(shared.multiplier());
+            assertThat(scale.wireName()).isEqualTo(shared.wireName());
+        }
+    }
 
     @Test
     void lakhGetsScaleAndAbsoluteAmount() {
