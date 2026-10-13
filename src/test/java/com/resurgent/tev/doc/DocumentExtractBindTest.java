@@ -139,6 +139,22 @@ class DocumentExtractBindTest {
                 .filter(r -> "gross_total".equals(r.fieldKey()))
                 .findFirst().orElseThrow();
         assertThat(gross.absoluteAmount()).isNotBlank();
+
+        // S2.1 grouping keys: line items carry grouping_* evidence naming the parent
+        // facts (vendor, package, validity, tax/freight flags) they belong to.
+        List<FactRow> lines = rows.stream()
+                .filter(r -> "line_items".equals(r.fieldKey()))
+                .toList();
+        assertThat(lines).isNotEmpty();
+        assertThat(lines).allSatisfy(line ->
+                assertThat(line.evidence()).anySatisfy(e -> {
+                    assertThat(e.role()).isEqualTo("grouping_vendor");
+                    assertThat(e.verbatim()).isEqualTo("vendor_name");
+                }));
+        assertThat(lines.get(0).evidence())
+                .extracting(FactRow.EvidenceRow::role)
+                .contains("grouping_package", "grouping_validity",
+                        "grouping_tax", "grouping_freight");
     }
 
     @Test

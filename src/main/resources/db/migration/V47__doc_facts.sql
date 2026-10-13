@@ -2,6 +2,9 @@
 -- fact / fact_value / fact_evidence + pack registry. M1 left provenance_doc empty on purpose.
 -- Re-run replaces facts for a parse_run (delete children then insert) — same discipline as
 -- cell interpretation snapshots. No clause / clause_slot / checklist tables here (M3).
+-- Quotation grouping keys (S2.1: vendor, package, validity, tax/freight flags) stay on the
+-- parent facts; line-item facts carry fact_evidence rows whose role names the group
+-- (grouping_vendor / grouping_package / grouping_validity / grouping_tax / grouping_freight).
 
 CREATE TABLE fact (
     fact_id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,7 +73,9 @@ CREATE TABLE fact_evidence (
     ordinal             INTEGER NOT NULL,
     role                TEXT NOT NULL CHECK (role IN (
                             'verbatim_quote','table_cell','label','period','unit','currency','scale',
-                            'signature_block','stamp','handwriting','derived_from')),
+                            'signature_block','stamp','handwriting','derived_from',
+                            'grouping_vendor','grouping_package','grouping_validity',
+                            'grouping_tax','grouping_freight')),
     provenance_id       INTEGER REFERENCES provenance_doc (provenance_id),
     source_text         TEXT,
     resolution          TEXT NOT NULL CHECK (resolution IN ('resolved','missing','ambiguous')),

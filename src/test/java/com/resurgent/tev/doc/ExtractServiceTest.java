@@ -102,10 +102,17 @@ class ExtractServiceTest {
                 List.of(
                         PackField.required("vendor_name", "identity > Legal Name",
                                 "identity", ValueKind.TEXT),
+                        PackField.optional("validity_date",
+                                "commercial > Offtake term > Validity", "commercial",
+                                ValueKind.DATE),
                         PackField.required("gross_total",
                                 "economic > Project Cost > Quoted Gross", "economic",
                                 ValueKind.MONEY),
                         PackField.optional("subtotal", "economic > Project Cost > Subtotal",
+                                "economic", ValueKind.MONEY),
+                        PackField.optional("tax", "economic > Project Cost > Tax",
+                                "economic", ValueKind.MONEY),
+                        PackField.optional("freight", "economic > Project Cost > Freight",
                                 "economic", ValueKind.MONEY)),
                 List.of(Map.of(
                         "name", "line_items",
@@ -205,8 +212,17 @@ class ExtractServiceTest {
         client.facts.add(new FactCandidate("vendor_name", ValueKind.TEXT)
                 .valueText("Acme Supplies").confidence(0.9)
                 .extractionMethod("llm_field"));
+        client.facts.add(new FactCandidate("validity_date", ValueKind.DATE)
+                .valueText("12/03/2026").confidence(0.9)
+                .extractionMethod("llm_field"));
         client.facts.add(new FactCandidate("subtotal", ValueKind.MONEY)
                 .valueText("Rs. 10,000").confidence(0.9)
+                .extractionMethod("llm_field"));
+        client.facts.add(new FactCandidate("tax", ValueKind.MONEY)
+                .valueText("Rs. 1,800").confidence(0.9)
+                .extractionMethod("llm_field"));
+        client.facts.add(new FactCandidate("freight", ValueKind.MONEY)
+                .valueText("Rs. 200").confidence(0.9)
                 .extractionMethod("llm_field"));
         client.facts.add(new FactCandidate("gross_total", ValueKind.MONEY)
                 .valueText("Rs. 12,000").confidence(0.9)
@@ -254,7 +270,66 @@ class ExtractServiceTest {
 
             assertThat(rows).anySatisfy(r -> assertThat(r.fieldKey()).isEqualTo("gross_total"));
             assertThat(rows).anySatisfy(r -> assertThat(r.fieldKey()).isEqualTo("subtotal"));
+
+            assertGroupingEvidenceBindsLinesToParents(db.connection(), outcome.parseRunId());
         }
+    }
+
+    /**
+     * S2.1 grouping keys: every line item carries one {@code grouping_*} evidence row per
+     * extracted parent fact (vendor / validity / tax / freight), with the parent fact id
+     * in {@code rule_id}; parents absent from the extract produce no row.
+     */
+    private void assertGroupingEvidenceBindsLinesToParents(
+            java.sql.Connection connection, long parseRunId) throws Exception {
+        record GroupingRow(long lineFactId, String role, String sourceText,
+                String ruleId, String resolution) {}
+
+        Map<String, String> roleToParentKey = Map.of(
+                "grouping_vendor", "vendor_name",
+                "grouping_validity", "validity_date",
+                "grouping_tax", "tax",
+                "grouping_freight", "freight");
+
+        Map<String, Long> parentIds = new java.util.HashMap<>();
+        List<GroupingRow> groupingRows = new ArrayList<>();
+        try (var stParents = connection.createStatement();
+                var stEvidence = connection.createStatement();
+                var parents = stParents.executeQuery(
+                        "SELECT field_key, fact_id FROM fact WHERE parse_run_id = " + parseRunId
+                                + " AND field_key IN ('vendor_name','validity_date','tax','freight')");
+                var evidence = stEvidence.executeQuery(
+                        "SELECT f.fact_id AS line_fact_id, e.role, e.source_text, e.rule_id,"
+                                + " e.resolution FROM fact_evidence e"
+                                + " JOIN fact f ON f.fact_id = e.fact_id"
+                                + " WHERE f.parse_run_id = " + parseRunId
+                                + " AND f.field_key = 'line_items' AND e.role LIKE 'grouping_%'"
+                                + " ORDER BY f.fact_id, e.ordinal")) {
+            while (parents.next()) {
+                parentIds.put(parents.getString(1), parents.getLong(2));
+            }
+            while (evidence.next()) {
+                groupingRows.add(new GroupingRow(evidence.getLong(1), evidence.getString(2),
+                        evidence.getString(3), evidence.getString(4), evidence.getString(5)));
+            }
+        }
+
+        // two lines × four extracted parents; project_name/scope_text absent → no package rows
+        assertThat(groupingRows).hasSize(8);
+        assertThat(groupingRows).extracting(GroupingRow::role)
+                .containsExactlyInAnyOrder(
+                        "grouping_vendor", "grouping_validity", "grouping_tax",
+                        "grouping_freight",
+                        "grouping_vendor", "grouping_validity", "grouping_tax",
+                        "grouping_freight");
+        assertThat(groupingRows).allSatisfy(r -> {
+            assertThat(r.sourceText())
+                    .isEqualTo(roleToParentKey.get(r.role()));
+            assertThat(r.resolution()).isEqualTo("resolved");
+            // rule_id points at the parent fact whose key the group names
+            assertThat(r.ruleId())
+                    .isEqualTo(String.valueOf(parentIds.get(roleToParentKey.get(r.role()))));
+        });
     }
 
     private ArrayNode payloadItems() {

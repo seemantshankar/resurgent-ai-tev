@@ -27,6 +27,21 @@ import java.util.Map;
  */
 public final class FactRepository {
 
+    /**
+     * Quotation grouping keys (S2.1/S2.7): parent fact field keys that group line-item
+     * facts, each mapped to the {@code fact_evidence.role} naming the group. The key
+     * values stay on the parent facts ({@code vendor_name}, {@code validity_date},
+     * {@code tax}, {@code freight}, …); a line item only carries the role plus the
+     * parent fact id in {@code rule_id}, so re-grouping never duplicates values.
+     */
+    public static final Map<String, String> GROUPING_ROLES = Map.of(
+            "vendor_name", "grouping_vendor",
+            "project_name", "grouping_package",
+            "scope_text", "grouping_package",
+            "validity_date", "grouping_validity",
+            "tax", "grouping_tax",
+            "freight", "grouping_freight");
+
     private final Connection connection;
 
     public FactRepository(Connection connection) {
@@ -176,6 +191,20 @@ public final class FactRepository {
                     insertFactEvidence(factId, ordinal++, "derived_from", null,
                             parentKey, "resolved", null,
                             parentId == null ? null : String.valueOf(parentId));
+                    evidenceInserted++;
+                }
+            }
+            if ("line_items".equals(f.fieldKey())) {
+                // S2.1 grouping: bind the line to the quotation's parent facts via a
+                // role that names the group; the value itself stays on the parent.
+                for (Map.Entry<String, String> group : GROUPING_ROLES.entrySet()) {
+                    List<Long> parentIds = idsByFieldKey.get(group.getKey());
+                    if (parentIds == null || parentIds.isEmpty()) {
+                        continue;
+                    }
+                    insertFactEvidence(factId, ordinal++, group.getValue(), null,
+                            group.getKey(), "resolved", null,
+                            String.valueOf(parentIds.get(0)));
                     evidenceInserted++;
                 }
             }
