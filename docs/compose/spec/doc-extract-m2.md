@@ -1,9 +1,9 @@
 ---
 feature: doc-extract-m2
-status: designed
-updated: 2026-10-12
+status: implemented
+updated: 2026-10-13
 branch: feat/doc-extract-m2
-commits:
+commits: ec2f552, 6abdd6d
 ---
 
 # M2: Document Extract, Classify, Persist, Retrieve
@@ -275,6 +275,7 @@ tev-doc facts    --mandate <id> [--path <ontology path prefix>] [--document <id>
 - picocli under `com.resurgent.tev.doc.cli`, same style as `DocIngestCommand` / `DocLayoutCommand`.
 - `classify` writes `document.doc_type_code` + selected `pack_code`/`pack_version` and a confidence + reasons (signals used).
 - `extract` prints pack, extractor id, facts written, missing required fields, ambiguous evidence count, and the parse_run id.
+- `extract --pages` scopes the run to a 1-based page selection (e.g. `1-5,8`); it is validated against the document page count (out-of-range exits 3) and sent as LlamaExtract `configuration.target_pages`. Citations keep original page numbers, so provenance is unaffected. Omit for all pages.
 - `bind` prints bound/unbound counts and the ontology paths touched.
 - `facts` prints or JSON-exports retrievable facts **with evidence** (verbatim, page, bbox when known) — this is the retrieval API for all later consumers (discrepancy engine, report bullets, syndication docs).
 - Both extract/bind accept `--db`; blob root resolution matches ingest (`--blob-root` or beside the db).
@@ -458,18 +459,18 @@ Sorted by path then confidence desc. This is the stable read surface for Phase-1
 
 ## Tasks
 
-- [ ] T1: Migration `V47__doc_facts.sql` — fact / fact_value / fact_evidence + run_stat/llm_usage stage extension (+ `doc_type_pack` registry if kept in SQLite) — acceptance: applies to a fresh workspace and a migrated FM workspace; no behavior change without extract (covers: S2.2)
-- [ ] T2: PackLoader + DocTypePack validation + `toExtractSchema()` — acceptance: valid YAML loads; invalid packs fail with actionable errors; schema fragment lists every pack field (covers: S2.1)
-- [ ] T3: Seed packs `identity.promoter_net_worth`, `quotation.vendor`, `agreement.ppa` under `src/main/resources/docpacks/` as engine goldens — acceptance: all three load; required/optional leaves and paths match S2.1 tables; used by tests, not as the only authoring path (covers: S2.1)
-- [ ] T4: ExtractClient SPI + records + FixtureExtractClient — acceptance: fixture returns deterministic FactCandidates with quotes for the golden PDFs (covers: S2.3)
-- [ ] T5: LlamaExtractAdapter behind the SPI with env config, timeout, and audit payload retention — acceptance: HTTP-stub test proves request/response mapping; missing key selects fixture or fails clearly when llama is forced (covers: S2.3)
-- [ ] T6: Deterministic normalizers (money/date/duration/percent) shared scale table with Excel rules — acceptance: unit tests cover lakh/crore, `31.03.2026`, `25 years`, and unstated-unit rate (covers: S2.4)
-- [ ] T7: Extract service — parse_run identity, fact/fact_evidence/provenance_doc writes, quote resolution, derived net-worth path, run replace on re-extract — acceptance: integration on golden PDFs writes citable facts and re-extract does not duplicate (covers: S2.2; S2.5; S2.7; depends: T1, T2, T4, T6)
-- [ ] T8: Bind service (pack-path only) + spine ensure for pack paths — acceptance: bind marks pack fields bound with ontology_path/path_root; extras stay unbound with reason (covers: S2.6; depends: T3, T7)
-- [ ] T9: CLI `tev-doc extract` and `tev-doc bind` — acceptance: commands run end-to-end on golden fixtures, print summaries, write run_stat/audit_log/llm_usage; existing FM Loader tests remain green (no FM changes) (covers: S2.8; S2.9; depends: T5, T7, T8)
-- [ ] T10: Golden integration suite `DocumentExtractBindTest` — acceptance: ingest→classify→extract→bind on three synthetic documents yields required fields bound for each pack, with verbatim provenance (covers: S2.10; depends: T9)
-- [ ] T11: Pack induction service — type clustering, LLM field mining, generalization filters (label-not-value, consensus, spine-first) — acceptance: unit tests strip company/PAN-like tokens and keep industry-generic fields; single-doc cluster can still map spine labels (covers: S2.11)
-- [ ] T12: Pack store + registry + `tev-doc induce` CLI with quality gates and `--dry-run` — acceptance: induce publishes a versioned YAML pack only when all gates pass; failed gates leave the corpus extractable and log why; re-induction bumps version (covers: S2.11; depends: T2, T11)
-- [ ] T13: Induced-pack integration — induce on a non-solar synthetic cluster (e.g. hotel folio / manufacturing quotation wording) then extract+bind without hand-written pack — acceptance: no analyst step; published pack fields bind; required coverage gate measured (covers: S2.11; S2.10; depends: T12, T9)
-- [ ] T14: `tev-doc classify` — file_role + identity_signals + tie-break LLM; writes `doc_type_code` + pack selection + reasons — acceptance: golden docs classify to the right pack; unknown type stays `unknown` and extract can still run open; `--force` re-classifies (covers: S2.12; depends: T2, T3)
-- [ ] T15: Retrieval — `tev-doc facts` + `FactQuery` API with filters and evidence join — acceptance: JSON export lists value + verbatim + page/bbox for golden extracts; path/document/kind filters work; no PDF re-parse on read (covers: S2.13; depends: T7)
+- [x] T1: Migration `V47__doc_facts.sql` — fact / fact_value / fact_evidence + run_stat/llm_usage stage extension (+ `doc_type_pack` registry if kept in SQLite) — acceptance: applies to a fresh workspace and a migrated FM workspace; no behavior change without extract (covers: S2.2)
+- [x] T2: PackLoader + DocTypePack validation + `toExtractSchema()` — acceptance: valid YAML loads; invalid packs fail with actionable errors; schema fragment lists every pack field (covers: S2.1)
+- [x] T3: Seed packs `identity.promoter_net_worth`, `quotation.vendor`, `agreement.ppa` under `src/main/resources/docpacks/` as engine goldens — acceptance: all three load; required/optional leaves and paths match S2.1 tables; used by tests, not as the only authoring path (covers: S2.1)
+- [x] T4: ExtractClient SPI + records + FixtureExtractClient — acceptance: fixture returns deterministic FactCandidates with quotes for the golden PDFs (covers: S2.3)
+- [x] T5: LlamaExtractAdapter behind the SPI with env config, timeout, and audit payload retention — acceptance: HTTP-stub test proves request/response mapping; missing key selects fixture or fails clearly when llama is forced (covers: S2.3)
+- [x] T6: Deterministic normalizers (money/date/duration/percent) shared scale table with Excel rules — acceptance: unit tests cover lakh/crore, `31.03.2026`, `25 years`, and unstated-unit rate (covers: S2.4)
+- [x] T7: Extract service — parse_run identity, fact/fact_evidence/provenance_doc writes, quote resolution, derived net-worth path, run replace on re-extract — acceptance: integration on golden PDFs writes citable facts and re-extract does not duplicate (covers: S2.2; S2.5; S2.7; depends: T1, T2, T4, T6)
+- [x] T8: Bind service (pack-path only) + spine ensure for pack paths — acceptance: bind marks pack fields bound with ontology_path/path_root; extras stay unbound with reason (covers: S2.6; depends: T3, T7)
+- [x] T9: CLI `tev-doc extract` and `tev-doc bind` — acceptance: commands run end-to-end on golden fixtures, print summaries, write run_stat/audit_log/llm_usage; existing FM Loader tests remain green (no FM changes) (covers: S2.8; S2.9; depends: T5, T7, T8)
+- [x] T10: Golden integration suite `DocumentExtractBindTest` — acceptance: ingest→classify→extract→bind on three synthetic documents yields required fields bound for each pack, with verbatim provenance (covers: S2.10; depends: T9)
+- [x] T11: Pack induction service — type clustering, LLM field mining, generalization filters (label-not-value, consensus, spine-first) — acceptance: unit tests strip company/PAN-like tokens and keep industry-generic fields; single-doc cluster can still map spine labels (covers: S2.11)
+- [x] T12: Pack store + registry + `tev-doc induce` CLI with quality gates and `--dry-run` — acceptance: induce publishes a versioned YAML pack only when all gates pass; failed gates leave the corpus extractable and log why; re-induction bumps version (covers: S2.11; depends: T2, T11)
+- [x] T13: Induced-pack integration — induce on a non-solar synthetic cluster (e.g. hotel folio / manufacturing quotation wording) then extract+bind without hand-written pack — acceptance: no analyst step; published pack fields bind; required coverage gate measured (covers: S2.11; S2.10; depends: T12, T9)
+- [x] T14: `tev-doc classify` — file_role + identity_signals + tie-break LLM; writes `doc_type_code` + pack selection + reasons — acceptance: golden docs classify to the right pack; unknown type stays `unknown` and extract can still run open; `--force` re-classifies (covers: S2.12; depends: T2, T3)
+- [x] T15: Retrieval — `tev-doc facts` + `FactQuery` API with filters and evidence join — acceptance: JSON export lists value + verbatim + page/bbox for golden extracts; path/document/kind filters work; no PDF re-parse on read (covers: S2.13; depends: T7)
