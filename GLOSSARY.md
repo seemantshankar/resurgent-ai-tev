@@ -160,6 +160,64 @@ _Avoid_: validated, approved, money vs non-money (alone)
 The economic root: frozen global bank mid-levels (CapEx + Means of Finance + working-capital margin hard; thin P&L/BS/CF). Industry packs add leaves on top; a mandate overlay holds soft leaves and aliases under known parents and is the living growth of the master set across classify runs. Identity paths and frame paths are separate roots and are not leaves of this spine. Classify sends an ontology slice: spine + selected pack + overlay. Missing industry infers a stub and asks for one confirm; it does not block the slice.
 _Avoid_: cost-head table, per-FM dictionary, Unmapped parking lot, frame path, purge-on-classify
 
+## Document intelligence
+
+**Document type**:
+What kind of supporting document a file is (net-worth certificate, vendor quotation, PPA, PVsyst report…), decided by the system; a type it has not seen before stays unknown until it is learned from similar documents.
+_Avoid_: category, file role
+
+**Fact**:
+One data point taken from a supporting document (a net-worth figure, a quotation total, a tariff), stored with its normalised value, the exact source words, and its page and position, and tagged with the entity it is about and, where relevant, the site.
+_Avoid_: field, extracted value, data point (alone)
+
+**Entity**:
+A company or person a mandate's documents are about: the borrower, its promoters, or a group company, identified from documents such as the MOA/AOA, the DPR and the mandate letter.
+_Avoid_: party, subject, company (alone)
+
+**Site**:
+One physical project location within a mandate (for example one of several plants), identified from the documents and matched across spelling variants. Site-level facts, checklist items and conflicts are tracked per site.
+_Avoid_: location, plant, project (alone)
+
+**Passage**:
+A section of prose from a supporting document (a DPR chapter, a promoter profile), kept verbatim with its pages, a short summary and a topic, together with the facts found inside it.
+_Avoid_: chunk, paragraph, narrative block
+
+**Document date**:
+The date a document was made, signed, executed or issued, as stated in the document itself. File metadata dates are used only when the document states none, and are marked as such. It is the main signal for which document is the latest.
+_Avoid_: file date, created date
+
+**Upload date**:
+When a document was added to a mandate in the system. Document sets arrive in instalments, so a later upload hints that a document is newer, but it never overrides a date the document itself states.
+_Avoid_: received date, ingest date
+
+**Superseded**:
+A fact replaced by a newer statement of the same data point about the same entity and site, from an amendment, a revised document or a newer certificate. It is kept, shown as "superseded by…", and not used for new outputs.
+_Avoid_: deleted, overwritten, obsolete
+
+**Clause**:
+A contractual or regulatory provision in a supporting document (termination, change in law, force majeure…), kept verbatim with its page and position. Only documents whose type is known to carry clauses are read for them.
+_Avoid_: term, condition, section
+
+**Checklist item**:
+Something a client is expected to provide for a mandate: either an **expected document** (a PPA, a net-worth certificate) or an **expected data point** inside one (the PPA tariff, the net-worth figure). Each has a stated basis: the regulation or practice that requires it, or the client document sets in which it was seen.
+_Avoid_: requirement, rule
+
+**Checklist status**:
+Where a checklist item stands for a mandate: **Provided** (evidence on a page), **Unclear** (present but unreliable, never counted as provided), **Not provided**, **Conflicting**, or **Not applicable** (decided by the system with a recorded reason). Not provided, Unclear and Conflicting are flagged to the analyst.
+_Avoid_: found, satisfied, missing
+
+**Spine checklist**:
+The checklist items a mandate needs whatever its project type, kept separately per country, for example those about the borrower, its promoters and the loan. It grows when an item proves to be independent of project type and client document sets across different industries confirm it.
+_Avoid_: master checklist, default checklist
+
+**Industry checklist**:
+The checklist items a particular industry in a particular country adds on top of the spine checklist (a PPA for Indian solar power, a hotel licence for Indian hotels). It starts as a system-drafted list and is reshaped by the documents clients in that industry actually provide. Items outside a mandate's industries are never asked for.
+_Avoid_: pack checklist, custom checklist
+
+**Conflict**:
+Two credible sources (two documents, two sections of one document, or a document and the financial model) stating different values for the same data point about the same entity, site and period. It is settled by a stated precedence rule, or by the system with written reasoning, or left **Conflicting** and flagged; it is never settled silently.
+_Avoid_: discrepancy (alone), mismatch, error
+
 ## Phase 1 (current scope)
 
 - **FM Loader**: file adapters (xlsx / xls / csv), safety limits, SQLite persistence, ingest QA (cell / reference / formula reconciliation). Cell contract: coord, typed values, formula text + `formula_normalized` + cached value, merges, hidden flags, `style_id` → shared cell style (bold, `number_format`, fill FG + pattern, per-side borders), reference edges, and the formula graph (precedents and dependents) at ingest — no quantity parsing, header labels, font name/size, or fill background (ADR 0013, ADR 0024).

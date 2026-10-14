@@ -12,4 +12,4 @@ Five canonical labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-f
 
 ## Domain docs
 
-Single-context layout: one `CONTEXT.md` at the repo root and ADRs under `docs/adr/`. See `docs/agents/domain.md`.
+Single-context layout: one `GLOSSARY.md` at the repo root and ADRs under `docs/adr/`. See `docs/agents/domain.md`.
