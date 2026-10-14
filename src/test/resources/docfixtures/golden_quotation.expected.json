@@ -1,0 +1,76 @@
+{
+  "doc_type_code": "quotation.vendor",
+  "fields": {
+    "vendor_name": {
+      "value": "Sri Sai Electricals Pvt Ltd",
+      "quote": "Sri Sai Electricals Pvt Ltd",
+      "page": 1
+    },
+    "quote_date": {
+      "value": "12/02/2026",
+      "quote": "Quotation Date: 12/02/2026",
+      "page": 1
+    },
+    "validity_date": {
+      "value": "12/03/2026",
+      "quote": "Validity: 12/03/2026",
+      "page": 1
+    },
+    "project_name": {
+      "value": "5 MW Solar Plant, Anantapur",
+      "quote": "Project: 5 MW Solar Plant, Anantapur",
+      "page": 1
+    },
+    "subtotal": {
+      "value": "Rs. 52,50,000",
+      "quote": "Subtotal: Rs. 52,50,000",
+      "page": 1
+    },
+    "tax": {
+      "value": "Rs. 9,45,000",
+      "quote": "Tax (GST 18%): Rs. 9,45,000",
+      "page": 1
+    },
+    "freight": {
+      "value": "Rs. 50,000",
+      "quote": "Freight: Rs. 50,000",
+      "page": 1
+    },
+    "gross_total": {
+      "value": "Rs. 62,45,000",
+      "quote": "Grand Total: Rs. 62,45,000",
+      "page": 1
+    },
+    "payment_terms": {
+      "value": "30% advance, 70% on delivery",
+      "quote": "Payment Terms: 30% advance, 70% on delivery",
+      "page": 1
+    }
+  },
+  "line_items": [
+    {
+      "description": "Solar Module 550W",
+      "qty": 200,
+      "unit_rate": 18000,
+      "amount": 3600000,
+      "quote": "Solar Module 550W              200    18000      36,00,000",
+      "page": 1
+    },
+    {
+      "description": "Inverter 100kW",
+      "qty": 2,
+      "unit_rate": 250000,
+      "amount": 500000,
+      "quote": "Inverter 100kW                   2   250000       5,00,000",
+      "page": 1
+    },
+    {
+      "description": "DC Cable Set",
+      "qty": 1,
+      "unit_rate": 150000,
+      "amount": 150000,
+      "quote": "DC Cable Set                     1   150000       1,50,000",
+      "page": 1
+    }
+  ]
+}

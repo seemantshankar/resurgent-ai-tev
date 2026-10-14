@@ -1,0 +1,41 @@
+{
+  "doc_type_code": "agreement.ppa",
+  "fields": {
+    "seller_name": {
+      "value": "Bhagyanagar Solar Power Pvt Ltd",
+      "quote": "Seller: Bhagyanagar Solar Power Pvt Ltd",
+      "page": 1
+    },
+    "buyer_name": {
+      "value": "State Distribution Company Ltd",
+      "quote": "Buyer: State Distribution Company Ltd",
+      "page": 1
+    },
+    "tariff": {
+      "value": "Rs. 4.50 per kWh",
+      "quote": "Tariff: Rs. 4.50 per kWh",
+      "page": 1
+    },
+    "tenor": {
+      "value": "25 years",
+      "quote": "Tenor: 25 years from COD",
+      "page": 1
+    },
+    "cod": {
+      "value": "30/09/2027",
+      "quote": "COD: 30/09/2027",
+      "page": 1
+    },
+    "capacity_mw": {
+      "value": "5.00 MW",
+      "quote": "Contract Capacity: 5.00 MW",
+      "page": 1
+    },
+    "governing_law": {
+      "value": "Indian Contract Act",
+      "quote": "Governing Law: Indian Contract Act",
+      "page": 1
+    }
+  },
+  "line_items": []
+}

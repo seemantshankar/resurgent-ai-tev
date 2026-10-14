@@ -1,0 +1,71 @@
+{
+  "doc_type_code": "quotation.vendor",
+  "fields": {
+    "vendor_name": {
+      "value": "Hotel Amenities India Ltd",
+      "quote": "Hotel Amenities India Ltd",
+      "page": 1
+    },
+    "quote_date": {
+      "value": "18/01/2026",
+      "quote": "Date: 18/01/2026",
+      "page": 1
+    },
+    "validity_date": {
+      "value": "28/02/2026",
+      "quote": "Validity: 28/02/2026",
+      "page": 1
+    },
+    "project_name": {
+      "value": "Sea View Resort & Spa, Goa",
+      "quote": "Sea View Resort & Spa, Goa",
+      "page": 1
+    },
+    "subtotal": {
+      "value": "Rs. 13,32,500",
+      "quote": "Subtotal: Rs. 13,32,500",
+      "page": 1
+    },
+    "tax": {
+      "value": "Rs. 2,39,850",
+      "quote": "GST: Rs. 2,39,850",
+      "page": 1
+    },
+    "freight": {
+      "value": "Rs. 45,000",
+      "quote": "Freight & Installation: Rs. 45,000",
+      "page": 1
+    },
+    "gross_total": {
+      "value": "Rs. 16,17,350",
+      "quote": "Grand Total: Rs. 16,17,350",
+      "page": 1
+    }
+  },
+  "line_items": [
+    {
+      "description": "King Size Bed Package",
+      "qty": 40,
+      "unit_rate": 22000,
+      "amount": 880000,
+      "quote": "King Size Bed Package             40    22000       8,80,000",
+      "page": 1
+    },
+    {
+      "description": "Mini Bar Unit",
+      "qty": 40,
+      "unit_rate": 8500,
+      "amount": 340000,
+      "quote": "Mini Bar Unit                     40     8500       3,40,000",
+      "page": 1
+    },
+    {
+      "description": "Pool Lounger",
+      "qty": 25,
+      "unit_rate": 4500,
+      "amount": 112500,
+      "quote": "Pool Lounger                      25     4500       1,12,500",
+      "page": 1
+    }
+  ]
+}
