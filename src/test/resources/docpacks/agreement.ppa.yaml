@@ -1,0 +1,65 @@
+code: agreement.ppa
+version: 1.0.0
+family: agreement
+file_role: agreement
+industry_tags: [solar_power, wind_power, hybrid, general]
+identity_signals:
+  any_of:
+    - "Power Purchase Agreement"
+    - "PPA"
+    - "Power Purchase"
+    - "विद्युत क्रय समझौता"
+fields:
+  - key: seller_name
+    path: commercial > Offtake > Seller
+    path_root: commercial
+    value_kind: text
+    required: true
+    prompt_hint: "Seller / generator name"
+    synonyms: ["Seller", "Generator", "Wind Power Generator"]
+  - key: buyer_name
+    path: commercial > Offtake > Buyer
+    path_root: commercial
+    value_kind: text
+    required: true
+    prompt_hint: "Buyer / procurer / licensee name"
+    synonyms: ["Buyer", "Procurer", "Licensee"]
+  - key: tariff
+    path: commercial > Offtake > Tariff
+    path_root: commercial
+    value_kind: money
+    required: true
+    slots: [currency, scale, unit]
+    prompt_hint: "Tariff / PPA rate in ₹ per kWh (or energy unit as stated)"
+    synonyms: ["Tariff", "PPA rate", "Energy charge"]
+  - key: tenor
+    path: commercial > Offtake > Tenor
+    path_root: commercial
+    value_kind: duration
+    required: true
+    prompt_hint: "PPA tenor / term as stated (e.g. 25 years)"
+    synonyms: ["Tenor", "Term", "Period of agreement"]
+  - key: cod
+    path: technical > COD
+    path_root: technical
+    value_kind: date
+    required: false
+    prompt_hint: "Commercial operation date or scheduled COD"
+    synonyms: ["COD", "Commercial Operation Date"]
+  - key: capacity_mw
+    path: technical > Capacity
+    path_root: technical
+    value_kind: quantity
+    required: true
+    slots: [unit]
+    prompt_hint: "Contracted capacity in MW (or as stated)"
+    synonyms: ["Capacity", "Contract Capacity", "MW"]
+  - key: governing_law
+    path: legal > Governing law
+    path_root: legal
+    value_kind: text
+    required: false
+    prompt_hint: "Governing law / jurisdiction as stated"
+tables: []
+checklist: []
+report_sections: [financial_viability, risk]

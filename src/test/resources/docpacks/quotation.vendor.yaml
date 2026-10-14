@@ -1,0 +1,99 @@
+code: quotation.vendor
+version: 1.0.0
+family: quotation
+file_role: quotation
+industry_tags: [general]
+identity_signals:
+  any_of:
+    - "Quotation"
+    - "Quotation / Estimate"
+    - "Offer"
+    - "Bill of Quantities"
+    - "BOQ"
+    - "Price Bid"
+fields:
+  - key: vendor_name
+    path: identity > Legal Name
+    path_root: identity
+    value_kind: text
+    required: true
+    prompt_hint: "Vendor / supplier legal name"
+    synonyms: ["From", "Supplier", "Vendor", "M/s"]
+  - key: quote_date
+    path: frame > Document Title > Date
+    path_root: frame
+    value_kind: date
+    required: false
+    prompt_hint: "Date of the quotation"
+  - key: validity_date
+    path: commercial > Offtake term > Validity
+    path_root: commercial
+    value_kind: date
+    required: false
+    prompt_hint: "Offer validity date or period end"
+  - key: project_name
+    path: technical > Location
+    path_root: technical
+    value_kind: text
+    required: false
+    prompt_hint: "Project or site name the quote is for"
+  - key: scope_text
+    path: technical > Capacity
+    path_root: technical
+    value_kind: text
+    required: false
+    prompt_hint: "Scope / capacity description as stated"
+  - key: subtotal
+    path: economic > Project Cost > Subtotal
+    path_root: economic
+    value_kind: money
+    required: false
+    slots: [currency, scale]
+    prompt_hint: "Subtotal before tax and freight"
+  - key: tax
+    path: economic > Project Cost > Tax
+    path_root: economic
+    value_kind: money
+    required: false
+    slots: [currency, scale]
+    prompt_hint: "GST / tax amount"
+  - key: freight
+    path: economic > Project Cost > Freight
+    path_root: economic
+    value_kind: money
+    required: false
+    slots: [currency, scale]
+    prompt_hint: "Freight / packing / installation charges"
+  - key: gross_total
+    path: economic > Project Cost > Quoted Gross
+    path_root: economic
+    value_kind: money
+    required: true
+    slots: [currency, scale]
+    prompt_hint: "Total quoted amount including tax and freight"
+    synonyms: ["Total", "Grand Total", "Net Payable"]
+  - key: payment_terms
+    path: commercial > Offtake term > Payment
+    path_root: commercial
+    value_kind: text
+    required: false
+    prompt_hint: "Payment terms as stated"
+tables:
+  - name: line_items
+    path: economic > Project Cost > Line Item
+    path_root: economic
+    fields:
+      - key: description
+        value_kind: text
+        prompt_hint: "Line item description / material name"
+      - key: qty
+        value_kind: quantity
+        prompt_hint: "Quantity"
+      - key: unit_rate
+        value_kind: money
+        prompt_hint: "Unit rate"
+      - key: amount
+        value_kind: money
+        prompt_hint: "Line amount"
+checklist: []
+report_sections: [financial_viability]
