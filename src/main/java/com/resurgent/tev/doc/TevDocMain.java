@@ -7,6 +7,7 @@ import com.resurgent.tev.doc.cli.DocClassifyCommand;
 import com.resurgent.tev.doc.cli.DocExtractCommand;
 import com.resurgent.tev.doc.cli.DocFactsCommand;
 import com.resurgent.tev.doc.cli.DocInduceClausesCommand;
+import com.resurgent.tev.doc.cli.DocInduceChecklistsCommand;
 import com.resurgent.tev.doc.cli.DocInduceCommand;
 import com.resurgent.tev.doc.cli.DocIngestCommand;
 import com.resurgent.tev.doc.cli.DocLayoutCommand;
@@ -20,7 +21,8 @@ import picocli.CommandLine.Command;
         subcommands = {
         DocIngestCommand.class, DocLayoutCommand.class, DocParseCommand.class,
         DocClassifyCommand.class, DocExtractCommand.class, DocBindCommand.class,
-        DocInduceCommand.class, DocInduceClausesCommand.class, DocFactsCommand.class,
+        DocInduceCommand.class, DocInduceClausesCommand.class, DocInduceChecklistsCommand.class,
+        DocFactsCommand.class,
         DocAssessCommand.class, DocQaCommand.class, DocChecklistCommand.class})
 public final class TevDocMain {
 

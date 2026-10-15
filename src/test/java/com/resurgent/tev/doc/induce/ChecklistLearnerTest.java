@@ -21,7 +21,7 @@ class ChecklistLearnerTest {
     void addsATypeSeenInMostMandatesAndDowngradesTheMissing() {
         ChecklistDefinition draft = solarDraft();
         List<ChecklistLearner.MandateObservation> mandates = List.of(
-                solar(1, "agreement.ppa", "report.pvsyst", "approval.evacuation"),
+                solar(1, "agreement.ppa", "approval.evacuation"),
                 solar(2, "agreement.ppa", "approval.evacuation"),
                 solar(3, "agreement.ppa", "approval.evacuation"));
 
@@ -48,8 +48,8 @@ class ChecklistLearnerTest {
                     .filteredOn(change -> change.kind().equals("made_optional"))
                     .singleElement().satisfies(change -> {
                         assertThat(change.itemKey()).isEqualTo("pvsyst_report");
-                        assertThat(change.sourceMandateIds()).containsExactly(2L, 3L);
-                        assertThat(change.note()).startsWith("optional:").contains("2 of the 3");
+                        assertThat(change.sourceMandateIds()).containsExactly(1L, 2L, 3L);
+                        assertThat(change.note()).startsWith("optional:").contains("3 of the 3");
                     });
 
             ChecklistDefinition learned = update.definition();
@@ -104,13 +104,11 @@ class ChecklistLearnerTest {
                 new ChecklistLearner.Config(1, 4, 2));
         assertThat(strict.updates()).isEmpty();
 
-        // minMissing 1: solar_ppa (not provided in 3 mandates) becomes optional.
+        // Even minMissing 1 cannot downgrade an item that a client provided.
         ChecklistLearner.Outcome relaxedMissing = ChecklistLearner.learn(
                 inputs(mandates, solarDraft()), new FixtureProjectTypeIndependenceJudge(),
                 new ChecklistLearner.Config(1, 1, 2));
-        assertThat(relaxedMissing.updates()).singleElement().satisfies(update ->
-                assertThat(update.changes()).extracting(ChecklistLearner.ItemChange::kind)
-                        .containsExactly("made_optional"));
+        assertThat(relaxedMissing.updates()).isEmpty();
     }
 
     @Test

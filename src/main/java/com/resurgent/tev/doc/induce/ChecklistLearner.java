@@ -90,14 +90,34 @@ public final class ChecklistLearner {
      * @param documentTypes the document types its documents were classified as
      */
     public record MandateObservation(
-            long mandateId,
+            SourceMandate source,
             String country,
             List<String> industries,
             List<String> documentTypes) {
 
+        public MandateObservation(long mandateId, String country, List<String> industries,
+                List<String> documentTypes) {
+            this(new SourceMandate("", mandateId), country, industries, documentTypes);
+        }
+
         public MandateObservation {
+            Objects.requireNonNull(source, "source");
             industries = industries == null ? List.of() : List.copyOf(industries);
-            documentTypes = documentTypes == null ? List.of() : List.copyOf(documentTypes);
+            documentTypes = documentTypes == null ? List.of() : documentTypes.stream().distinct().toList();
+        }
+    }
+
+    /** A database-local mandate id is meaningful only together with its workspace. */
+    public record SourceMandate(String workspace, long mandateId) implements Comparable<SourceMandate> {
+        @Override
+        public int compareTo(SourceMandate other) {
+            int byWorkspace = workspace.compareTo(other.workspace);
+            return byWorkspace == 0 ? Long.compare(mandateId, other.mandateId) : byWorkspace;
+        }
+
+        @Override
+        public String toString() {
+            return workspace.isEmpty() ? Long.toString(mandateId) : workspace + "#" + mandateId;
         }
     }
 
@@ -121,7 +141,7 @@ public final class ChecklistLearner {
      * @param kind {@code added} | {@code made_optional} | {@code promoted}
      * @param itemKey the item key
      * @param documentType the document type the change is about
-     * @param sourceMandateIds the mandates that provided it ({@code added}, {@code
+     * @param sourceMandates the mandates that provided it ({@code added}, {@code
      *     promoted}) or that did not ({@code made_optional})
      * @param reason one line why the change was made
      * @param note the note stored on the item (e.g. why it became optional, or the
@@ -131,13 +151,18 @@ public final class ChecklistLearner {
             String kind,
             String itemKey,
             String documentType,
-            List<Long> sourceMandateIds,
+            List<SourceMandate> sourceMandates,
             String reason,
             String note) {
 
         public ItemChange {
-            sourceMandateIds = sourceMandateIds == null ? List.of()
-                    : List.copyOf(sourceMandateIds);
+            sourceMandates = sourceMandates == null ? List.of()
+                    : List.copyOf(sourceMandates);
+        }
+
+        /** Local ids for callers inspecting a single workspace; provenance uses sourceMandates. */
+        public List<Long> sourceMandateIds() {
+            return sourceMandates.stream().map(SourceMandate::mandateId).toList();
         }
     }
 
@@ -247,9 +272,9 @@ public final class ChecklistLearner {
         String industryLabel = String.join(", ", definitionIndustries);
 
         List<ItemChange> changes = new ArrayList<>();
-        for (Map.Entry<String, List<Long>> entry : observedTypes(group).entrySet()) {
+        for (Map.Entry<String, List<SourceMandate>> entry : observedTypes(group).entrySet()) {
             String documentType = entry.getKey();
-            List<Long> sourceMandates = entry.getValue();
+            List<SourceMandate> sourceMandates = entry.getValue();
             if (sourceMandates.size() < config.minObservedMandates()
                     || sourceMandates.size() * 2 <= total) {
                 continue;
@@ -267,12 +292,12 @@ public final class ChecklistLearner {
             if (!item.mandatory()) {
                 continue;
             }
-            List<Long> missing = group.stream()
+            List<SourceMandate> missing = group.stream()
                     .filter(m -> !m.documentTypes().contains(item.documentType()))
-                    .map(MandateObservation::mandateId)
+                    .map(MandateObservation::source)
                     .sorted()
                     .toList();
-            if (missing.size() < config.minMissingMandates()) {
+            if (missing.size() != total || missing.size() < config.minMissingMandates()) {
                 continue;
             }
             String reason = "not provided in " + missing.size() + " of the " + total + " "
@@ -296,7 +321,7 @@ public final class ChecklistLearner {
     private static DefinitionUpdate learnSpine(ChecklistDefinition spine,
             List<MandateObservation> mandates, ProjectTypeIndependenceJudge judge, Config config,
             List<ProjectTypeIndependenceJudge.Judgement> judgements) {
-        Map<String, List<Long>> mandatesByType = new TreeMap<>();
+        Map<String, List<SourceMandate>> mandatesByType = new TreeMap<>();
         Map<String, Set<String>> industriesByType = new TreeMap<>();
         for (MandateObservation mandate : mandates) {
             if (!countryMatches(spine.country(), mandate.country())) {
@@ -304,7 +329,7 @@ public final class ChecklistLearner {
             }
             for (String documentType : mandate.documentTypes()) {
                 mandatesByType.computeIfAbsent(documentType, k -> new ArrayList<>())
-                        .add(mandate.mandateId());
+                        .add(mandate.source());
                 industriesByType.computeIfAbsent(documentType, k -> new TreeSet<>())
                         .addAll(mandate.industries());
             }
@@ -336,7 +361,7 @@ public final class ChecklistLearner {
             if (judgement == null || !judgement.independent()) {
                 continue;
             }
-            List<Long> sourceMandates = mandatesByType
+            List<SourceMandate> sourceMandates = mandatesByType
                     .getOrDefault(candidate.documentType(), List.of()).stream()
                     .sorted()
                     .toList();
@@ -396,16 +421,16 @@ public final class ChecklistLearner {
     }
 
     /** Document type → the mandate ids that provided it, ascending, in type order. */
-    private static Map<String, List<Long>> observedTypes(List<MandateObservation> group) {
-        Map<String, List<Long>> providedBy = new TreeMap<>();
+    private static Map<String, List<SourceMandate>> observedTypes(List<MandateObservation> group) {
+        Map<String, List<SourceMandate>> providedBy = new TreeMap<>();
         for (MandateObservation mandate : group) {
             for (String documentType : mandate.documentTypes()) {
                 providedBy.computeIfAbsent(documentType, k -> new ArrayList<>())
-                        .add(mandate.mandateId());
+                        .add(mandate.source());
             }
         }
-        Map<String, List<Long>> sorted = new LinkedHashMap<>();
-        for (Map.Entry<String, List<Long>> entry : providedBy.entrySet()) {
+        Map<String, List<SourceMandate>> sorted = new LinkedHashMap<>();
+        for (Map.Entry<String, List<SourceMandate>> entry : providedBy.entrySet()) {
             sorted.put(entry.getKey(), entry.getValue().stream().sorted().toList());
         }
         return sorted;
@@ -437,7 +462,7 @@ public final class ChecklistLearner {
     }
 
     private static MandateObservation fold(MandateObservation mandate) {
-        return new MandateObservation(mandate.mandateId(), mandate.country(),
+        return new MandateObservation(mandate.source(), mandate.country(),
                 mandate.industries().stream()
                         .map(ChecklistLearner::foldIndustryKey)
                         .filter(key -> !key.isEmpty())
@@ -464,10 +489,10 @@ public final class ChecklistLearner {
         return major + "." + (minor + 1) + ".0";
     }
 
-    private static String mandateIds(List<Long> ids) {
+    private static String mandateIds(List<SourceMandate> ids) {
         List<String> text = new ArrayList<>();
-        for (Long id : ids) {
-            text.add(Long.toString(id));
+        for (SourceMandate source : ids) {
+            text.add(source.toString());
         }
         return String.join(", ", text);
     }

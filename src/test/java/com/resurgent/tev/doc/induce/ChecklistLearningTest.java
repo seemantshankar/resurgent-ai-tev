@@ -56,6 +56,9 @@ class ChecklistLearningTest {
                         assertThat(row.checklistVersion()).isEqualTo("1.1.0");
                         assertThat(row.origin()).isEqualTo("observed");
                         assertThat(row.basisKind()).isEqualTo("observed");
+                        for (var source : workspaces) {
+                            assertThat(row.basisText()).contains(source.dbPath().toString() + "#1");
+                        }
                         assertThat(row.status()).isEqualTo("provided");
                         assertThat(row.pageIndex()).isEqualTo(1);
                     });
@@ -69,11 +72,118 @@ class ChecklistLearningTest {
         }
         assertThat(DocInduceChecklistsRunner.run(workspaces, null,
                 ChecklistLearner.Config.defaults()).updates()).isEmpty();
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(workspaces.get(0).dbPath())) {
+            var history = new com.resurgent.tev.doc.db.ChecklistRepository(db.connection())
+                    .learningHistory(1L);
+            assertThat(history).filteredOn(e -> e.eventType().equals("checklist_learning_summary"))
+                    .hasSize(2).allSatisfy(event -> {
+                        var payload = new ObjectMapper().readTree(event.payload());
+                        assertThat(payload.path("mandates_read").asInt()).isEqualTo(3);
+                        assertThat(payload.path("thresholds").path("min_observed_mandates").asInt()).isEqualTo(2);
+                        assertThat(payload.path("thresholds").path("min_missing_mandates").asInt()).isEqualTo(2);
+                        assertThat(payload.path("thresholds").path("min_industries_for_spine").asInt()).isEqualTo(2);
+                    });
+            assertThat(history).filteredOn(e -> e.eventType().equals("checklist_learned"))
+                    .hasSize(2).allSatisfy(event -> {
+                        var payload = new ObjectMapper().readTree(event.payload());
+                        assertThat(payload.path("reason").asText()).isNotBlank();
+                        assertThat(payload.path("new_version").asText()).isEqualTo("1.1.0");
+                        assertThat(payload.path("source_mandates")).hasSize(3);
+                        List<String> paths = new ArrayList<>();
+                        payload.path("source_mandates").forEach(source -> {
+                            assertThat(source.path("mandate_id").asLong()).isEqualTo(1);
+                            paths.add(source.path("workspace").asText());
+                        });
+                        assertThat(paths).containsExactlyInAnyOrderElementsOf(workspaces.stream()
+                                .map(w -> w.dbPath().toString()).toList());
+                    });
+        }
+    }
+
+    @Test
+    void neverProvidedMeansAbsentFromEveryMandateNotJustNOfThem() throws Exception {
+        var a = workspace("a", "solar_power", "approval.evacuation", "report.pvsyst");
+        var b = workspace("b", "solar_power", "approval.evacuation");
+        var c = workspace("c", "solar_power", "approval.evacuation");
+        DocInduceChecklistsRunner.run(List.of(a, b, c), null, ChecklistLearner.Config.defaults());
+        DocAssessRunner.run(1L, b.dbPath(), new FakeDocLlmClient("{}"));
+        assertThat(qa(b).checklist()).filteredOn(r -> r.itemKey().equals("pvsyst_report"))
+                .singleElement().satisfies(r -> assertThat(r.mandatory()).isTrue());
+    }
+
+    @Test
+    void inductionCliPromotesOnlyCrossIndustryLlmJudgedItemsAndHonorsThresholds() throws Exception {
+        var workspaces = List.of(
+                workspace("solar-a", "solar_power", "approval.evacuation", "certificate.tax", "certificate.project"),
+                workspace("solar-b", "solar_power", "approval.evacuation", "certificate.tax", "certificate.project"),
+                workspace("solar-c", "solar_power", "approval.evacuation", "certificate.tax", "certificate.project"),
+                workspace("hotel", "hotel", "certificate.tax", "certificate.project"));
+        FakeDocLlmClient judge = new FakeDocLlmClient("""
+                {"judgements":[
+                  {"document_type":"certificate.tax","independent":true,"reason":"Tax compliance applies to every borrower"},
+                  {"document_type":"certificate.project","independent":false,"reason":"Project-specific licence"},
+                  {"document_type":"approval.evacuation","independent":true,"reason":"Unrequested solar-only type"},
+                  {"document_type":"invented.type","independent":true,"reason":"Not observed"}]}
+                """);
+        var command = new picocli.CommandLine(
+                new com.resurgent.tev.doc.cli.DocInduceChecklistsCommand(judge));
+        List<String> args = new ArrayList<>(List.of("--min-observed-mandates", "3",
+                "--min-missing-mandates", "4", "--min-industries-for-spine", "2"));
+        for (var workspace : workspaces) {
+            args.addAll(List.of("--mandate", "1", "--db", workspace.dbPath().toString()));
+        }
+        assertThat(com.resurgent.tev.doc.TevDocMain.commandLine().getSubcommands())
+                .containsKey("induce-checklists");
+        assertThat(command.execute(args.toArray(String[]::new))).isZero();
+        for (var workspace : workspaces) {
+            DocAssessRunner.run(1L, workspace.dbPath(), new FakeDocLlmClient("{}"));
+            MandateQa qa = qa(workspace);
+            assertThat(qa.checklist()).filteredOn(r -> r.itemKey().equals("certificate_tax"))
+                    .singleElement().satisfies(r -> {
+                        assertThat(r.origin()).isEqualTo("promoted");
+                        assertThat(r.checklistVersion()).isEqualTo("1.1.0");
+                        assertThat(r.note()).contains("Tax compliance");
+                    });
+            assertThat(qa.checklist()).filteredOn(r -> r.itemKey().equals("pvsyst_report"))
+                    .singleElement().satisfies(r -> assertThat(r.mandatory()).isTrue());
+            var spine = ChecklistStore.loadCatalog(workspace.dbPath()).values().stream()
+                    .filter(ChecklistDefinition::isSpine).findFirst().orElseThrow();
+            assertThat(spine.items()).extracting(ChecklistItemDef::documentType)
+                    .contains("certificate.tax").doesNotContain("approval.evacuation",
+                            "certificate.project", "invented.type");
+        }
+    }
+
+    @Test
+    void repeatedWorkspaceCannotManufactureAConsensus() throws Exception {
+        var a = workspace("one", "solar_power", "approval.evacuation");
+        var alias = new DocInduceChecklistsRunner.MandateWorkspace(1L,
+                a.dbPath().getParent().resolve(".").resolve("workspace.db"));
+        var result = DocInduceChecklistsRunner.run(List.of(a, a, alias), null,
+                ChecklistLearner.Config.defaults());
+        assertThat(result.mandatesRead()).isEqualTo(1);
+        assertThat(result.updates()).isEmpty();
+        assertThat(store(a).loadAll()).extracting(ChecklistDefinition::version).containsExactly("1.0.0");
+    }
+
+    @Test
+    void latestVersionAcrossStoresWinsEvenWhenAnOlderWorkspaceIsLast() throws Exception {
+        var a = workspace("newer", "solar_power", "approval.evacuation");
+        var b = workspace("older", "solar_power", "approval.evacuation");
+        var initial = store(a).loadAll().get(0);
+        store(a).publishVersioned(new ChecklistDefinition(initial.code(), "1.4.0", initial.scope(),
+                initial.country(), initial.industries(), initial.items(), "existing learning"));
+        DocInduceChecklistsRunner.run(List.of(a, b), null, ChecklistLearner.Config.defaults());
+        for (var workspace : List.of(a, b)) {
+            DocAssessRunner.run(1L, workspace.dbPath(), new FakeDocLlmClient("{}"));
+            assertThat(qa(workspace).checklist()).filteredOn(r -> r.itemKey().equals("approval_evacuation"))
+                    .singleElement().satisfies(r -> assertThat(r.checklistVersion()).isEqualTo("1.5.0"));
+        }
     }
 
     private DocInduceChecklistsRunner.MandateWorkspace workspace(String name, String industry,
             String... types) throws Exception {
-        Path directory = Files.createDirectories(temp.resolve(name));
+        Path directory = Files.createDirectories(temp.resolve(name)).toRealPath();
         Path dbPath = directory.resolve("workspace.db");
         var workspace = new DocInduceChecklistsRunner.MandateWorkspace(1L, dbPath);
         try (WorkspaceDatabase ignored = WorkspaceDatabase.open(dbPath)) { }

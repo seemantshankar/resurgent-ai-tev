@@ -97,6 +97,14 @@ public final class DocInduceChecklistsRunner {
         if (workspaces.isEmpty()) {
             throw new IllegalArgumentException("checklist learning needs at least one workspace");
         }
+        Set<MandateWorkspace> distinct = new LinkedHashSet<>();
+        for (MandateWorkspace workspace : workspaces) {
+            if (workspace.mandateId() <= 0 || !java.nio.file.Files.isRegularFile(workspace.dbPath())) {
+                throw new IllegalArgumentException("expected an existing mandate workspace: " + workspace);
+            }
+            distinct.add(new MandateWorkspace(workspace.mandateId(), workspace.dbPath().toRealPath()));
+        }
+        workspaces = List.copyOf(distinct);
         List<ChecklistLearner.MandateObservation> observations = readObservations(workspaces);
         Map<String, ChecklistDefinition> catalog = loadCatalog(workspaces);
 
@@ -111,7 +119,7 @@ public final class DocInduceChecklistsRunner {
                 judge, config);
         List<Path> published = publish(workspaces, outcome.updates());
 
-        persist(workspaces, outcome, published, usage, client != null);
+        persist(workspaces, outcome, published, usage, client != null, config);
         return new Result(workspaces.size(), outcome.updates(), outcome.judgements(), published);
     }
 
@@ -138,7 +146,8 @@ public final class DocInduceChecklistsRunner {
                     }
                 }
                 observations.add(new ChecklistLearner.MandateObservation(
-                        workspace.mandateId(), country, industries,
+                        new ChecklistLearner.SourceMandate(workspace.dbPath().toString(),
+                                workspace.mandateId()), country, industries,
                         List.copyOf(documentTypes)));
             }
         }
@@ -153,16 +162,12 @@ public final class DocInduceChecklistsRunner {
      */
     private static Map<String, ChecklistDefinition> loadCatalog(List<MandateWorkspace> workspaces)
             throws Exception {
-        Map<String, ChecklistDefinition> catalog = new LinkedHashMap<>();
-        ChecklistDefinition seed = ChecklistLoader.loadSeedSpine();
-        catalog.put(seed.code(), seed);
+        List<ChecklistDefinition> definitions = new ArrayList<>();
+        definitions.add(ChecklistLoader.loadSeedSpine());
         for (Path root : storeRoots(workspaces)) {
-            for (ChecklistDefinition definition
-                    : ChecklistStore.latestPerCode(new ChecklistStore(root).loadAll()).values()) {
-                catalog.put(definition.code(), definition);
-            }
+            definitions.addAll(new ChecklistStore(root).loadAll());
         }
-        return catalog;
+        return ChecklistStore.latestPerCode(definitions);
     }
 
     /**
@@ -202,7 +207,7 @@ public final class DocInduceChecklistsRunner {
      */
     private static void persist(List<MandateWorkspace> workspaces,
             ChecklistLearner.Outcome outcome, List<Path> published, List<DocLlmClient.Usage> usage,
-            boolean liveModel) throws Exception {
+            boolean liveModel, ChecklistLearner.Config config) throws Exception {
         Map<String, DocLlmClient.Usage> totals = new LinkedHashMap<>();
         for (DocLlmClient.Usage total : usage) {
             totals.merge(total.modelId(), total, DocLlmClient.Usage::plus);
@@ -213,7 +218,7 @@ public final class DocInduceChecklistsRunner {
                 connection.setAutoCommit(false);
                 try {
                     persistWorkspace(connection, workspace, outcome, published, totals.values(),
-                            liveModel);
+                            liveModel, workspaces.size(), config);
                     connection.commit();
                 } catch (Exception e) {
                     try {
@@ -235,7 +240,8 @@ public final class DocInduceChecklistsRunner {
 
     private static void persistWorkspace(Connection connection, MandateWorkspace workspace,
             ChecklistLearner.Outcome outcome, List<Path> published,
-            Iterable<DocLlmClient.Usage> totals, boolean liveModel) throws Exception {
+            Iterable<DocLlmClient.Usage> totals, boolean liveModel, int mandatesRead,
+            ChecklistLearner.Config config) throws Exception {
         WorkspaceRepository repo = new WorkspaceRepository(connection);
         AssessmentRepository assessment = new AssessmentRepository(connection);
         Long sourceFileId = assessment.anchorSourceFileId(workspace.mandateId());
@@ -282,7 +288,8 @@ public final class DocInduceChecklistsRunner {
         repo.recordRunStat(parseRunId, STAGE, "llm_calls",
                 (double) (liveModel && judged ? 1 : 0), null);
         repo.insertAuditLog(parseRunId, "checklist_learning_summary", Timestamps.now(),
-                summaryPayload(workspace, outcome, published, liveModel), "info");
+                summaryPayload(workspace, outcome, published, liveModel, mandatesRead,
+                        config), "info");
         repo.updateParseRunResult(parseRunId, Timestamps.now(),
                 outcome.updates().isEmpty() ? "partial" : "success",
                 "{\"mandate\":" + workspace.mandateId()
@@ -303,8 +310,9 @@ public final class DocInduceChecklistsRunner {
         node.put("item_key", change.itemKey());
         node.put("document_type", change.documentType());
         ArrayNode mandates = node.putArray("source_mandates");
-        for (Long mandateId : change.sourceMandateIds()) {
-            mandates.add(mandateId);
+        for (ChecklistLearner.SourceMandate source : change.sourceMandates()) {
+            mandates.addObject().put("workspace", source.workspace())
+                    .put("mandate_id", source.mandateId());
         }
         node.put("reason", change.reason());
         return node.toString();
@@ -312,9 +320,15 @@ public final class DocInduceChecklistsRunner {
 
     /** Audit payload: the run in one line — counts, judgements and published files. */
     private static String summaryPayload(MandateWorkspace workspace,
-            ChecklistLearner.Outcome outcome, List<Path> published, boolean liveModel) {
+            ChecklistLearner.Outcome outcome, List<Path> published, boolean liveModel,
+            int mandatesRead, ChecklistLearner.Config config) {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("mandate", workspace.mandateId());
+        node.put("mandates_read", mandatesRead);
+        ObjectNode thresholds = node.putObject("thresholds");
+        thresholds.put("min_observed_mandates", config.minObservedMandates());
+        thresholds.put("min_missing_mandates", config.minMissingMandates());
+        thresholds.put("min_industries_for_spine", config.minIndustriesForSpine());
         node.put("live_model", liveModel);
         node.put("definitions_updated", outcome.updates().size());
         node.put("changes", totalChanges(outcome));

@@ -44,6 +44,27 @@ public final class ChecklistRepository {
         return connection;
     }
 
+    /** An append-only learning decision or run summary, with its JSON provenance. */
+    public record LearningEvent(long parseRunId, String eventType, String payload) {}
+
+    /** Reads the mandate's learning history, including decisions from earlier versions. */
+    public List<LearningEvent> learningHistory(long mandateId) throws SQLException {
+        List<LearningEvent> events = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT a.parse_run_id, a.event_type, a.payload FROM audit_log a"
+                        + " JOIN parse_run r ON r.parse_run_id = a.parse_run_id"
+                        + " WHERE r.mandate_id = ? AND a.event_type IN"
+                        + " ('checklist_learned', 'checklist_learning_summary') ORDER BY a.audit_log_id")) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    events.add(new LearningEvent(rs.getLong(1), rs.getString(2), rs.getString(3)));
+                }
+            }
+        }
+        return List.copyOf(events);
+    }
+
     /**
      * A document version's classification signals the checklist engine matches on.
      *
