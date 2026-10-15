@@ -19,7 +19,10 @@ import com.resurgent.tev.doc.query.MandateQaQuery;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -218,6 +221,61 @@ class PassagesAndChapterFactsTest {
         assertThat(firstRow.evidencePages()).contains(2);
     }
 
+    @Test
+    void passageProvenanceUsesPassageEntityType() throws Exception {
+        long versionId = ingestDpr();
+        seedStoredParse(versionId, DPR_PAGE_1, DPR_PAGE_2);
+        classify(versionId);
+
+        new AssessPassagesRunner().run(MANDATE, dbPath, null);
+
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            // V53: the passage table and one provenance_doc anchor per passage, of
+            // entity type 'passage'.
+            assertThat(scalar(db, "SELECT COUNT(*) FROM passage")).isEqualTo(2);
+            assertThat(scalar(db, "SELECT COUNT(*) FROM provenance_doc pd"
+                    + " JOIN passage p ON p.provenance_id = pd.provenance_id"
+                    + " WHERE pd.entity_type = 'passage'")).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void passagesComeFromStoredParseAndNoNewParseRunIsMade() throws Exception {
+        long versionId = ingestDpr();
+        seedStoredParse(versionId, DPR_PAGE_1, DPR_PAGE_2);
+        classify(versionId);
+
+        // Snapshot before assessing: the stored parse output and the pipeline's parse runs.
+        List<String> storedParseBefore = storedParseSnapshot(versionId);
+        assertThat(storedParseBefore).hasSize(2);
+        Map<String, Integer> runsBefore = parseRunsByParserVersion();
+
+        DocAssessRunner.Result result = DocAssessRunner.run(MANDATE, dbPath,
+                new FakeDocLlmClient("{}"));
+        assertThat(result.stages()).extracting(AssessStage.StageResult::stage)
+                .containsExactly("assess_profile", "assess_passages");
+
+        // The only new parse runs are the assess stage's own: passages never trigger a
+        // parser, and the stored parse output is not rewritten (same parse job, tier
+        // and page texts — a re-parse would replace them with its own job id).
+        Map<String, Integer> runsAfter = parseRunsByParserVersion();
+        assertThat(runsAfter.getOrDefault(DocAssessRunner.PARSER_VERSION, 0))
+                .isGreaterThan(runsBefore.getOrDefault(DocAssessRunner.PARSER_VERSION, 0));
+        runsBefore.remove(DocAssessRunner.PARSER_VERSION);
+        runsAfter.remove(DocAssessRunner.PARSER_VERSION);
+        assertThat(runsAfter).isEqualTo(runsBefore);
+        assertThat(storedParseSnapshot(versionId)).isEqualTo(storedParseBefore);
+
+        // And the passages read as the stored markdown: this sentence exists only in
+        // the seeded parse output, never on the fixture PDF's pages.
+        List<MandateQa.PassageRow> passages = qa().passages();
+        assertThat(passages).hasSize(2);
+        assertThat(passages.get(0).verbatim())
+                .contains("The project is a 10 MW solar photovoltaic power plant.");
+        assertThat(passages.get(1).verbatim())
+                .contains("The main plant and machinery comprises the following items.");
+    }
+
     // --- fixture helpers ---
 
     /** Stages the golden extract sidecar beside the workspace db, as the M2 goldens do. */
@@ -311,5 +369,43 @@ class PassagesAndChapterFactsTest {
 
     private MandateQa qa() throws Exception {
         return MandateQaQueryRunner.query(dbPath, MandateQaQuery.forMandate(MANDATE));
+    }
+
+    /** The stored parse output rows a re-parse would have to replace, as plain strings. */
+    private List<String> storedParseSnapshot(long versionId) throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath);
+                var st = db.connection().createStatement();
+                var rs = st.executeQuery(
+                        "SELECT page_index, parse_job_id, parse_tier, page_markdown, page_text"
+                                + " FROM cloud_parse_page WHERE document_version_id = "
+                                + versionId + " ORDER BY page_index")) {
+            List<String> rows = new ArrayList<>();
+            while (rs.next()) {
+                rows.add(rs.getInt(1) + "|" + rs.getString(2) + "|" + rs.getString(3)
+                        + "|" + rs.getString(4) + "|" + rs.getString(5));
+            }
+            return rows;
+        }
+    }
+
+    /** Parse runs by parser version: only the assessment's own version may grow. */
+    private Map<String, Integer> parseRunsByParserVersion() throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath);
+                var st = db.connection().createStatement();
+                var rs = st.executeQuery("SELECT parser_version, COUNT(*) FROM parse_run"
+                        + " GROUP BY parser_version ORDER BY parser_version")) {
+            Map<String, Integer> runs = new LinkedHashMap<>();
+            while (rs.next()) {
+                runs.put(rs.getString(1), rs.getInt(2));
+            }
+            return runs;
+        }
+    }
+
+    private static long scalar(WorkspaceDatabase db, String sql) throws Exception {
+        try (var st = db.connection().createStatement(); var rs = st.executeQuery(sql)) {
+            rs.next();
+            return rs.getLong(1);
+        }
     }
 }
