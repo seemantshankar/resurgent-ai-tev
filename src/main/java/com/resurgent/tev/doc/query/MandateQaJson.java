@@ -52,6 +52,28 @@ public final class MandateQaJson {
             }
         }
 
+        // M3-03 (#136): entities with their roles, aliases and source pages.
+        ArrayNode entities = root.putArray("entities");
+        for (MandateQa.EntityRow row : qa.entities()) {
+            ObjectNode n = entities.addObject();
+            n.put("entity_id", row.entityId());
+            n.put("role", row.role());
+            n.put("name", row.name());
+            n.put("reason", row.reason());
+            ArrayNode aliases = n.putArray("aliases");
+            for (MandateQa.AliasRow alias : row.aliases()) {
+                ObjectNode a = aliases.addObject();
+                a.put("alias", alias.alias());
+                if (alias.pageIndex() != null) {
+                    a.put("page_index", alias.pageIndex());
+                }
+            }
+            ArrayNode pages = n.putArray("page_indexes");
+            for (Integer pageIndex : row.pageIndexes()) {
+                pages.add(pageIndex);
+            }
+        }
+
         // M3-04 (#137): sites with their spelling variants and the documents that
         // mention them — appended at the end so #134's sections are untouched.
         ArrayNode sites = root.putArray("sites");

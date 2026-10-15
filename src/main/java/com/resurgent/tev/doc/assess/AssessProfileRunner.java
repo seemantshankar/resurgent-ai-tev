@@ -138,17 +138,24 @@ public final class AssessProfileRunner implements AssessStage {
         // facts and texts (appended step; see SiteScan).
         SiteScan.Result siteResult = SiteScan.scan(connection, mandateId, client, usage::add);
 
+        // M3-03 entities: identify the mandate's entities — borrower, promoters and
+        // group companies — and tag the facts (appended step; see EntityScan).
+        EntityScan.Stats entityStats = EntityScan.run(connection, mandateId, client, usage::add);
+
         recordStats(repo, parseRunId, usage, versions.size(), statedCount, metadataCount,
-                noneCount, siteResult);
+                noneCount, entityStats, siteResult);
         assessment.upsertAssessmentRun(mandateId, STAGE, "completed", parseRunId,
                 startedAt, Timestamps.now(),
-                metricsJson(versions.size(), statedCount, metadataCount, noneCount, usage,
-                        siteResult));
+                metricsJson(versions.size(), statedCount, metadataCount, noneCount, entityStats,
+                        siteResult, usage));
 
         String detail = String.format(Locale.ROOT,
-                "%d documents (%d stated, %d file_metadata, %d none); %d sites (%d aliases)",
+                "%d documents (%d stated, %d file_metadata, %d none); %d sites (%d aliases),"
+                        + " %d entities, %d facts (%d tagged)",
                 versions.size(), statedCount, metadataCount, noneCount,
-                siteResult.sites(), siteResult.aliases());
+                siteResult.sites(), siteResult.aliases(),
+                entityStats.entitiesTotal(), entityStats.factsTagged()
+                        + entityStats.factsUntagged(), entityStats.factsTagged());
         return new StageResult(STAGE, versions.size(), detail);
     }
 
@@ -215,7 +222,7 @@ public final class AssessProfileRunner implements AssessStage {
 
     private static void recordStats(WorkspaceRepository repo, Long parseRunId,
             List<DocLlmClient.Usage> usage, int total, int stated, int metadata, int none,
-            SiteScan.Result sites) throws Exception {
+            EntityScan.Stats entities, SiteScan.Result sites) throws Exception {
         if (parseRunId == null) {
             return;
         }
@@ -223,6 +230,18 @@ public final class AssessProfileRunner implements AssessStage {
         repo.recordRunStat(parseRunId, STAGE, "dates_stated", (double) stated, null);
         repo.recordRunStat(parseRunId, STAGE, "dates_file_metadata", (double) metadata, null);
         repo.recordRunStat(parseRunId, STAGE, "dates_none", (double) none, null);
+        repo.recordRunStat(parseRunId, STAGE, "entities_total",
+                (double) entities.entitiesTotal(), null);
+        repo.recordRunStat(parseRunId, STAGE, "entities_borrower",
+                (double) entities.entitiesBorrower(), null);
+        repo.recordRunStat(parseRunId, STAGE, "entities_promoter",
+                (double) entities.entitiesPromoter(), null);
+        repo.recordRunStat(parseRunId, STAGE, "entities_group_company",
+                (double) entities.entitiesGroupCompany(), null);
+        repo.recordRunStat(parseRunId, STAGE, "facts_tagged",
+                (double) entities.factsTagged(), null);
+        repo.recordRunStat(parseRunId, STAGE, "facts_untagged",
+                (double) entities.factsUntagged(), null);
         repo.recordRunStat(parseRunId, STAGE, "sites_total", (double) sites.sites(), null);
         repo.recordRunStat(parseRunId, STAGE, "site_aliases", (double) sites.aliases(), null);
         repo.recordRunStat(parseRunId, STAGE, "llm_calls",
@@ -242,12 +261,18 @@ public final class AssessProfileRunner implements AssessStage {
     }
 
     private static String metricsJson(int total, int stated, int metadata, int none,
-            List<DocLlmClient.Usage> usage, SiteScan.Result sites) {
+            EntityScan.Stats entities, SiteScan.Result sites, List<DocLlmClient.Usage> usage) {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("documents_total", total);
         node.put("dates_stated", stated);
         node.put("dates_file_metadata", metadata);
         node.put("dates_none", none);
+        node.put("entities_total", entities.entitiesTotal());
+        node.put("entities_borrower", entities.entitiesBorrower());
+        node.put("entities_promoter", entities.entitiesPromoter());
+        node.put("entities_group_company", entities.entitiesGroupCompany());
+        node.put("facts_tagged", entities.factsTagged());
+        node.put("facts_untagged", entities.factsUntagged());
         node.put("sites_total", sites.sites());
         node.put("site_aliases", sites.aliases());
         node.put("llm_calls", usage.stream().mapToInt(DocLlmClient.Usage::calls).sum());
