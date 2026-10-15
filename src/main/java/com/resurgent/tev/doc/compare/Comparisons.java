@@ -51,6 +51,13 @@ public final class Comparisons {
      */
     private static final Set<String> LEGAL_FORMS = Set.of("pvt", "private", "ltd", "limited", "llp");
 
+    /**
+     * Site names at or above this score are one site (issue #135). Below it
+     * the {@link SiteMatch#score()} is still reported so later tickets can
+     * escalate near-misses to the LLM instead of deciding here.
+     */
+    public static final double SITE_MATCH_SCORE = 0.8;
+
     private Comparisons() {}
 
     /**
@@ -176,6 +183,66 @@ public final class Comparisons {
         }
         return Comparison.disagree("different names: " + quote(left) + " ('" + l
                 + "') vs " + quote(right) + " ('" + r + "')");
+    }
+
+    /**
+     * Scores two site names loosely (issue #135; GLOSSARY "Site"): keys are
+     * the same lower-cased alphanumeric tokens a name uses, concatenated so
+     * {@code "Jaisingh Pura"} and {@code "Jaisingpura"} meet; the score is
+     * their normalised edit similarity (1.0 identical). Matches at
+     * {@link #SITE_MATCH_SCORE}, and always reports the score so ambiguous
+     * matches can be escalated to the LLM by later tickets. Blank names never
+     * match and score 0.0.
+     */
+    public static SiteMatch site(String left, String right) {
+        String l = collapseKey(left);
+        String r = collapseKey(right);
+        if (l == null || r == null) {
+            return new SiteMatch(false, 0.0);
+        }
+        double score = similarity(l, r);
+        return new SiteMatch(score >= SITE_MATCH_SCORE, score);
+    }
+
+    /** All tokens of a name lower-cased and concatenated, nothing stripped. */
+    private static String collapseKey(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        List<String> tokens = nameTokens(raw);
+        if (tokens.isEmpty()) {
+            return null;
+        }
+        return String.join("", tokens);
+    }
+
+    /** 1.0 for identical keys; edit distance over the longer key otherwise. */
+    private static double similarity(String left, String right) {
+        int max = Math.max(left.length(), right.length());
+        if (max == 0) {
+            return 1.0;
+        }
+        return 1.0 - (double) levenshtein(left, right) / max;
+    }
+
+    private static int levenshtein(String left, String right) {
+        int[] previous = new int[right.length() + 1];
+        int[] current = new int[right.length() + 1];
+        for (int j = 0; j <= right.length(); j++) {
+            previous[j] = j;
+        }
+        for (int i = 1; i <= left.length(); i++) {
+            current[0] = i;
+            for (int j = 1; j <= right.length(); j++) {
+                int substitution = left.charAt(i - 1) == right.charAt(j - 1) ? 0 : 1;
+                current[j] = Math.min(Math.min(current[j - 1] + 1, previous[j] + 1),
+                        previous[j - 1] + substitution);
+            }
+            int[] swap = previous;
+            previous = current;
+            current = swap;
+        }
+        return previous[right.length()];
     }
 
     /** The comparison key of a name: tokens lower-cased, concatenated, legal forms stripped. */
