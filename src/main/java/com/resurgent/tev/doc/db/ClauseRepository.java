@@ -93,6 +93,8 @@ public final class ClauseRepository {
      */
     public long upsertPackType(String packCode, String packVersion, PackClauseType type)
             throws SQLException {
+        // No generated-key read here: on the conflict path a fresh connection returns
+        // key 0, so the id is always resolved with a SELECT after the upsert.
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO clause_type (code, label, parent_family, aliases_json,"
                         + " pack_code, pack_version, source, status)"
@@ -100,8 +102,7 @@ public final class ClauseRepository {
                         + " ON CONFLICT (pack_code, code) DO UPDATE SET"
                         + " label = excluded.label, parent_family = excluded.parent_family,"
                         + " aliases_json = excluded.aliases_json,"
-                        + " pack_version = excluded.pack_version",
-                Statement.RETURN_GENERATED_KEYS)) {
+                        + " pack_version = excluded.pack_version")) {
             ps.setString(1, type.key());
             ps.setString(2, type.label());
             if (type.parentFamily() == null) {
@@ -113,10 +114,6 @@ public final class ClauseRepository {
             ps.setString(5, packCode);
             ps.setString(6, packVersion);
             ps.executeUpdate();
-            Long id = generatedId(ps);
-            if (id != null) {
-                return id;
-            }
         }
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT clause_type_id FROM clause_type WHERE pack_code = ? AND code = ?")) {

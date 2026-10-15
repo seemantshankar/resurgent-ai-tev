@@ -2,9 +2,12 @@ package com.resurgent.tev.doc.assess;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resurgent.tev.doc.classify.ClassifyRequest;
 import com.resurgent.tev.doc.classify.ClassifyResult;
 import com.resurgent.tev.doc.classify.DocTypeClassifier;
+import com.resurgent.tev.doc.cli.DocQaCommand;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.MandateQaQueryRunner;
 import com.resurgent.tev.doc.ingest.BlobStore;
@@ -16,9 +19,13 @@ import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.doc.query.MandateQa;
 import com.resurgent.tev.doc.query.MandateQaQuery;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -28,6 +35,7 @@ import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import picocli.CommandLine;
 
 /**
  * Golden M3-08 suite (issue #141): clause reading over synthetic born-digital PDFs.
@@ -177,6 +185,117 @@ class MandateClausesTest {
         }
     }
 
+    @Test
+    void packWithoutClauseDeclarationProducesNoClausesAndNoClauseCalls() throws Exception {
+        // The promoter net-worth certificate's pack declares no clauses: nothing is
+        // segmented, stored, or asked of the model for this document type.
+        long versionId = ingestAndLayout(
+                writePdf("promoter_net_worth.pdf", new String[][] {{
+                    "Certificate of Net Worth",
+                    "Net worth of the promoter is Rs. 10 crore as certified.",
+                }}),
+                "Promoter NW", "certificate");
+        classify(versionId, netWorthPack);
+
+        FakeDocLlmClient fake = new FakeDocLlmClient("{\"date\": null, \"clauses\": []}");
+        DocAssessRunner.run(MANDATE, dbPath, fake);
+
+        assertThat(qa().clauses()).isEmpty();
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            Connection c = db.connection();
+            assertThat(count(c, "SELECT COUNT(*) FROM clause")).isZero();
+            assertThat(count(c, "SELECT COUNT(*) FROM clause_type")).isZero();
+            assertThat(count(c, "SELECT COUNT(*) FROM provenance_doc"
+                    + " WHERE entity_type = 'clause'")).isZero();
+            assertThat(count(c, "SELECT COUNT(*) FROM llm_usage"
+                    + " WHERE stage = 'assess_clauses'")).isZero();
+            assertThat(count(c, "SELECT COUNT(*) FROM run_stat"
+                    + " WHERE stage = 'assess_clauses' AND name = 'clauses_total'"
+                    + " AND value_num = 0")).isEqualTo(1);
+            assertThat(count(c, "SELECT COUNT(*) FROM run_stat"
+                    + " WHERE stage = 'assess_clauses' AND name = 'llm_calls'"
+                    + " AND value_num = 0")).isEqualTo(1);
+        }
+
+        // In isolation: the clause stage asks the model nothing at all for this pack.
+        FakeDocLlmClient direct = new FakeDocLlmClient("{\"date\": null, \"clauses\": []}");
+        AssessStage.StageResult result = new AssessClausesRunner().run(MANDATE, dbPath, direct);
+        assertThat(direct.calls()).isZero();
+        assertThat(result.stage()).isEqualTo("assess_clauses");
+        assertThat(result.detail()).isEqualTo("0 clauses (0 bound, 0 open) from 0 of 1 documents");
+    }
+
+    @Test
+    void reassessmentReplacesClausesNeverDuplicates() throws Exception {
+        long versionId = ingestAndLayout(ppaFixture(), "PPA - Repeat", "agreement");
+        classify(versionId, ppaPack);
+
+        DocAssessRunner.run(MANDATE, dbPath, null);
+        DocAssessRunner.run(MANDATE, dbPath, null);
+
+        List<MandateQa.ClauseRow> clauses = qa().clauses();
+        assertThat(clauses).hasSize(3);
+        assertThat(clauses).extracting(MandateQa.ClauseRow::heading)
+                .containsExactly("12. TERMINATION", "13. FORCE MAJEURE", "15. DEEMED GENERATION");
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            Connection c = db.connection();
+            assertThat(count(c, "SELECT COUNT(*) FROM clause")).isEqualTo(3);
+            assertThat(count(c, "SELECT COUNT(*) FROM provenance_doc"
+                    + " WHERE entity_type = 'clause'")).isEqualTo(3);
+            assertThat(count(c, "SELECT COUNT(*) FROM assessment_run"
+                    + " WHERE mandate_id = " + MANDATE + " AND stage = 'assess_clauses'"))
+                    .isEqualTo(1);
+        }
+    }
+
+    @Test
+    void qaCliListsClausesAsTextAndJson() throws Exception {
+        long versionId = ingestAndLayout(ppaFixture(), "PPA - CLI", "agreement");
+        classify(versionId, ppaPack);
+
+        // Explicitly offline: clientOrNull() would use the developer's live key, and
+        // the default suite never needs the network.
+        DocAssessRunner.Result assess = DocAssessRunner.run(MANDATE, dbPath, null);
+        assertThat(assess.summaryLines()).contains(
+                "assess_clauses: 3 clauses (2 bound, 1 open) from 1 of 1 documents");
+
+        Run text = run(new DocQaCommand(),
+                "--mandate", Long.toString(MANDATE), "--db", dbPath.toString());
+        assertThat(text.exitCode()).isZero();
+        assertThat(text.out())
+                .contains("clause 12. TERMINATION p1 [bound, known] | Termination"
+                        + " | ppa_clauses.pdf")
+                .contains("clause 15. DEEMED GENERATION p2 [open, new] | (untyped)"
+                        + " | ppa_clauses.pdf")
+                .contains("ninety (90) days prior written notice")
+                .contains("clauses: 3");
+
+        Run jsonRun = run(new DocQaCommand(),
+                "--mandate", Long.toString(MANDATE), "--db", dbPath.toString(), "--json");
+        assertThat(jsonRun.exitCode()).isZero();
+        JsonNode clauses = new ObjectMapper().readTree(jsonRun.out()).get("clauses");
+        assertThat(clauses).hasSize(3);
+        JsonNode termination = null;
+        JsonNode open = null;
+        for (JsonNode clause : clauses) {
+            if ("termination".equals(clause.get("type_code").asText())) {
+                termination = clause;
+            }
+            if ("open".equals(clause.get("status").asText())) {
+                open = clause;
+            }
+        }
+        assertThat(termination).isNotNull();
+        assertThat(termination.get("heading").asText()).isEqualTo("12. TERMINATION");
+        assertThat(termination.get("page_start").asInt()).isEqualTo(1);
+        assertThat(termination.get("verbatim").asText())
+                .contains("liquidated damages of Rs. 5,00,000");
+        assertThat(termination.get("extraction_method").asText()).isEqualTo("alias");
+        assertThat(open).isNotNull();
+        assertThat(open.get("type_code").isNull()).isTrue();
+        assertThat(open.get("novelty").asText()).isEqualTo("new");
+    }
+
     // ---- fixture + helpers ----
 
     /** Two-page PPA: a bound termination and force-majeure clause, plus one unknown clause. */
@@ -251,6 +370,19 @@ class MandateClausesTest {
 
     MandateQa qa() throws Exception {
         return MandateQaQueryRunner.query(dbPath, MandateQaQuery.forMandate(MANDATE));
+    }
+
+    private record Run(int exitCode, String out, String err) {}
+
+    /** Executes one CLI command through picocli, capturing stdout/stderr. */
+    private Run run(Callable<Integer> command, String... args) {
+        CommandLine cmd = new CommandLine(command);
+        StringWriter out = new StringWriter();
+        StringWriter err = new StringWriter();
+        cmd.setOut(new PrintWriter(out));
+        cmd.setErr(new PrintWriter(err));
+        Integer exit = cmd.execute(new ArrayList<>(List.of(args)).toArray(String[]::new));
+        return new Run(exit == null ? -1 : exit, out.toString(), err.toString());
     }
 
     static MandateQa.ClauseRow clauseByType(List<MandateQa.ClauseRow> clauses, String typeCode) {
