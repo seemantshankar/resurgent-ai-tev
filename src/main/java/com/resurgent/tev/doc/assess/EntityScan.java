@@ -60,13 +60,17 @@ public final class EntityScan {
      * @param entitiesPromoter entities with role {@code promoter}
      * @param entitiesGroupCompany entities with role {@code group_company}
      * @param documentsScanned document versions asked through the LLM seam
+     * @param factsTagged mandate facts tagged with an entity
+     * @param factsUntagged mandate facts left untagged (each with a reason)
      */
     public record Stats(
             int entitiesTotal,
             int entitiesBorrower,
             int entitiesPromoter,
             int entitiesGroupCompany,
-            int documentsScanned) {}
+            int documentsScanned,
+            int factsTagged,
+            int factsUntagged) {}
 
     private EntityScan() {}
 
@@ -106,6 +110,8 @@ public final class EntityScan {
             persist(assessment, entities, mandateId, entity);
         }
 
+        FactTagger.Tally facts = FactTagger.tag(connection, mandateId);
+
         int borrower = 0;
         int promoter = 0;
         int groupCompany = 0;
@@ -117,7 +123,8 @@ public final class EntityScan {
                 default -> { }
             }
         }
-        return new Stats(merged.size(), borrower, promoter, groupCompany, scanned);
+        return new Stats(merged.size(), borrower, promoter, groupCompany, scanned,
+                facts.factsTagged(), facts.factsUntagged());
     }
 
     /**

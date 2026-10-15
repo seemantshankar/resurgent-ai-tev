@@ -144,9 +144,11 @@ public final class AssessProfileRunner implements AssessStage {
                         usage));
 
         String detail = String.format(Locale.ROOT,
-                "%d documents (%d stated, %d file_metadata, %d none), %d entities",
+                "%d documents (%d stated, %d file_metadata, %d none), %d entities,"
+                        + " %d facts (%d tagged)",
                 versions.size(), statedCount, metadataCount, noneCount,
-                entityStats.entitiesTotal());
+                entityStats.entitiesTotal(), entityStats.factsTagged()
+                        + entityStats.factsUntagged(), entityStats.factsTagged());
         return new StageResult(STAGE, versions.size(), detail);
     }
 
@@ -230,6 +232,10 @@ public final class AssessProfileRunner implements AssessStage {
                 (double) entities.entitiesPromoter(), null);
         repo.recordRunStat(parseRunId, STAGE, "entities_group_company",
                 (double) entities.entitiesGroupCompany(), null);
+        repo.recordRunStat(parseRunId, STAGE, "facts_tagged",
+                (double) entities.factsTagged(), null);
+        repo.recordRunStat(parseRunId, STAGE, "facts_untagged",
+                (double) entities.factsUntagged(), null);
         repo.recordRunStat(parseRunId, STAGE, "llm_calls",
                 (double) usage.stream().mapToInt(DocLlmClient.Usage::calls).sum(), null);
 
@@ -257,6 +263,8 @@ public final class AssessProfileRunner implements AssessStage {
         node.put("entities_borrower", entities.entitiesBorrower());
         node.put("entities_promoter", entities.entitiesPromoter());
         node.put("entities_group_company", entities.entitiesGroupCompany());
+        node.put("facts_tagged", entities.factsTagged());
+        node.put("facts_untagged", entities.factsUntagged());
         node.put("llm_calls", usage.stream().mapToInt(DocLlmClient.Usage::calls).sum());
         return node.toString();
     }

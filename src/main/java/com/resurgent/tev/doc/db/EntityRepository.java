@@ -42,8 +42,8 @@ public final class EntityRepository {
     /**
      * Drops the mandate's previous entity set for a re-run: facts detach first (the
      * {@code fact.entity_id} reference is enforced immediately by SQLite), then the
-     * identifications' provenance, aliases and entity rows. Re-running must never
-     * duplicate entities.
+     * aliases (they reference the identifications' provenance), the identifications'
+     * provenance and the entity rows. Re-running must never duplicate entities.
      *
      * @throws SQLException if any delete fails
      */
@@ -59,6 +59,12 @@ public final class EntityRepository {
             ps.executeUpdate();
         }
         try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM entity_alias WHERE entity_id IN"
+                        + " (SELECT entity_id FROM entity WHERE mandate_id = ?)")) {
+            ps.setLong(1, mandateId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
                 "DELETE FROM provenance_doc WHERE entity_type = ? AND entity_id IN"
                         + " (SELECT entity_id FROM entity WHERE mandate_id = ?)")) {
             ps.setString(1, PROVENANCE_ENTITY_TYPE);
@@ -66,14 +72,28 @@ public final class EntityRepository {
             ps.executeUpdate();
         }
         try (PreparedStatement ps = connection.prepareStatement(
-                "DELETE FROM entity_alias WHERE entity_id IN"
-                        + " (SELECT entity_id FROM entity WHERE mandate_id = ?)")) {
+                "DELETE FROM entity WHERE mandate_id = ?")) {
             ps.setLong(1, mandateId);
             ps.executeUpdate();
         }
+    }
+
+    /**
+     * Writes one fact's entity tag: {@code entityId} when the fact's entity was
+     * determined, null when not — the reason is recorded either way.
+     *
+     * @throws SQLException if the update fails
+     */
+    public void updateFactEntity(long factId, Long entityId, String reason) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "DELETE FROM entity WHERE mandate_id = ?")) {
-            ps.setLong(1, mandateId);
+                "UPDATE fact SET entity_id = ?, entity_reason = ? WHERE fact_id = ?")) {
+            setLong(ps, 1, entityId);
+            if (reason == null) {
+                ps.setNull(2, Types.VARCHAR);
+            } else {
+                ps.setString(2, reason);
+            }
+            ps.setLong(3, factId);
             ps.executeUpdate();
         }
     }
