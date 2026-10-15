@@ -7,7 +7,9 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.DateTimeException;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -41,6 +43,13 @@ public final class Comparisons {
      * quantity and rate magnitudes: {@code |a - b| <= tolerance × max(|a|, |b|)}.
      */
     public static final double RELATIVE_TOLERANCE = 0.01;
+
+    /**
+     * Legal forms stripped from the end of a name before loose comparison:
+     * {@code Pvt Ltd} / {@code Private Limited} / {@code Ltd} / {@code Limited}
+     * / {@code LLP} (issue #135).
+     */
+    private static final Set<String> LEGAL_FORMS = Set.of("pvt", "private", "ltd", "limited", "llp");
 
     private Comparisons() {}
 
@@ -145,6 +154,57 @@ public final class Comparisons {
         }
         return Comparison.differentReadings(left.text() + " (" + left.grain()
                 + ") and " + right.text() + " (" + right.grain() + ") are different readings");
+    }
+
+    /**
+     * Compares two names loosely (issue #135; GLOSSARY "Entity"): case is
+     * ignored, punctuation and whitespace separate nothing, and the legal
+     * forms {@code Pvt Ltd} / {@code Private Limited / Ltd / Limited / LLP}
+     * are equivalent. Genuinely different names are {@link Verdict#DISAGREE};
+     * a blank name, or one that is nothing but a legal form, refuses.
+     */
+    public static Comparison name(String left, String right) {
+        String l = looseNameKey(left);
+        String r = looseNameKey(right);
+        if (l == null || r == null) {
+            return Comparison.notComparable(
+                    "cannot compare names: " + quote(left) + " vs " + quote(right));
+        }
+        if (l.equals(r)) {
+            return Comparison.agree(quote(left) + " = " + quote(right)
+                    + " (loose key '" + l + "')");
+        }
+        return Comparison.disagree("different names: " + quote(left) + " ('" + l
+                + "') vs " + quote(right) + " ('" + r + "')");
+    }
+
+    /** The comparison key of a name: tokens lower-cased, concatenated, legal forms stripped. */
+    private static String looseNameKey(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        List<String> tokens = nameTokens(raw);
+        int end = tokens.size();
+        while (end > 0 && LEGAL_FORMS.contains(tokens.get(end - 1))) {
+            end--;
+        }
+        if (end == 0) {
+            return null;
+        }
+        return String.join("", tokens.subList(0, end));
+    }
+
+    /**
+     * Lower-cased alphanumeric tokens of a name; every run of punctuation or
+     * whitespace is a separator, so {@code "A.B.C. Traders"} and
+     * {@code "ABC Traders"} tokenise alike.
+     */
+    private static List<String> nameTokens(String raw) {
+        String cleaned = raw.toLowerCase(Locale.ROOT).replaceAll("[^\\p{Alnum}]+", " ").trim();
+        if (cleaned.isEmpty()) {
+            return List.of();
+        }
+        return List.of(cleaned.split(" "));
     }
 
     /** The calendar interval a stated date covers at its own precision. */
