@@ -141,6 +141,14 @@ public final class ChecklistRepository {
      * @throws SQLException if any delete fails
      */
     public void clearChecklist(long mandateId) throws SQLException {
+        // Detach the references first: SQLite enforces FKs immediately, so no
+        // provenance row can be deleted while a result still points at it.
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE checklist_result SET provenance_id = NULL WHERE checklist_item_id IN"
+                        + " (SELECT checklist_item_id FROM checklist_item WHERE mandate_id = ?)")) {
+            ps.setLong(1, mandateId);
+            ps.executeUpdate();
+        }
         try (PreparedStatement ps = connection.prepareStatement(
                 "DELETE FROM provenance_doc WHERE entity_type = ? AND entity_id IN"
                         + " (SELECT r.checklist_result_id FROM checklist_result r"

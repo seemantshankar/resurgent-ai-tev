@@ -43,8 +43,10 @@ CREATE TABLE checklist_result (
     checklist_result_id INTEGER PRIMARY KEY AUTOINCREMENT,
     checklist_item_id   INTEGER NOT NULL REFERENCES checklist_item (checklist_item_id),
     assessment_run_id   INTEGER REFERENCES assessment_run (assessment_run_id),
-    entity_id           INTEGER REFERENCES entity (entity_id),
-    site_id             INTEGER REFERENCES site (site_id),
+    -- Re-assessment rebuilds the entity/site set before this stage runs, so a stale
+    -- reference nulls out (the whole checklist is replaced in the same run anyway).
+    entity_id           INTEGER REFERENCES entity (entity_id) ON DELETE SET NULL,
+    site_id             INTEGER REFERENCES site (site_id) ON DELETE SET NULL,
     status              TEXT NOT NULL CHECK (status IN (
                             'provided', 'unclear', 'not_provided', 'conflicting', 'not_applicable')),
     reason              TEXT NOT NULL,
@@ -52,12 +54,16 @@ CREATE TABLE checklist_result (
     page_index          INTEGER,          -- cited page; NOT NULL for every provided status
     confidence          REAL,
     client_request      TEXT,             -- filled wording, set when not_provided
-    provenance_id       INTEGER REFERENCES provenance_doc (provenance_id),
+    provenance_id       INTEGER REFERENCES provenance_doc (provenance_id) ON DELETE SET NULL,
     checked_at          TEXT NOT NULL
 );
 
+-- One result per (item, scope). The index deliberately uses the plain columns:
+-- SQLite treats NULLs as distinct in unique indexes, so when a re-scan clears the
+-- entity/site rows the FK's ON DELETE SET NULL can never collide two collapsed
+-- scope keys with each other; duplicates with a concrete scope are still blocked.
 CREATE UNIQUE INDEX idx_checklist_result_scope ON checklist_result (
-    checklist_item_id, COALESCE(entity_id, -1), COALESCE(site_id, -1));
+    checklist_item_id, entity_id, site_id);
 CREATE INDEX idx_checklist_result_item ON checklist_result (checklist_item_id);
 
 CREATE TABLE checklist_override (
@@ -76,8 +82,8 @@ CREATE TABLE checklist_summary (
     mandate_id           INTEGER NOT NULL,
     assessment_run_id    INTEGER REFERENCES assessment_run (assessment_run_id),
     scope_kind           TEXT NOT NULL CHECK (scope_kind IN ('overall', 'entity', 'site')),
-    entity_id            INTEGER REFERENCES entity (entity_id),
-    site_id              INTEGER REFERENCES site (site_id),
+    entity_id            INTEGER REFERENCES entity (entity_id) ON DELETE SET NULL,
+    site_id              INTEGER REFERENCES site (site_id) ON DELETE SET NULL,
     status               TEXT NOT NULL CHECK (status IN (
                              'provided', 'unclear', 'not_provided', 'conflicting', 'not_applicable')),
     item_count           INTEGER NOT NULL,

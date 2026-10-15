@@ -310,6 +310,24 @@ public final class AssessmentRepository {
     }
 
     /**
+     * The recorded {@code assessment_run_id} of one stage of a mandate, or null.
+     * Use this after {@link #upsertAssessmentRun} when the id must be certain: the
+     * driver's generated keys are only reliable on the insert branch of the upsert.
+     *
+     * @throws SQLException if the query fails
+     */
+    public Long findAssessmentRunId(long mandateId, String stage) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT assessment_run_id FROM assessment_run WHERE mandate_id = ? AND stage = ?")) {
+            ps.setLong(1, mandateId);
+            ps.setString(2, stage);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : null;
+            }
+        }
+    }
+
+    /**
      * The run record of each stage executed for the mandate, oldest stage first.
      *
      * @throws SQLException if the query fails

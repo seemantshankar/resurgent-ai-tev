@@ -106,9 +106,15 @@ public final class AssessChecklistRunner implements AssessStage {
 
         // The results cite this assessment run; record it as running now so the ids
         // exist, then flip it to completed with metrics when the run succeeds (a
-        // failed run rolls back, leaving the previous run record untouched).
-        long runId = assessment.upsertAssessmentRun(mandateId, STAGE, "running", parseRunId,
+        // failed run rolls back, leaving the previous run record untouched). The id
+        // is read back — on a re-run the upsert updates the existing row and the
+        // driver's generated keys are not trustworthy outside the insert branch.
+        assessment.upsertAssessmentRun(mandateId, STAGE, "running", parseRunId,
                 startedAt, null, null);
+        Long runId = assessment.findAssessmentRunId(mandateId, STAGE);
+        if (runId == null) {
+            throw new SQLException("assessment_run row missing after upsert for stage " + STAGE);
+        }
 
         Map<String, ChecklistDefinition> catalog = ChecklistStore.loadCatalogLenient(dbPath);
         ChecklistAssessor.Inputs inputs = new ChecklistAssessor.Inputs(
