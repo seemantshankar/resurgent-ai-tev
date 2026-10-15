@@ -77,7 +77,8 @@ public final class WorkspaceDatabase implements AutoCloseable {
             "db/migration/V53__m3_passages.sql",
             "db/migration/V55__m3_clauses.sql",
             "db/migration/V56__m3_clause_promotion_stage.sql",
-            "db/migration/V57__m3_checklist.sql"
+            "db/migration/V57__m3_checklist.sql",
+            "db/migration/V59__m3_conflicts.sql"
     };
 
     /** Number of bundled migrations, i.e. the schema version a fully migrated database reports. */

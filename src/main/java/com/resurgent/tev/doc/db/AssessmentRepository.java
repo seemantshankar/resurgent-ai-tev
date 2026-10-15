@@ -667,7 +667,9 @@ public final class AssessmentRepository {
                 new PassageRepository(connection).passagesForMandate(mandateId),
                 industries(mandateId), country(mandateId),
                 new ChecklistRepository(connection).results(mandateId),
-                new ChecklistRepository(connection).summaries(mandateId));
+                new ChecklistRepository(connection).summaries(mandateId),
+                new ConflictRepository(connection).conflicts(mandateId),
+                new ConflictRepository(connection).versionsDiffer(mandateId));
     }
 
     /** Collapses whitespace runs to single spaces, like the layout's {@code text_norm}. */

@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -35,8 +36,10 @@ import java.util.stream.Collectors;
  * reproducible for the same workspace. Entity-granularity items expand once per
  * matching entity (a fact of the document tagged to that entity owns it for the
  * entity); a mandate with no such entity still gets one row with no entity, so an
- * expected item never silently vanishes. Conflicting and Not applicable are later
- * tickets and are never produced here.
+ * expected item never silently vanishes. An item whose data point carries a
+ * conflict no rule or AI judgement settled becomes Conflicting through
+ * {@link #applyOpenConflicts} (M3-12); Not applicable is a later ticket and is not
+ * produced here.
  */
 public final class ChecklistAssessor {
 
@@ -48,6 +51,9 @@ public final class ChecklistAssessor {
     public static final String STATUS_UNCLEAR = "unclear";
 
     public static final String STATUS_NOT_PROVIDED = "not_provided";
+
+    /** An open conflict on the item's data point: no value is chosen (M3-12). */
+    public static final String STATUS_CONFLICTING = "conflicting";
 
     /** Everything the engine reads — all persisted by the earlier stages. */
     public record Inputs(
@@ -141,6 +147,79 @@ public final class ChecklistAssessor {
             }
         }
         return List.copyOf(results);
+    }
+
+    /**
+     * Applies the mandate's open conflicts to the planned results (M3-12, ADR 0026
+     * tier 3): a data point left open — no precedence rule covered it and AI
+     * judgement did not settle it — makes its checklist item Conflicting. A
+     * mandate-granularity item is conflicted whenever its data point is, in any
+     * scope; an entity/site item only when the conflict was formed in exactly that
+     * scope. No value is chosen. Rule- and AI-settled conflicts never change a
+     * status: their settlement is shown on the conflict row itself, and a revision
+     * ({@code versions-differ}) is not a conflict.
+     *
+     * @param plan the planned results
+     * @param openConflicts the mandate's conflicts with settlement {@code open}
+     * @return the plan, with the affected results Conflicting
+     */
+    public static List<Result> applyOpenConflicts(List<Result> plan,
+            List<MandateQa.ConflictRow> openConflicts) {
+        if (openConflicts.isEmpty()) {
+            return plan;
+        }
+        List<Result> applied = new ArrayList<>(plan.size());
+        for (Result result : plan) {
+            MandateQa.ConflictRow conflict = openConflictFor(result, openConflicts);
+            applied.add(conflict == null ? result : conflicting(result, conflict));
+        }
+        return List.copyOf(applied);
+    }
+
+    /** The open conflict on the item's data point within the result's scope, or null. */
+    private static MandateQa.ConflictRow openConflictFor(Result result,
+            List<MandateQa.ConflictRow> openConflicts) {
+        ChecklistItemDef item = result.item();
+        for (MandateQa.ConflictRow conflict : openConflicts) {
+            if (!inScope(result, conflict)) {
+                continue;
+            }
+            if (item.fieldKey() != null && item.fieldKey().equals(conflict.fieldKey())) {
+                return conflict;
+            }
+            if (item.ontologyPath() != null
+                    && item.ontologyPath().equals(conflict.ontologyPath())) {
+                return conflict;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Whether the conflict falls within the result's scope: a mandate-granularity
+     * result covers every scope of the data point (the comparison may have been
+     * made within a site or entity), an entity/site result only the conflict
+     * formed in exactly that scope.
+     */
+    private static boolean inScope(Result result, MandateQa.ConflictRow conflict) {
+        if (result.entityId() == null && result.siteId() == null) {
+            return true;
+        }
+        return Objects.equals(result.entityId(), conflict.entityId())
+                && Objects.equals(result.siteId(), conflict.siteId());
+    }
+
+    /** The same result, Conflicting: the conflict row is the record of both values. */
+    private static Result conflicting(Result result, MandateQa.ConflictRow conflict) {
+        return new Result(result.item(), result.checklistCode(), result.checklistVersion(),
+                result.definitionScope(), result.country(), result.industry(),
+                result.entityId(), result.entityName(), result.siteId(), result.siteName(),
+                STATUS_CONFLICTING,
+                "conflicting " + conflict.dataPoint() + " across documents: "
+                        + conflict.left().value() + " vs " + conflict.right().value()
+                        + " — no precedence rule covered the disagreement and AI judgement"
+                        + " did not settle it",
+                null, null, null, null, null, null);
     }
 
     /**

@@ -7,6 +7,7 @@ import com.resurgent.tev.doc.checklist.ChecklistStore;
 import com.resurgent.tev.doc.db.AssessmentRepository;
 import com.resurgent.tev.doc.db.AssessmentRepository.BlockAnchor;
 import com.resurgent.tev.doc.db.ChecklistRepository;
+import com.resurgent.tev.doc.db.ConflictRepository;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.EntityRepository;
 import com.resurgent.tev.doc.db.SiteRepository;
@@ -30,8 +31,10 @@ import java.util.Optional;
  * in-scope versioned definitions (seed spine plus the store beside the workspace), lets
  * the analyst's recorded overrides add or remove items, and stores one result per item
  * and scope — Provided with page evidence, Unclear when the reading is not trustworthy,
- * Not provided with the ask-the-client wording. Not provided and Unclear raise
- * non-blocking review_queue flags. Counts by status are persisted overall and per
+ * Not provided with the ask-the-client wording. A data point the earlier
+ * {@code assess_conflicts} stage (M3-12) left with an open conflict is Conflicting —
+ * the conflict stage runs first and this stage reads its rows. Not provided and Unclear
+ * raise non-blocking review_queue flags. Counts by status are persisted overall and per
  * entity (and site) in {@code checklist_summary}. One transaction per run; a re-run
  * replaces the previous checklist wholesale and never duplicates it. The stage is
  * deterministic — it reads only persisted state and never calls the model.
@@ -46,7 +49,7 @@ public final class AssessChecklistRunner implements AssessStage {
             ChecklistAssessor.STATUS_PROVIDED,
             ChecklistAssessor.STATUS_UNCLEAR,
             ChecklistAssessor.STATUS_NOT_PROVIDED,
-            "conflicting",
+            ChecklistAssessor.STATUS_CONFLICTING,
             "not_applicable");
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -123,8 +126,14 @@ public final class AssessChecklistRunner implements AssessStage {
                 checklist.documentScopes(mandateId),
                 checklist.facts(mandateId));
         List<MandateQa.ChecklistOverrideRow> overrides = checklist.overrides(mandateId);
-        List<ChecklistAssessor.Result> plan =
-                ChecklistAssessor.plan(inputs, catalog.values(), overrides);
+        // The conflicts stage ran first (M3-12): a data point it left open — no rule,
+        // no AI settlement — is what makes its checklist item Conflicting.
+        List<MandateQa.ConflictRow> openConflicts = new ConflictRepository(connection)
+                .conflicts(mandateId).stream()
+                .filter(row -> ConflictRepository.SETTLEMENT_OPEN.equals(row.settlement()))
+                .toList();
+        List<ChecklistAssessor.Result> plan = ChecklistAssessor.applyOpenConflicts(
+                ChecklistAssessor.plan(inputs, catalog.values(), overrides), openConflicts);
 
         // Replace semantics: drop the previous items, results, their provenance and the
         // summaries first, so the new inserts can never be deleted by the same run.
@@ -136,6 +145,7 @@ public final class AssessChecklistRunner implements AssessStage {
         int provided = 0;
         int unclear = 0;
         int notProvided = 0;
+        int conflicting = 0;
         for (ChecklistAssessor.Result result : plan) {
             Long itemId = itemIds.get(result.item().key());
             if (itemId == null) {
@@ -161,6 +171,7 @@ public final class AssessChecklistRunner implements AssessStage {
                     insertProvidedProvenance(assessment, docs, checklist, result, resultId);
                 }
                 case ChecklistAssessor.STATUS_UNCLEAR -> unclear++;
+                case ChecklistAssessor.STATUS_CONFLICTING -> conflicting++;
                 default -> notProvided++;
             }
         }
@@ -169,14 +180,15 @@ public final class AssessChecklistRunner implements AssessStage {
         int[] flags = insertFlags(repo, checklist, parseRunId, plan);
 
         recordStats(repo, parseRunId, itemIds.size(), plan.size(), provided, unclear,
-                notProvided, flags);
+                notProvided, conflicting, flags);
         assessment.upsertAssessmentRun(mandateId, STAGE, "completed", parseRunId, startedAt,
                 Timestamps.now(), metricsJson(itemIds.size(), plan.size(), provided, unclear,
-                        notProvided, flags));
+                        notProvided, conflicting, flags));
 
         String detail = String.format(Locale.ROOT,
-                "%d items, %d results (%d provided, %d unclear, %d not provided), %d flags",
-                itemIds.size(), plan.size(), provided, unclear, notProvided,
+                "%d items, %d results (%d provided, %d unclear, %d not provided,"
+                        + " %d conflicting), %d flags",
+                itemIds.size(), plan.size(), provided, unclear, notProvided, conflicting,
                 flags[0] + flags[1]);
         return new StageResult(STAGE, plan.size(), detail);
     }
@@ -336,8 +348,8 @@ public final class AssessChecklistRunner implements AssessStage {
     }
 
     private static void recordStats(WorkspaceRepository repo, Long parseRunId, int items,
-            int results, int provided, int unclear, int notProvided, int[] flags)
-            throws Exception {
+            int results, int provided, int unclear, int notProvided, int conflicting,
+            int[] flags) throws Exception {
         if (parseRunId == null) {
             return;
         }
@@ -346,19 +358,21 @@ public final class AssessChecklistRunner implements AssessStage {
         repo.recordRunStat(parseRunId, STAGE, "checklist_provided", (double) provided, null);
         repo.recordRunStat(parseRunId, STAGE, "checklist_unclear", (double) unclear, null);
         repo.recordRunStat(parseRunId, STAGE, "checklist_not_provided", (double) notProvided, null);
+        repo.recordRunStat(parseRunId, STAGE, "checklist_conflicting", (double) conflicting, null);
         repo.recordRunStat(parseRunId, STAGE, "flags_not_provided", (double) flags[0], null);
         repo.recordRunStat(parseRunId, STAGE, "flags_unclear", (double) flags[1], null);
         repo.updateParseRunResult(parseRunId, Timestamps.now(), "success", null);
     }
 
     private static String metricsJson(int items, int results, int provided, int unclear,
-            int notProvided, int[] flags) {
+            int notProvided, int conflicting, int[] flags) {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("items", items);
         node.put("results", results);
         node.put("provided", provided);
         node.put("unclear", unclear);
         node.put("not_provided", notProvided);
+        node.put("conflicting", conflicting);
         node.put("flags_not_provided", flags[0]);
         node.put("flags_unclear", flags[1]);
         return node.toString();

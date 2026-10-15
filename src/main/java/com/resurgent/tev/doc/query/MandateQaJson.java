@@ -3,6 +3,7 @@ package com.resurgent.tev.doc.query;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.util.List;
 
 /** JSON export for {@code tev-doc qa --json}, sectioned like {@link MandateQa}. */
 public final class MandateQaJson {
@@ -300,10 +301,68 @@ public final class MandateQaJson {
             n.put("item_count", row.itemCount());
         }
 
+        // M3-12 (#145): the conflicts between documents with both sides and their
+        // settlement, and the revisions (same document type, different dates) whose
+        // winner M4 chooses — appended at the end so earlier sections are untouched.
+        writeConflicts(root.putArray("conflicts"), qa.conflicts());
+        writeConflicts(root.putArray("versions_differ"), qa.versionsDiffer());
+
         try {
             return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root);
         } catch (Exception e) {
             throw new IllegalStateException("mandate qa json export failed", e);
+        }
+    }
+
+    /** One JSON object per conflict row, sides nested with their source and value. */
+    private static void writeConflicts(ArrayNode target, List<MandateQa.ConflictRow> rows) {
+        for (MandateQa.ConflictRow row : rows) {
+            ObjectNode n = target.addObject();
+            n.put("conflict_id", row.conflictId());
+            n.put("kind", row.kind());
+            n.put("data_point", row.dataPoint());
+            putOrNull(n, "field_key", row.fieldKey());
+            putOrNull(n, "ontology_path", row.ontologyPath());
+            if (row.entityId() != null) {
+                n.put("entity_id", row.entityId());
+            }
+            putOrNull(n, "entity_name", row.entityName());
+            if (row.siteId() != null) {
+                n.put("site_id", row.siteId());
+            }
+            putOrNull(n, "site_name", row.siteName());
+            putOrNull(n, "period", row.period());
+            n.put("verdict", row.verdict());
+            writeConflictSide(n.putObject("left"), row.left());
+            writeConflictSide(n.putObject("right"), row.right());
+            putOrNull(n, "settlement", row.settlement());
+            putOrNull(n, "chosen_side", row.chosenSide());
+            putOrNull(n, "chosen_value", row.chosenValue());
+            putOrNull(n, "rejected_value", row.rejectedValue());
+            putOrNull(n, "rule_id", row.ruleId());
+            putOrNull(n, "rules_version", row.rulesVersion());
+            putOrNull(n, "reasoning", row.reasoning());
+        }
+    }
+
+    private static void writeConflictSide(ObjectNode n, MandateQa.ConflictSideRow side) {
+        if (side.documentVersionId() != null) {
+            n.put("document_version_id", side.documentVersionId());
+        }
+        putOrNull(n, "logical_name", side.logicalName());
+        putOrNull(n, "file_name", side.fileName());
+        if (side.pageIndex() != null) {
+            n.put("page_index", side.pageIndex());
+        }
+        putOrNull(n, "value", side.value());
+        putOrNull(n, "quote", side.quote());
+    }
+
+    private static void putOrNull(ObjectNode n, String key, String value) {
+        if (value == null) {
+            n.putNull(key);
+        } else {
+            n.put(key, value);
         }
     }
 }

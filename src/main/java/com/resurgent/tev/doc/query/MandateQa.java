@@ -26,6 +26,12 @@ import java.util.List;
  *     reason, page evidence and ask-the-client wording (M3-10; appended)
  * @param checklistSummary the persisted counts by status, overall and per entity
  *     (M3-10; appended)
+ * @param conflicts every conflict of the mandate's last assessment — the same data
+ *     point disagreed on across documents within the same entity, site and period,
+ *     with both sources and values and how it was settled (M3-12; appended)
+ * @param versionsDiffer conflicts that are really a revision: the same document type
+ *     on two different document dates, newest first, settlement left to M4 (M3-12;
+ *     appended)
  */
 public record MandateQa(
         long mandateId,
@@ -38,7 +44,9 @@ public record MandateQa(
         List<IndustryRow> industries,
         CountryRow country,
         List<ChecklistResultRow> checklist,
-        List<ChecklistSummaryRow> checklistSummary) {
+        List<ChecklistSummaryRow> checklistSummary,
+        List<ConflictRow> conflicts,
+        List<ConflictRow> versionsDiffer) {
 
     /**
      * One document version's date assessment.
@@ -413,4 +421,75 @@ public record MandateQa(
             String action,
             String reason,
             String createdAt) {}
+
+    /**
+     * One conflict between documents over the same data point (M3-12, ADR 0026):
+     * both sides kept in full, plus the settlement. Never overwritten — the losing
+     * value stays on this row and in the fact table.
+     *
+     * @param conflictId conflict row id
+     * @param kind {@code doc-doc} | {@code intra-doc} | {@code doc-fm} |
+     *     {@code versions-differ}
+     * @param dataPoint the data point disagreed on (pack field key, else ontology path)
+     * @param fieldKey pack field key, or null when the data point is path-identified
+     * @param ontologyPath bound ontology path, or null when unbound
+     * @param entityId entity the comparison was made within, or null
+     * @param entityName that entity's name, or null
+     * @param siteId site the comparison was made within, or null
+     * @param siteName that site's name, or null
+     * @param period the stated period (as-on date, financial year, …), or null
+     * @param verdict the comparison verdict that formed the row (e.g. {@code disagree})
+     * @param left left side: source, page, value and quote
+     * @param right right side: source, page, value and quote
+     * @param settlement {@code rule} | {@code ai} | {@code open}, or null for
+     *     {@code versions-differ} (M4 chooses the winner)
+     * @param chosenSide {@code left} | {@code right} — the side whose value is used,
+     *     or null when open
+     * @param chosenValue the value used, or null when open
+     * @param rejectedValue the value rejected (still kept), or null when open
+     * @param ruleId id of the precedence rule that settled it, or null
+     * @param rulesVersion version of the precedence rule set, or null
+     * @param reasoning why it was settled this way (rule reason, AI reasoning, or
+     *     why it is still open); never blank
+     */
+    public record ConflictRow(
+            long conflictId,
+            String kind,
+            String dataPoint,
+            String fieldKey,
+            String ontologyPath,
+            Long entityId,
+            String entityName,
+            Long siteId,
+            String siteName,
+            String period,
+            String verdict,
+            ConflictSideRow left,
+            ConflictSideRow right,
+            String settlement,
+            String chosenSide,
+            String chosenValue,
+            String rejectedValue,
+            String ruleId,
+            String rulesVersion,
+            String reasoning) {}
+
+    /**
+     * One side of a conflict: the document version it was read from, the citing page
+     * and quote when anchored, and the value as stated.
+     *
+     * @param documentVersionId the version the value came from, or null when unknown
+     * @param logicalName that version's logical document name, or null
+     * @param fileName that version's stored file name, or null
+     * @param pageIndex the cited page, or null when unanchored
+     * @param value the value as stated (never blank)
+     * @param quote the verbatim the value was read from, or null when unanchored
+     */
+    public record ConflictSideRow(
+            Long documentVersionId,
+            String logicalName,
+            String fileName,
+            Integer pageIndex,
+            String value,
+            String quote) {}
 }

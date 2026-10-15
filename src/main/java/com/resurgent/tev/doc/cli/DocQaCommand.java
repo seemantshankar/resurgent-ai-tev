@@ -250,6 +250,44 @@ public final class DocQaCommand implements Callable<Integer> {
                 out.printf("checklist summary %s: %d %s%n",
                         summaryScope(summary), summary.itemCount(), summary.status());
             }
+            // M3-12 (#145): the conflicts between documents with both sides and their
+            // settlement, and the revisions whose winner M4 chooses — appended at the
+            // end so the earlier output is untouched.
+            for (MandateQa.ConflictRow row : qa.conflicts()) {
+                out.printf("conflict %s [%s] settlement=%s | %s vs %s%n",
+                        row.dataPoint(),
+                        row.kind(),
+                        blankToDash(row.settlement()),
+                        row.left().value(),
+                        row.right().value());
+                out.printf("  %s%n", conflictSides(row));
+                if ("rule".equals(row.settlement())) {
+                    out.printf("  settled by rule %s (rules %s): chose %s, rejected %s%n",
+                            blankToDash(row.ruleId()),
+                            blankToDash(row.rulesVersion()),
+                            blankToDash(row.chosenValue()),
+                            blankToDash(row.rejectedValue()));
+                } else if ("ai".equals(row.settlement())) {
+                    out.printf("  settled by AI: chose %s, rejected %s%n",
+                            blankToDash(row.chosenValue()),
+                            blankToDash(row.rejectedValue()));
+                } else {
+                    out.printf("  open: no settlement, flagged conflicting%n");
+                }
+                out.printf("  reasoning: %s%n", shorten(row.reasoning()));
+            }
+            out.printf("conflicts: %d%n", qa.conflicts().size());
+            for (MandateQa.ConflictRow row : qa.versionsDiffer()) {
+                out.printf("versions differ %s [%s] | newest %s (%s) vs %s (%s)%n",
+                        row.dataPoint(),
+                        row.kind(),
+                        row.left().value(),
+                        blankToDash(row.left().fileName()),
+                        row.right().value(),
+                        blankToDash(row.right().fileName()));
+                out.printf("  reasoning: %s%n", shorten(row.reasoning()));
+            }
+            out.printf("versions differ: %d%n", qa.versionsDiffer().size());
             return 0;
         } catch (IllegalArgumentException e) {
             err.println("qa rejected: " + e.getMessage());
@@ -262,6 +300,19 @@ public final class DocQaCommand implements Callable<Integer> {
 
     private static String blankToDash(String value) {
         return value == null || value.isBlank() ? "-" : value;
+    }
+
+    /** {@code left: <file pN>, right: <file pN>} — where each conflict value was read. */
+    private static String conflictSides(MandateQa.ConflictRow row) {
+        return "left: " + conflictSide(row.left()) + ", right: " + conflictSide(row.right());
+    }
+
+    private static String conflictSide(MandateQa.ConflictSideRow side) {
+        StringBuilder text = new StringBuilder(blankToDash(side.fileName()));
+        if (side.pageIndex() != null) {
+            text.append(" p").append(side.pageIndex());
+        }
+        return text.toString();
     }
 
     /** The scope suffix of a checklist row: entity, site or the mandate itself. */
