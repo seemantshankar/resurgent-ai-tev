@@ -29,6 +29,9 @@ public final class ConflictRepository {
     /** A disagreement between two different documents (possibly different types). */
     public static final String KIND_DOC_DOC = "doc-doc";
 
+    /** A document statement versus a read-only Layer B financial model cell. */
+    public static final String KIND_DOC_FM = "doc-fm";
+
     /** A disagreement between two sections (passages) of one document (M3-13). */
     public static final String KIND_INTRA_DOC = "intra-doc";
 
@@ -327,6 +330,11 @@ public final class ConflictRepository {
      */
     public void clearConflicts(long mandateId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM conflict_skip WHERE mandate_id = ?")) {
+            ps.setLong(1, mandateId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
                 "DELETE FROM conflict WHERE mandate_id = ?")) {
             ps.setLong(1, mandateId);
             ps.executeUpdate();
@@ -521,6 +529,47 @@ public final class ConflictRepository {
                             rs.getString("rule_id"),
                             rs.getString("rules_version"),
                             rs.getString("reasoning")));
+                }
+                return rows;
+            }
+        }
+    }
+
+    /** Persist a refused pair in the caller's assessment transaction; no review flag. */
+    public void insertConflictSkip(long mandateId, Long assessmentRunId, ConflictFactRow fact,
+            String fmSource, String reason) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO conflict_skip (mandate_id, assessment_run_id, kind, data_point,"
+                        + " ontology_path, document_version_id, page_index, fm_source, reason,"
+                        + " created_at) VALUES (?, ?, 'doc-fm', ?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setLong(1, mandateId);
+            setLong(ps, 2, assessmentRunId);
+            ps.setString(3, fact.fieldKey() != null ? fact.fieldKey() : fact.ontologyPath());
+            ps.setString(4, fact.ontologyPath());
+            ps.setLong(5, fact.documentVersionId());
+            setInt(ps, 6, fact.pageIndex());
+            ps.setString(7, fmSource);
+            ps.setString(8, reason);
+            ps.setString(9, Timestamps.now());
+            ps.executeUpdate();
+        }
+    }
+
+    /** The mandate's skipped document/model pairs in stable assessment order. */
+    public List<MandateQa.ConflictSkipRow> conflictSkips(long mandateId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT skip_id, kind, data_point, ontology_path, document_version_id,"
+                        + " page_index, fm_source, reason FROM conflict_skip"
+                        + " WHERE mandate_id = ? ORDER BY skip_id")) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<MandateQa.ConflictSkipRow> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new MandateQa.ConflictSkipRow(rs.getLong("skip_id"),
+                            rs.getString("kind"), rs.getString("data_point"),
+                            rs.getString("ontology_path"), rs.getLong("document_version_id"),
+                            asInt(rs.getObject("page_index")), rs.getString("fm_source"),
+                            rs.getString("reason")));
                 }
                 return rows;
             }

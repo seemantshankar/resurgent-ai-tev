@@ -308,6 +308,20 @@ public final class MandateQaJson {
         // winner M4 chooses — appended at the end so earlier sections are untouched.
         writeConflicts(root.putArray("conflicts"), qa.conflicts());
         writeConflicts(root.putArray("versions_differ"), qa.versionsDiffer());
+        ArrayNode skips = root.putArray("conflict_skips");
+        for (MandateQa.ConflictSkipRow row : qa.conflictSkips()) {
+            ObjectNode n = skips.addObject();
+            n.put("skip_id", row.skipId());
+            n.put("kind", row.kind());
+            n.put("data_point", row.dataPoint());
+            n.put("ontology_path", row.ontologyPath());
+            n.put("document_version_id", row.documentVersionId());
+            if (row.pageIndex() != null) {
+                n.put("page_index", row.pageIndex());
+            }
+            n.put("fm_source", row.fmSource());
+            n.put("reason", row.reason());
+        }
 
         try {
             return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root);

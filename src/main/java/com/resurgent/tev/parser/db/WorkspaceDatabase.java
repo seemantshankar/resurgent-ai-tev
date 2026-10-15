@@ -80,6 +80,7 @@ public final class WorkspaceDatabase implements AutoCloseable {
             "db/migration/V57__m3_checklist.sql",
             "db/migration/V58__m3_industry_checklists.sql",
             "db/migration/V59__m3_conflicts.sql",
+            "db/migration/V61__m3_doc_fm_conflict_skips.sql",
             "db/migration/V62__m3_checklist_learning_stage.sql"
     };
 

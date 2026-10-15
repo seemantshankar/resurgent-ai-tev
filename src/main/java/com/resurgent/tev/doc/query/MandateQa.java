@@ -46,7 +46,19 @@ public record MandateQa(
         List<ChecklistResultRow> checklist,
         List<ChecklistSummaryRow> checklistSummary,
         List<ConflictRow> conflicts,
-        List<ConflictRow> versionsDiffer) {
+        List<ConflictRow> versionsDiffer,
+        List<ConflictSkipRow> conflictSkips) {
+
+    /** A document/model pair not compared; ambiguity is visible, never a conflict. */
+    public record ConflictSkipRow(
+            long skipId,
+            String kind,
+            String dataPoint,
+            String ontologyPath,
+            long documentVersionId,
+            Integer pageIndex,
+            String fmSource,
+            String reason) {}
 
     /**
      * One document version's date assessment.

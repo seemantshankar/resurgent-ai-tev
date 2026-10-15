@@ -291,6 +291,11 @@ public final class DocQaCommand implements Callable<Integer> {
                 out.printf("  reasoning: %s%n", shorten(row.reasoning()));
             }
             out.printf("versions differ: %d%n", qa.versionsDiffer().size());
+            for (MandateQa.ConflictSkipRow row : qa.conflictSkips()) {
+                out.printf("conflict skip %s [%s] cell %s: %s%n",
+                        row.dataPoint(), row.kind(), row.fmSource(), row.reason());
+            }
+            out.printf("conflict skips: %d%n", qa.conflictSkips().size());
             return 0;
         } catch (IllegalArgumentException e) {
             err.println("qa rejected: " + e.getMessage());
@@ -311,7 +316,9 @@ public final class DocQaCommand implements Callable<Integer> {
      * absent for document-level sides.
      */
     private static String conflictSides(MandateQa.ConflictRow row) {
-        return "left: " + conflictSide(row.left()) + ", right: " + conflictSide(row.right());
+        return "left: " + conflictSide(row.left()) + ", right: "
+                + ("doc-fm".equals(row.kind()) ? "cell " + row.right().quote()
+                        : conflictSide(row.right()));
     }
 
     private static String conflictSide(MandateQa.ConflictSideRow side) {

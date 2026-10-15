@@ -6,6 +6,7 @@ import com.resurgent.tev.doc.compare.Verdict;
 import com.resurgent.tev.doc.db.ConflictRepository;
 import com.resurgent.tev.doc.db.ConflictRepository.ConflictFactRow;
 import com.resurgent.tev.doc.db.ConflictRepository.ConflictWrite;
+import com.resurgent.tev.doc.db.FmConflictSources;
 import com.resurgent.tev.doc.extract.MoneyNormalizer;
 import com.resurgent.tev.doc.extract.RateNormalizer;
 import com.resurgent.tev.doc.llm.DocLlmClient;
@@ -101,7 +102,117 @@ public final class ConflictScan {
                 }
             }
         }
+        scanFm(connection, mandateId, assessmentRunId, facts, periodsByVersion,
+                client, usageSink, repository, written);
         return written;
+    }
+
+    private static void scanFm(Connection connection, long mandateId, Long runId,
+            List<ConflictFactRow> facts, Map<Long, String> periods, DocLlmClient client,
+            Consumer<DocLlmClient.Usage> usageSink, ConflictRepository repository,
+            List<Written> written) throws SQLException {
+        Map<String, List<FmConflictSources.Cell>> paths =
+                FmConflictSources.forMandate(connection, mandateId);
+        for (ConflictFactRow fact : facts) {
+            List<FmConflictSources.Cell> cells = paths.get(fact.ontologyPath());
+            if (cells == null || cells.isEmpty()) {
+                continue;
+            }
+            // Layer B also binds row labels. They identify the amount, not a second value.
+            List<FmConflictSources.Cell> numeric = cells.stream()
+                    .filter(c -> c.value().numericValue() != null || c.value().formulaText() != null)
+                    .toList();
+            if (!numeric.isEmpty()) {
+                cells = numeric;
+            }
+            if (cells.size() != 1) {
+                String sources = String.join(", ", cells.stream().map(FmConflictSources.Cell::source).toList());
+                repository.insertConflictSkip(mandateId, runId, fact, sources,
+                        "ambiguous FM path: multiple bound cells for " + fact.ontologyPath());
+                continue;
+            }
+            FmConflictSources.Cell cell = cells.get(0);
+            if (cell.periods().stream().anyMatch(p -> "ambiguous".equals(p.resolution()))) {
+                repository.insertConflictSkip(mandateId, runId, fact, cell.source(),
+                        "ambiguous FM period: " + cell.periods().stream()
+                                .map(p -> p.text() == null ? p.normalized() : p.text()).toList());
+                continue;
+            }
+            String periodSkip = fmPeriodSkip(cell, periodOf(fact, periods));
+            if (periodSkip != null) {
+                repository.insertConflictSkip(mandateId, runId, fact, cell.source(), periodSkip);
+                continue;
+            }
+            var reading = cell.reading();
+            if (reading == null || reading.refusal() != null
+                    || !"money".equals(reading.kind()) || reading.absoluteAmount() == null) {
+                repository.insertConflictSkip(mandateId, runId, fact, cell.source(),
+                        "no usable reading for document money comparison"
+                                + (reading != null && reading.refusal() != null
+                                        ? ": " + reading.refusal() : ""));
+                continue;
+            }
+            String modelValue = (reading.currency() == null ? "" : reading.currency() + " ")
+                    + reading.absoluteAmount();
+            Comparison compared = Comparisons.money(valueOf(fact), modelValue);
+            if (!compared.differs()) {
+                continue;
+            }
+            String settlement = ConflictRepository.SETTLEMENT_OPEN;
+            String chosen = null;
+            String ruleId = null;
+            String rulesVersion = null;
+            String reasoning = "no precedence rule covers this disagreement and AI judgement did not"
+                    + " settle it (declined or unavailable)";
+            var rule = PrecedenceRules.settle(fact.docTypeCode(), "financial-model");
+            if (rule.isPresent()) {
+                settlement = ConflictRepository.SETTLEMENT_RULE;
+                chosen = rule.get().choseLeft() ? "left" : "right";
+                ruleId = rule.get().ruleId();
+                rulesVersion = rule.get().rulesVersion();
+                reasoning = rule.get().reason();
+            } else {
+                var ai = LlmConflictSettlement.settle(client, dataPointOf(fact), describe(fact),
+                        "financial model cell " + cell.source() + " states " + modelValue, usageSink);
+                if (ai.isPresent()) {
+                    settlement = ConflictRepository.SETTLEMENT_AI;
+                    chosen = ai.get().choseLeft() ? "left" : "right";
+                    reasoning = ai.get().reasoning();
+                }
+            }
+            ConflictWrite write = new ConflictWrite(ConflictRepository.KIND_DOC_FM,
+                    dataPointOf(fact), fact.fieldKey(), fact.ontologyPath(), fact.entityId(),
+                    fact.siteId(), periodOf(fact, periods), compared.verdict().wireName(),
+                    fact.factId(), fact.documentVersionId(), fact.pageIndex(), valueOf(fact),
+                    fact.quote(), null, null, null, modelValue, cell.source(), settlement,
+                    chosen, ruleId, rulesVersion, reasoning);
+            written.add(new Written(repository.insertConflict(mandateId, runId, write), write));
+        }
+    }
+
+    /** Never infer a calendar period from upload dates or from the document's value. */
+    private static String fmPeriodSkip(FmConflictSources.Cell cell, String documentPeriod) {
+        List<String> modelPeriods = cell.periods().stream()
+                .filter(p -> !"missing".equals(p.resolution()))
+                .map(p -> p.normalized() == null ? p.text() : p.normalized())
+                .filter(Objects::nonNull).distinct().toList();
+        if (modelPeriods.isEmpty() && documentPeriod == null) {
+            return null;
+        }
+        if (modelPeriods.size() != 1 || documentPeriod == null) {
+            return "ambiguous FM period: cannot align " + modelPeriods
+                    + " with document period " + documentPeriod;
+        }
+        String modelPeriod = modelPeriods.get(0);
+        if (documentPeriod.trim().equalsIgnoreCase(modelPeriod.trim())) {
+            return null;
+        }
+        Comparison comparison = Comparisons.date(documentPeriod, modelPeriod);
+        if (comparison.verdict() == Verdict.AGREE) {
+            return null;
+        }
+        return "different periods or incompatible precision: document " + documentPeriod
+                + " vs FM " + modelPeriod + " (" + comparison.detail() + ")";
     }
 
     /** Facts grouped by data-point identity: pack field key, else ontology path, per line. */
