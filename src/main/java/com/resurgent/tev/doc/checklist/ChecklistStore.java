@@ -92,7 +92,8 @@ public final class ChecklistStore {
      * ({@code {code}@{version}.yaml}) never fights the file that introduced the
      * code — newer learning outcomes simply outrank older files.
      */
-    static Map<String, ChecklistDefinition> latestPerCode(List<ChecklistDefinition> definitions) {
+    public static Map<String, ChecklistDefinition> latestPerCode(
+            List<ChecklistDefinition> definitions) {
         Map<String, ChecklistDefinition> latest = new LinkedHashMap<>();
         for (ChecklistDefinition definition : definitions) {
             ChecklistDefinition current = latest.get(definition.code());

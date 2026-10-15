@@ -332,8 +332,11 @@ public final class ChecklistAssessor {
         return name.length() == 2 ? name.toUpperCase(Locale.ROOT) : null;
     }
 
-    /** Industry labels compare case-insensitively with underscores and spaces folded. */
-    static String normaliseIndustry(String industry) {
+    /**
+     * Industry labels compare case-insensitively with spaces folded to underscores —
+     * the one fold rule for scope matching and for learning (M3-15) alike.
+     */
+    public static String normaliseIndustry(String industry) {
         return industry.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
     }
 
