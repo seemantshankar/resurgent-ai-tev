@@ -38,8 +38,8 @@ import java.util.function.Consumer;
  * are passage-linked and the passages differ — two sections of one document
  * (kind {@code intra-doc}); a document-level fact carries no section. A money fact the
  * bind stage left {@code unbound} (issue #153) has no shared path a model cell could
- * meet it on, so it is recorded as a skip naming that path, never dropped from the
- * comparison in silence.
+ * meet it on, and a bound money amount may simply have no cell in the model: both are
+ * recorded as skips naming the path, never dropped from the comparison in silence.
  *
  * <p>Settlement follows ADR 0026's tiers: the versioned {@link PrecedenceRules} first,
  * else AI judgement through the {@link LlmConflictSettlement} seam (confident → settled
@@ -153,6 +153,13 @@ public final class ConflictScan {
             }
             List<FmConflictSources.Cell> cells = paths.get(fact.ontologyPath());
             if (cells == null || cells.isEmpty()) {
+                // A bound amount the model says nothing about is a comparison that was
+                // possible and refused, not one that agreed. Silent here is the green-but-
+                // blind read #147 forbids, so the model's silence is recorded per amount.
+                if ("money".equals(fact.valueKind())) {
+                    repository.insertConflictSkip(mandateId, runId, fact, null,
+                            "financial model has no cell bound to " + fact.ontologyPath());
+                }
                 continue;
             }
             // Layer B also binds row labels. They identify the amount, not a second value.

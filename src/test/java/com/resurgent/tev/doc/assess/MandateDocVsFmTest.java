@@ -72,9 +72,11 @@ import picocli.CommandLine;
  * model side names the sheet and the cell — settled through the same three tiers, with
  * the model read and never changed. An ambiguous model path or period is skipped with a
  * recorded reason row instead of a conflict. A money fact the shared nomenclature cannot
- * name (issue #153) is skipped the same way, naming the path it could not bind. Asserted
- * through the mandate QA read API, and the CLI text/JSON export only; no direct SQL
- * assertions.
+ * name (issue #153), and a bound amount the model states no cell for, are skipped the
+ * same way, naming the path — the model's silence is never read as agreement. The
+ * conflicts stage counts the model comparison apart from document-versus-document.
+ * Asserted through the mandate QA read API, and the CLI text/JSON export only; no direct
+ * SQL assertions.
  */
 class MandateDocVsFmTest {
 
@@ -484,7 +486,87 @@ class MandateDocVsFmTest {
 
         assertThat(qa().conflictSkips())
                 .extracting(MandateQa.ConflictSkipRow::dataPoint)
-                .containsExactlyInAnyOrder("assets_total", "liabilities_total");
+                .containsExactlyInAnyOrder("net_worth", "assets_total", "liabilities_total");
+        // The bound net worth is refused because the model states no such path; the other
+        // two because no shared leaf names them. Both refusals are visible, neither is a
+        // pass.
+        assertThat(qa().conflictSkips())
+                .filteredOn(skip -> "net_worth".equals(skip.dataPoint()))
+                .singleElement().satisfies(skip -> assertThat(skip.reason())
+                        .contains("no cell bound", "economic > Balance Sheet > Net Worth"));
+    }
+
+    // --- #147: the model saying nothing about a bound amount is a recorded refusal --
+
+    @Test
+    void aBoundAmountTheModelDoesNotStateIsSkippedNamingTheModelsSilence() throws Exception {
+        // The model states a project cost; the certificate states a promoter's net worth,
+        // which the shared nomenclature binds to Balance Sheet > Net Worth. No model cell
+        // is bound there, so the comparison was possible and refused — and an empty
+        // conflict list must not read as agreement.
+        Path xlsx = modelWorkbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lakhs)");
+            sheet.createRow(2).createCell(0).setCellValue("Project cost");
+            sheet.getRow(2).createCell(1).setCellValue(6000);
+        });
+        ingestFm(xlsx, List.of(new LayerBAssignment(null, "B3", "economic", "Project Cost")));
+        long certificate = ingestNetWorthCertificate();
+
+        DocAssessRunner.run(MANDATE, dbPath, null);
+
+        assertThat(qa().conflicts()).isEmpty();
+        assertThat(qa().conflictSkips())
+                .filteredOn(skip -> "net_worth".equals(skip.dataPoint()))
+                .singleElement().satisfies(skip -> {
+                    assertThat(skip.kind()).isEqualTo("doc-fm");
+                    assertThat(skip.ontologyPath())
+                            .isEqualTo("economic > Balance Sheet > Net Worth");
+                    assertThat(skip.fmSource()).isNull();
+                    assertThat(skip.documentVersionId()).isEqualTo(certificate);
+                    assertThat(skip.pageIndex()).isEqualTo(1);
+                    assertThat(skip.reason())
+                            .contains("no cell bound", "economic > Balance Sheet > Net Worth");
+                });
+        // The two amounts no shared leaf names are refused for their own reason, not this.
+        assertThat(qa().conflictSkips()).hasSize(3);
+        assertThat(qa().conflictSkips())
+                .filteredOn(skip -> "assets_total".equals(skip.dataPoint()))
+                .singleElement().satisfies(skip ->
+                        assertThat(skip.reason()).contains("unbound"));
+
+        Run text = run(new DocQaCommand(), "--mandate", "1", "--db", dbPath.toString());
+        assertThat(text.exitCode()).isZero();
+        assertThat(text.out())
+                .contains("conflict skip net_worth [doc-fm]")
+                .contains("conflict skips: 3");
+
+        DocAssessRunner.run(MANDATE, dbPath, null);
+        assertThat(qa().conflictSkips()).hasSize(3);
+    }
+
+    // --- #147: the model comparison is counted apart from document-vs-document ----
+
+    @Test
+    void theConflictsStageReportsTheModelComparisonApartFromDocumentVersusDocument()
+            throws Exception {
+        Path xlsx = modelWorkbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lakhs)");
+            sheet.createRow(2).createCell(0).setCellValue("Project cost");
+            sheet.getRow(2).createCell(1).setCellValue(6000);
+        });
+        ingestFm(xlsx, List.of(new LayerBAssignment(null, "B3", "economic", "Project Cost")));
+        ingestDpr("Rs. 52,00,00,000");
+
+        DocAssessRunner.Result result = DocAssessRunner.run(MANDATE, dbPath, null);
+
+        // A run that disagreed with the model reads differently from one that only
+        // compared documents: the stage detail breaks the two apart.
+        assertThat(result.stages())
+                .filteredOn(stage -> AssessConflictsRunner.STAGE.equals(stage.stage()))
+                .singleElement().satisfies(stage -> assertThat(stage.detail())
+                        .contains("1 conflicts")
+                        .contains("0 document-vs-document")
+                        .contains("1 document-vs-model"));
     }
 
     // --- FM seams: the unchanged pipeline over a synthetic workbook ------------

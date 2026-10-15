@@ -223,7 +223,7 @@ The same document type present on two different document dates (a revised quotat
 _Avoid_: superseded conflict, duplicate documents
 
 **Skipped comparison**:
-A source pair the system deliberately did not compare — an ambiguous financial-model path or period, an unusable cell reading, or a document amount that bound to no shared nomenclature path — recorded with its reason so the decision is visible instead of silently absent.
+A source pair the system deliberately did not compare — an ambiguous financial-model path or period, an unusable cell reading, a document amount that bound to no shared nomenclature path, or a bound amount the model states no cell for — recorded with its reason so the decision is visible instead of silently absent.
 _Avoid_: missed conflict, ignored pair
 
 **Fact binding**:
