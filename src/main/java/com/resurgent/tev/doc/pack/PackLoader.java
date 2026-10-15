@@ -353,12 +353,13 @@ public final class PackLoader {
         return packs;
     }
 
-    /** Loads the four seed goldens from {@code docpacks/} on the classpath. */
+    /** Loads the five seed goldens from {@code docpacks/} on the classpath. */
     public static List<DocTypePack> loadSeedPacks() throws PackValidationException {
         return List.of(
                 loadClasspath("docpacks/identity.promoter_net_worth.yaml"),
                 loadClasspath("docpacks/quotation.vendor.yaml"),
                 loadClasspath("docpacks/agreement.ppa.yaml"),
+                loadClasspath("docpacks/financials.audited_summary.yaml"),
                 loadClasspath("docpacks/report.dpr.yaml"));
     }
 

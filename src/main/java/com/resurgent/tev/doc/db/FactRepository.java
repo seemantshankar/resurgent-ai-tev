@@ -74,11 +74,26 @@ public final class FactRepository {
             String lineKey,
             String groupKeysJson,
             List<Citation> citations,
-            List<String> derivedFromKeys) {
+            List<String> derivedFromKeys,
+            String period) {
 
         public FactWrite {
             citations = citations == null ? List.of() : List.copyOf(citations);
             derivedFromKeys = derivedFromKeys == null ? List.of() : List.copyOf(derivedFromKeys);
+        }
+
+        /** Fact write with no period (presence fields, line items, derived values). */
+        public FactWrite(String fieldKey, String ontologyPath, String pathRoot,
+                String subjectEntity, String valueKind, String valueText, Double valueNumber,
+                String valueDate, String unit, String currency, String scale,
+                String absoluteAmount, String langSource, String extractionMethod,
+                String extractorId, Double confidence, String statedOrDerived, String lineKey,
+                String groupKeysJson, List<Citation> citations,
+                List<String> derivedFromKeys) {
+            this(fieldKey, ontologyPath, pathRoot, subjectEntity, valueKind, valueText,
+                    valueNumber, valueDate, unit, currency, scale, absoluteAmount, langSource,
+                    extractionMethod, extractorId, confidence, statedOrDerived, lineKey,
+                    groupKeysJson, citations, derivedFromKeys, null);
         }
     }
 
@@ -207,6 +222,14 @@ public final class FactRepository {
                             String.valueOf(parentIds.get(0)));
                     evidenceInserted++;
                 }
+            }
+            if (f.period() != null && !f.period().isBlank()) {
+                // The statement the value was read for, as stated (e.g. a financial
+                // year). Reserved evidence role: two years of one figure are two
+                // readings of it, never a conflict (ADR 0026).
+                insertFactEvidence(factId, ordinal++, "period", null,
+                        f.period(), "resolved", null, null);
+                evidenceInserted++;
             }
         }
         return new ReplaceStats(facts.size(), evidenceInserted, provenanceInserted,

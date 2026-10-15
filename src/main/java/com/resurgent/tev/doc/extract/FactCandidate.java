@@ -24,6 +24,7 @@ public final class FactCandidate {
     private String absoluteAmount;
     private String subjectEntity;
     private String lineKey;
+    private String period;
     private Double confidence;
     private String statedOrDerived = "stated";
     private String extractionMethod = "llm_field";
@@ -127,6 +128,19 @@ public final class FactCandidate {
 
     public FactCandidate lineKey(String lineKey) {
         this.lineKey = lineKey;
+        return this;
+    }
+
+    /**
+     * The period the value was read for, as stated (e.g. {@code FY2024-25}); surface an
+     * audited figure was recorded per financial year rather than a second reading of it.
+     */
+    public String period() {
+        return period;
+    }
+
+    public FactCandidate period(String period) {
+        this.period = period;
         return this;
     }
 

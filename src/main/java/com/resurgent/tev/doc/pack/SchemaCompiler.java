@@ -13,8 +13,11 @@ import java.util.Set;
 /**
  * Builds the JSON Schema fragment sent to {@code ExtractClient} from a pack.
  * Object of field keys; each leaf carries {@code value_kind}, {@code required},
- * and a short {@code prompt_hint}. Multi-value leaves are arrays. Quotation packs
- * add a {@code line_items} array of row objects from pack {@code tables}.
+ * and a short {@code prompt_hint}. Multi-value leaves are arrays. Pack
+ * {@code tables} are compiled as arrays of row objects (one property per column);
+ * a table's {@code period_key} column is marked {@code "period": true} so row
+ * facts can carry the period they were read for. A field whose key is a table
+ * column compiles only inside its table — never as a root leaf.
  */
 public final class SchemaCompiler {
 
@@ -34,22 +37,30 @@ public final class SchemaCompiler {
         ObjectNode props = root.putObject("properties");
         ArrayNode required = root.putArray("required");
 
+        Set<String> tableOwned = tableOwnedKeys(pack);
+
         for (PackField field : pack.fields()) {
+            if (tableOwned.contains(field.key())) {
+                // Fields that repeat per row (audited headline figures, ...) are
+                // extracted as table columns, not as single root-level values.
+                continue;
+            }
             putFieldProps(props, field);
             if (field.required()) {
                 required.add(field.key());
             }
         }
 
-        // Quotation-style packs: row maps under tables[].fields become line_items[].
+        // Row tables (quotation line_items, audited headline figures, ...): row maps
+        // under tables[].fields become an array of row objects.
         for (Map<String, Object> table : pack.tables()) {
             Object name = table.get("name");
-            if (name == null || !"line_items".equals(String.valueOf(name))) {
+            if (name == null) {
                 continue;
             }
             putTableRows(props, table);
-            // line_items is structurally required when the pack declares the table.
-            required.add("line_items");
+            // A table array is structurally required when the pack declares the table.
+            required.add(String.valueOf(name));
         }
 
         return root;
@@ -84,6 +95,22 @@ public final class SchemaCompiler {
         return root;
     }
 
+    /** Field keys owned by a declared table — compiled as columns, never root leaves. */
+    private static Set<String> tableOwnedKeys(DocTypePack pack) {
+        Set<String> keys = new HashSet<>();
+        for (Map<String, Object> table : pack.tables()) {
+            Object fieldsObj = table.get("fields");
+            if (fieldsObj instanceof java.util.List<?> list) {
+                for (Object raw : list) {
+                    if (raw instanceof Map<?, ?> f && f.get("key") != null) {
+                        keys.add(String.valueOf(f.get("key")));
+                    }
+                }
+            }
+        }
+        return keys;
+    }
+
     /** Leaf schema for one pack field, shared by {@link #compile} and {@link #compileForFields}. */
     private static void putFieldProps(ObjectNode parent, PackField field) {
         ObjectNode leaf = parent.putObject(field.key());
@@ -112,6 +139,8 @@ public final class SchemaCompiler {
         ObjectNode items = tableNode.putObject("items");
         items.put("type", "object");
         ObjectNode itemProps = items.putObject("properties");
+        Object periodKey = table.get("period_key");
+        String periodColumn = periodKey == null ? null : String.valueOf(periodKey);
         Object fieldsObj = table.get("fields");
         if (fieldsObj instanceof java.util.List<?> list) {
             for (Object raw : list) {
@@ -130,6 +159,9 @@ public final class SchemaCompiler {
                     }
                     if (f.get("prompt_hint") != null) {
                         col.put("description", String.valueOf(f.get("prompt_hint")));
+                    }
+                    if (key.equals(periodColumn)) {
+                        col.put("period", true);
                     }
                 }
             }

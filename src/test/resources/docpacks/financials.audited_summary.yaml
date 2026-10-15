@@ -1,0 +1,98 @@
+code: financials.audited_summary
+version: 1.0.0
+family: financials
+file_role: audited_financials
+industry_tags: [general]
+identity_signals:
+  any_of:
+    - "Audited Financial Summary"
+    - "Audited Financials"
+    - "Audited Financial Statements"
+    - "Summary of Audited Financials"
+    - "Audited Balance Sheet"
+# Presence fields record what the summary states about itself: the entity it is
+# about, the financial years it covers and the auditor. The four headline figures
+# are also declared here so the binder has their ontology paths; they are compiled
+# into the financial_years table below (one fact per figure per year), never as
+# single root-level values.
+fields:
+  - key: subject_name
+    path: identity > Legal Name
+    path_root: identity
+    value_kind: text
+    required: true
+    prompt_hint: "Name of the company or person these audited financials are for"
+    synonyms: ["Name of the Company", "Entity", "In the name of", "Audited financials of"]
+  - key: financial_years
+    path: frame > Period > Financial Years
+    path_root: frame
+    value_kind: text
+    required: true
+    prompt_hint: "The financial years the summary covers, as stated (e.g. FY2023-24 and FY2024-25)"
+    synonyms: ["Financial Year", "FY", "Year ended", "for the year"]
+  - key: auditor_name
+    path: frame > Attestation > Auditor
+    path_root: frame
+    value_kind: text
+    required: true
+    prompt_hint: "Name of the auditor / audit firm that certified the financials"
+    synonyms: ["Auditor", "Audited by", "Statutory Auditor"]
+  - key: revenue
+    path: economic > Audited Financials > Revenue
+    path_root: economic
+    value_kind: money
+    required: true
+    slots: [currency, scale]
+    prompt_hint: "Revenue / total income of the year"
+    synonyms: ["Revenue", "Total Income", "Turnover"]
+  - key: pat
+    path: economic > Audited Financials > Profit After Tax
+    path_root: economic
+    value_kind: money
+    required: true
+    slots: [currency, scale]
+    prompt_hint: "Profit after tax of the year"
+    synonyms: ["PAT", "Profit After Tax", "Net Profit"]
+  - key: net_worth
+    path: economic > Audited Financials > Net Worth
+    path_root: economic
+    value_kind: money
+    required: true
+    slots: [currency, scale]
+    prompt_hint: "Net worth as reported for the year"
+    synonyms: ["Net Worth", "NW"]
+  - key: total_borrowings
+    path: economic > Audited Financials > Total Borrowings
+    path_root: economic
+    value_kind: money
+    required: true
+    slots: [currency, scale]
+    prompt_hint: "Total borrowings / debt outstanding at year end"
+    synonyms: ["Total Borrowings", "Borrowings", "Total Debt"]
+# One row per financial year; every column except the period column becomes one
+# fact for that year, tagged with the row's financial year as its period.
+tables:
+  - name: headline_figures
+    path: economic > Audited Financials > Headline Figure
+    path_root: economic
+    period_key: financial_year
+    fields:
+      - key: financial_year
+        value_kind: text
+        prompt_hint: "Financial year label as stated (e.g. FY2024-25)"
+      - key: revenue
+        value_kind: money
+        prompt_hint: "Revenue / total income of the year"
+      - key: pat
+        value_kind: money
+        prompt_hint: "Profit after tax of the year"
+      - key: net_worth
+        value_kind: money
+        prompt_hint: "Net worth as reported for the year"
+      - key: total_borrowings
+        value_kind: money
+        prompt_hint: "Total borrowings / debt outstanding at year end"
+checklist: []
+document_date:
+  kind: report
+report_sections: [financial_viability]
