@@ -119,11 +119,20 @@ public final class FixtureExtractClient implements ExtractClient {
                     facts.add(candidate);
                 }
             }
-            JsonNode lineItems = fixture.path("line_items");
-            if (lineItems.isArray()) {
-                for (JsonNode line : lineItems) {
+            // Row tables (quotation line_items, plant-and-machinery lists, …): every
+            // top-level array entry becomes one row fact per element, keyed by the
+            // array's name — the M2 quotation-row style.
+            Iterator<Map.Entry<String, JsonNode>> tables = fixture.fields();
+            while (tables.hasNext()) {
+                Map.Entry<String, JsonNode> table = tables.next();
+                JsonNode lines = table.getValue();
+                if (!lines.isArray()) {
+                    continue;
+                }
+                String tableKey = table.getKey();
+                for (JsonNode line : lines) {
                     String description = line.path("description").asText(null);
-                    FactCandidate row = new FactCandidate("line_items", ValueKind.TEXT)
+                    FactCandidate row = new FactCandidate(tableKey, ValueKind.TEXT)
                             .valueText(description)
                             .lineKey(description)
                             .subjectEntity(fields.path("vendor_name").path("value").asText(null))
@@ -148,9 +157,9 @@ public final class FixtureExtractClient implements ExtractClient {
             }
             // Declared pack tables: {"tables": {name: [row]}} — one fact per column
             // per row, every fact carrying the row's period column as its period.
-            JsonNode tables = fixture.path("tables");
-            if (tables.isObject()) {
-                Iterator<Map.Entry<String, JsonNode>> tableIt = tables.fields();
+            JsonNode tablesNode = fixture.path("tables");
+            if (tablesNode.isObject()) {
+                Iterator<Map.Entry<String, JsonNode>> tableIt = tablesNode.fields();
                 while (tableIt.hasNext()) {
                     Map.Entry<String, JsonNode> tableEntry = tableIt.next();
                     addTableRows(schema, tableEntry.getKey(), tableEntry.getValue(),

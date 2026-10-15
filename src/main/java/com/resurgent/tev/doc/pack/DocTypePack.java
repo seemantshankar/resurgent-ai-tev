@@ -42,6 +42,7 @@ public final class DocTypePack {
     private final List<String> reportSections;
     private final String documentDateKind;
     private final ClauseSection clauseSection;
+    private final List<PackPassage> passages;
 
     /**
      * Creates a validated pack. Use {@link PackLoader} for YAML; this constructor
@@ -59,7 +60,7 @@ public final class DocTypePack {
             List<String> checklist,
             List<String> reportSections) {
         this(code, version, family, fileRole, industryTags, identitySignals, fields, tables,
-                checklist, reportSections, null, ClauseSection.NONE);
+                checklist, reportSections, null, ClauseSection.NONE, List.of());
     }
 
     /**
@@ -81,13 +82,16 @@ public final class DocTypePack {
             List<String> reportSections,
             String documentDateKind) {
         this(code, version, family, fileRole, industryTags, identitySignals, fields, tables,
-                checklist, reportSections, documentDateKind, ClauseSection.NONE);
+                checklist, reportSections, documentDateKind, ClauseSection.NONE, List.of());
     }
 
     /**
-     * Creates a validated pack with its document-date kind and clause section (M3-08).
+     * Creates a validated pack with its document-date kind, clause section and passage
+     * topics (M3-06, M3-08).
      *
      * @param clauseSection the clause section the pack declares, null when none
+     * @param passages chapter topics prose documents of this type are split into,
+     *     each naming the data points to take; empty for non-prose packs
      */
     public DocTypePack(
             String code,
@@ -101,7 +105,8 @@ public final class DocTypePack {
             List<String> checklist,
             List<String> reportSections,
             String documentDateKind,
-            ClauseSection clauseSection) {
+            ClauseSection clauseSection,
+            List<PackPassage> passages) {
         this.code = Objects.requireNonNull(code, "code");
         this.version = Objects.requireNonNull(version, "version");
         this.family = Objects.requireNonNull(family, "family");
@@ -116,6 +121,7 @@ public final class DocTypePack {
                 ? null
                 : documentDateKind.trim().toLowerCase(Locale.ROOT);
         this.clauseSection = clauseSection == null ? ClauseSection.NONE : clauseSection;
+        this.passages = passages == null ? List.of() : List.copyOf(passages);
     }
 
     public String code() {
@@ -186,6 +192,14 @@ public final class DocTypePack {
     /** The clause types bound for this document type, in declaration order. */
     public List<PackClauseType> clauseTypes() {
         return clauseSection.types();
+    }
+
+    /**
+     * Chapter topics prose of this type is split into (M3-06), each naming the data
+     * points to take; empty for packs that declare none.
+     */
+    public List<PackPassage> passages() {
+        return passages;
     }
 
     /** Required fields only. */

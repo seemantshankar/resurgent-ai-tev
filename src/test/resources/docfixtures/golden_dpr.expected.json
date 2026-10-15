@@ -1,0 +1,52 @@
+{
+  "doc_type_code": "report.dpr",
+  "fields": {
+    "project_name": {
+      "value": "Bhagyanagar Solar Power Project",
+      "quote": "Bhagyanagar Solar Power Project",
+      "page": 1
+    },
+    "land_location": {
+      "value": "Village Jaisingpura, District Ahmednagar",
+      "quote": "Location: Village Jaisingpura, District Ahmednagar",
+      "page": 1
+    },
+    "land_area": {
+      "value": "4.5 acres",
+      "quote": "Land area: 4.5 acres",
+      "page": 1
+    },
+    "survey_numbers": {
+      "value": "112/1, 113/2",
+      "quote": "Survey Numbers: 112/1, 113/2",
+      "page": 1
+    },
+    "capacity_mw": {
+      "value": "10 MW",
+      "quote": "Capacity: 10 MW",
+      "page": 1
+    },
+    "technology": {
+      "value": "Solar photovoltaic",
+      "quote": "The project is a 10 MW solar photovoltaic power plant.",
+      "page": 1
+    }
+  },
+  "plant_and_machinery": [
+    {
+      "description": "Module Mounting Structure - 400 sets",
+      "quote": "Module Mounting Structure - 400 sets",
+      "page": 2
+    },
+    {
+      "description": "Inverter 100 kW - 10 nos",
+      "quote": "Inverter 100 kW - 10 nos",
+      "page": 2
+    },
+    {
+      "description": "SCADA System - 1 nos",
+      "quote": "SCADA System - 1 nos",
+      "page": 2
+    }
+  ]
+}

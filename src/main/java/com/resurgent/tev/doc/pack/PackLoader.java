@@ -183,11 +183,12 @@ public final class PackLoader {
         List<String> reportSections = textList(root.get("report_sections"));
 
         String documentDateKind = documentDateKind(root.get("document_date"), source);
+        List<PackPassage> passages = passages(root.get("passages"), fields, tables, source);
 
         ClauseSection clauseSection = clauseSection(root.get("clauses"), source);
 
         return new DocTypePack(code, version, family, fileRole, industryTags, identitySignals,
-                fields, tables, checklist, reportSections, documentDateKind, clauseSection);
+                fields, tables, checklist, reportSections, documentDateKind, clauseSection, passages);
     }
 
     /**
@@ -242,6 +243,65 @@ public final class PackLoader {
     }
 
     /**
+     * Optional {@code passages:} section (M3-06): per chapter topic, the heading terms
+     * that assign a passage to it and the data points to take from the chapter. Every
+     * referenced key must be a declared field or row table — a bad pack fails at load.
+     */
+    private static List<PackPassage> passages(JsonNode node, List<PackField> fields,
+            List<Map<String, Object>> tables, String source) throws PackValidationException {
+        if (node == null || node.isNull()) {
+            return List.of();
+        }
+        if (!node.isArray()) {
+            throw new PackValidationException(source + ": passages must be a list");
+        }
+        java.util.Set<String> knownKeys = new java.util.HashSet<>();
+        for (PackField field : fields) {
+            knownKeys.add(field.key());
+        }
+        for (Map<String, Object> table : tables) {
+            Object name = table.get("name");
+            if (name != null) {
+                knownKeys.add(String.valueOf(name));
+            }
+        }
+        List<PackPassage> out = new ArrayList<>();
+        java.util.Set<String> topics = new java.util.HashSet<>();
+        int index = 0;
+        for (JsonNode p : node) {
+            index++;
+            String where = source + ": passages[" + index + "]";
+            if (!p.isObject()) {
+                throw new PackValidationException(where + " must be a mapping");
+            }
+            String topic = requireText(p, "topic", where);
+            if (!topics.add(topic)) {
+                throw new PackValidationException(where + ": duplicate topic '" + topic + "'");
+            }
+            List<String> headingTerms = textList(p.get("heading_terms"));
+            if (headingTerms.isEmpty()) {
+                throw new PackValidationException(where + ": heading_terms must be a non-empty list");
+            }
+            List<String> keys = textList(p.get("fields"));
+            if (keys.isEmpty()) {
+                throw new PackValidationException(where + ": fields must be a non-empty list");
+            }
+            for (String key : keys) {
+                if (!knownKeys.contains(key)) {
+                    throw new PackValidationException(where + ": field '" + key
+                            + "' is not a declared pack field or table");
+                }
+            }
+            try {
+                out.add(new PackPassage(topic, headingTerms, keys));
+            } catch (IllegalArgumentException e) {
+                throw new PackValidationException(where + ": " + e.getMessage());
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    /**
      * Optional {@code document_date: {kind: execution}} declaration (M3). The kind is
      * from the closed set; an absent declaration means the generic {@code date} kind.
      */
@@ -293,13 +353,14 @@ public final class PackLoader {
         return packs;
     }
 
-    /** Loads the seed goldens from {@code docpacks/} on the classpath. */
+    /** Loads the five seed goldens from {@code docpacks/} on the classpath. */
     public static List<DocTypePack> loadSeedPacks() throws PackValidationException {
         return List.of(
                 loadClasspath("docpacks/identity.promoter_net_worth.yaml"),
                 loadClasspath("docpacks/quotation.vendor.yaml"),
                 loadClasspath("docpacks/agreement.ppa.yaml"),
-                loadClasspath("docpacks/financials.audited_summary.yaml"));
+                loadClasspath("docpacks/financials.audited_summary.yaml"),
+                loadClasspath("docpacks/report.dpr.yaml"));
     }
 
     private static String requireText(JsonNode node, String field, String where)
