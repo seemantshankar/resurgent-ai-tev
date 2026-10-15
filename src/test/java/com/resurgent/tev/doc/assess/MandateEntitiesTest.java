@@ -2,12 +2,20 @@ package com.resurgent.tev.doc.assess;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.resurgent.tev.doc.bind.PackPathBinder;
+import com.resurgent.tev.doc.db.FactRepository;
+import com.resurgent.tev.doc.extract.ExtractService;
+import com.resurgent.tev.doc.extract.FixtureExtractClient;
 import com.resurgent.tev.doc.ingest.BlobStore;
 import com.resurgent.tev.doc.ingest.DocumentIngestService;
 import com.resurgent.tev.doc.layout.DocumentLayoutService;
 import com.resurgent.tev.doc.llm.DocLlmClient;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackLoader;
+import com.resurgent.tev.doc.query.FactQuery;
+import com.resurgent.tev.doc.query.FactRow;
 import com.resurgent.tev.doc.query.MandateQa;
 import com.resurgent.tev.doc.db.MandateQaQueryRunner;
 import com.resurgent.tev.doc.query.MandateQaQuery;
@@ -34,6 +42,8 @@ import org.junit.jupiter.api.io.TempDir;
 class MandateEntitiesTest {
 
     private static final long MANDATE = 1L;
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @TempDir
     Path tempDir;
@@ -90,6 +100,111 @@ class MandateEntitiesTest {
                 doc -> assertThat(doc.dateSource()).isEqualTo("stated"));
     }
 
+    @Test
+    void netWorthFactIsTaggedWithItsPromoterNotTheBorrower() throws Exception {
+        ingestAndLayout(mandateLetterPdf(), "Mandate Letter - ABC", "mandate_letter");
+        ingestAndLayout(moaExtractPdf(), "MOA - ABC", "moa");
+        long netWorthVersion = ingestAndLayout(netWorthPdf(), "Promoter NW - Ramesh", "certificate");
+
+        FixtureExtractClient extractClient = new FixtureExtractClient();
+        extractClient.putFixture("identity.promoter_net_worth", netWorthFixture());
+        ExtractService.ExtractOutcome extract = new ExtractService().extract(
+                dbPath, netWorthVersion, MANDATE, netWorthPack, extractClient,
+                FixtureExtractClient.ID);
+        assertThat(extract.status()).isEqualTo("success");
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), netWorthPack);
+
+        DocAssessRunner.run(MANDATE, dbPath, new DocumentReplyLlm());
+
+        MandateQa qa = qa();
+        MandateQa.EntityRow borrower = entityWithRole(qa, "borrower");
+        MandateQa.EntityRow promoter = qa.entities().stream()
+                .filter(e -> "promoter".equals(e.role())
+                        && "RAMESH KUMAR SHARMA".equals(e.name()))
+                .findFirst()
+                .orElseThrow();
+
+        // AC4: the promoter's net-worth fact is tagged with that promoter, not
+        // the borrower.
+        List<FactRow> facts = facts();
+        FactRow netWorth = fact(facts, "net_worth");
+        assertThat(netWorth.entityId()).isEqualTo(promoter.entityId());
+        assertThat(netWorth.entityId()).isNotEqualTo(borrower.entityId());
+        assertThat(netWorth.entityReason()).isNotBlank();
+
+        // AC5: a fact whose entity cannot be determined stays untagged, with a
+        // recorded reason — the amounts alone name nobody, so they are not guessed
+        // onto the borrower.
+        FactRow assets = fact(facts, "assets_total");
+        assertThat(assets.entityId()).isNull();
+        assertThat(assets.entityReason()).isNotBlank();
+        assertThat(assets.entityReason()).isNotEqualTo(netWorth.entityReason());
+    }
+
+    @Test
+    void offlineAssessmentNeverGuessesAndRecordsWhy() throws Exception {
+        long netWorthVersion = ingestAndLayout(netWorthPdf(), "Promoter NW - Ramesh", "certificate");
+        FixtureExtractClient extractClient = new FixtureExtractClient();
+        extractClient.putFixture("identity.promoter_net_worth", netWorthFixture());
+        ExtractService.ExtractOutcome extract = new ExtractService().extract(
+                dbPath, netWorthVersion, MANDATE, netWorthPack, extractClient,
+                FixtureExtractClient.ID);
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), netWorthPack);
+
+        // No LLM seam: no entities can be identified, so every fact must stay
+        // untagged with a reason — even the one whose quote names a person.
+        DocAssessRunner.run(MANDATE, dbPath, null);
+
+        assertThat(qa().entities()).isEmpty();
+        List<FactRow> facts = facts();
+        assertThat(facts).isNotEmpty();
+        assertThat(facts).allSatisfy(f -> {
+            assertThat(f.entityId()).isNull();
+            assertThat(f.entityReason()).isNotBlank();
+        });
+        assertThat(fact(facts, "net_worth").entityReason())
+                .contains("no identified entities");
+    }
+
+    @Test
+    void reassessmentReplacesEntitiesAndTagsWithoutDuplicates() throws Exception {
+        ingestAndLayout(mandateLetterPdf(), "Mandate Letter - ABC", "mandate_letter");
+        ingestAndLayout(moaExtractPdf(), "MOA - ABC", "moa");
+        long netWorthVersion = ingestAndLayout(netWorthPdf(), "Promoter NW - Ramesh", "certificate");
+        FixtureExtractClient extractClient = new FixtureExtractClient();
+        extractClient.putFixture("identity.promoter_net_worth", netWorthFixture());
+        ExtractService.ExtractOutcome extract = new ExtractService().extract(
+                dbPath, netWorthVersion, MANDATE, netWorthPack, extractClient,
+                FixtureExtractClient.ID);
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), netWorthPack);
+
+        DocAssessRunner.run(MANDATE, dbPath, new DocumentReplyLlm());
+        MandateQa first = qa();
+        long firstTagged = facts().stream().filter(f -> f.entityId() != null).count();
+        assertThat(first.entities()).hasSize(3);
+
+        // Assess again over the same facts: entities, aliases and tags are
+        // replaced, never stacked.
+        DocAssessRunner.run(MANDATE, dbPath, new DocumentReplyLlm());
+
+        MandateQa second = qa();
+        assertThat(second.entities()).hasSameSizeAs(first.entities());
+        assertThat(second.entities()).extracting(MandateQa.EntityRow::name)
+                .containsExactlyElementsOf(first.entities().stream()
+                        .map(MandateQa.EntityRow::name).toList());
+        MandateQa.EntityRow borrower = entityWithRole(second, "borrower");
+        assertThat(borrower.aliases()).hasSize(2);
+        MandateQa.EntityRow promoter = second.entities().stream()
+                .filter(e -> "promoter".equals(e.role())
+                        && "RAMESH KUMAR SHARMA".equals(e.name()))
+                .findFirst()
+                .orElseThrow();
+        List<FactRow> facts = facts();
+        assertThat(facts.stream().filter(f -> f.entityId() != null).count())
+                .isEqualTo(firstTagged);
+        assertThat(fact(facts, "net_worth").entityId()).isEqualTo(promoter.entityId());
+    }
+
     // --- fixtures ---
 
     private Path mandateLetterPdf() throws Exception {
@@ -111,6 +226,38 @@ class MandateEntitiesTest {
                         "Memorandum of Association",
                         "ABC Private Limited is a company incorporated under the Companies Act, 2013",
                         "Date of incorporation: 15 May 2019"));
+    }
+
+    private Path netWorthPdf() throws Exception {
+        return writePdf("net_worth.pdf",
+                List.of(
+                        "Certificate of Net Worth",
+                        "Name of the Member: Ramesh Kumar Sharma",
+                        "As on 31 March 2026",
+                        "Total Assets: Rs. 2,45,00,000",
+                        "Total Liabilities: Rs. 85,00,000",
+                        "Net Worth of Ramesh Kumar Sharma: Rs. 1,60,00,000",
+                        "Date: 5 February 2026"));
+    }
+
+    /** Fixture-extract payload for the net-worth certificate. */
+    private static JsonNode netWorthFixture() throws Exception {
+        return MAPPER.readTree("""
+                {
+                  "doc_type_code": "identity.promoter_net_worth",
+                  "fields": {
+                    "subject_name": {"value": "Ramesh Kumar Sharma",
+                      "quote": "Name of the Member: Ramesh Kumar Sharma", "page": 1},
+                    "as_of_date": {"value": "31/03/2026",
+                      "quote": "As on 31 March 2026", "page": 1},
+                    "assets_total": {"value": "Rs. 2,45,00,000",
+                      "quote": "Total Assets: Rs. 2,45,00,000", "page": 1},
+                    "liabilities_total": {"value": "Rs. 85,00,000",
+                      "quote": "Total Liabilities: Rs. 85,00,000", "page": 1},
+                    "net_worth": {"value": "Rs. 1,60,00,000",
+                      "quote": "Net Worth of Ramesh Kumar Sharma: Rs. 1,60,00,000", "page": 1}
+                  }
+                }""");
     }
 
     @SafeVarargs
@@ -152,6 +299,19 @@ class MandateEntitiesTest {
 
     private MandateQa qa() throws Exception {
         return MandateQaQueryRunner.query(dbPath, MandateQaQuery.forMandate(MANDATE));
+    }
+
+    private List<FactRow> facts() throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            return new FactRepository(db.connection()).query(FactQuery.forMandate(MANDATE));
+        }
+    }
+
+    private static FactRow fact(List<FactRow> facts, String fieldKey) {
+        return facts.stream()
+                .filter(f -> fieldKey.equals(f.fieldKey()))
+                .findFirst()
+                .orElseThrow();
     }
 
     private static MandateQa.EntityRow entityWithRole(MandateQa qa, String role) {
