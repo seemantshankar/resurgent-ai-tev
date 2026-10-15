@@ -6,6 +6,11 @@ import java.util.Objects;
 /**
  * Retrieval row returned by {@code FactQuery} / {@code tev-doc facts}
  * (Architecture S2.13). Evidence is joined — no PDF re-parse on read.
+ *
+ * <p>{@code siteId} is the M3-04 tag naming the mandate site the fact is about
+ * (null for mandate-wide facts); {@code entityId} is the M3-03 tag naming the
+ * mandate entity the fact is about (null when it could not be determined);
+ * {@code entityReason} records why — the tag or the reason it was left untagged.
  */
 public record FactRow(
         long factId,
@@ -29,7 +34,9 @@ public record FactRow(
         String statedOrDerived,
         List<EvidenceRow> evidence,
         Long siteId,
-        String siteName) {
+        String siteName,
+        Long entityId,
+        String entityReason) {
 
     public FactRow {
         Objects.requireNonNull(evidence, "evidence");

@@ -44,6 +44,10 @@ public final class FactJson {
                 n.put("confidence", row.confidence());
             }
             n.put("stated_or_derived", row.statedOrDerived());
+            if (row.entityId() != null) {
+                n.put("entity_id", row.entityId());
+            }
+            n.put("entity_reason", row.entityReason());
             ArrayNode ev = n.putArray("evidence");
             for (FactRow.EvidenceRow e : row.evidence()) {
                 ObjectNode en = ev.addObject();

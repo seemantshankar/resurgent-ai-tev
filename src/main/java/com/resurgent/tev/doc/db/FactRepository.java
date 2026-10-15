@@ -311,7 +311,7 @@ public final class FactRepository {
                         + " f.value_number, f.value_date, f.unit, f.currency, f.scale,"
                         + " f.absolute_amount, f.subject_entity, f.line_key, f.document_version_id,"
                         + " dv.file_name, f.extraction_method, f.confidence, f.stated_or_derived,"
-                        + " f.site_id, s.site_name"
+                        + " f.site_id, s.site_name, f.entity_id, f.entity_reason"
                         + " FROM fact f"
                         + " JOIN document_version dv ON dv.document_version_id = f.document_version_id"
                         + " JOIN document d ON d.document_id = dv.document_id"
@@ -383,7 +383,9 @@ public final class FactRepository {
                             asDouble(rs.getObject("confidence")),
                             rs.getString("stated_or_derived"),
                             asLong(rs.getObject("site_id")),
-                            rs.getString("site_name"));
+                            rs.getString("site_name"),
+                            asLong(rs.getObject("entity_id")),
+                            rs.getString("entity_reason"));
                     builders.put(factId, b);
                     order.add(factId);
                 }
@@ -579,6 +581,8 @@ public final class FactRepository {
         final String statedOrDerived;
         final Long siteId;
         final String siteName;
+        final Long entityId;
+        final String entityReason;
         final List<FactRow.EvidenceRow> evidence = new ArrayList<>();
 
         FactRowBuilder(long factId, String ontologyPath, String pathRoot, String fieldKey,
@@ -586,7 +590,7 @@ public final class FactRepository {
                 String unit, String currency, String scale, String absoluteAmount,
                 String subjectEntity, String lineKey, long documentVersionId, String fileName,
                 String extractionMethod, Double confidence, String statedOrDerived,
-                Long siteId, String siteName) {
+                Long siteId, String siteName, Long entityId, String entityReason) {
             this.factId = factId;
             this.ontologyPath = ontologyPath;
             this.pathRoot = pathRoot;
@@ -608,13 +612,15 @@ public final class FactRepository {
             this.statedOrDerived = statedOrDerived;
             this.siteId = siteId;
             this.siteName = siteName;
+            this.entityId = entityId;
+            this.entityReason = entityReason;
         }
 
         FactRow build() {
             return new FactRow(factId, ontologyPath, pathRoot, fieldKey, valueKind, valueText,
                     valueNumber, valueDate, unit, currency, scale, absoluteAmount, subjectEntity,
                     lineKey, documentVersionId, fileName, extractionMethod, confidence,
-                    statedOrDerived, evidence, siteId, siteName);
+                    statedOrDerived, evidence, siteId, siteName, entityId, entityReason);
         }
     }
 
