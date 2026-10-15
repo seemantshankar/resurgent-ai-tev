@@ -70,7 +70,8 @@ public final class WorkspaceDatabase implements AutoCloseable {
             "db/migration/V46__document_layout.sql",
             "db/migration/V47__doc_facts.sql",
             "db/migration/V48__cloud_parse_pages.sql",
-            "db/migration/V49__m3_assessment_dates.sql"
+            "db/migration/V49__m3_assessment_dates.sql",
+            "db/migration/V52__m3_mandate_industry_country.sql"
     };
 
     /** Number of bundled migrations, i.e. the schema version a fully migrated database reports. */

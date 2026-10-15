@@ -52,6 +52,40 @@ public final class MandateQaJson {
             }
         }
 
+        ArrayNode industries = root.putArray("industries");
+        for (MandateQa.IndustryRow row : qa.industries()) {
+            ObjectNode n = industries.addObject();
+            n.put("industry", row.industry());
+            n.put("is_new_industry", row.isNewIndustry());
+            n.put("reason", row.reason());
+            if (row.verbatim() != null) {
+                n.put("verbatim", row.verbatim());
+            }
+            if (row.pageIndex() != null) {
+                n.put("page_index", row.pageIndex());
+            }
+            if (row.documentVersionId() != null) {
+                n.put("document_version_id", row.documentVersionId());
+            }
+        }
+
+        if (qa.country() != null) {
+            ObjectNode n = root.putObject("country");
+            n.put("country", qa.country().country());
+            n.put("reason", qa.country().reason());
+            if (qa.country().verbatim() != null) {
+                n.put("verbatim", qa.country().verbatim());
+            }
+            if (qa.country().pageIndex() != null) {
+                n.put("page_index", qa.country().pageIndex());
+            }
+            if (qa.country().documentVersionId() != null) {
+                n.put("document_version_id", qa.country().documentVersionId());
+            }
+        } else {
+            root.putNull("country");
+        }
+
         try {
             return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root);
         } catch (Exception e) {

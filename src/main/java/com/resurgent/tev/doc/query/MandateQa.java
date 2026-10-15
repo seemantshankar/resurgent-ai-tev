@@ -11,11 +11,17 @@ import java.util.List;
  * @param documents one row per document version with its document date, precision, source
  *     and upload date
  * @param stages the latest assessment run per stage
+ * @param industries the mandate's industries, several allowed, each with its reason and
+ *     page provenance; an industry the packs have not seen is marked new
+ * @param country the mandate's country with its reason and page provenance, or null when
+ *     none was detected
  */
 public record MandateQa(
         long mandateId,
         List<DocumentDateRow> documents,
-        List<AssessmentRunRow> stages) {
+        List<AssessmentRunRow> stages,
+        List<IndustryRow> industries,
+        CountryRow country) {
 
     /**
      * One document version's date assessment.
@@ -62,4 +68,43 @@ public record MandateQa(
             String startedAt,
             String finishedAt,
             Long parseRunId) {}
+
+    /**
+     * One industry recorded for the mandate, with its reason and page provenance.
+     *
+     * @param industryRecordId the stored record id
+     * @param industry industry name as recorded
+     * @param isNewIndustry true when the packs have not seen this industry before
+     * @param reason why the industry was recorded (human-readable)
+     * @param verbatim the verbatim text the industry was read from, when anchored
+     * @param pageIndex provenance page for the verbatim, when anchored
+     * @param documentVersionId the version the industry was read from, may be null
+     */
+    public record IndustryRow(
+            long industryRecordId,
+            String industry,
+            boolean isNewIndustry,
+            String reason,
+            String verbatim,
+            Integer pageIndex,
+            Long documentVersionId) {}
+
+    /**
+     * The mandate's single country with its reason and page provenance, or absent
+     * (null {@code MandateQa.country}) when none was detected.
+     *
+     * @param countryRecordId the stored record id
+     * @param country country name as recorded
+     * @param reason why the country was recorded (human-readable)
+     * @param verbatim the verbatim text the country was read from, when anchored
+     * @param pageIndex provenance page for the verbatim, when anchored
+     * @param documentVersionId the version the country was read from, may be null
+     */
+    public record CountryRow(
+            long countryRecordId,
+            String country,
+            String reason,
+            String verbatim,
+            Integer pageIndex,
+            Long documentVersionId) {}
 }

@@ -134,15 +134,27 @@ public final class AssessProfileRunner implements AssessStage {
             }
         }
 
+        // M3-05 (issue #138): the mandate's industries and country, detected from the
+        // documents. Replace semantics like the dates: clear this run's predecessor first.
+        assessment.clearIndustryCountry(mandateId);
+        IndustryScan.Counts industries = IndustryScan.scan(mandateId, assessment, docs,
+                versions, dbPath, client, usage::add);
+        CountryScan.Counts country = CountryScan.scan(mandateId, assessment, docs,
+                versions, client, usage::add);
+
         recordStats(repo, parseRunId, usage, versions.size(), statedCount, metadataCount,
-                noneCount);
+                noneCount, industries, country);
         assessment.upsertAssessmentRun(mandateId, STAGE, "completed", parseRunId,
                 startedAt, Timestamps.now(),
-                metricsJson(versions.size(), statedCount, metadataCount, noneCount, usage));
+                metricsJson(versions.size(), statedCount, metadataCount, noneCount, usage,
+                        industries, country));
 
         String detail = String.format(Locale.ROOT,
-                "%d documents (%d stated, %d file_metadata, %d none)",
-                versions.size(), statedCount, metadataCount, noneCount);
+                "%d documents (%d stated, %d file_metadata, %d none);"
+                        + " %d industries (%d new); country: %s",
+                versions.size(), statedCount, metadataCount, noneCount,
+                industries.recorded(), industries.newIndustries(),
+                country.country() == null ? "none" : country.country());
         return new StageResult(STAGE, versions.size(), detail);
     }
 
@@ -208,8 +220,8 @@ public final class AssessProfileRunner implements AssessStage {
     }
 
     private static void recordStats(WorkspaceRepository repo, Long parseRunId,
-            List<DocLlmClient.Usage> usage, int total, int stated, int metadata, int none)
-            throws Exception {
+            List<DocLlmClient.Usage> usage, int total, int stated, int metadata, int none,
+            IndustryScan.Counts industries, CountryScan.Counts country) throws Exception {
         if (parseRunId == null) {
             return;
         }
@@ -217,6 +229,12 @@ public final class AssessProfileRunner implements AssessStage {
         repo.recordRunStat(parseRunId, STAGE, "dates_stated", (double) stated, null);
         repo.recordRunStat(parseRunId, STAGE, "dates_file_metadata", (double) metadata, null);
         repo.recordRunStat(parseRunId, STAGE, "dates_none", (double) none, null);
+        repo.recordRunStat(parseRunId, STAGE, "industries_recorded",
+                (double) industries.recorded(), null);
+        repo.recordRunStat(parseRunId, STAGE, "industries_new",
+                (double) industries.newIndustries(), null);
+        repo.recordRunStat(parseRunId, STAGE, "country_recorded",
+                country.country() == null ? 0.0 : 1.0, null);
         repo.recordRunStat(parseRunId, STAGE, "llm_calls",
                 (double) usage.stream().mapToInt(DocLlmClient.Usage::calls).sum(), null);
 
@@ -234,12 +252,18 @@ public final class AssessProfileRunner implements AssessStage {
     }
 
     private static String metricsJson(int total, int stated, int metadata, int none,
-            List<DocLlmClient.Usage> usage) {
+            List<DocLlmClient.Usage> usage, IndustryScan.Counts industries,
+            CountryScan.Counts country) {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("documents_total", total);
         node.put("dates_stated", stated);
         node.put("dates_file_metadata", metadata);
         node.put("dates_none", none);
+        node.put("industries", industries.recorded());
+        node.put("industries_new", industries.newIndustries());
+        if (country.country() != null) {
+            node.put("country", country.country());
+        }
         node.put("llm_calls", usage.stream().mapToInt(DocLlmClient.Usage::calls).sum());
         return node.toString();
     }

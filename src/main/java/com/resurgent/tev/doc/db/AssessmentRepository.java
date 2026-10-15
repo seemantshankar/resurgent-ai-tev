@@ -1,6 +1,7 @@
 package com.resurgent.tev.doc.db;
 
 import com.resurgent.tev.doc.query.MandateQa;
+import com.resurgent.tev.parser.db.Timestamps;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -23,6 +24,12 @@ public final class AssessmentRepository {
 
     /** Provenance entity type for a document date read from a document. */
     public static final String DATE_ENTITY_TYPE = "document_date";
+
+    /** Provenance entity type for a mandate industry record (M3-05). */
+    public static final String INDUSTRY_ENTITY_TYPE = "mandate_industry";
+
+    /** Provenance entity type for the mandate country record (M3-05). */
+    public static final String COUNTRY_ENTITY_TYPE = "mandate_country";
 
     private final Connection connection;
 
@@ -377,6 +384,238 @@ public final class AssessmentRepository {
     }
 
     /**
+     * Drops the mandate's previous industry and country records: their provenance rows
+     * first (the records reference them, so the records must go first), then the records.
+     * Must run before a re-run inserts its own results, so re-running never duplicates.
+     *
+     * @throws SQLException if any statement fails
+     */
+    public void clearIndustryCountry(long mandateId) throws SQLException {
+        List<Long> industryIds = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT industry_record_id FROM mandate_industry_record WHERE mandate_id = ?")) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    industryIds.add(rs.getLong(1));
+                }
+            }
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM mandate_industry_record WHERE mandate_id = ?")) {
+            ps.setLong(1, mandateId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM provenance_doc WHERE entity_type = ? AND entity_id = ?")) {
+            ps.setString(1, INDUSTRY_ENTITY_TYPE);
+            for (long id : industryIds) {
+                ps.setLong(2, id);
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
+
+        Long countryId = null;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT country_record_id FROM mandate_country_record WHERE mandate_id = ?")) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    countryId = rs.getLong(1);
+                }
+            }
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM mandate_country_record WHERE mandate_id = ?")) {
+            ps.setLong(1, mandateId);
+            ps.executeUpdate();
+        }
+        if (countryId != null) {
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "DELETE FROM provenance_doc WHERE entity_type = ? AND entity_id = ?")) {
+                ps.setString(1, COUNTRY_ENTITY_TYPE);
+                ps.setLong(2, countryId);
+                ps.executeUpdate();
+            }
+        }
+    }
+
+    /**
+     * Inserts one industry recorded for the mandate.
+     *
+     * @param mandateId mandate scope
+     * @param industry industry as recorded (display form)
+     * @param industryKey normalised key used for de-duplication
+     * @param isNewIndustry true when the installed packs have not seen this industry
+     * @param reason why the industry was recorded
+     * @param documentVersionId the version it was read from, may be null
+     * @return the {@code industry_record_id}
+     * @throws SQLException if the insert fails or yields no generated key
+     */
+    public long insertIndustryRecord(long mandateId, String industry, String industryKey,
+            boolean isNewIndustry, String reason, Long documentVersionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO mandate_industry_record (mandate_id, industry, industry_key,"
+                        + " is_new_industry, reason, document_version_id, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, mandateId);
+            ps.setString(2, industry);
+            ps.setString(3, industryKey);
+            ps.setInt(4, isNewIndustry ? 1 : 0);
+            ps.setString(5, reason);
+            if (documentVersionId == null) {
+                ps.setNull(6, Types.INTEGER);
+            } else {
+                ps.setLong(6, documentVersionId);
+            }
+            ps.setString(7, Timestamps.now());
+            ps.executeUpdate();
+            try (ResultSet keys = ps.getGeneratedKeys()) {
+                if (keys.next()) {
+                    return keys.getLong(1);
+                }
+            }
+        }
+        throw new SQLException("mandate_industry_record insert yielded no id");
+    }
+
+    /**
+     * Points an industry record at the provenance row anchoring it in the document.
+     *
+     * @throws SQLException if the update fails
+     */
+    public void setIndustryProvenance(long industryRecordId, long provenanceId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE mandate_industry_record SET provenance_id = ?"
+                        + " WHERE industry_record_id = ?")) {
+            ps.setLong(1, provenanceId);
+            ps.setLong(2, industryRecordId);
+            ps.executeUpdate();
+        }
+    }
+
+    /**
+     * Inserts the mandate's country record. One per mandate: the caller clears the
+     * previous run first.
+     *
+     * @return the {@code country_record_id}
+     * @throws SQLException if the insert fails or yields no generated key
+     */
+    public long insertCountryRecord(long mandateId, String country, String countryKey,
+            String reason, Long documentVersionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO mandate_country_record (mandate_id, country, country_key,"
+                        + " reason, document_version_id, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, mandateId);
+            ps.setString(2, country);
+            ps.setString(3, countryKey);
+            ps.setString(4, reason);
+            if (documentVersionId == null) {
+                ps.setNull(5, Types.INTEGER);
+            } else {
+                ps.setLong(5, documentVersionId);
+            }
+            ps.setString(6, Timestamps.now());
+            ps.executeUpdate();
+            try (ResultSet keys = ps.getGeneratedKeys()) {
+                if (keys.next()) {
+                    return keys.getLong(1);
+                }
+            }
+        }
+        throw new SQLException("mandate_country_record insert yielded no id");
+    }
+
+    /**
+     * Points the country record at the provenance row anchoring it in the document.
+     *
+     * @throws SQLException if the update fails
+     */
+    public void setCountryProvenance(long countryRecordId, long provenanceId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE mandate_country_record SET provenance_id = ? WHERE country_record_id = ?")) {
+            ps.setLong(1, provenanceId);
+            ps.setLong(2, countryRecordId);
+            ps.executeUpdate();
+        }
+    }
+
+    /**
+     * The mandate's industries, section of {@link MandateQa}, oldest record first.
+     *
+     * @throws SQLException if the query fails
+     */
+    public List<MandateQa.IndustryRow> industries(long mandateId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT mir.industry_record_id, mir.industry, mir.is_new_industry, mir.reason,"
+                        + " mir.document_version_id, pd.verbatim, p.page_index"
+                        + " FROM mandate_industry_record mir"
+                        + " LEFT JOIN provenance_doc pd ON pd.provenance_id = mir.provenance_id"
+                        + " LEFT JOIN page p ON p.page_id = pd.page_id"
+                        + " WHERE mir.mandate_id = ? ORDER BY mir.industry_record_id")) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<MandateQa.IndustryRow> rows = new ArrayList<>();
+                while (rs.next()) {
+                    long versionRaw = rs.getLong("document_version_id");
+                    Long versionId = rs.wasNull() ? null : versionRaw;
+                    int pageRaw = rs.getInt("page_index");
+                    Integer pageIndex = rs.wasNull() ? null : pageRaw;
+                    rows.add(new MandateQa.IndustryRow(
+                            rs.getLong("industry_record_id"),
+                            rs.getString("industry"),
+                            rs.getInt("is_new_industry") == 1,
+                            rs.getString("reason"),
+                            rs.getString("verbatim"),
+                            pageIndex,
+                            versionId));
+                }
+                return rows;
+            }
+        }
+    }
+
+    /**
+     * The mandate's country record, section of {@link MandateQa}, or null when none
+     * was detected.
+     *
+     * @throws SQLException if the query fails
+     */
+    public MandateQa.CountryRow country(long mandateId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT mcr.country_record_id, mcr.country, mcr.reason,"
+                        + " mcr.document_version_id, pd.verbatim, p.page_index"
+                        + " FROM mandate_country_record mcr"
+                        + " LEFT JOIN provenance_doc pd ON pd.provenance_id = mcr.provenance_id"
+                        + " LEFT JOIN page p ON p.page_id = pd.page_id"
+                        + " WHERE mcr.mandate_id = ?")) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                long versionRaw = rs.getLong("document_version_id");
+                Long versionId = rs.wasNull() ? null : versionRaw;
+                int pageRaw = rs.getInt("page_index");
+                Integer pageIndex = rs.wasNull() ? null : pageRaw;
+                return new MandateQa.CountryRow(
+                        rs.getLong("country_record_id"),
+                        rs.getString("country"),
+                        rs.getString("reason"),
+                        rs.getString("verbatim"),
+                        pageIndex,
+                        versionId);
+            }
+        }
+    }
+
+    /**
      * The source file the mandate's assessment runs hang their usage stats on: the
      * source file of the mandate's first document version. Null when the mandate has
      * no version attached to a source file.
@@ -403,7 +642,8 @@ public final class AssessmentRepository {
      * @throws SQLException if any query fails
      */
     public MandateQa readMandateQa(long mandateId) throws SQLException {
-        return new MandateQa(mandateId, documentDates(mandateId), assessmentRuns(mandateId));
+        return new MandateQa(mandateId, documentDates(mandateId), assessmentRuns(mandateId),
+                industries(mandateId), country(mandateId));
     }
 
     /** Collapses whitespace runs to single spaces, like the layout's {@code text_norm}. */

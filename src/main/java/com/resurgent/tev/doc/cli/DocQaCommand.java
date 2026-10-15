@@ -68,6 +68,29 @@ public final class DocQaCommand implements Callable<Integer> {
                         stage.parseRunId() != null ? " parse_run=" + stage.parseRunId() : "");
             }
             out.printf("stages: %d%n", qa.stages().size());
+            for (MandateQa.IndustryRow industry : qa.industries()) {
+                out.printf("industry %s%s | %s%s%n",
+                        industry.industry(),
+                        industry.isNewIndustry() ? " (new)" : "",
+                        industry.reason(),
+                        industry.pageIndex() != null ? " | page=" + industry.pageIndex() : "");
+                if (industry.verbatim() != null) {
+                    out.printf("  named: %s%n", industry.verbatim());
+                }
+            }
+            out.printf("industries: %d%n", qa.industries().size());
+            if (qa.country() != null) {
+                out.printf("country %s | %s%s%n",
+                        qa.country().country(),
+                        qa.country().reason(),
+                        qa.country().pageIndex() != null
+                                ? " | page=" + qa.country().pageIndex() : "");
+                if (qa.country().verbatim() != null) {
+                    out.printf("  named: %s%n", qa.country().verbatim());
+                }
+            } else {
+                out.printf("country: -%n");
+            }
             return 0;
         } catch (IllegalArgumentException e) {
             err.println("qa rejected: " + e.getMessage());
