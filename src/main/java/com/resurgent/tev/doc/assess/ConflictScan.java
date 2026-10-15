@@ -135,6 +135,11 @@ public final class ConflictScan {
                                 .map(p -> p.text() == null ? p.normalized() : p.text()).toList());
                 continue;
             }
+            String periodSkip = fmPeriodSkip(cell, periodOf(fact, periods));
+            if (periodSkip != null) {
+                repository.insertConflictSkip(mandateId, runId, fact, cell.source(), periodSkip);
+                continue;
+            }
             var reading = cell.reading();
             if (reading == null || reading.refusal() != null
                     || !"money".equals(reading.kind()) || reading.absoluteAmount() == null) {
@@ -180,6 +185,31 @@ public final class ConflictScan {
                     chosen, ruleId, rulesVersion, reasoning);
             written.add(new Written(repository.insertConflict(mandateId, runId, write), write));
         }
+    }
+
+    /** Never infer a calendar period from upload dates or from the document's value. */
+    private static String fmPeriodSkip(FmConflictSources.Cell cell, String documentPeriod) {
+        List<String> modelPeriods = cell.periods().stream()
+                .filter(p -> !"missing".equals(p.resolution()))
+                .map(p -> p.normalized() == null ? p.text() : p.normalized())
+                .filter(Objects::nonNull).distinct().toList();
+        if (modelPeriods.isEmpty() && documentPeriod == null) {
+            return null;
+        }
+        if (modelPeriods.size() != 1 || documentPeriod == null) {
+            return "ambiguous FM period: cannot align " + modelPeriods
+                    + " with document period " + documentPeriod;
+        }
+        String modelPeriod = modelPeriods.get(0);
+        if (documentPeriod.trim().equalsIgnoreCase(modelPeriod.trim())) {
+            return null;
+        }
+        Comparison comparison = Comparisons.date(documentPeriod, modelPeriod);
+        if (comparison.verdict() == Verdict.AGREE) {
+            return null;
+        }
+        return "different periods or incompatible precision: document " + documentPeriod
+                + " vs FM " + modelPeriod + " (" + comparison.detail() + ")";
     }
 
     /** Facts grouped by data-point identity: pack field key, else ontology path, per line. */

@@ -361,6 +361,24 @@ class MandateDocVsFmTest {
         assertThat(skip.reason()).contains("no usable reading");
     }
 
+    @Test
+    void differentStatedPeriodsAreSkippedRatherThanReportedAsConflicts() throws Exception {
+        Path xlsx = modelWorkbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lakhs)");
+            sheet.createRow(1).createCell(1).setCellValue("2027");
+            sheet.createRow(2).createCell(0).setCellValue("Project cost");
+            sheet.getRow(2).createCell(1).setCellValue(6000);
+        });
+        ingestFm(xlsx, List.of(new LayerBAssignment(null, "B3", "economic", "Project Cost")));
+        ingestDpr("Rs. 52,00,00,000", "2026");
+
+        DocAssessRunner.run(MANDATE, dbPath, null);
+
+        assertThat(qa().conflicts()).isEmpty();
+        assertThat(qa().conflictSkips()).singleElement().satisfies(skip ->
+                assertThat(skip.reason()).contains("different periods", "2026", "2027"));
+    }
+
     // --- FM seams: the unchanged pipeline over a synthetic workbook ------------
 
     /**
@@ -420,11 +438,16 @@ class MandateDocVsFmTest {
 
     /** Ingests one DPR PDF, lays it out, classifies it and extracts the fixture facts. */
     private long ingestDpr(String total) throws Exception {
+        return ingestDpr(total, null);
+    }
+
+    private long ingestDpr(String total, String period) throws Exception {
         Path pdf = writePdf("dpr_sunbeam.pdf", List.of(
                 "Detailed Project Report",
                 "Project: Sunbeam Solar Park",
                 "Total project cost: " + total,
-                "Report Date: 10 June 2026"));
+                "Report Date: 10 June 2026",
+                period == null ? "" : "Period: " + period));
         DocumentIngestService.IngestResult ingested = new DocumentIngestService().ingest(
                 new DocumentIngestService.IngestRequest(
                         pdf, MANDATE, "DPR - Sunbeam Solar Park", "v1", "dpr", "dpr"),
@@ -432,7 +455,13 @@ class MandateDocVsFmTest {
         new DocumentLayoutService().layout(ingested.documentVersionId(), dbPath, blobs);
         classify(ingested.documentVersionId());
         FixtureExtractClient extractClient = new FixtureExtractClient();
-        extractClient.putFixture("report.dpr", dprFixture(total));
+        JsonNode fixture = dprFixture(total);
+        if (period != null) {
+            ((com.fasterxml.jackson.databind.node.ObjectNode) fixture.get("fields"))
+                    .putObject("period").put("value", period)
+                    .put("quote", "Period: " + period).put("page", 1);
+        }
+        extractClient.putFixture("report.dpr", fixture);
         ExtractService.ExtractOutcome extract = new ExtractService().extract(
                 dbPath, ingested.documentVersionId(), MANDATE, dprPack, extractClient,
                 FixtureExtractClient.ID);
