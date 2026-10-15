@@ -218,6 +218,14 @@ _Avoid_: pack checklist, custom checklist
 Two credible sources (two documents, two sections of one document, or a document and the financial model) stating different values for the same data point about the same entity, site and period. It is settled by a stated precedence rule, or by the system with written reasoning, or left **Conflicting** and flagged; it is never settled silently.
 _Avoid_: discrepancy (alone), mismatch, error
 
+**Versions differ**:
+The same document type present on two different document dates (a revised quotation against the original). It is recorded newest first as a revision, not a conflict; choosing a winner is a later-phase decision.
+_Avoid_: superseded conflict, duplicate documents
+
+**Skipped comparison**:
+A source pair the system deliberately did not compare — an ambiguous financial-model path or period, or an unusable cell reading — recorded with its reason so the decision is visible instead of silently absent.
+_Avoid_: missed conflict, ignored pair
+
 ## Phase 1 (current scope)
 
 - **FM Loader**: file adapters (xlsx / xls / csv), safety limits, SQLite persistence, ingest QA (cell / reference / formula reconciliation). Cell contract: coord, typed values, formula text + `formula_normalized` + cached value, merges, hidden flags, `style_id` → shared cell style (bold, `number_format`, fill FG + pattern, per-side borders), reference edges, and the formula graph (precedents and dependents) at ingest — no quantity parsing, header labels, font name/size, or fill background (ADR 0013, ADR 0024).
