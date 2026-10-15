@@ -252,8 +252,10 @@ class PassagesAndChapterFactsTest {
 
         DocAssessRunner.Result result = DocAssessRunner.run(MANDATE, dbPath,
                 new FakeDocLlmClient("{}"));
+        // #143's checklist stage is appended after the passages stage (merged pipeline).
         assertThat(result.stages()).extracting(AssessStage.StageResult::stage)
-                .containsExactly("assess_profile", "assess_clauses", "assess_passages");
+                .containsExactly("assess_profile", "assess_clauses", "assess_passages",
+                        "assess_checklist");
 
         // The only new parse runs are the assess stage's own: passages never trigger a
         // parser, and the stored parse output is not rewritten (same parse job, tier

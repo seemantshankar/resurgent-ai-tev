@@ -1,0 +1,201 @@
+# India spine checklist — DRAFT seed data (issue #143), versioned alongside packs.
+# An item without a named basis (regulation or bank practice) is rejected by the
+# loader, and the engine drops a draft item the loader was told to skip. Items were
+# drafted from the BRD (TEV Automation BRD v1.2): §3.1 FR-1.1.2 names the primary
+# supporting documents; the §3.1 discrepancy-matrix column adds the assurance
+# documents; the registration items (PAN / GST / incorporation / MOA-AOA) come from
+# spec #133 story 28 and architecture §6.6 (identity spine). LLM drafting and
+# learning from client document sets arrive in later tickets (#144/#148); this file
+# is the checked-in golden the engine tests and first mandates run against.
+code: in.spine
+version: 1.0.0
+scope: spine
+country: IN
+
+items:
+  # --- borrower identity and registration documents -------------------------
+  - key: certificate_of_incorporation
+    label: Certificate of incorporation
+    level: document
+    granularity: mandate
+    document_type: registration.certificate_of_incorporation
+    mandatory: true
+    basis:
+      kind: regulation
+      text: "Companies Act, 2013, s.7 read with s.9 — certificate of incorporation of the borrower company"
+    request: "Please share the borrower's certificate of incorporation issued by the Registrar of Companies."
+
+  - key: moa_aoa
+    label: Memorandum and Articles of Association
+    level: document
+    granularity: mandate
+    document_type: identity.moa_aoa
+    mandatory: true
+    basis:
+      kind: regulation
+      text: "Companies Act, 2013, s.4 and s.5 — memorandum and articles of association"
+    request: "Please share the borrower's MOA and AOA (certified copies)."
+
+  - key: pan_card
+    label: PAN card of the borrower
+    level: document
+    granularity: mandate
+    document_type: registration.pan
+    mandatory: true
+    basis:
+      kind: regulation
+      text: "Income-tax Act, 1961, s.139A and Rule 114 — Permanent Account Number"
+    request: "Please share the borrower's PAN card."
+
+  - key: gst_certificate
+    label: GST registration certificate
+    level: document
+    granularity: mandate
+    document_type: registration.gst
+    mandatory: true
+    basis:
+      kind: regulation
+      text: "Central Goods and Services Tax Act, 2017, s.22–24 read with Rule 10 — GST registration certificate"
+    request: "Please share the borrower's GST registration certificate (GSTIN)."
+
+  # --- promoter net worth ---------------------------------------------------
+  - key: promoter_net_worth_certificate
+    label: Promoter net worth certificate
+    level: document
+    granularity: entity
+    entity_role: promoter
+    document_type: identity.promoter_net_worth
+    mandatory: true
+    basis:
+      kind: practice
+      text: "BRD §3.1 FR-1.1.2 names Director/Promoter Net Worth Certificates; a practising chartered accountant's certificate is the standard bank evidence of promoter strength"
+    request: "Please share {entity}'s net worth certificate certified by a practising chartered accountant."
+
+  - key: promoter_net_worth_value
+    label: Promoter net worth figure
+    level: data_point
+    granularity: entity
+    entity_role: promoter
+    document_type: identity.promoter_net_worth
+    field_key: net_worth
+    ontology_path: "economic > Promoter Net Worth > Net Worth"
+    mandatory: true
+    basis:
+      kind: practice
+      text: "BRD §3.2 FR-2.1.6 promoter equity norms (minimum required promoter contribution) — the promoter's net worth figure supports the means-of-finance assessment"
+    request: "Please state {entity}'s net worth as on the latest available date."
+
+  # --- financials -----------------------------------------------------------
+  - key: audited_financials
+    label: Audited balance sheet and profit and loss statements
+    level: document
+    granularity: mandate
+    document_type: financials.audited_statements
+    mandatory: true
+    basis:
+      kind: practice
+      text: "BRD §3.1 FR-1.1.2 — Audited Balance Sheets & Profit and Loss Statements (3–5 years for brownfield projects)"
+    request: "Please share the audited balance sheet and profit and loss statements for the last three to five financial years."
+
+  - key: notes_to_accounts
+    label: Notes to accounts
+    level: document
+    granularity: mandate
+    document_type: financials.notes_to_accounts
+    mandatory: true
+    basis:
+      kind: practice
+      text: "BRD §3.1 discrepancy matrix — Notes to Accounts are the primary source document for the financial discrepancy checks"
+    request: "Please share the notes to accounts accompanying the audited financials."
+
+  - key: debt_schedule
+    label: Debt schedule
+    level: document
+    granularity: mandate
+    document_type: financials.debt_schedule
+    mandatory: true
+    basis:
+      kind: practice
+      text: "BRD §3.1 discrepancy matrix — Debt Schedules are the primary source document for the borrowing checks"
+    request: "Please share the borrower's current debt schedule (lender-wise outstanding and repayment terms)."
+
+  - key: promoter_bank_statements
+    label: Promoter bank statements
+    level: document
+    granularity: mandate
+    document_type: financials.promoter_bank_statements
+    mandatory: false
+    basis:
+      kind: practice
+      text: "BRD §3.1 discrepancy matrix — Promoter Bank Statements are used to corroborate the promoter net worth and contribution"
+    request: "Please share the promoters' bank statements for the last twelve months."
+
+  # --- loan request and approvals -------------------------------------------
+  - key: loan_request
+    label: Loan request / application
+    level: document
+    granularity: mandate
+    document_type: letter.loan_request
+    mandatory: true
+    basis:
+      kind: practice
+      text: "Bank practice (BRD §1 step 1 document gathering) — the client's loan request stating the facility sought opens every mandate file"
+    request: "Please share the client's loan request / application stating the facility, amount and purpose."
+
+  - key: bank_sanction_letter
+    label: Bank sanction letter
+    level: document
+    granularity: mandate
+    document_type: letter.bank_sanction
+    mandatory: true
+    basis:
+      kind: practice
+      text: "BRD §3.1 FR-1.1.2 and discrepancy matrix — Sanction Letters / Bank Sanction Letters carry the sanctioned terms"
+    request: "Please share the bank sanction letter with the sanctioned terms and conditions."
+
+  # --- project documents ----------------------------------------------------
+  - key: dpr
+    label: Detailed Project Report
+    level: document
+    granularity: mandate
+    document_type: project.dpr
+    mandatory: true
+    basis:
+      kind: practice
+      text: "BRD §3.1 FR-1.1.2 — Detailed Project Reports (DPR) are the core document of the techno-economic assessment"
+    request: "Please share the Detailed Project Report for the project."
+
+  - key: cost_quotations
+    label: Equipment, machinery and civil work quotations
+    level: document
+    granularity: mandate
+    document_type: quotation.vendor
+    mandatory: true
+    basis:
+      kind: practice
+      text: "BRD §3.1 FR-1.1.2 — Equipment, Machinery & Civil Work Quotations (greenfield & brownfield expansions)"
+    request: "Please share the equipment, machinery and civil work quotations for the project."
+
+  - key: quotation_gross_total
+    label: Quoted gross total
+    level: data_point
+    granularity: mandate
+    document_type: quotation.vendor
+    field_key: gross_total
+    ontology_path: "economic > Project Cost > Quoted Gross"
+    mandatory: true
+    basis:
+      kind: practice
+      text: "BRD §3.1 discrepancy matrix — Vendor Proforma Invoices / quotations: the quoted gross total is compared with the DPR project cost"
+    request: "Please confirm the quoted gross total (including tax and freight) for the project cost."
+
+  - key: project_execution_schedule
+    label: Project execution schedule
+    level: document
+    granularity: mandate
+    document_type: project.execution_schedule
+    mandatory: false
+    basis:
+      kind: practice
+      text: "BRD §3.1 discrepancy matrix — Project Execution Schedule (DPR) anchors the construction timeline checks"
+    request: "Please share the project execution schedule with milestones and target commissioning."
