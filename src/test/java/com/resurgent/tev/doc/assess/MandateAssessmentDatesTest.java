@@ -106,7 +106,9 @@ class MandateAssessmentDatesTest {
         FakeDocLlmClient fake = new FakeDocLlmClient(
                 "{\"date\": \"March 2025\", \"quote\": \"firm through March 2025\"}");
         DocAssessRunner.run(MANDATE, dbPath, fake);
-        assertThat(fake.calls()).isEqualTo(1);
+        // The full pipeline shares this fake (industry drafts and the checklist's
+        // not-applicable read also ask), so count the date reads only: exactly one.
+        assertThat(fake.callsWithSystemContaining("You read ONE date")).isEqualTo(1);
 
         MandateQa.DocumentDateRow row = docRow(versionId);
         assertThat(row.dateKind()).isEqualTo("offer");
