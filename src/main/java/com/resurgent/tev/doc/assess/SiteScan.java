@@ -10,8 +10,12 @@ import com.resurgent.tev.parser.db.Timestamps;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
@@ -69,7 +73,10 @@ public final class SiteScan {
         repository.clearMandateSites(mandateId);
 
         List<ResolvedSite> sites = new ArrayList<>();
-        for (SiteRepository.FactSiteRow fact : repository.factsForMandate(mandateId)) {
+        List<SiteRepository.FactSiteRow> facts = repository.factsForMandate(mandateId);
+        Map<Long, Set<Long>> sitesByDocument = new LinkedHashMap<>();
+        Map<Long, Long> siteByMentionFact = new HashMap<>();
+        for (SiteRepository.FactSiteRow fact : facts) {
             if (!isSiteNameFact(fact)) {
                 continue;
             }
@@ -77,7 +84,11 @@ public final class SiteScan {
             if (mention.isEmpty()) {
                 continue;
             }
-            resolveMention(mention, fact.documentVersionId(), mandateId, repository, sites, now);
+            long siteId = resolveMention(mention, fact.documentVersionId(), mandateId,
+                    repository, sites, now);
+            siteByMentionFact.put(fact.factId(), siteId);
+            sitesByDocument.computeIfAbsent(fact.documentVersionId(),
+                    id -> new LinkedHashSet<>()).add(siteId);
         }
 
         // Each document's text may mention a known site under a different spelling
@@ -95,6 +106,24 @@ public final class SiteScan {
                 }
                 addAlias(repository, site, version.documentVersionId(), window.text(),
                         window.score(), reasonLoose(window.score()), now);
+                sitesByDocument.computeIfAbsent(version.documentVersionId(),
+                        id -> new LinkedHashSet<>()).add(site.siteId);
+            }
+        }
+
+        // Tag every fact: a site-name fact with the site it names; any other fact with
+        // the single site of its document; a mandate-wide document (no site mentioned)
+        // leaves its facts without a site.
+        for (SiteRepository.FactSiteRow fact : facts) {
+            Long siteId = siteByMentionFact.get(fact.factId());
+            if (siteId == null) {
+                Set<Long> documentSites = sitesByDocument.get(fact.documentVersionId());
+                if (documentSites != null && documentSites.size() == 1) {
+                    siteId = documentSites.iterator().next();
+                }
+            }
+            if (siteId != null) {
+                repository.tagFact(fact.factId(), siteId);
             }
         }
 
@@ -128,8 +157,12 @@ public final class SiteScan {
         return false;
     }
 
-    /** Merges the mention into the best-scoring site, or creates a new site. */
-    private static void resolveMention(String mention, long documentVersionId, long mandateId,
+    /**
+     * Merges the mention into the best-scoring site, or creates a new site.
+     *
+     * @return the site id the mention belongs to
+     */
+    private static long resolveMention(String mention, long documentVersionId, long mandateId,
             SiteRepository repository, List<ResolvedSite> sites, String now) throws SQLException {
         ResolvedSite best = null;
         double bestScore = -1;
@@ -145,11 +178,12 @@ public final class SiteScan {
         if (best != null && bestScore >= Comparisons.SITE_MATCH_SCORE) {
             addAlias(repository, best, documentVersionId, mention, bestScore,
                     reasonLoose(bestScore), now);
-            return;
+            return best.siteId;
         }
         ResolvedSite created = new ResolvedSite(repository.insertSite(mandateId, mention, now));
         sites.add(created);
         addAlias(repository, created, documentVersionId, mention, 1.0, "first mention", now);
+        return created.siteId;
     }
 
     /**

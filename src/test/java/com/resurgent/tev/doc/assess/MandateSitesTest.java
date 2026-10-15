@@ -262,4 +262,31 @@ class MandateSitesTest {
                 .extracting(MandateQa.SiteDocumentRow::documentVersionId)
                 .containsExactlyInAnyOrder(quoteB, ppaB);
     }
+
+    @Test
+    void siteFactsAreTaggedWithTheirSiteAndMandateWideFactsCarryNone() throws Exception {
+        quotation("quotation_c.pdf", "Quote C - Bhagyanagar", "Bhagyanagar",
+                "Project: Bhagyanagar Solar Plant");
+        long ppaC = ppa("ppa_c.pdf", "PPA C - Bhagyanagar",
+                "Project: Bhagyanagar Solar Plant");
+        long cert = netWorthCertificate("net_worth_c.pdf", "Promoter NW - PAN");
+
+        DocAssessRunner.run(MANDATE, dbPath, new FakeDocLlmClient("{\"same\": false}"));
+
+        MandateQa qa = qa();
+        assertThat(qa.sites()).hasSize(1);
+        long siteId = siteNamed(qa, "Bhagyanagar").siteId();
+
+        // The PPA's tariff is about the site: tagged with it through the read API.
+        FactRow tariff = factByKey(factsFor(ppaC), "tariff");
+        assertThat(tariff.siteId()).isEqualTo(siteId);
+        assertThat(tariff.siteName()).isEqualTo("Bhagyanagar");
+
+        // A mandate-wide fact (the borrower's PAN) is about no site.
+        FactRow pan = factByKey(factsFor(cert), "borrower_pan");
+        assertThat(pan.siteId()).isNull();
+        assertThat(pan.siteName()).isNull();
+        FactRow netWorth = factByKey(factsFor(cert), "net_worth");
+        assertThat(netWorth.siteId()).isNull();
+    }
 }
