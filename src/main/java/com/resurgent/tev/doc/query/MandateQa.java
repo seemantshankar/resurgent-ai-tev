@@ -11,13 +11,19 @@ import java.util.List;
  * @param documents one row per document version with its document date, precision, source
  *     and upload date
  * @param stages the latest assessment run per stage
+ * @param entities the mandate's entities (borrower, promoters, group companies) with
+ *     their roles, aliases and source pages
+ * @param sites the identified sites with their spelling aliases and mentioning documents
+ *     (M3-04; appended)
  * @param passages the chapter passages assessed from the stored parse output, with the
- *     facts linked to each chapter
+ *     facts linked to each chapter (M3-06; appended)
  */
 public record MandateQa(
         long mandateId,
         List<DocumentDateRow> documents,
         List<AssessmentRunRow> stages,
+        List<EntityRow> entities,
+        List<SiteRow> sites,
         List<PassageRow> passages) {
 
     /**
@@ -128,4 +134,76 @@ public record MandateQa(
             String extractionMethod,
             List<String> evidenceQuotes,
             List<Integer> evidencePages) {}
+
+    /**
+     * One mandate entity (M3-03): a company or person the documents are about.
+     *
+     * @param entityId entity id
+     * @param role {@code borrower} | {@code promoter} | {@code group_company}
+     * @param name the normalised (first identified) name
+     * @param reason the recorded reason this entity has this role, may be null
+     * @param aliases every spelling of the name seen, with its source page
+     * @param pageIndexes the distinct source pages of the entity's identifications
+     */
+    public record EntityRow(
+            long entityId,
+            String role,
+            String name,
+            String reason,
+            List<AliasRow> aliases,
+            List<Integer> pageIndexes) {}
+
+    /**
+     * One spelling variant of an entity's name.
+     *
+     * @param alias the spelling as stated in the document
+     * @param pageIndex page the spelling was first read from, or null when unanchored
+     */
+    public record AliasRow(String alias, Integer pageIndex) {}
+
+    /**
+     * One identified mandate site (GLOSSARY "Site"): the canonical name, the spelling
+     * mentions recorded per document and the documents the site was seen in.
+     *
+     * @param siteId site id
+     * @param siteName canonical site name (the first mention that created the site)
+     * @param aliases one row per spelling mention, each with why it matched
+     * @param documents distinct documents that mention the site
+     */
+    public record SiteRow(
+            long siteId,
+            String siteName,
+            List<SiteAliasRow> aliases,
+            List<SiteDocumentRow> documents) {}
+
+    /**
+     * One spelling of a site as seen in one document (M3-04).
+     *
+     * @param documentVersionId document the spelling was seen in
+     * @param logicalName document logical name
+     * @param fileName stored file name
+     * @param aliasText the spelling exactly as seen
+     * @param matchScore loose site score when the mention was merged, 1.0 for the first
+     *     mention that created the site
+     * @param matchReason why the mention matched (never blank — "every match records why")
+     */
+    public record SiteAliasRow(
+            long documentVersionId,
+            String logicalName,
+            String fileName,
+            String aliasText,
+            Double matchScore,
+            String matchReason) {}
+
+    /**
+     * A document that mentions a site (M3-04).
+     *
+     * @param documentVersionId version id
+     * @param logicalName document logical name
+     * @param fileName stored file name
+     */
+    public record SiteDocumentRow(
+            long documentVersionId,
+            String logicalName,
+            String fileName) {}
 }

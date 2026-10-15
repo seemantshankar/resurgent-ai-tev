@@ -4,7 +4,10 @@ import com.resurgent.tev.doc.db.MandateQaQueryRunner;
 import com.resurgent.tev.doc.query.MandateQa;
 import com.resurgent.tev.doc.query.MandateQaQuery;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.Callable;
+import java.util.stream.Collectors;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Option;
@@ -12,11 +15,13 @@ import picocli.CommandLine.Spec;
 
 /**
  * {@code tev-doc qa}: print the persisted mandate assessment results — per-document
- * document date, precision, source and upload date, plus the assessment runs — without
- * re-parsing anything. Read-through-API only, like {@code facts}.
+ * document date, precision, source and upload date, the assessment runs, the mandate
+ * entities with their roles, aliases and source pages, and the mandate sites with their
+ * aliases and mentioning documents — without re-parsing anything. Read-through-API only,
+ * like {@code facts}.
  */
 @Command(name = "qa",
-        description = "Show persisted mandate QA: document dates and assessment stages")
+        description = "Show persisted mandate QA: document dates, stages, entities and sites")
 public final class DocQaCommand implements Callable<Integer> {
 
     @Option(names = "--mandate", required = true, description = "Mandate id")
@@ -68,6 +73,42 @@ public final class DocQaCommand implements Callable<Integer> {
                         stage.parseRunId() != null ? " parse_run=" + stage.parseRunId() : "");
             }
             out.printf("stages: %d%n", qa.stages().size());
+            // M3-03 (#136): entities with their roles, aliases and source pages.
+            for (MandateQa.EntityRow entity : qa.entities()) {
+                out.printf("%s: %s | %s%n", entity.role(), entity.name(),
+                        blankToDash(entity.reason()));
+                for (MandateQa.AliasRow alias : entity.aliases()) {
+                    out.printf("  alias: %s%s%n", alias.alias(),
+                            alias.pageIndex() != null ? " (page " + alias.pageIndex() + ")" : "");
+                }
+                out.printf("  pages: %s%n", pagesText(entity.pageIndexes()));
+            }
+            out.printf("entities: %d%n", qa.entities().size());
+            // M3-04 (#137): sites with their spelling variants and mentioning
+            // documents — appended after #134's output.
+            for (MandateQa.SiteRow site : qa.sites()) {
+                out.printf("site %d: %s%n", site.siteId(), site.siteName());
+                for (MandateQa.SiteAliasRow alias : site.aliases()) {
+                    out.printf("  alias %s | %s | score %s | %s%n",
+                            blankToDash(alias.aliasText()),
+                            blankToDash(alias.fileName()),
+                            alias.matchScore() != null
+                                    ? String.format(Locale.ROOT, "%.2f", alias.matchScore())
+                                    : "-",
+                            blankToDash(alias.matchReason()));
+                }
+                StringBuilder files = new StringBuilder();
+                for (MandateQa.SiteDocumentRow doc : site.documents()) {
+                    if (files.length() > 0) {
+                        files.append(", ");
+                    }
+                    files.append(blankToDash(doc.fileName()));
+                }
+                out.printf("  documents: %s%n", files.length() == 0 ? "-" : files);
+            }
+            out.printf("sites: %d%n", qa.sites().size());
+            // M3-06 (#139): chapter passages from the stored parse output with their
+            // per-chapter facts — appended at the end so the earlier sections stand.
             for (MandateQa.PassageRow row : qa.passages()) {
                 out.printf("passage %d | %s | topic=%s | pages %d-%d | page=%d%n",
                         row.passageIndex(),
@@ -117,5 +158,12 @@ public final class DocQaCommand implements Callable<Integer> {
 
     private static String blankToDash(String value) {
         return value == null || value.isBlank() ? "-" : value;
+    }
+
+    private static String pagesText(List<Integer> pageIndexes) {
+        if (pageIndexes == null || pageIndexes.isEmpty()) {
+            return "-";
+        }
+        return pageIndexes.stream().map(String::valueOf).collect(Collectors.joining(", "));
     }
 }

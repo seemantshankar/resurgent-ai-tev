@@ -373,10 +373,12 @@ public final class FactRepository {
                         + " f.value_text,"
                         + " f.value_number, f.value_date, f.unit, f.currency, f.scale,"
                         + " f.absolute_amount, f.subject_entity, f.line_key, f.document_version_id,"
-                        + " dv.file_name, f.extraction_method, f.confidence, f.stated_or_derived"
+                        + " dv.file_name, f.extraction_method, f.confidence, f.stated_or_derived,"
+                        + " f.site_id, s.site_name, f.entity_id, f.entity_reason"
                         + " FROM fact f"
                         + " JOIN document_version dv ON dv.document_version_id = f.document_version_id"
                         + " JOIN document d ON d.document_id = dv.document_id"
+                        + " LEFT JOIN site s ON s.site_id = f.site_id"
                         + " WHERE 1=1");
         List<Object> params = new ArrayList<>();
         if (query.mandateId() != null) {
@@ -442,7 +444,11 @@ public final class FactRepository {
                             rs.getString("file_name"),
                             rs.getString("extraction_method"),
                             asDouble(rs.getObject("confidence")),
-                            rs.getString("stated_or_derived"));
+                            rs.getString("stated_or_derived"),
+                            asLong(rs.getObject("site_id")),
+                            rs.getString("site_name"),
+                            asLong(rs.getObject("entity_id")),
+                            rs.getString("entity_reason"));
                     builders.put(factId, b);
                     order.add(factId);
                 }
@@ -636,13 +642,18 @@ public final class FactRepository {
         final String extractionMethod;
         final Double confidence;
         final String statedOrDerived;
+        final Long siteId;
+        final String siteName;
+        final Long entityId;
+        final String entityReason;
         final List<FactRow.EvidenceRow> evidence = new ArrayList<>();
 
         FactRowBuilder(long factId, String ontologyPath, String pathRoot, String fieldKey,
                 String valueKind, String valueText, Double valueNumber, String valueDate,
                 String unit, String currency, String scale, String absoluteAmount,
                 String subjectEntity, String lineKey, long documentVersionId, String fileName,
-                String extractionMethod, Double confidence, String statedOrDerived) {
+                String extractionMethod, Double confidence, String statedOrDerived,
+                Long siteId, String siteName, Long entityId, String entityReason) {
             this.factId = factId;
             this.ontologyPath = ontologyPath;
             this.pathRoot = pathRoot;
@@ -662,13 +673,17 @@ public final class FactRepository {
             this.extractionMethod = extractionMethod;
             this.confidence = confidence;
             this.statedOrDerived = statedOrDerived;
+            this.siteId = siteId;
+            this.siteName = siteName;
+            this.entityId = entityId;
+            this.entityReason = entityReason;
         }
 
         FactRow build() {
             return new FactRow(factId, ontologyPath, pathRoot, fieldKey, valueKind, valueText,
                     valueNumber, valueDate, unit, currency, scale, absoluteAmount, subjectEntity,
                     lineKey, documentVersionId, fileName, extractionMethod, confidence,
-                    statedOrDerived, evidence);
+                    statedOrDerived, evidence, siteId, siteName, entityId, entityReason);
         }
     }
 
