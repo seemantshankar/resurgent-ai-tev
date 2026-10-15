@@ -68,6 +68,31 @@ public final class DocQaCommand implements Callable<Integer> {
                         stage.parseRunId() != null ? " parse_run=" + stage.parseRunId() : "");
             }
             out.printf("stages: %d%n", qa.stages().size());
+            for (MandateQa.ClauseRow clause : qa.clauses()) {
+                out.printf("clause %s%s [%s%s] | %s | %s | importance=%s%n",
+                        blankToDash(clause.heading()),
+                        pageRange(clause),
+                        clause.status(),
+                        clause.novelty() != null ? ", " + clause.novelty() : "",
+                        clause.typeLabel() != null ? clause.typeLabel() : "(untyped)",
+                        blankToDash(clause.fileName()),
+                        blankToDash(clause.importance()));
+                if (clause.summary() != null) {
+                    out.printf("  summary: %s%n", clause.summary());
+                }
+                out.printf("  %s%n", shorten(clause.verbatim()));
+                for (MandateQa.ClauseSlotRow slot : clause.slots()) {
+                    out.printf("  slot %s: %s%s%n",
+                            slot.slotKey(),
+                            slot.valueText(),
+                            slot.valueNumber() != null
+                                    ? String.format(java.util.Locale.ROOT, " (%s%s)",
+                                            formatNumber(slot.valueNumber()),
+                                            slot.unit() != null ? " " + slot.unit() : "")
+                                    : "");
+                }
+            }
+            out.printf("clauses: %d%n", qa.clauses().size());
             return 0;
         } catch (IllegalArgumentException e) {
             err.println("qa rejected: " + e.getMessage());
@@ -80,5 +105,25 @@ public final class DocQaCommand implements Callable<Integer> {
 
     private static String blankToDash(String value) {
         return value == null || value.isBlank() ? "-" : value;
+    }
+
+    private static String pageRange(MandateQa.ClauseRow clause) {
+        if (clause.pageStart() == null) {
+            return "";
+        }
+        return clause.pageEnd() == null || clause.pageEnd().equals(clause.pageStart())
+                ? " p" + clause.pageStart()
+                : " p" + clause.pageStart() + "-p" + clause.pageEnd();
+    }
+
+    private static String shorten(String text) {
+        String compact = text.replaceAll("\\s+", " ").strip();
+        return compact.length() <= 200 ? compact : compact.substring(0, 200) + "…";
+    }
+
+    private static String formatNumber(double value) {
+        return value == java.lang.Math.rint(value)
+                ? Long.toString((long) value)
+                : java.math.BigDecimal.valueOf(value).stripTrailingZeros().toPlainString();
     }
 }

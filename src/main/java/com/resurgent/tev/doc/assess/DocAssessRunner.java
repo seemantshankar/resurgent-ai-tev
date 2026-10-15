@@ -18,7 +18,8 @@ public final class DocAssessRunner {
     public static final String PARSER_VERSION = "0.1.0-doc-assess";
 
     /** Pipeline contract: later M3 tickets append their stage runners here, in order. */
-    private static final List<AssessStage> STAGES = List.of(new AssessProfileRunner());
+    private static final List<AssessStage> STAGES = List.of(
+            new AssessProfileRunner(), new AssessClausesRunner());
 
     private DocAssessRunner() {}
 

@@ -52,6 +52,44 @@ public final class MandateQaJson {
             }
         }
 
+        ArrayNode clauses = root.putArray("clauses");
+        for (MandateQa.ClauseRow row : qa.clauses()) {
+            ObjectNode n = clauses.addObject();
+            n.put("clause_id", row.clauseId());
+            n.put("document_id", row.documentId());
+            n.put("document_version_id", row.documentVersionId());
+            n.put("logical_name", row.logicalName());
+            n.put("file_name", row.fileName());
+            n.put("heading", row.heading());
+            n.put("verbatim", row.verbatim());
+            if (row.pageStart() != null) {
+                n.put("page_start", row.pageStart());
+            }
+            if (row.pageEnd() != null) {
+                n.put("page_end", row.pageEnd());
+            }
+            n.put("type_code", row.typeCode());
+            n.put("type_label", row.typeLabel());
+            n.put("parent_family", row.parentFamily());
+            n.put("status", row.status());
+            n.put("novelty", row.novelty());
+            n.put("summary", row.summary());
+            n.put("importance", row.importance());
+            n.put("extraction_method", row.extractionMethod());
+            ArrayNode slots = n.putArray("slots");
+            for (MandateQa.ClauseSlotRow slot : row.slots()) {
+                ObjectNode s = slots.addObject();
+                s.put("slot_key", slot.slotKey());
+                s.put("value_text", slot.valueText());
+                if (slot.valueNumber() != null) {
+                    s.put("value_number", slot.valueNumber());
+                }
+                s.put("unit", slot.unit());
+                s.put("currency", slot.currency());
+                s.put("scale", slot.scale());
+            }
+        }
+
         try {
             return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root);
         } catch (Exception e) {
