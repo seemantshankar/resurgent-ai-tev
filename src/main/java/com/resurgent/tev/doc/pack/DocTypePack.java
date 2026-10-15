@@ -21,6 +21,15 @@ public final class DocTypePack {
     public static final List<String> SCALES = List.of(
             "unit", "thousand", "lakh", "million", "crore", "billion");
 
+    /**
+     * Date kinds a pack can declare for its document type (M3 document dates):
+     * execution / signing for agreements, issue for certificates and letters,
+     * report for DPR / PVsyst, offer for quotations, and {@code date} as the
+     * generic fallback.
+     */
+    public static final List<String> DOCUMENT_DATE_KINDS = List.of(
+            "execution", "signing", "issue", "report", "offer", "date");
+
     private final String code;
     private final String version;
     private final String family;
@@ -31,6 +40,9 @@ public final class DocTypePack {
     private final List<Map<String, Object>> tables;
     private final List<String> checklist;
     private final List<String> reportSections;
+    private final String documentDateKind;
+    private final ClauseSection clauseSection;
+    private final List<PackPassage> passages;
 
     /**
      * Creates a validated pack. Use {@link PackLoader} for YAML; this constructor
@@ -47,6 +59,54 @@ public final class DocTypePack {
             List<Map<String, Object>> tables,
             List<String> checklist,
             List<String> reportSections) {
+        this(code, version, family, fileRole, industryTags, identitySignals, fields, tables,
+                checklist, reportSections, null, ClauseSection.NONE, List.of());
+    }
+
+    /**
+     * Creates a validated pack with the document-date kind its type carries (M3).
+     *
+     * @param documentDateKind one of {@link #DOCUMENT_DATE_KINDS}, or null when the
+     *     pack does not declare one (the assessment falls back to the generic kind)
+     */
+    public DocTypePack(
+            String code,
+            String version,
+            String family,
+            String fileRole,
+            List<String> industryTags,
+            List<String> identitySignals,
+            List<PackField> fields,
+            List<Map<String, Object>> tables,
+            List<String> checklist,
+            List<String> reportSections,
+            String documentDateKind) {
+        this(code, version, family, fileRole, industryTags, identitySignals, fields, tables,
+                checklist, reportSections, documentDateKind, ClauseSection.NONE, List.of());
+    }
+
+    /**
+     * Creates a validated pack with its document-date kind, clause section and passage
+     * topics (M3-06, M3-08).
+     *
+     * @param clauseSection the clause section the pack declares, null when none
+     * @param passages chapter topics prose documents of this type are split into,
+     *     each naming the data points to take; empty for non-prose packs
+     */
+    public DocTypePack(
+            String code,
+            String version,
+            String family,
+            String fileRole,
+            List<String> industryTags,
+            List<String> identitySignals,
+            List<PackField> fields,
+            List<Map<String, Object>> tables,
+            List<String> checklist,
+            List<String> reportSections,
+            String documentDateKind,
+            ClauseSection clauseSection,
+            List<PackPassage> passages) {
         this.code = Objects.requireNonNull(code, "code");
         this.version = Objects.requireNonNull(version, "version");
         this.family = Objects.requireNonNull(family, "family");
@@ -57,6 +117,11 @@ public final class DocTypePack {
         this.tables = tables == null ? List.of() : tables.stream().map(Map::copyOf).toList();
         this.checklist = checklist == null ? List.of() : List.copyOf(checklist);
         this.reportSections = reportSections == null ? List.of() : List.copyOf(reportSections);
+        this.documentDateKind = documentDateKind == null || documentDateKind.isBlank()
+                ? null
+                : documentDateKind.trim().toLowerCase(Locale.ROOT);
+        this.clauseSection = clauseSection == null ? ClauseSection.NONE : clauseSection;
+        this.passages = passages == null ? List.of() : List.copyOf(passages);
     }
 
     public String code() {
@@ -102,6 +167,39 @@ public final class DocTypePack {
     /** Field by pack key, or empty. */
     public Optional<PackField> field(String key) {
         return fields.stream().filter(f -> f.key().equals(key)).findFirst();
+    }
+
+    /** The document-date kind this type carries ({@code execution}/…), or null when undeclared. */
+    public String documentDateKind() {
+        return documentDateKind;
+    }
+
+    /** The clause section this pack declares (never null; {@link ClauseSection#NONE} when absent). */
+    public ClauseSection clauseSection() {
+        return clauseSection;
+    }
+
+    /** True when the pack declares clauses — only such document types are read for them. */
+    public boolean declaresClauses() {
+        return clauseSection.declared();
+    }
+
+    /** True when unmatched clauses are stored open (Pass B) for this type. */
+    public boolean clauseOpenExtraction() {
+        return clauseSection.declared() && clauseSection.openExtraction();
+    }
+
+    /** The clause types bound for this document type, in declaration order. */
+    public List<PackClauseType> clauseTypes() {
+        return clauseSection.types();
+    }
+
+    /**
+     * Chapter topics prose of this type is split into (M3-06), each naming the data
+     * points to take; empty for packs that declare none.
+     */
+    public List<PackPassage> passages() {
+        return passages;
     }
 
     /** Required fields only. */
@@ -156,6 +254,19 @@ public final class DocTypePack {
         String s = scale == null ? "" : scale.toLowerCase(Locale.ROOT);
         if (!SCALES.contains(s)) {
             throw new IllegalArgumentException("scale must be one of " + SCALES + ", got: " + scale);
+        }
+    }
+
+    /**
+     * Validates a document-date kind against the closed M3 vocabulary.
+     *
+     * @throws IllegalArgumentException when not in {@link #DOCUMENT_DATE_KINDS}
+     */
+    public static void requireDocumentDateKind(String kind) {
+        String k = kind == null ? "" : kind.toLowerCase(Locale.ROOT);
+        if (!DOCUMENT_DATE_KINDS.contains(k)) {
+            throw new IllegalArgumentException(
+                    "document_date.kind must be one of " + DOCUMENT_DATE_KINDS + ", got: " + kind);
         }
     }
 }

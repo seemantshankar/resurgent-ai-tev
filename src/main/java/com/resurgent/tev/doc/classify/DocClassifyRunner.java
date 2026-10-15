@@ -103,9 +103,11 @@ public final class DocClassifyRunner {
     /**
      * Seed packs, any {@code --pack-dir} packs, plus every pack published under
      * {@code {db-parent}/packs} so a pack induced after the last classify is visible.
-     * Later layers win on a duplicate code (induced over seed).
+     * Later layers win on a duplicate code (induced over seed). Public so on-demand
+     * harnesses (the live benchmark) reuse production candidate assembly instead of
+     * re-implementing it.
      */
-    static List<DocTypePack> loadCandidatePacks(Path db, Path packDir) throws Exception {
+    public static List<DocTypePack> loadCandidatePacks(Path db, Path packDir) throws Exception {
         Map<String, DocTypePack> byCode = new LinkedHashMap<>();
         for (DocTypePack pack : PackLoader.loadSeedPacks()) {
             byCode.put(pack.code(), pack);

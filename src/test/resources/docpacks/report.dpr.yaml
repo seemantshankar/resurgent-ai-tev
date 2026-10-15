@@ -1,0 +1,107 @@
+code: report.dpr
+version: 1.0.0
+family: dpr
+file_role: dpr
+industry_tags: [solar_power, wind_power, hybrid, general]
+identity_signals:
+  any_of:
+    - "Detailed Project Report"
+    - "DPR"
+    - "Project Report"
+fields:
+  - key: project_name
+    path: identity > Project > Name
+    path_root: identity
+    value_kind: text
+    required: false
+    prompt_hint: "Project name as stated"
+  - key: land_location
+    path: technical > Site > Location
+    path_root: technical
+    value_kind: text
+    required: false
+    prompt_hint: "Land / project site location as stated"
+    synonyms: ["Location", "Site", "Village"]
+  - key: land_area
+    path: technical > Site > Land area
+    path_root: technical
+    value_kind: quantity
+    required: false
+    slots: [unit]
+    prompt_hint: "Total land area with its unit (acres, hectares)"
+    synonyms: ["Land area", "Total land"]
+  - key: survey_numbers
+    path: technical > Site > Survey numbers
+    path_root: technical
+    value_kind: text
+    required: false
+    prompt_hint: "Survey / khasra numbers of the land"
+  - key: capacity_mw
+    path: technical > Capacity
+    path_root: technical
+    value_kind: quantity
+    required: false
+    slots: [unit]
+    prompt_hint: "Project capacity in MW (or as stated)"
+    synonyms: ["Capacity", "Project capacity", "MW"]
+  - key: technology
+    path: technical > Technology
+    path_root: technical
+    value_kind: text
+    required: false
+    prompt_hint: "Technology / equipment configuration as stated"
+  - key: implementation_timeline
+    path: technical > Implementation > Timeline
+    path_root: technical
+    value_kind: text
+    required: false
+    prompt_hint: "Implementation schedule / timeline as stated"
+  - key: project_cost
+    path: economic > Project Cost
+    path_root: economic
+    value_kind: money
+    required: false
+    slots: [currency, scale]
+    prompt_hint: "Project cost as stated (total project cost / cost estimate)"
+    synonyms: ["Project Cost", "Total project cost", "Estimated project cost"]
+tables:
+  - name: plant_and_machinery
+    path: technical > Plant and machinery > Item
+    path_root: technical
+    fields:
+      - key: description
+        value_kind: text
+        prompt_hint: "Equipment / machinery item description"
+      - key: qty
+        value_kind: quantity
+        prompt_hint: "Quantity as stated"
+      - key: amount
+        value_kind: money
+        prompt_hint: "Item amount when stated"
+  - name: cost_summary
+    path: economic > Project Cost Summary
+    path_root: economic
+    fields:
+      - key: project_cost
+        value_kind: money
+        prompt_hint: "Project cost as stated in the cost summary table"
+passages:
+  - topic: project_overview
+    heading_terms: [introduction, project overview, project description, salient features, at a glance]
+    fields: [project_name, land_location, land_area, survey_numbers, capacity_mw]
+  - topic: technology
+    heading_terms: [technology, project technology, technical configuration]
+    fields: [technology, capacity_mw]
+  - topic: plant_and_machinery
+    heading_terms: [plant and machinery, plant & machinery, machinery, equipment]
+    fields: [plant_and_machinery]
+  - topic: implementation
+    heading_terms: [implementation, timeline, schedule, milestones]
+    fields: [implementation_timeline]
+  - topic: project_cost
+    heading_terms: [project cost, cost of the project, cost summary, cost estimate, financial viability, means of finance]
+    fields: [project_cost, cost_summary]
+checklist: []
+document_date:
+  kind: report
+report_sections: [technical, financial_viability]

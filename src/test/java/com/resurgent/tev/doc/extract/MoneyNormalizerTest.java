@@ -42,18 +42,22 @@ class MoneyNormalizerTest {
 
     @Test
     void indianGroupingDigitsParse() {
+        // V36 mirror: "Rs. 2,45,00,000" states a figure and a currency but no
+        // scale token, so it has no scale and no absolute amount (Excel rule:
+        // money whose scale nothing states is not written as 'unit').
         MoneyNormalizer.Result r = MoneyNormalizer.parse("Rs. 2,45,00,000");
         assertThat(r.ok()).isTrue();
-        assertThat(r.scale()).isEqualTo(MoneyNormalizer.Scale.UNIT);
-        assertThat(r.absoluteAmount()).isEqualTo("24500000");
+        assertThat(r.amount()).isEqualByComparingTo("24500000");
+        assertThat(r.scale()).isNull();
+        assertThat(r.absoluteAmount()).isNull();
     }
 
     @Test
-    void bareNumberIsUnitScale() {
+    void bareNumberStatesNoScale() {
         MoneyNormalizer.Result r = MoneyNormalizer.parse("18000");
         assertThat(r.ok()).isTrue();
-        assertThat(r.scale()).isEqualTo(MoneyNormalizer.Scale.UNIT);
-        assertThat(r.absoluteAmount()).isEqualTo("18000");
+        assertThat(r.scale()).isNull();
+        assertThat(r.absoluteAmount()).isNull();
     }
 
     @Test
@@ -62,6 +66,24 @@ class MoneyNormalizerTest {
         assertThat(MoneyNormalizer.parse("INR 3 billions").absoluteAmount()).isEqualTo("3000000000");
         assertThat(MoneyNormalizer.parse("INR 3 thousands").absoluteAmount()).isEqualTo("3000");
         assertThat(MoneyNormalizer.parse("Rs 3 lacs").scale()).isEqualTo(MoneyNormalizer.Scale.LAKH);
+    }
+
+    @Test
+    void rupeeMarkerWithWordBoundary() {
+        MoneyNormalizer.Result r = MoneyNormalizer.parse("Rs 571,178,252.43");
+        assertThat(r.ok()).isTrue();
+        assertThat(r.currency()).isEqualTo("INR");
+        assertThat(r.amount()).isEqualByComparingTo("571178252.43");
+        // currency is stated, scale is not: absolute stays empty until a scale
+        // is resolved (the document's stated-scale context does that later)
+        assertThat(r.scale()).isNull();
+        assertThat(r.absoluteAmount()).isNull();
+    }
+
+    @Test
+    void rupeesIsNotFoundInsideUnrelatedWords() {
+        // "corps" ends in "rs": without a word boundary the parser reads money into it
+        assertThat(MoneyNormalizer.parse("corps 5,000").ok()).isFalse();
     }
 
     @Test

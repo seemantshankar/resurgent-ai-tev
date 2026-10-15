@@ -21,7 +21,8 @@ import java.util.Map;
  * Persistence for extracted facts, evidence, and provenance (Architecture §6.5, S2.5).
  * Re-extract replaces the fact set for a parse_run (children first). Quote resolution
  * matches {@code span.text_raw} → {@code block.text_raw} → {@code table_cell.text_raw}
- * on the cited page; unresolved quotes stay citable with {@code resolution='missing'}.
+ * on the cited page, then the parsed page text ({@code cloud_parse_page}) for scans with
+ * no layout rows; unresolved quotes stay citable with {@code resolution='missing'}.
  *
  * <p>Connection is owned by the caller; methods never commit or roll back.
  */
@@ -74,11 +75,26 @@ public final class FactRepository {
             String lineKey,
             String groupKeysJson,
             List<Citation> citations,
-            List<String> derivedFromKeys) {
+            List<String> derivedFromKeys,
+            String period) {
 
         public FactWrite {
             citations = citations == null ? List.of() : List.copyOf(citations);
             derivedFromKeys = derivedFromKeys == null ? List.of() : List.copyOf(derivedFromKeys);
+        }
+
+        /** Fact write with no period (presence fields, line items, derived values). */
+        public FactWrite(String fieldKey, String ontologyPath, String pathRoot,
+                String subjectEntity, String valueKind, String valueText, Double valueNumber,
+                String valueDate, String unit, String currency, String scale,
+                String absoluteAmount, String langSource, String extractionMethod,
+                String extractorId, Double confidence, String statedOrDerived, String lineKey,
+                String groupKeysJson, List<Citation> citations,
+                List<String> derivedFromKeys) {
+            this(fieldKey, ontologyPath, pathRoot, subjectEntity, valueKind, valueText,
+                    valueNumber, valueDate, unit, currency, scale, absoluteAmount, langSource,
+                    extractionMethod, extractorId, confidence, statedOrDerived, lineKey,
+                    groupKeysJson, citations, derivedFromKeys, null);
         }
     }
 
@@ -208,9 +224,80 @@ public final class FactRepository {
                     evidenceInserted++;
                 }
             }
+            if (f.period() != null && !f.period().isBlank()) {
+                // The statement the value was read for, as stated (e.g. a financial
+                // year). Reserved evidence role: two years of one figure are two
+                // readings of it, never a conflict (ADR 0026).
+                insertFactEvidence(factId, ordinal++, "period", null,
+                        f.period(), "resolved", null, null);
+                evidenceInserted++;
+            }
         }
         return new ReplaceStats(facts.size(), evidenceInserted, provenanceInserted,
                 quotesResolved, quotesMissing);
+    }
+
+    /**
+     * Inserts one passage-linked fact (a chapter data point or one row of a listed
+     * table) with its evidence and provenance. The caller already removed the stage's
+     * previous facts (see {@code AssessPassagesRunner}), so this is a plain insert —
+     * re-running the stage replaces and never duplicates.
+     *
+     * @param parseRunId parse_run carrying the assessment stage
+     * @param documentVersionId version the fact is about
+     * @param passageId passage the fact is linked to
+     * @param f normalized fact to insert
+     * @return the new {@code fact_id}
+     * @throws SQLException if any insert fails
+     */
+    public long insertPassageFact(long parseRunId, long documentVersionId, long passageId,
+            FactWrite f) throws SQLException {
+        long factId;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO fact (parse_run_id, document_version_id, region_id, field_key,"
+                        + " ontology_path, path_root, subject_entity, value_kind, value_text,"
+                        + " value_number, value_date, unit, currency, scale, absolute_amount,"
+                        + " lang_source, extraction_method, extractor_id, confidence,"
+                        + " nomenclature_status, unbound_reason, stated_or_derived, line_key,"
+                        + " group_keys_json, valid_from, valid_to, is_current, created_at,"
+                        + " passage_id)"
+                        + " VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
+                        + " 'unbound', NULL, ?, ?, ?, NULL, NULL, 1, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, documentVersionId);
+            setNullableString(ps, 3, f.fieldKey());
+            setNullableString(ps, 4, f.ontologyPath());
+            setNullableString(ps, 5, f.pathRoot());
+            setNullableString(ps, 6, f.subjectEntity());
+            ps.setString(7, f.valueKind());
+            setNullableString(ps, 8, f.valueText());
+            setNullableDouble(ps, 9, f.valueNumber());
+            setNullableString(ps, 10, f.valueDate());
+            setNullableString(ps, 11, f.unit());
+            setNullableString(ps, 12, f.currency());
+            setNullableString(ps, 13, f.scale());
+            setNullableString(ps, 14, f.absoluteAmount());
+            setNullableString(ps, 15, f.langSource());
+            ps.setString(16, f.extractionMethod());
+            setNullableString(ps, 17, f.extractorId());
+            setNullableDouble(ps, 18, f.confidence());
+            setNullableString(ps, 19, f.statedOrDerived());
+            setNullableString(ps, 20, f.lineKey());
+            setNullableString(ps, 21, f.groupKeysJson());
+            ps.setString(22, Timestamps.now());
+            ps.setLong(23, passageId);
+            ps.executeUpdate();
+            factId = generatedId(ps);
+        }
+        int ordinal = 0;
+        for (Citation citation : f.citations()) {
+            QuoteHit hit = resolveQuote(documentVersionId, citation);
+            long provenanceId = insertProvenance(factId, documentVersionId, citation, hit);
+            insertFactEvidence(factId, ordinal++, "verbatim_quote", provenanceId,
+                    citation.verbatim(), hit.resolved() ? "resolved" : "missing", null, null);
+        }
+        return factId;
     }
 
     /**
@@ -246,54 +333,103 @@ public final class FactRepository {
 
     /**
      * Quote resolution: exact match on {@code span.text_raw}, then {@code block.text_raw},
-     * then {@code table_cell.text_raw} for the cited page. First hit wins.
+     * then {@code table_cell.text_raw} for the cited page; finally a text containment
+     * match against the LlamaParse page ({@code cloud_parse_page}) — scanned documents
+     * have no layout rows, so the parsed markdown is their only citable text. First hit
+     * wins.
      */
     public QuoteHit resolveQuote(long documentVersionId, Citation citation) throws SQLException {
         Long pageId = findPageId(documentVersionId, citation.pageIndex());
-        if (pageId == null) {
-            return QuoteHit.missing(citation.verbatim(), citation.pageIndex());
-        }
-        // span
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT s.span_id, s.block_id FROM span s"
-                        + " JOIN block b ON b.block_id = s.block_id"
-                        + " WHERE b.page_id = ? AND s.text_raw = ? LIMIT 1")) {
-            ps.setLong(1, pageId);
-            ps.setString(2, citation.verbatim());
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    return new QuoteHit(true, pageId, rs.getLong("block_id"),
-                            rs.getLong("span_id"), null, citation);
+        if (pageId != null) {
+            // span
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT s.span_id, s.block_id FROM span s"
+                            + " JOIN block b ON b.block_id = s.block_id"
+                            + " WHERE b.page_id = ? AND s.text_raw = ? LIMIT 1")) {
+                ps.setLong(1, pageId);
+                ps.setString(2, citation.verbatim());
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return new QuoteHit(true, pageId, rs.getLong("block_id"),
+                                rs.getLong("span_id"), null, citation);
+                    }
+                }
+            }
+            // block
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT block_id FROM block WHERE page_id = ? AND text_raw = ? LIMIT 1")) {
+                ps.setLong(1, pageId);
+                ps.setString(2, citation.verbatim());
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return new QuoteHit(true, pageId, rs.getLong("block_id"), null, null,
+                                citation);
+                    }
+                }
+            }
+            // table_cell
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT tc.table_cell_id, tg.block_id FROM table_cell tc"
+                            + " JOIN table_grid tg ON tg.table_grid_id = tc.table_grid_id"
+                            + " JOIN block b ON b.block_id = tg.block_id"
+                            + " WHERE b.page_id = ? AND tc.text_raw = ? LIMIT 1")) {
+                ps.setLong(1, pageId);
+                ps.setString(2, citation.verbatim());
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return new QuoteHit(true, pageId, rs.getLong("block_id"), null,
+                                rs.getLong("table_cell_id"), citation);
+                    }
                 }
             }
         }
-        // block
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT block_id FROM block WHERE page_id = ? AND text_raw = ? LIMIT 1")) {
-            ps.setLong(1, pageId);
-            ps.setString(2, citation.verbatim());
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    return new QuoteHit(true, pageId, rs.getLong("block_id"), null, null, citation);
-                }
-            }
-        }
-        // table_cell
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT tc.table_cell_id, tg.block_id FROM table_cell tc"
-                        + " JOIN table_grid tg ON tg.table_grid_id = tc.table_grid_id"
-                        + " JOIN block b ON b.block_id = tg.block_id"
-                        + " WHERE b.page_id = ? AND tc.text_raw = ? LIMIT 1")) {
-            ps.setLong(1, pageId);
-            ps.setString(2, citation.verbatim());
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    return new QuoteHit(true, pageId, rs.getLong("block_id"), null,
-                            rs.getLong("table_cell_id"), citation);
-                }
-            }
+        QuoteHit pageHit = resolveQuoteInParsedPages(documentVersionId, citation, pageId);
+        if (pageHit != null) {
+            return pageHit;
         }
         return QuoteHit.missing(citation, pageId);
+    }
+
+    /** Containment match of the verbatim against the cited page's parsed text. */
+    private QuoteHit resolveQuoteInParsedPages(long documentVersionId, Citation citation,
+            Long pageId) throws SQLException {
+        String loose = normalizeLoose(citation.verbatim());
+        String tight = normalizeTight(citation.verbatim());
+        if (tight.isEmpty()) {
+            return null;
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT page_markdown, page_text FROM cloud_parse_page"
+                        + " WHERE document_version_id = ? AND page_index = ?")) {
+            ps.setLong(1, documentVersionId);
+            ps.setInt(2, citation.pageIndex());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    for (int column = 1; column <= 2; column++) {
+                        String page = rs.getString(column);
+                        if (page == null || page.isBlank()) {
+                            continue;
+                        }
+                        // loose keeps word shapes (space-normalized containment);
+                        // tight drops markdown pipes and layout gaps so table cells
+                        // still match a quote read across them
+                        if (normalizeLoose(page).contains(loose)
+                                || normalizeTight(page).contains(tight)) {
+                            return new QuoteHit(true, pageId, null, null, null, citation);
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String normalizeLoose(String text) {
+        return text == null ? "" : text.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+    }
+
+    private static String normalizeTight(String text) {
+        return text == null ? "" : text.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
     }
 
     /**
@@ -310,10 +446,12 @@ public final class FactRepository {
                         + " f.value_text,"
                         + " f.value_number, f.value_date, f.unit, f.currency, f.scale,"
                         + " f.absolute_amount, f.subject_entity, f.line_key, f.document_version_id,"
-                        + " dv.file_name, f.extraction_method, f.confidence, f.stated_or_derived"
+                        + " dv.file_name, f.extraction_method, f.confidence, f.stated_or_derived,"
+                        + " f.site_id, s.site_name, f.entity_id, f.entity_reason"
                         + " FROM fact f"
                         + " JOIN document_version dv ON dv.document_version_id = f.document_version_id"
                         + " JOIN document d ON d.document_id = dv.document_id"
+                        + " LEFT JOIN site s ON s.site_id = f.site_id"
                         + " WHERE 1=1");
         List<Object> params = new ArrayList<>();
         if (query.mandateId() != null) {
@@ -379,7 +517,11 @@ public final class FactRepository {
                             rs.getString("file_name"),
                             rs.getString("extraction_method"),
                             asDouble(rs.getObject("confidence")),
-                            rs.getString("stated_or_derived"));
+                            rs.getString("stated_or_derived"),
+                            asLong(rs.getObject("site_id")),
+                            rs.getString("site_name"),
+                            asLong(rs.getObject("entity_id")),
+                            rs.getString("entity_reason"));
                     builders.put(factId, b);
                     order.add(factId);
                 }
@@ -544,10 +686,6 @@ public final class FactRepository {
             Long tableCellId,
             Citation citation) {
 
-        static QuoteHit missing(String verbatim, int pageIndex) {
-            return new QuoteHit(false, null, null, null, null, Citation.of(pageIndex, verbatim));
-        }
-
         static QuoteHit missing(Citation citation, Long pageId) {
             return new QuoteHit(false, pageId, null, null, null, citation);
         }
@@ -573,13 +711,18 @@ public final class FactRepository {
         final String extractionMethod;
         final Double confidence;
         final String statedOrDerived;
+        final Long siteId;
+        final String siteName;
+        final Long entityId;
+        final String entityReason;
         final List<FactRow.EvidenceRow> evidence = new ArrayList<>();
 
         FactRowBuilder(long factId, String ontologyPath, String pathRoot, String fieldKey,
                 String valueKind, String valueText, Double valueNumber, String valueDate,
                 String unit, String currency, String scale, String absoluteAmount,
                 String subjectEntity, String lineKey, long documentVersionId, String fileName,
-                String extractionMethod, Double confidence, String statedOrDerived) {
+                String extractionMethod, Double confidence, String statedOrDerived,
+                Long siteId, String siteName, Long entityId, String entityReason) {
             this.factId = factId;
             this.ontologyPath = ontologyPath;
             this.pathRoot = pathRoot;
@@ -599,13 +742,17 @@ public final class FactRepository {
             this.extractionMethod = extractionMethod;
             this.confidence = confidence;
             this.statedOrDerived = statedOrDerived;
+            this.siteId = siteId;
+            this.siteName = siteName;
+            this.entityId = entityId;
+            this.entityReason = entityReason;
         }
 
         FactRow build() {
             return new FactRow(factId, ontologyPath, pathRoot, fieldKey, valueKind, valueText,
                     valueNumber, valueDate, unit, currency, scale, absoluteAmount, subjectEntity,
                     lineKey, documentVersionId, fileName, extractionMethod, confidence,
-                    statedOrDerived, evidence);
+                    statedOrDerived, evidence, siteId, siteName, entityId, entityReason);
         }
     }
 

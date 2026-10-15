@@ -138,7 +138,12 @@ class DocumentExtractBindTest {
         FactRow gross = rows.stream()
                 .filter(r -> "gross_total".equals(r.fieldKey()))
                 .findFirst().orElseThrow();
-        assertThat(gross.absoluteAmount()).isNotBlank();
+        // "Rs. 62,45,000" states a currency but no scale: like the Excel side,
+        // the figure is kept as a number with scale/absolute empty
+        assertThat(gross.currency()).isEqualTo("INR");
+        assertThat(gross.valueNumber()).isEqualTo(6245000.0);
+        assertThat(gross.scale()).isNull();
+        assertThat(gross.absoluteAmount()).isNull();
 
         // S2.1 grouping keys: line items carry grouping_* evidence naming the parent
         // facts (vendor, package, validity, tax/freight flags) they belong to.

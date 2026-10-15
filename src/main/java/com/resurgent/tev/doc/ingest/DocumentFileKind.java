@@ -63,14 +63,16 @@ public enum DocumentFileKind {
         String v = raw.trim().toLowerCase(Locale.ROOT);
         return switch (v) {
             case "fm_workbook", "dpr", "agreement", "certificate", "quotation",
-                    "technical_report", "regulatory", "identity", "other" -> v;
+                    "technical_report", "regulatory", "identity", "audited_financials",
+                    "other" -> v;
             default -> "other";
         };
     }
 
     /**
      * Maps a normalized role to its default document family. Identity maps to
-     * certificate; unmapped roles, including fm_workbook, map to other.
+     * certificate; audited financials map to financials; unmapped roles, including
+     * fm_workbook, map to other.
      */
     public static String defaultDocFamily(String fileRole) {
         return switch (fileRole) {
@@ -80,6 +82,7 @@ public enum DocumentFileKind {
             case "quotation" -> "quotation";
             case "technical_report" -> "technical_report";
             case "regulatory" -> "regulatory";
+            case "audited_financials" -> "financials";
             default -> "other";
         };
     }

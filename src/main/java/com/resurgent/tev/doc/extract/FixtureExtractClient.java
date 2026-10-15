@@ -52,7 +52,7 @@ public final class FixtureExtractClient implements ExtractClient {
      * Registers an in-memory fixture for a doc type code.
      *
      * @param docTypeCode pack code (required)
-     * @param fixture fixture JSON with fields/line_items (required)
+     * @param fixture fixture JSON with fields, line_items and/or tables (required)
      */
     public void putFixture(String docTypeCode, JsonNode fixture) {
         byDocType.put(docTypeCode, fixture);
@@ -119,11 +119,20 @@ public final class FixtureExtractClient implements ExtractClient {
                     facts.add(candidate);
                 }
             }
-            JsonNode lineItems = fixture.path("line_items");
-            if (lineItems.isArray()) {
-                for (JsonNode line : lineItems) {
+            // Row tables (quotation line_items, plant-and-machinery lists, …): every
+            // top-level array entry becomes one row fact per element, keyed by the
+            // array's name — the M2 quotation-row style.
+            Iterator<Map.Entry<String, JsonNode>> tables = fixture.fields();
+            while (tables.hasNext()) {
+                Map.Entry<String, JsonNode> table = tables.next();
+                JsonNode lines = table.getValue();
+                if (!lines.isArray()) {
+                    continue;
+                }
+                String tableKey = table.getKey();
+                for (JsonNode line : lines) {
                     String description = line.path("description").asText(null);
-                    FactCandidate row = new FactCandidate("line_items", ValueKind.TEXT)
+                    FactCandidate row = new FactCandidate(tableKey, ValueKind.TEXT)
                             .valueText(description)
                             .lineKey(description)
                             .subjectEntity(fields.path("vendor_name").path("value").asText(null))
@@ -146,11 +155,92 @@ public final class FixtureExtractClient implements ExtractClient {
                     facts.add(row);
                 }
             }
+            // Declared pack tables: {"tables": {name: [row]}} — one fact per column
+            // per row, every fact carrying the row's period column as its period.
+            JsonNode tablesNode = fixture.path("tables");
+            if (tablesNode.isObject()) {
+                Iterator<Map.Entry<String, JsonNode>> tableIt = tablesNode.fields();
+                while (tableIt.hasNext()) {
+                    Map.Entry<String, JsonNode> tableEntry = tableIt.next();
+                    addTableRows(schema, tableEntry.getKey(), tableEntry.getValue(),
+                            facts, citations);
+                }
+            }
         }
 
         long latencyMs = (System.nanoTime() - start) / 1_000_000L;
         return new ExtractResult(ID, payload, keepOnPages(facts, req.pageIndices()), citations,
                 ExtractStats.local(latencyMs));
+    }
+
+    /**
+     * Emits one candidate per non-period column per fixture row of a declared pack
+     * table ({@code "tables": {name: [{column: {value, quote, page}}]}}), reading the
+     * compiled schema's {@code period} marker to tell the period column apart.
+     */
+    private static void addTableRows(JsonNode schema, String tableName, JsonNode rows,
+            List<FactCandidate> facts, List<Citation> citations) {
+        if (!rows.isArray() || schema == null) {
+            return;
+        }
+        JsonNode itemProps = schema.path("properties").path(tableName).path("items")
+                .path("properties");
+        String periodColumn = periodColumnOf(itemProps);
+        for (JsonNode row : rows) {
+            String period = periodColumn != null && row.hasNonNull(periodColumn)
+                    ? row.get(periodColumn).asText(null) : null;
+            Iterator<Map.Entry<String, JsonNode>> it = row.fields();
+            while (it.hasNext()) {
+                Map.Entry<String, JsonNode> col = it.next();
+                JsonNode cell = col.getValue();
+                if (col.getKey().equals(periodColumn) || cell == null || cell.isNull()) {
+                    continue;
+                }
+                String value;
+                String quote;
+                int page;
+                if (cell.isObject()) {
+                    value = cell.hasNonNull("value") ? cell.get("value").asText() : null;
+                    quote = cell.hasNonNull("quote") ? cell.get("quote").asText() : value;
+                    page = cell.hasNonNull("page") ? cell.get("page").asInt(1) : 1;
+                } else {
+                    value = cell.asText(null);
+                    quote = value;
+                    page = 1;
+                }
+                if (value == null) {
+                    continue;
+                }
+                FactCandidate candidate = new FactCandidate(col.getKey(),
+                        kindOf(itemProps, col.getKey()))
+                        .valueText(value)
+                        .period(period)
+                        .confidence(0.95)
+                        .extractionMethod("deterministic")
+                        .statedOrDerived("stated");
+                if (quote != null) {
+                    Citation citation = Citation.of(page, quote);
+                    candidate.addCitation(citation);
+                    citations.add(citation);
+                }
+                facts.add(candidate);
+            }
+        }
+    }
+
+    /** The schema column carrying {@code "period": true}, or null when the table has none. */
+    private static String periodColumnOf(JsonNode itemProps) {
+        if (itemProps == null || !itemProps.isObject()) {
+            return null;
+        }
+        Iterator<Map.Entry<String, JsonNode>> it = itemProps.fields();
+        while (it.hasNext()) {
+            Map.Entry<String, JsonNode> entry = it.next();
+            if (entry.getValue().path("period").asBoolean(false)) {
+                return entry.getKey();
+            }
+        }
+        return null;
     }
 
     /**
@@ -175,6 +265,10 @@ public final class FixtureExtractClient implements ExtractClient {
 
     private static ValueKind kindFor(JsonNode schema, String key) {
         JsonNode props = schema != null ? schema.path("properties") : null;
+        return kindOf(props, key);
+    }
+
+    private static ValueKind kindOf(JsonNode props, String key) {
         if (props != null && props.has(key)) {
             String kind = props.path(key).path("value_kind").asText(null);
             if (kind != null) {

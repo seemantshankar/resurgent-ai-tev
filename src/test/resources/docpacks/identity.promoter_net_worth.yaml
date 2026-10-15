@@ -62,4 +62,6 @@ fields:
     prompt_hint: "Membership number of the certifying CA"
 tables: []
 checklist: []
+document_date:
+  kind: issue
 report_sections: [financial_viability, risk]

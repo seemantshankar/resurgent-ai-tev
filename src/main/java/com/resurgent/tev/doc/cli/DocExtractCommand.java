@@ -70,13 +70,35 @@ public final class DocExtractCommand implements Callable<Integer> {
             if (!"success".equals(result.status())) {
                 err.println("warning: extract " + result.status() + ": " + result.message());
             }
-            return exitCode(result.status());
+            int exit = exitCode(result.status());
+            if (exit == 0) {
+                // Processing new documents ends by re-running the assessment (M3-01).
+                reassess(mandateId, db, out, err);
+            }
+            return exit;
         } catch (IllegalArgumentException e) {
             err.println("extract rejected: " + e.getMessage());
             return 3;
         } catch (Exception e) {
             err.println("extract failed: " + (e.getMessage() != null ? e.getMessage() : e));
             return 1;
+        }
+    }
+
+    /**
+     * Re-runs the mandate assessment after a successful extract. A failed assessment is
+     * a warning, not an extract failure: the extracted facts are already persisted.
+     */
+    private static void reassess(long mandateId, java.nio.file.Path db,
+            java.io.PrintWriter out, java.io.PrintWriter err) {
+        try {
+            var assessment = com.resurgent.tev.doc.assess.DocAssessRunner.run(mandateId, db);
+            for (String line : assessment.summaryLines()) {
+                out.println("assessment: " + line);
+            }
+        } catch (Exception e) {
+            err.println("warning: assessment re-run failed: "
+                    + (e.getMessage() != null ? e.getMessage() : e));
         }
     }
 

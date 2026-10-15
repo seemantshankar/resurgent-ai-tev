@@ -96,4 +96,6 @@ tables:
         value_kind: money
         prompt_hint: "Line amount"
 checklist: []
+document_date:
+  kind: offer
 report_sections: [financial_viability]

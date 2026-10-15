@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -45,10 +46,11 @@ class PackLoaderTest {
     @Test
     void seedPacksLoadFromPackDirAndClasspath() throws Exception {
         List<DocTypePack> seed = PackLoader.loadSeedPacks();
-        assertThat(seed).hasSize(3);
+        assertThat(seed).hasSize(5);
         assertThat(seed.stream().map(DocTypePack::code))
                 .containsExactlyInAnyOrder(
-                        "identity.promoter_net_worth", "quotation.vendor", "agreement.ppa");
+                        "identity.promoter_net_worth", "quotation.vendor", "agreement.ppa",
+                        "financials.audited_summary", "report.dpr");
 
         Path packDir = tempDir.resolve("packs");
         Files.createDirectories(packDir);
@@ -134,17 +136,46 @@ class PackLoaderTest {
         for (DocTypePack pack : PackLoader.loadSeedPacks()) {
             JsonNode props = pack.toExtractSchema().path("properties");
             for (PackField field : pack.fields()) {
-                assertThat(props.has(field.key()))
+                // Fields owned by a declared table (e.g. the audited headline figures,
+                // which repeat per financial year) compile as table columns; every
+                // other field compiles as a root leaf.
+                JsonNode leaf = props.path(field.key());
+                if (!props.has(field.key())) {
+                    leaf = tableColumn(pack, props, field.key());
+                }
+                assertThat(leaf.isMissingNode())
                         .as("schema property for " + pack.code() + "#" + field.key())
-                        .isTrue();
-                assertThat(props.path(field.key()).path("value_kind").asText())
+                        .isFalse();
+                assertThat(leaf.path("value_kind").asText())
                         .isEqualTo(field.valueKind().wireName());
             }
-            // quotation pack declares line_items rows
-            if (pack.tables().stream().anyMatch(t -> "line_items".equals(String.valueOf(t.get("name"))))) {
-                assertThat(props.has("line_items")).isTrue();
+            // packs that declare tables (line_items rows, headline figures) compile them
+            for (Map<String, Object> table : pack.tables()) {
+                Object name = table.get("name");
+                if (name != null) {
+                    assertThat(props.path(String.valueOf(name)).path("type").asText())
+                            .as("table array for " + pack.code() + "#" + name)
+                            .isEqualTo("array");
+                }
             }
         }
+    }
+
+    /** The compiled {@code table[].items.properties[key]} column for a table-owned field. */
+    private static JsonNode tableColumn(DocTypePack pack, JsonNode props, String key) {
+        for (Map<String, Object> table : pack.tables()) {
+            Object fieldsObj = table.get("fields");
+            if (!(fieldsObj instanceof List<?> list)) {
+                continue;
+            }
+            for (Object raw : list) {
+                if (raw instanceof Map<?, ?> f && key.equals(String.valueOf(f.get("key")))) {
+                    return props.path(String.valueOf(table.get("name")))
+                            .path("items").path("properties").path(key);
+                }
+            }
+        }
+        return com.fasterxml.jackson.databind.node.MissingNode.getInstance();
     }
 
     @Test

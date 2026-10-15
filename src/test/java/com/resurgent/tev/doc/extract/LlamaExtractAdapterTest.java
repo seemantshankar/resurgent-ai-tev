@@ -183,6 +183,23 @@ class LlamaExtractAdapterTest {
     }
 
     @Test
+    void numberFactsKeepPlainFigureTextNotScientificNotation() throws Exception {
+        ObjectNode result = MAPPER.createObjectNode();
+        result.put("net_worth", 571178252.43);
+        ObjectNode job = MAPPER.createObjectNode();
+        job.put("id", "ext-test");
+        job.put("status", "COMPLETED");
+        job.set("extract_result", result);
+        getResponse = job.toString();
+
+        ExtractResult out = adapter().extractFieldSchema(request(writeOriginal()), sampleSchema());
+        FactCandidate nw = out.facts().stream()
+                .filter(f -> f.key().equals("net_worth")).findFirst().orElseThrow();
+        assertThat(nw.valueText()).isEqualTo("571178252.43");
+        assertThat(nw.valueNumber()).isEqualTo(571178252.43);
+    }
+
+    @Test
     void postsOfficialExtractCreateBody() throws Exception {
         AtomicReference<String> lastCreate = new AtomicReference<>();
         HttpServer spy = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -223,6 +240,29 @@ class LlamaExtractAdapterTest {
 
     @Test
     void honorsParseTierOptionInsteadOfAgentic() throws Exception {
+        assertThat(capturedTierFor(Map.of(LlamaExtractAdapter.KEY_PARSE_TIER, "agentic_plus")))
+                .isEqualTo("agentic_plus");
+        assertThat(capturedTierFor(Map.of(LlamaExtractAdapter.KEY_PARSE_TIER, "cost_effective")))
+                .isEqualTo("cost_effective");
+    }
+
+    /**
+     * {@code fast} exists in LlamaParse but is not an accepted LlamaExtract
+     * {@code configuration.tier}, so mirroring it verbatim fails the call with HTTP 422.
+     */
+    @Test
+    void mapsParseFastToCheapestExtractTier() throws Exception {
+        assertThat(capturedTierFor(Map.of(LlamaExtractAdapter.KEY_PARSE_TIER, "fast")))
+                .isEqualTo("cost_effective");
+    }
+
+    @Test
+    void rejectsUnsupportedTierWordByFallingBackToDefault() throws Exception {
+        assertThat(capturedTierFor(Map.of(LlamaExtractAdapter.KEY_PARSE_TIER, "hyper")))
+                .isEqualTo(LlamaExtractAdapter.DEFAULT_TIER);
+    }
+
+    private String capturedTierFor(Map<String, String> options) throws Exception {
         AtomicReference<String> lastCreate = new AtomicReference<>();
         HttpServer spy = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         spy.createContext("/api/v1/beta/files", ex -> {
@@ -245,11 +285,8 @@ class LlamaExtractAdapterTest {
                     "LLAMA_CLOUD_API_KEY", "k",
                     "LLAMA_EXTRACT_BASE_URL",
                     "http://127.0.0.1:" + spy.getAddress().getPort()));
-            a.extractFieldSchema(
-                    request(writeOriginal(), Map.of(LlamaExtractAdapter.KEY_PARSE_TIER, "fast")),
-                    sampleSchema());
-            JsonNode configuration = MAPPER.readTree(lastCreate.get()).path("configuration");
-            assertThat(configuration.path("tier").asText()).isEqualTo("fast");
+            a.extractFieldSchema(request(writeOriginal(), options), sampleSchema());
+            return MAPPER.readTree(lastCreate.get()).path("configuration").path("tier").asText();
         } finally {
             spy.stop(0);
         }

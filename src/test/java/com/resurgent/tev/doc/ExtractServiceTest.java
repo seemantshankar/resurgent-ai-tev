@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.resurgent.tev.doc.db.CloudParsePageRepository;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.extract.Citation;
@@ -173,7 +174,11 @@ class ExtractServiceTest {
             FactRow netWorth = rows.stream()
                     .filter(r -> "net_worth".equals(r.fieldKey())).findFirst().orElseThrow();
             assertThat(netWorth.extractionMethod()).isEqualTo("derived");
-            assertThat(netWorth.absoluteAmount()).isEqualTo("7500000");
+            // parents state figures but no scale (Excel V36 mirror): the derived
+            // difference is carried as value_number with scale/absolute empty
+            assertThat(netWorth.valueNumber()).isEqualTo(7500000.0);
+            assertThat(netWorth.absoluteAmount()).isNull();
+            assertThat(netWorth.scale()).isNull();
             assertThat(netWorth.evidence()).anySatisfy(e -> {
                 assertThat(e.role()).isEqualTo("derived_from");
                 assertThat(e.verbatim()).isEqualTo("assets_total");
@@ -181,6 +186,44 @@ class ExtractServiceTest {
             assertThat(netWorth.evidence()).anySatisfy(e -> {
                 assertThat(e.role()).isEqualTo("derived_from");
                 assertThat(e.verbatim()).isEqualTo("liabilities_total");
+            });
+        }
+    }
+
+    @Test
+    void moneyContextFromParsedPagesFillsUnstatedSlotsAndResolvesQuotes() throws Exception {
+        // scanned audit report shape: the extractor returns a bare figure and a quote;
+        // currency, scale and citable text exist only on the parsed page
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            new CloudParsePageRepository(db.connection())
+                    .replacePages(documentVersionId, "pjb-test", "agentic",
+                            List.of("M/s Test Co, Khandwa, Madhya Pradesh\n"
+                                    + "(Amount in Rs.)\nNet Sales 571,178,252.43 for FY2024-25"),
+                            List.of("Net Sales 571,178,252.43 for FY2024-25"));
+        }
+        client.facts.add(new FactCandidate("assets_total", ValueKind.MONEY)
+                .valueText("5.7117825243E8").valueNumber(5.7117825243E8)
+                .confidence(0.9)
+                .extractionMethod("llm_field")
+                .addCitation(Citation.of(1, "Net Sales 571,178,252.43 for FY2024-25")));
+
+        ExtractService.ExtractOutcome outcome = new ExtractService().extract(
+                dbPath, documentVersionId, mandateId, netWorthPack(), client, "1");
+        assertThat(outcome.status()).isEqualTo("success");
+
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            FactRepository facts = new FactRepository(db.connection());
+            List<FactRow> rows = facts.query(FactQuery.forMandate(mandateId)
+                    .withVersion(documentVersionId));
+            FactRow assets = rows.stream()
+                    .filter(r -> "assets_total".equals(r.fieldKey())).findFirst().orElseThrow();
+            assertThat(assets.valueText()).isEqualTo("571178252.43");
+            assertThat(assets.currency()).isEqualTo("INR");
+            assertThat(assets.scale()).isEqualTo("unit");
+            assertThat(assets.absoluteAmount()).isEqualTo("571178252.43");
+            assertThat(assets.evidence()).anySatisfy(e -> {
+                assertThat(e.role()).isEqualTo("verbatim_quote");
+                assertThat(e.resolution()).isEqualTo("resolved");
             });
         }
     }

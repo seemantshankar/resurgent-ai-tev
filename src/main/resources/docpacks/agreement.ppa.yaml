@@ -62,4 +62,25 @@ fields:
     prompt_hint: "Governing law / jurisdiction as stated"
 tables: []
 checklist: []
+clauses:
+  open_extraction: true
+  types:
+    - key: termination
+      label: Termination
+      parent_family: termination
+      aliases: ["Termination", "Termination by Procurer", "right to terminate", "terminate this Agreement"]
+    - key: force_majeure
+      label: Force Majeure
+      parent_family: force_majeure
+      aliases: ["Force Majeure", "Event of Force Majeure", "Act of God"]
+    - key: change_in_law
+      label: Change in Law
+      parent_family: change_in_law
+      aliases: ["Change in Law", "Change of Law"]
+    - key: assignment
+      label: Assignment
+      parent_family: assignment
+      aliases: ["Assignment", "Assign this Agreement"]
+document_date:
+  kind: execution
 report_sections: [financial_viability, risk]
