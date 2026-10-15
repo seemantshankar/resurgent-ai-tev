@@ -269,15 +269,22 @@ public final class ExtractService {
         for (FactCandidate c : candidates) {
             if ("line_items".equals(c.key())) {
                 lineCandidates.add(c);
-                continue;
+            } else {
+                stated.add(c);
             }
-            stated.add(c);
-            writes.add(toWrite(c, pack, extractorId));
+        }
+
+        // The document's subject (vendor/subject name) is the entity for
+        // period-carrying row facts that state no subject of their own: a figure read
+        // for a financial year is about the document's entity. Facts without a period
+        // keep their own subject (null when none is stated).
+        String documentSubject = findSubject(pack, stated);
+        for (FactCandidate c : stated) {
+            writes.add(toWrite(c, pack, extractorId, documentSubject));
         }
 
         // Quotation line items: one fact per line + parent totals (already in candidates).
-        String vendor = findSubject(pack, stated);
-        writes.addAll(lineItemWrites(pack, lineCandidates, result, vendor, extractorId));
+        writes.addAll(lineItemWrites(pack, lineCandidates, result, documentSubject, extractorId));
 
         // Derived net worth when the pack can compute it and none was stated.
         FactRepository.FactWrite derived =
@@ -289,7 +296,7 @@ public final class ExtractService {
     }
 
     private static FactRepository.FactWrite toWrite(FactCandidate c, DocTypePack pack,
-            String extractorId) {
+            String extractorId, String documentSubject) {
         String path = null;
         String pathRoot = null;
         Optional<PackField> field = pack.field(c.key());
@@ -297,11 +304,15 @@ public final class ExtractService {
             path = field.get().path();
             pathRoot = field.get().pathRootWire();
         }
+        String subject = c.subjectEntity();
+        if ((subject == null || subject.isBlank()) && c.period() != null) {
+            subject = documentSubject;
+        }
         return new FactRepository.FactWrite(
                 c.key(),
                 path,
                 pathRoot,
-                c.subjectEntity(),
+                subject,
                 c.valueKind().wireName(),
                 c.valueText(),
                 c.valueNumber(),
@@ -318,7 +329,8 @@ public final class ExtractService {
                 c.lineKey(),
                 null,
                 c.citations(),
-                c.derivedFromKeys());
+                c.derivedFromKeys(),
+                c.period());
     }
 
     private static String findSubject(DocTypePack pack, List<FactCandidate> stated) {

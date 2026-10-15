@@ -5,13 +5,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.resurgent.tev.doc.extract.ValueKind;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Builds the JSON Schema fragment sent to {@code ExtractClient} from a pack.
  * Object of field keys; each leaf carries {@code value_kind}, {@code required},
- * and a short {@code prompt_hint}. Multi-value leaves are arrays. Quotation packs
- * add a {@code line_items} array of row objects from pack {@code tables}.
+ * and a short {@code prompt_hint}. Multi-value leaves are arrays. Pack
+ * {@code tables} are compiled as arrays of row objects (one property per column);
+ * a table's {@code period_key} column is marked {@code "period": true} so row
+ * facts can carry the period they were read for. A field whose key is a table
+ * column compiles only inside its table — never as a root leaf.
  */
 public final class SchemaCompiler {
 
@@ -31,7 +36,14 @@ public final class SchemaCompiler {
         ObjectNode props = root.putObject("properties");
         ArrayNode required = root.putArray("required");
 
+        Set<String> tableOwned = tableOwnedKeys(pack);
+
         for (PackField field : pack.fields()) {
+            if (tableOwned.contains(field.key())) {
+                // Figures that repeat per row (revenue, PAT, net worth, ...) are
+                // extracted as table columns, not as single root-level values.
+                continue;
+            }
             ObjectNode leaf = props.putObject(field.key());
             putValueKind(leaf, field.valueKind());
             leaf.put("description", field.promptHint() != null ? field.promptHint() : field.path());
@@ -54,17 +66,21 @@ public final class SchemaCompiler {
             }
         }
 
-        // Quotation-style packs: row maps under tables[].fields become line_items[].
+        // Row tables (quotation line_items, audited financial years, ...): row maps
+        // under tables[].fields become an array of row objects.
         for (Map<String, Object> table : pack.tables()) {
             Object name = table.get("name");
-            if (name == null || !"line_items".equals(String.valueOf(name))) {
+            if (name == null) {
                 continue;
             }
-            ObjectNode lineItems = props.putObject("line_items");
-            lineItems.put("type", "array");
-            ObjectNode items = lineItems.putObject("items");
+            String tableName = String.valueOf(name);
+            ObjectNode rows = props.putObject(tableName);
+            rows.put("type", "array");
+            ObjectNode items = rows.putObject("items");
             items.put("type", "object");
             ObjectNode itemProps = items.putObject("properties");
+            Object periodKey = table.get("period_key");
+            String periodColumn = periodKey == null ? null : String.valueOf(periodKey);
             Object fieldsObj = table.get("fields");
             if (fieldsObj instanceof java.util.List<?> list) {
                 for (Object raw : list) {
@@ -84,14 +100,33 @@ public final class SchemaCompiler {
                         if (f.get("prompt_hint") != null) {
                             col.put("description", String.valueOf(f.get("prompt_hint")));
                         }
+                        if (key.equals(periodColumn)) {
+                            col.put("period", true);
+                        }
                     }
                 }
             }
-            // line_items is structurally required when the pack declares the table.
-            required.add("line_items");
+            // The table array is structurally required when the pack declares the table.
+            required.add(tableName);
         }
 
         return root;
+    }
+
+    /** Field keys owned by a declared table — compiled as columns, never root leaves. */
+    private static Set<String> tableOwnedKeys(DocTypePack pack) {
+        Set<String> keys = new HashSet<>();
+        for (Map<String, Object> table : pack.tables()) {
+            Object fieldsObj = table.get("fields");
+            if (fieldsObj instanceof java.util.List<?> list) {
+                for (Object raw : list) {
+                    if (raw instanceof Map<?, ?> f && f.get("key") != null) {
+                        keys.add(String.valueOf(f.get("key")));
+                    }
+                }
+            }
+        }
+        return keys;
     }
 
     private static void putValueKind(ObjectNode leaf, ValueKind kind) {

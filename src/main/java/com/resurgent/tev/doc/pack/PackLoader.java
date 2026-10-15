@@ -293,12 +293,13 @@ public final class PackLoader {
         return packs;
     }
 
-    /** Loads the three seed goldens from {@code docpacks/} on the classpath. */
+    /** Loads the seed goldens from {@code docpacks/} on the classpath. */
     public static List<DocTypePack> loadSeedPacks() throws PackValidationException {
         return List.of(
                 loadClasspath("docpacks/identity.promoter_net_worth.yaml"),
                 loadClasspath("docpacks/quotation.vendor.yaml"),
-                loadClasspath("docpacks/agreement.ppa.yaml"));
+                loadClasspath("docpacks/agreement.ppa.yaml"),
+                loadClasspath("docpacks/financials.audited_summary.yaml"));
     }
 
     private static String requireText(JsonNode node, String field, String where)
