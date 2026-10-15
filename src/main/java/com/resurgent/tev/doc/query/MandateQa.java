@@ -438,9 +438,11 @@ public record MandateQa(
             String createdAt) {}
 
     /**
-     * One conflict between documents over the same data point (M3-12, ADR 0026):
-     * both sides kept in full, plus the settlement. Never overwritten — the losing
-     * value stays on this row and in the fact table.
+     * One conflict over the same data point (M3-12/M3-13, ADR 0026): between two
+     * documents ({@code doc-doc}) or between two sections of one document
+     * ({@code intra-doc}, each side citing its passage and page). Both sides kept in
+     * full, plus the settlement. Never overwritten — the losing value stays on this
+     * row and in the fact table.
      *
      * @param conflictId conflict row id
      * @param kind {@code doc-doc} | {@code intra-doc} | {@code doc-fm} |
@@ -491,7 +493,9 @@ public record MandateQa(
 
     /**
      * One side of a conflict: the document version it was read from, the citing page
-     * and quote when anchored, and the value as stated.
+     * and quote when anchored, the section (chapter passage) it was read in when the
+     * side is a passage-linked fact (an intra-document conflict cites two sections of
+     * one document), and the value as stated.
      *
      * @param documentVersionId the version the value came from, or null when unknown
      * @param logicalName that version's logical document name, or null
@@ -499,6 +503,8 @@ public record MandateQa(
      * @param pageIndex the cited page, or null when unanchored
      * @param value the value as stated (never blank)
      * @param quote the verbatim the value was read from, or null when unanchored
+     * @param passageHeading the chapter passage heading this side was read in, or
+     *     null for document-level sides
      */
     public record ConflictSideRow(
             Long documentVersionId,
@@ -506,5 +512,6 @@ public record MandateQa(
             String fileName,
             Integer pageIndex,
             String value,
-            String quote) {}
+            String quote,
+            String passageHeading) {}
 }

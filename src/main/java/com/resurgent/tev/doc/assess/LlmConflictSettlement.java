@@ -19,7 +19,8 @@ final class LlmConflictSettlement {
 
     private static final String SYSTEM = """
             You settle ONE disagreement between two sources of a mandate.
-            A source is a document page or a financial model cell. The model is read only.
+            Sources may be different documents, different passages of one document,
+            or read-only financial model cells.
             Both values are kept either way; you only say which one to use.
             Reply with a single JSON object: \
             {"settle": true, "chosen_side": "left" | "right", "reasoning": "<why, citing each document page or model sheet and cell>"}.

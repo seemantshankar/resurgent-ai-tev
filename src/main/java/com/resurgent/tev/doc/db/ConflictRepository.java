@@ -14,13 +14,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Persistence and retrieval for the M3-12 conflicts between documents (issue #145,
- * ADR 0026): one {@code conflict} row per disagreement over the same data point,
- * carrying both sides (source, page, value, quote, fact id) and its settlement —
- * the losing value is never overwritten. {@code versions-differ} rows are revisions
- * (same document type, different document dates) whose winner M4 chooses. The
- * repository never commits or rolls back — the caller owns the transaction, the same
- * discipline as {@link AssessmentRepository}.
+ * Persistence and retrieval for the M3-12/M3-13 conflicts (issues #145, #146,
+ * ADR 0026): one {@code conflict} row per disagreement over the same data point —
+ * between two documents ({@code doc-doc}) or between two sections of one document
+ * ({@code intra-doc}, both sides' fact and passage kept) — carrying both sides
+ * (source, page, value, quote, fact id) and its settlement — the losing value is
+ * never overwritten. {@code versions-differ} rows are revisions (same document type,
+ * different document dates) whose winner M4 chooses. The repository never commits or
+ * rolls back — the caller owns the transaction, the same discipline as
+ * {@link AssessmentRepository}.
  */
 public final class ConflictRepository {
 
@@ -29,6 +31,9 @@ public final class ConflictRepository {
 
     /** A document statement versus a read-only Layer B financial model cell. */
     public static final String KIND_DOC_FM = "doc-fm";
+
+    /** A disagreement between two sections (passages) of one document (M3-13). */
+    public static final String KIND_INTRA_DOC = "intra-doc";
 
     /** A revision: the same document type on two different document dates (M4 picks). */
     public static final String KIND_VERSIONS_DIFFER = "versions-differ";
@@ -85,6 +90,9 @@ public final class ConflictRepository {
      *     row, or null
      * @param pageIndex best evidence page, or null
      * @param quote best evidence quote, or null
+     * @param passageId the chapter passage the fact was read from, or null for
+     *     document-level facts
+     * @param passageHeading that passage's heading, or null
      */
     public record ConflictFactRow(
             long factId,
@@ -109,7 +117,9 @@ public final class ConflictRepository {
             String siteName,
             String periodEvidence,
             Integer pageIndex,
-            String quote) {}
+            String quote,
+            Long passageId,
+            String passageHeading) {}
 
     /**
      * One conflict row to persist. Values are never overwritten: both sides stay on
@@ -184,7 +194,8 @@ public final class ConflictRepository {
 
     /**
      * Every mandate fact with its document metadata, scope tags, stated period
-     * evidence and best evidence line (resolved and paged evidence preferred).
+     * evidence and best evidence line (resolved and paged evidence preferred), plus
+     * the chapter passage it was read from when it is passage-linked.
      *
      * @throws SQLException if the query fails
      */
@@ -197,7 +208,7 @@ public final class ConflictRepository {
                         + " f.value_number, f.value_date, f.unit, f.currency, f.entity_id,"
                         + " e.name AS entity_name, f.site_id, s.site_name,"
                         + " ev.role AS evidence_role, ev.source_text, ev.resolution,"
-                        + " p.page_index"
+                        + " p.page_index, f.passage_id, psg.heading AS passage_heading"
                         + " FROM fact f"
                         + " JOIN document_version dv ON dv.document_version_id = f.document_version_id"
                         + " JOIN document d ON d.document_id = dv.document_id"
@@ -205,6 +216,7 @@ public final class ConflictRepository {
                         + "  ON dc.document_version_id = f.document_version_id"
                         + " LEFT JOIN entity e ON e.entity_id = f.entity_id"
                         + " LEFT JOIN site s ON s.site_id = f.site_id"
+                        + " LEFT JOIN passage psg ON psg.passage_id = f.passage_id"
                         + " LEFT JOIN fact_evidence ev ON ev.fact_id = f.fact_id"
                         + " LEFT JOIN provenance_doc pd ON pd.provenance_id = ev.provenance_id"
                         + " LEFT JOIN page p ON p.page_id = pd.page_id"
@@ -269,6 +281,8 @@ public final class ConflictRepository {
         final String entityName;
         final Long siteId;
         final String siteName;
+        final Long passageId;
+        final String passageHeading;
         String periodEvidence;
         Integer pageIndex;
         String quote;
@@ -295,6 +309,8 @@ public final class ConflictRepository {
             this.entityName = rs.getString("entity_name");
             this.siteId = asLong(rs.getObject("site_id"));
             this.siteName = rs.getString("site_name");
+            this.passageId = asLong(rs.getObject("passage_id"));
+            this.passageHeading = rs.getString("passage_heading");
         }
 
         ConflictFactRow toRow() {
@@ -302,7 +318,7 @@ public final class ConflictRepository {
                     fileName, docTypeCode, documentDate, fieldKey, ontologyPath, lineKey,
                     valueKind, valueText, valueNumber, valueDate, unit, currency,
                     entityId, entityName, siteId, siteName, periodEvidence, pageIndex,
-                    quote);
+                    quote, passageId, passageHeading);
         }
     }
 
@@ -391,6 +407,36 @@ public final class ConflictRepository {
         return read(mandateId, false);
     }
 
+    /** One persisted analyst flag: AI settlements are Resolved; open conflicts are Pending. */
+    public record ConflictFlagRow(String category, String status, String summary, String detail) {}
+
+    /**
+     * The mandate's latest conflict-assessment flags, including AI settlements that
+     * need no analyst action. Reads the stored queue rather than inferring flags from
+     * settlements, so callers can verify that a pick was visibly recorded.
+     *
+     * @throws SQLException if the query fails
+     */
+    public List<ConflictFlagRow> flags(long mandateId) throws SQLException {
+        List<ConflictFlagRow> rows = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT rq.category, rq.status, rq.summary, rq.detail FROM review_queue rq"
+                        + " JOIN assessment_run ar ON ar.parse_run_id = rq.parse_run_id"
+                        + " WHERE ar.mandate_id = ? AND ar.stage = 'assess_conflicts'"
+                        + " AND rq.category IN (?, ?) ORDER BY rq.review_queue_id")) {
+            ps.setLong(1, mandateId);
+            ps.setString(2, FLAG_CONFLICTING);
+            ps.setString(3, FLAG_SETTLED_BY_AI);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(new ConflictFlagRow(rs.getString("category"), rs.getString("status"),
+                            rs.getString("summary"), rs.getString("detail")));
+                }
+            }
+        }
+        return List.copyOf(rows);
+    }
+
     /**
      * The mandate's revisions — section of {@link MandateQa}, newest first (the left
      * side of each row is the newest document date; M4 chooses winners).
@@ -417,18 +463,24 @@ public final class ConflictRepository {
                         + " c.period, c.verdict, c.left_fact_id, c.left_document_version_id,"
                         + " ld.logical_name AS left_logical_name,"
                         + " ldv.file_name AS left_file_name, c.left_page_index,"
-                        + " c.left_value, c.left_quote, c.right_fact_id,"
+                        + " c.left_value, c.left_quote, lpsg.heading AS left_passage_heading,"
+                        + " c.right_fact_id,"
                         + " c.right_document_version_id, rd.logical_name AS right_logical_name,"
                         + " rdv.file_name AS right_file_name, c.right_page_index,"
-                        + " c.right_value, c.right_quote, c.settlement, c.chosen_side,"
+                        + " c.right_value, c.right_quote, rpsg.heading AS right_passage_heading,"
+                        + " c.settlement, c.chosen_side,"
                         + " c.rule_id, c.rules_version, c.reasoning"
                         + " FROM conflict c"
                         + " LEFT JOIN document_version ldv"
                         + "  ON ldv.document_version_id = c.left_document_version_id"
                         + " LEFT JOIN document ld ON ld.document_id = ldv.document_id"
+                        + " LEFT JOIN fact lf ON lf.fact_id = c.left_fact_id"
+                        + " LEFT JOIN passage lpsg ON lpsg.passage_id = lf.passage_id"
                         + " LEFT JOIN document_version rdv"
                         + "  ON rdv.document_version_id = c.right_document_version_id"
                         + " LEFT JOIN document rd ON rd.document_id = rdv.document_id"
+                        + " LEFT JOIN fact rf ON rf.fact_id = c.right_fact_id"
+                        + " LEFT JOIN passage rpsg ON rpsg.passage_id = rf.passage_id"
                         + " LEFT JOIN entity e ON e.entity_id = c.entity_id"
                         + " LEFT JOIN site s ON s.site_id = c.site_id"
                         + " WHERE c.mandate_id = ?" + filter + order)) {
@@ -460,14 +512,16 @@ public final class ConflictRepository {
                                     rs.getString("left_file_name"),
                                     asInt(rs.getObject("left_page_index")),
                                     leftValue,
-                                    rs.getString("left_quote")),
+                                    rs.getString("left_quote"),
+                                    rs.getString("left_passage_heading")),
                             new MandateQa.ConflictSideRow(
                                     asLong(rs.getObject("right_document_version_id")),
                                     rs.getString("right_logical_name"),
                                     rs.getString("right_file_name"),
                                     asInt(rs.getObject("right_page_index")),
                                     rightValue,
-                                    rs.getString("right_quote")),
+                                    rs.getString("right_quote"),
+                                    rs.getString("right_passage_heading")),
                             settlement,
                             chosenSide,
                             chosen ? ("left".equals(chosenSide) ? leftValue : rightValue) : null,
