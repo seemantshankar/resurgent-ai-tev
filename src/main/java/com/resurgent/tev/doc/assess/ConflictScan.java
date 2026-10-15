@@ -291,8 +291,13 @@ public final class ConflictScan {
                         + " settle it (declined or unavailable)");
     }
 
-    /** A revision: same document type, both dated, and the dates are not the same day. */
+    /** A revision: distinct versions of the same type, both dated, with different dates. */
     private static boolean versionsDiffer(ConflictFactRow left, ConflictFactRow right) {
+        // One version cannot be its own revision, even when its date has a precision
+        // the date comparator cannot interpret (for example canonical YYYY-MM).
+        if (left.documentVersionId() == right.documentVersionId()) {
+            return false;
+        }
         if (left.docTypeCode() == null || !left.docTypeCode().equals(right.docTypeCode())) {
             return false;
         }

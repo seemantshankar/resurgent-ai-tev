@@ -399,6 +399,36 @@ public final class ConflictRepository {
         return read(mandateId, false);
     }
 
+    /** One persisted analyst flag: AI settlements are Resolved; open conflicts are Pending. */
+    public record ConflictFlagRow(String category, String status, String summary, String detail) {}
+
+    /**
+     * The mandate's latest conflict-assessment flags, including AI settlements that
+     * need no analyst action. Reads the stored queue rather than inferring flags from
+     * settlements, so callers can verify that a pick was visibly recorded.
+     *
+     * @throws SQLException if the query fails
+     */
+    public List<ConflictFlagRow> flags(long mandateId) throws SQLException {
+        List<ConflictFlagRow> rows = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT rq.category, rq.status, rq.summary, rq.detail FROM review_queue rq"
+                        + " JOIN assessment_run ar ON ar.parse_run_id = rq.parse_run_id"
+                        + " WHERE ar.mandate_id = ? AND ar.stage = 'assess_conflicts'"
+                        + " AND rq.category IN (?, ?) ORDER BY rq.review_queue_id")) {
+            ps.setLong(1, mandateId);
+            ps.setString(2, FLAG_CONFLICTING);
+            ps.setString(3, FLAG_SETTLED_BY_AI);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(new ConflictFlagRow(rs.getString("category"), rs.getString("status"),
+                            rs.getString("summary"), rs.getString("detail")));
+                }
+            }
+        }
+        return List.copyOf(rows);
+    }
+
     /**
      * The mandate's revisions — section of {@link MandateQa}, newest first (the left
      * side of each row is the newest document date; M4 chooses winners).

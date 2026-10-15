@@ -9,6 +9,7 @@ import com.resurgent.tev.doc.classify.ClassifyResult;
 import com.resurgent.tev.doc.classify.DocTypeClassifier;
 import com.resurgent.tev.doc.cli.DocQaCommand;
 import com.resurgent.tev.doc.db.CloudParsePageRepository;
+import com.resurgent.tev.doc.db.ConflictRepository;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.MandateQaQueryRunner;
 import com.resurgent.tev.doc.ingest.BlobStore;
@@ -24,7 +25,6 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Connection;
 import java.util.List;
 import java.util.concurrent.Callable;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -45,7 +45,7 @@ import picocli.CommandLine;
  * three tiers, with both sections and pages recorded; the same figure repeated
  * across chapters is no conflict. Fixture PDFs in a temp {@code workspace.db}, the
  * fake doc LLM client and the fixture extract client; assertions go through the
- * mandate QA read API (plus the persisted rows it reads), never prompts or internals.
+ * mandate QA and conflict-flag read APIs, never raw SQL, prompts or internals.
  */
 class MandateIntraDocumentTest {
 
@@ -119,27 +119,11 @@ class MandateIntraDocumentTest {
         assertThat(conflict.reasoning()).contains("no precedence rule");
         assertThat(qa.versionsDiffer()).isEmpty();
 
-        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            Connection c = db.connection();
-            assertThat(count(c, "SELECT COUNT(*) FROM conflict WHERE kind = 'intra-doc'"))
-                    .isEqualTo(1);
-            // The row cites both sides' facts, each in its own passage of the one version.
-            assertThat(count(c, "SELECT COUNT(*) FROM conflict c"
-                    + " JOIN fact lf ON lf.fact_id = c.left_fact_id"
-                    + " JOIN fact rf ON rf.fact_id = c.right_fact_id"
-                    + " WHERE c.kind = 'intra-doc'"
-                    + " AND lf.document_version_id = c.left_document_version_id"
-                    + " AND rf.document_version_id = c.right_document_version_id"
-                    + " AND lf.passage_id IS NOT NULL AND rf.passage_id IS NOT NULL"
-                    + " AND lf.passage_id != rf.passage_id")).isEqualTo(1);
-            // Both stated values stay on the fact table — nothing is overwritten.
-            assertThat(count(c, "SELECT COUNT(*) FROM fact WHERE field_key = 'project_cost'"))
-                    .isEqualTo(2);
-            assertThat(count(c, "SELECT COUNT(*) FROM review_queue"
-                    + " WHERE category = 'conflicting'")).isEqualTo(1);
-            assertThat(count(c, "SELECT COUNT(*) FROM review_queue"
-                    + " WHERE category = 'settled_by_ai'")).isZero();
-        }
+        assertCostPassages(qa, "Rs. 48 crore", "Rs. 52.6 crore");
+        assertThat(flags()).singleElement().satisfies(flag -> {
+            assertThat(flag.category()).isEqualTo("conflicting");
+            assertThat(flag.status()).isEqualTo("Pending");
+        });
 
         Run text = run(new DocQaCommand(), "--mandate", "1", "--db", dbPath.toString());
         assertThat(text.exitCode()).isZero();
@@ -200,26 +184,21 @@ class MandateIntraDocumentTest {
                 .contains("page 7")
                 .contains("page 2");
         assertThat(qa.versionsDiffer()).isEmpty();
+        assertCostPassages(qa, "Rs. 48 crore", "Rs. 52.6 crore");
 
+        // Persisted flags are read through the repository API, not raw SQL.
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            Connection c = db.connection();
-            assertThat(count(c, "SELECT COUNT(*) FROM conflict WHERE kind = 'intra-doc'"))
-                    .isEqualTo(1);
-            assertThat(count(c, "SELECT COUNT(*) FROM fact WHERE field_key = 'project_cost'"))
-                    .isEqualTo(2);
-            // Settled by AI is flagged (visible, no action required); nothing is open.
-            assertThat(count(c, "SELECT COUNT(*) FROM review_queue"
-                    + " WHERE category = 'settled_by_ai'")).isEqualTo(1);
-            try (var st = c.createStatement(); var rs = st.executeQuery(
-                    "SELECT status, summary FROM review_queue"
-                            + " WHERE category = 'settled_by_ai'")) {
-                assertThat(rs.next()).isTrue();
-                assertThat(rs.getString("status")).isEqualTo("Resolved");
-                assertThat(rs.getString("summary"))
-                        .contains("Conflict on project_cost settled by AI");
-            }
-            assertThat(count(c, "SELECT COUNT(*) FROM review_queue"
-                    + " WHERE category = 'conflicting'")).isZero();
+            assertThat(new ConflictRepository(db.connection()).flags(MANDATE))
+                    .singleElement().satisfies(flag -> {
+                        assertThat(flag.category()).isEqualTo("settled_by_ai");
+                        assertThat(flag.status()).isEqualTo("Resolved");
+                        assertThat(flag.summary()).contains("Conflict on project_cost settled by AI",
+                                "Rs. 52.6 crore used", "Rs. 48 crore rejected");
+                        JsonNode detail = MAPPER.readTree(flag.detail());
+                        assertThat(detail.get("conflict_id").asLong()).isEqualTo(conflict.conflictId());
+                        assertThat(detail.get("kind").asText()).isEqualTo("intra-doc");
+                    });
+            assertThat(new ConflictRepository(db.connection()).flags(MANDATE + 1)).isEmpty();
         }
 
         Run text = run(new DocQaCommand(), "--mandate", "1", "--db", dbPath.toString());
@@ -255,19 +234,70 @@ class MandateIntraDocumentTest {
         MandateQa qa = qa();
         assertThat(qa.conflicts()).isEmpty();
         assertThat(qa.versionsDiffer()).isEmpty();
-        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            Connection c = db.connection();
-            // Both statements were extracted and compared — the pair agreed.
-            assertThat(count(c, "SELECT COUNT(*) FROM fact WHERE field_key = 'project_cost'"))
-                    .isEqualTo(2);
-            assertThat(count(c, "SELECT COUNT(*) FROM conflict")).isZero();
-            assertThat(count(c, "SELECT COUNT(*) FROM review_queue"
-                    + " WHERE category IN ('conflicting', 'settled_by_ai')")).isZero();
-        }
+        // Both chapter statements really exist, so an empty conflict list is not vacuous.
+        assertCostPassages(qa, "Rs. 52.6 crore", "Rs. 52.6 crore");
+        assertThat(flags()).isEmpty();
 
         Run text = run(new DocQaCommand(), "--mandate", "1", "--db", dbPath.toString());
         assertThat(text.exitCode()).isZero();
         assertThat(text.out()).contains("conflicts: 0");
+    }
+
+    @Test
+    void monthDatedReportStillHasAnIntraDocumentConflictNotDifferentVersions() throws Exception {
+        ingestDpr(CHAPTER_TWO_COST + ". Report date: March 2025", CHAPTER_SEVEN_COST);
+        stageCostFixture(CHAPTER_TWO_COST, "Rs. 48 crore", CHAPTER_SEVEN_COST, "Rs. 52.6 crore");
+
+        DocAssessRunner.run(MANDATE, dbPath, new CostLlm("{\"settle\": false}"));
+
+        MandateQa qa = qa();
+        assertThat(qa.documents()).singleElement().satisfies(document -> {
+            assertThat(document.documentDate()).isEqualTo("2025-03");
+            assertThat(document.datePrecision()).isEqualTo("month");
+        });
+        assertThat(qa.conflicts()).singleElement().satisfies(conflict -> {
+            assertThat(conflict.kind()).isEqualTo("intra-doc");
+            assertThat(conflict.settlement()).isEqualTo("open");
+            assertThat(conflict.left().pageIndex()).isEqualTo(2);
+            assertThat(conflict.right().pageIndex()).isEqualTo(7);
+        });
+        assertThat(qa.versionsDiffer()).isEmpty();
+    }
+
+    @Test
+    void reassessmentReplacesAiSettlementWithOneOpenConflictWhenModelIsUnavailable()
+            throws Exception {
+        ingestDpr(CHAPTER_TWO_COST, CHAPTER_SEVEN_COST);
+        stageCostFixture(CHAPTER_TWO_COST, "Rs. 48 crore", CHAPTER_SEVEN_COST, "Rs. 52.6 crore");
+        DocAssessRunner.run(MANDATE, dbPath, new CostLlm("""
+                {"settle": true, "chosen_side": "right",
+                 "reasoning": "The detailed cost table on page 7 overrides page 2's estimate."}
+                """));
+        assertThat(flags()).extracting(ConflictRepository.ConflictFlagRow::category)
+                .containsExactly("settled_by_ai");
+
+        // Re-running all five stages replaces passages as well as conflicts; their
+        // citations must remain usable and yesterday's AI flag must not survive.
+        for (int run = 0; run < 2; run++) {
+            DocAssessRunner.run(MANDATE, dbPath, null);
+            MandateQa qa = qa();
+            assertThat(qa.stages()).hasSize(5).allSatisfy(stage ->
+                    assertThat(stage.status()).isEqualTo("completed"));
+            assertThat(qa.conflicts()).singleElement().satisfies(conflict -> {
+                assertThat(conflict.kind()).isEqualTo("intra-doc");
+                assertThat(conflict.settlement()).isEqualTo("open");
+                assertThat(conflict.chosenValue()).isNull();
+                assertThat(conflict.left().quote()).isEqualTo(CHAPTER_TWO_COST);
+                assertThat(conflict.right().quote()).isEqualTo(CHAPTER_SEVEN_COST);
+                assertThat(conflict.left().passageHeading()).isEqualTo("2. Project Cost");
+                assertThat(conflict.right().passageHeading()).isEqualTo("7. Project Cost Summary");
+            });
+            assertCostPassages(qa, "Rs. 48 crore", "Rs. 52.6 crore");
+            assertThat(flags()).singleElement().satisfies(flag -> {
+                assertThat(flag.category()).isEqualTo("conflicting");
+                assertThat(flag.status()).isEqualTo("Pending");
+            });
+        }
     }
 
     // --- fixtures -------------------------------------------------------------
@@ -281,25 +311,25 @@ class MandateIntraDocumentTest {
                         pdf, MANDATE, "DPR - Bhagyanagar", "v1", "dpr", "dpr"),
                 dbPath, blobs);
         new DocumentLayoutService().layout(ingested.documentVersionId(), dbPath, blobs);
-        seedStoredParse(ingested.documentVersionId());
+        seedStoredParse(ingested.documentVersionId(), chapterTwoCostLine, chapterSevenCostLine);
         classify(ingested.documentVersionId());
         return ingested.documentVersionId();
     }
 
     /** The stored parse output the passages are split from: two cost chapters apart. */
-    private void seedStoredParse(long versionId) throws Exception {
+    private void seedStoredParse(long versionId, String chapterTwoCostLine,
+            String chapterSevenCostLine) throws Exception {
         List<String> pages = List.of(
                 "# 1. Introduction and Project Site\n\n"
                         + "Bhagyanagar Solar Power Project, District Ahmednagar.",
                 "# 2. Project Cost\n\n"
-                        + "The project cost is stated below.\n\nProject cost: Rs. 48 crore",
+                        + "The project cost is stated below.\n\n" + chapterTwoCostLine,
                 "# 3. Statutory Clearances\n\nAll statutory clearances are in place.",
                 "# 4. Market Assessment\n\nPower demand is assessed below.",
                 "# 5. Site Photographs\n\nSite photographs are annexed.",
                 "# 6. Annexures\n\nList of annexures to this report.",
                 "# 7. Project Cost Summary\n\n"
-                        + "The detailed cost table is below.\n\n"
-                        + "Estimated project cost: Rs. 52.6 crore");
+                        + "The detailed cost table is below.\n\n" + chapterSevenCostLine);
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
             new CloudParsePageRepository(db.connection()).replacePages(
                     versionId, "parse-job-dpr", "agentic", pages, pages);
@@ -344,8 +374,7 @@ class MandateIntraDocumentTest {
 
     /**
      * Stages the fixture-extract sidecar beside the workspace db (the chapter-fact
-     * route, M3-06): a cost summary table with one row per chapter's page — page 2 the
-     * prose chapter, page 7 the detailed cost table.
+     * route, M3-06): a prose field on page 2 and the cost summary table on page 7.
      */
     private void stageCostFixture(String pageTwoQuote, String pageTwoValue,
             String pageSevenQuote, String pageSevenValue) throws Exception {
@@ -354,9 +383,11 @@ class MandateIntraDocumentTest {
         String json = """
                 {
                   "doc_type_code": "report.dpr",
+                  "fields": {
+                    "project_cost": {"value": "%s", "quote": "%s", "page": 2}
+                  },
                   "tables": {
                     "cost_summary": [
-                      {"project_cost": {"value": "%s", "quote": "%s", "page": 2}},
                       {"project_cost": {"value": "%s", "quote": "%s", "page": 7}}
                     ]
                   }
@@ -383,11 +414,32 @@ class MandateIntraDocumentTest {
         return MandateQaQueryRunner.query(dbPath, MandateQaQuery.forMandate(MANDATE));
     }
 
-    private static long count(Connection c, String sql) throws Exception {
-        try (var st = c.createStatement(); var rs = st.executeQuery(sql)) {
-            rs.next();
-            return rs.getLong(1);
+    private List<ConflictRepository.ConflictFlagRow> flags() throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            return new ConflictRepository(db.connection()).flags(MANDATE);
         }
+    }
+
+    private static void assertCostPassages(MandateQa qa, String chapterTwoValue,
+            String chapterSevenValue) {
+        List<MandateQa.PassageRow> passages = qa.passages().stream()
+                .filter(passage -> "project_cost".equals(passage.topic())).toList();
+        assertThat(passages).extracting(MandateQa.PassageRow::heading)
+                .containsExactly("2. Project Cost", "7. Project Cost Summary");
+        assertThat(passages).extracting(MandateQa.PassageRow::passageId).doesNotHaveDuplicates();
+        assertChapterCost(passages.get(0), chapterTwoValue, 2);
+        assertChapterCost(passages.get(1), chapterSevenValue, 7);
+    }
+
+    private static void assertChapterCost(MandateQa.PassageRow passage, String value, int page) {
+        assertThat(passage.verbatim()).contains(value);
+        assertThat(passage.pageIndex()).isEqualTo(page);
+        assertThat(passage.facts()).singleElement().satisfies(fact -> {
+            assertThat(fact.fieldKey()).isEqualTo("project_cost");
+            assertThat(fact.valueText()).isEqualTo(value);
+            assertThat(fact.evidencePages()).contains(page);
+            assertThat(fact.evidenceQuotes()).anySatisfy(quote -> assertThat(quote).contains(value));
+        });
     }
 
     private record Run(int exitCode, String out, String err) {}
