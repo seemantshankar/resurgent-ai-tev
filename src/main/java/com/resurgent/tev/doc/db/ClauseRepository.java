@@ -179,6 +179,26 @@ public final class ClauseRepository {
     }
 
     /**
+     * Flips an open proposal to a promoted clause type scoped to the pack version that
+     * learned it (M3-09 auto-promotion, no human step). The proposal row keeps its
+     * {@code source = 'proposed'} history; later Pass A binding upserts the pack type
+     * onto the same {@code (pack_code, code)} row.
+     *
+     * @return rows updated (0 when the proposal was already promoted or absent)
+     * @throws SQLException if the update fails
+     */
+    public int markPromoted(String code, String packCode, String packVersion) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE clause_type SET status = 'promoted', pack_code = ?, pack_version = ?"
+                        + " WHERE code = ? AND source = 'proposed' AND status = 'open'")) {
+            ps.setString(1, packCode);
+            ps.setString(2, packVersion);
+            ps.setString(3, code);
+            return ps.executeUpdate();
+        }
+    }
+
+    /**
      * Inserts one clause row.
      *
      * @return the generated {@code clause_id}

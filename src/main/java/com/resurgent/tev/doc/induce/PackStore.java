@@ -41,12 +41,22 @@ public final class PackStore {
             List<String> sourceMandates,
             String inductionRunId,
             String status,
-            String createdAt) {
+            String createdAt,
+            List<String> sourceDocuments) {
 
         public PackRegistryEntry {
             sourceMandates = sourceMandates == null ? List.of() : List.copyOf(sourceMandates);
+            sourceDocuments = sourceDocuments == null ? List.of() : List.copyOf(sourceDocuments);
             status = status == null ? "published" : status;
             createdAt = createdAt == null ? Instant.now().toString() : createdAt;
+        }
+
+        /** Registry entry without the M3 source documents (field induction). */
+        public PackRegistryEntry(String code, String version, String family, String fileRole,
+                String industryTag, String fileHash, String yamlPath, List<String> sourceMandates,
+                String inductionRunId, String status, String createdAt) {
+            this(code, version, family, fileRole, industryTag, fileHash, yamlPath, sourceMandates,
+                    inductionRunId, status, createdAt, List.of());
         }
     }
 
@@ -65,11 +75,19 @@ public final class PackStore {
             String industryTag,
             String fileHash,
             List<String> sourceMandates,
-            String inductionRunId) {
+            String inductionRunId,
+            List<String> sourceDocuments) {
 
         public PublishRequest {
             Objects.requireNonNull(pack, "pack");
             sourceMandates = sourceMandates == null ? List.of() : List.copyOf(sourceMandates);
+            sourceDocuments = sourceDocuments == null ? List.of() : List.copyOf(sourceDocuments);
+        }
+
+        /** Publish request without recorded source documents (field induction). */
+        public PublishRequest(DocTypePack pack, String industryTag, String fileHash,
+                List<String> sourceMandates, String inductionRunId) {
+            this(pack, industryTag, fileHash, sourceMandates, inductionRunId, List.of());
         }
     }
 
@@ -131,7 +149,8 @@ public final class PackStore {
                 request.sourceMandates(),
                 request.inductionRunId(),
                 "published",
-                Instant.now().toString());
+                Instant.now().toString(),
+                request.sourceDocuments());
 
         List<PackRegistryEntry> entries = new ArrayList<>(entries());
         entries.add(entry);
@@ -210,6 +229,26 @@ public final class PackStore {
             }
         }
         return Optional.empty();
+    }
+
+    /**
+     * Latest published registry entry for {@code code} across industry tags, in publish
+     * order — the version a new clause type is added to when no tag is known upfront.
+     */
+    public Optional<PackRegistryEntry> latestEntryForCode(String code) {
+        List<PackRegistryEntry> all = entries();
+        for (int i = all.size() - 1; i >= 0; i--) {
+            PackRegistryEntry e = all.get(i);
+            if (e.code().equals(code) && "published".equals(e.status())) {
+                return Optional.of(e);
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** Latest published pack for {@code code} across industry tags. */
+    public Optional<DocTypePack> latestForCode(String code) {
+        return latestEntryForCode(code).flatMap(this::loadByEntry);
     }
 
     /** All registry entries in publish order. */
@@ -301,7 +340,9 @@ public final class PackStore {
                 pack.fields(),
                 pack.tables(),
                 pack.checklist(),
-                pack.reportSections());
+                pack.reportSections(),
+                pack.documentDateKind(),
+                pack.clauseSection());
     }
 
     /** registry.json document shape. */
