@@ -142,6 +142,64 @@ public final class MandateQaJson {
             }
         }
 
+        // M3-10 (#143): checklist results, each with its scope, status, reason, page
+        // evidence and ask-the-client wording, and the persisted counts by status —
+        // appended at the end so the earlier sections are untouched.
+        ArrayNode checklist = root.putArray("checklist");
+        for (MandateQa.ChecklistResultRow row : qa.checklist()) {
+            ObjectNode n = checklist.addObject();
+            n.put("result_id", row.resultId());
+            n.put("item_key", row.itemKey());
+            n.put("label", row.label());
+            n.put("level", row.level());
+            n.put("granularity", row.granularity());
+            n.put("mandatory", row.mandatory());
+            n.put("basis_kind", row.basisKind());
+            n.put("basis_text", row.basisText());
+            n.put("origin", row.origin());
+            n.put("document_type", row.documentType());
+            n.put("field_key", row.fieldKey());
+            n.put("ontology_path", row.ontologyPath());
+            if (row.entityId() != null) {
+                n.put("entity_id", row.entityId());
+            }
+            n.put("entity_name", row.entityName());
+            if (row.siteId() != null) {
+                n.put("site_id", row.siteId());
+            }
+            n.put("site_name", row.siteName());
+            n.put("status", row.status());
+            n.put("reason", row.reason());
+            if (row.documentVersionId() != null) {
+                n.put("document_version_id", row.documentVersionId());
+            }
+            n.put("logical_name", row.logicalName());
+            n.put("file_name", row.fileName());
+            if (row.pageIndex() != null) {
+                n.put("page_index", row.pageIndex());
+            }
+            if (row.confidence() != null) {
+                n.put("confidence", row.confidence());
+            }
+            n.put("client_request", row.clientRequest());
+        }
+
+        ArrayNode checklistSummary = root.putArray("checklist_summary");
+        for (MandateQa.ChecklistSummaryRow row : qa.checklistSummary()) {
+            ObjectNode n = checklistSummary.addObject();
+            n.put("scope_kind", row.scopeKind());
+            if (row.entityId() != null) {
+                n.put("entity_id", row.entityId());
+            }
+            n.put("entity_name", row.entityName());
+            if (row.siteId() != null) {
+                n.put("site_id", row.siteId());
+            }
+            n.put("site_name", row.siteName());
+            n.put("status", row.status());
+            n.put("item_count", row.itemCount());
+        }
+
         try {
             return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root);
         } catch (Exception e) {

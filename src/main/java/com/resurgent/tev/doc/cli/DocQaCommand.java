@@ -17,11 +17,13 @@ import picocli.CommandLine.Spec;
  * {@code tev-doc qa}: print the persisted mandate assessment results — per-document
  * document date, precision, source and upload date, the assessment runs, the mandate
  * entities with their roles, aliases and source pages, the clauses with their types
- * and slots, and the mandate sites with their aliases and mentioning documents —
- * without re-parsing anything. Read-through-API only, like {@code facts}.
+ * and slots, the mandate sites with their aliases and mentioning documents, and the
+ * checklist with its statuses, ask-the-client list and counts — without re-parsing
+ * anything. Read-through-API only, like {@code facts}.
  */
 @Command(name = "qa",
-        description = "Show persisted mandate QA: document dates, stages, entities, clauses and sites")
+        description = "Show persisted mandate QA: document dates, stages, entities,"
+                + " clauses, sites and the checklist")
 public final class DocQaCommand implements Callable<Integer> {
 
     @Option(names = "--mandate", required = true, description = "Mandate id")
@@ -133,6 +135,56 @@ public final class DocQaCommand implements Callable<Integer> {
                 out.printf("  documents: %s%n", files.length() == 0 ? "-" : files);
             }
             out.printf("sites: %d%n", qa.sites().size());
+            // M3-10 (#143): checklist results with their status, page evidence and
+            // basis, the ask-the-client list, the unclear items and the persisted
+            // counts — appended at the end so the earlier output is untouched.
+            for (MandateQa.ChecklistResultRow row : qa.checklist()) {
+                out.printf("checklist %s [%s] %s/%s%s | %s%n",
+                        row.itemKey(),
+                        row.status(),
+                        row.level(),
+                        row.granularity(),
+                        checklistScope(row),
+                        row.documentType());
+                out.printf("  %s%n", row.reason());
+                if (row.pageIndex() != null) {
+                    out.printf("  page %s%s%n",
+                            row.pageIndex(),
+                            row.fileName() != null ? " of " + row.fileName() : "");
+                }
+                out.printf("  basis %s: %s%n", row.basisKind(), shorten(row.basisText()));
+            }
+            List<MandateQa.ChecklistResultRow> asks = qa.checklist().stream()
+                    .filter(r -> "not_provided".equals(r.status()))
+                    .toList();
+            if (!asks.isEmpty()) {
+                out.println("ask the client:");
+                for (MandateQa.ChecklistResultRow row : asks) {
+                    out.printf("  %s%s: %s%n",
+                            row.label(),
+                            row.entityName() != null ? " (" + row.entityName() + ")" : "",
+                            blankToDash(row.clientRequest()));
+                }
+            }
+            List<MandateQa.ChecklistResultRow> unclear = qa.checklist().stream()
+                    .filter(r -> "unclear".equals(r.status()))
+                    .toList();
+            if (!unclear.isEmpty()) {
+                out.println("unclear items:");
+                for (MandateQa.ChecklistResultRow row : unclear) {
+                    out.printf("  %s%s: %s%n",
+                            row.itemKey(),
+                            row.entityName() != null ? " (" + row.entityName() + ")" : "",
+                            row.reason());
+                }
+            }
+            out.printf("checklist: %d items (%s)%n",
+                    qa.checklist().size(),
+                    statusCounts(qa.checklist()));
+            for (MandateQa.ChecklistSummaryRow summary : qa.checklistSummary()) {
+                out.printf("checklist summary %s: %d %s%n",
+                        summaryScope(summary), summary.itemCount(), summary.status());
+            }
             return 0;
         } catch (IllegalArgumentException e) {
             err.println("qa rejected: " + e.getMessage());
@@ -145,6 +197,48 @@ public final class DocQaCommand implements Callable<Integer> {
 
     private static String blankToDash(String value) {
         return value == null || value.isBlank() ? "-" : value;
+    }
+
+    /** The scope suffix of a checklist row: entity, site or the mandate itself. */
+    private static String checklistScope(MandateQa.ChecklistResultRow row) {
+        if (row.entityName() != null) {
+            return " entity=" + row.entityName();
+        }
+        if (row.siteName() != null) {
+            return " site=" + row.siteName();
+        }
+        return "";
+    }
+
+    /** {@code 0 provided, 2 unclear, 16 not_provided} — the three shippable statuses always. */
+    private static String statusCounts(List<MandateQa.ChecklistResultRow> rows) {
+        List<String> shippable = List.of("provided", "unclear", "not_provided");
+        StringBuilder text = new StringBuilder();
+        for (String status : List.of("provided", "unclear", "not_provided", "conflicting",
+                "not_applicable")) {
+            long count = rows.stream().filter(r -> status.equals(r.status())).count();
+            if (!shippable.contains(status) && count == 0) {
+                continue;
+            }
+            if (text.length() > 0) {
+                text.append(", ");
+            }
+            text.append(count).append(' ').append(status);
+        }
+        return text.toString();
+    }
+
+    /** {@code overall}, {@code entity <name>} or {@code site <name>} of a summary row. */
+    private static String summaryScope(MandateQa.ChecklistSummaryRow summary) {
+        return switch (summary.scopeKind()) {
+            case "entity" -> summary.entityName() != null
+                    ? "entity " + summary.entityName()
+                    : "entity " + summary.entityId();
+            case "site" -> summary.siteName() != null
+                    ? "site " + summary.siteName()
+                    : "site " + summary.siteId();
+            default -> "overall";
+        };
     }
 
     private static String pagesText(List<Integer> pageIndexes) {

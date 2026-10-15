@@ -19,7 +19,7 @@ public final class DocAssessRunner {
 
     /** Pipeline contract: later M3 tickets append their stage runners here, in order. */
     private static final List<AssessStage> STAGES = List.of(
-            new AssessProfileRunner(), new AssessClausesRunner());
+            new AssessProfileRunner(), new AssessClausesRunner(), new AssessChecklistRunner());
 
     private DocAssessRunner() {}
 

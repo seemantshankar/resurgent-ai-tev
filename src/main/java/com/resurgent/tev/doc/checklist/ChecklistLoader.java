@@ -178,7 +178,7 @@ public final class ChecklistLoader {
 
     private static ChecklistItemDef itemFromNode(JsonNode item, String where, Set<String> keys)
             throws ChecklistValidationException {
-        String key = containstKey(item, where, keys);
+        String key = containsKey(item, where, keys);
         String label = requireText(item, "label", where);
         String level = requireText(item, "level", where).toLowerCase(Locale.ROOT);
         if (!LEVELS.contains(level)) {
@@ -262,7 +262,7 @@ public final class ChecklistLoader {
                 fieldKey, ontologyPath, mandatory, basisKind, basisText, origin, clientRequest);
     }
 
-    private static String containstKey(JsonNode item, String where, Set<String> keys)
+    private static String containsKey(JsonNode item, String where, Set<String> keys)
             throws ChecklistValidationException {
         String key = requireText(item, "key", where);
         if (!ITEM_KEY.matcher(key).matches()) {
