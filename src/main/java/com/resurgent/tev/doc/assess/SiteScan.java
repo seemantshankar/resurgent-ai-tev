@@ -16,6 +16,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
@@ -85,7 +86,7 @@ public final class SiteScan {
                 continue;
             }
             long siteId = resolveMention(mention, fact.documentVersionId(), mandateId,
-                    repository, sites, now);
+                    repository, sites, now, client, usageSink);
             siteByMentionFact.put(fact.factId(), siteId);
             sitesByDocument.computeIfAbsent(fact.documentVersionId(),
                     id -> new LinkedHashSet<>()).add(siteId);
@@ -158,19 +159,23 @@ public final class SiteScan {
     }
 
     /**
-     * Merges the mention into the best-scoring site, or creates a new site.
+     * Merges the mention into the best-scoring site, asks the LLM seam when the best
+     * score is ambiguous, or creates a new site. Every row written records why.
      *
      * @return the site id the mention belongs to
      */
     private static long resolveMention(String mention, long documentVersionId, long mandateId,
-            SiteRepository repository, List<ResolvedSite> sites, String now) throws SQLException {
+            SiteRepository repository, List<ResolvedSite> sites, String now,
+            DocLlmClient client, Consumer<DocLlmClient.Usage> usageSink) throws SQLException {
         ResolvedSite best = null;
+        String bestName = null;
         double bestScore = -1;
         for (ResolvedSite site : sites) {
             for (String name : site.displayNames) {
                 double score = Comparisons.site(mention, name).score();
                 if (score > bestScore) {
                     bestScore = score;
+                    bestName = name;
                     best = site;
                 }
             }
@@ -179,6 +184,25 @@ public final class SiteScan {
             addAlias(repository, best, documentVersionId, mention, bestScore,
                     reasonLoose(bestScore), now);
             return best.siteId;
+        }
+        if (best != null && bestScore >= SITE_AMBIGUOUS_FLOOR) {
+            Optional<LlmSiteConfirmation.Verdict> verdict =
+                    LlmSiteConfirmation.ask(client, bestName, mention, bestScore, usageSink);
+            if (verdict.isPresent() && verdict.get().same()) {
+                addAlias(repository, best, documentVersionId, mention, bestScore,
+                        reasonConfirmed(bestScore, verdict.get().reason()), now);
+                return best.siteId;
+            }
+            if (verdict.isPresent()) {
+                // The model read the spellings as different sites: a new site whose
+                // alias records the ambiguous score and the model's reason.
+                ResolvedSite created =
+                        new ResolvedSite(repository.insertSite(mandateId, mention, now));
+                sites.add(created);
+                addAlias(repository, created, documentVersionId, mention, bestScore,
+                        reasonRejected(bestScore, verdict.get().reason()), now);
+                return created.siteId;
+            }
         }
         ResolvedSite created = new ResolvedSite(repository.insertSite(mandateId, mention, now));
         sites.add(created);
@@ -273,6 +297,16 @@ public final class SiteScan {
         }
         return String.format(Locale.ROOT, "loose score %.2f (>= %.2f)",
                 score, Comparisons.SITE_MATCH_SCORE);
+    }
+
+    private static String reasonConfirmed(double score, String llmReason) {
+        String base = String.format(Locale.ROOT, "llm confirmed score %.2f", score);
+        return llmReason == null || llmReason.isBlank() ? base : base + ": " + llmReason;
+    }
+
+    private static String reasonRejected(double score, String llmReason) {
+        String base = String.format(Locale.ROOT, "llm rejected score %.2f", score);
+        return llmReason == null || llmReason.isBlank() ? base : base + ": " + llmReason;
     }
 
     private static String normalize(String text) {

@@ -289,4 +289,61 @@ class MandateSitesTest {
         FactRow netWorth = factByKey(factsFor(cert), "net_worth");
         assertThat(netWorth.siteId()).isNull();
     }
+
+    @Test
+    void ambiguousSpellingConfirmedByLlmMergesIntoOneSiteWithReason() throws Exception {
+        long quoteA = quotation("quotation_a.pdf", "Quote A - Jaisingpura", "Jaisingpura",
+                "Project: Jaisingpura Solar Plant");
+        // 0.73 loose score vs "Jaisingpura": below the 0.8 auto-merge, above the floor.
+        long quoteD = quotation("quotation_d.pdf", "Quote D - Jaysinghpur", "Jaysinghpur",
+                "Project: Jaysinghpur Solar Plant");
+        FakeDocLlmClient fake = new FakeDocLlmClient(
+                "{\"same\": true, \"reason\": \"transliteration variant of the same project\"}");
+
+        DocAssessRunner.run(MANDATE, dbPath, fake);
+
+        MandateQa qa = qa();
+        assertThat(qa.sites()).hasSize(1);
+        MandateQa.SiteRow site = siteNamed(qa, "Jaisingpura");
+        assertThat(site.documents())
+                .extracting(MandateQa.SiteDocumentRow::documentVersionId)
+                .containsExactlyInAnyOrder(quoteA, quoteD);
+
+        MandateQa.SiteAliasRow ambiguous = site.aliases().stream()
+                .filter(a -> "Jaysinghpur".equals(a.aliasText()))
+                .findFirst().orElseThrow();
+        assertThat(ambiguous.documentVersionId()).isEqualTo(quoteD);
+        assertThat(ambiguous.matchScore()).isBetween(0.5, 0.8);
+        assertThat(ambiguous.matchReason())
+                .startsWith("llm confirmed score 0.73:")
+                .contains("transliteration variant of the same project");
+        assertThat(fake.calls()).isEqualTo(1);
+    }
+
+    @Test
+    void ambiguousSpellingDeniedByLlmStaysASeparateSite() throws Exception {
+        quotation("quotation_a.pdf", "Quote A - Jaisingpura", "Jaisingpura",
+                "Project: Jaisingpura Solar Plant");
+        quotation("quotation_d.pdf", "Quote D - Jaysinghpur", "Jaysinghpur",
+                "Project: Jaysinghpur Solar Plant");
+        FakeDocLlmClient fake = new FakeDocLlmClient(
+                "{\"same\": false, \"reason\": \"different village names\"}");
+
+        DocAssessRunner.run(MANDATE, dbPath, fake);
+
+        MandateQa qa = qa();
+        assertThat(qa.sites()).hasSize(2);
+        assertThat(qa.sites())
+                .extracting(MandateQa.SiteRow::siteName)
+                .containsExactlyInAnyOrder("Jaisingpura", "Jaysinghpur");
+        MandateQa.SiteAliasRow denied = siteNamed(qa, "Jaysinghpur").aliases().stream()
+                .filter(a -> "Jaysinghpur".equals(a.aliasText()))
+                .findFirst().orElseThrow();
+        assertThat(denied.matchReason())
+                .startsWith("llm rejected score 0.73:")
+                .contains("different village names");
+        assertThat(denied.matchScore()).isBetween(0.5, 0.8);
+        assertThat(fake.calls()).isEqualTo(1);
+        assertThat(siteNamed(qa, "Jaisingpura").aliases()).hasSize(1);
+    }
 }
