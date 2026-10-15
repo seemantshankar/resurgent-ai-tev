@@ -123,19 +123,51 @@ public final class AssessClausesRunner implements AssessStage {
                 continue;
             }
             documentsWithClauses++;
-            for (ClauseSegmenter.Segment segment : segments) {
-                Optional<PackClauseType> matched = aliasMatch(pack.clauseTypes(), segment);
-                if (matched.isPresent()) {
-                    storeClause(connection, clauses, docs, assessment, version, parseRunId,
-                            segment, matched.get(), pack, METHOD_ALIAS, null, null, List.of());
+            Map<Integer, LlmClauseReading.Reading> readings =
+                    LlmClauseReading.read(client, pack, segments, usage::add);
+            for (int i = 0; i < segments.size(); i++) {
+                ClauseSegmenter.Segment segment = segments.get(i);
+                LlmClauseReading.Reading reading = readings.get(i + 1);
+                PackClauseType matched = aliasMatch(pack.clauseTypes(), segment).orElse(null);
+                if (reading != null && reading.typeKey() != null) {
+                    matched = pack.clauseTypes().stream()
+                            .filter(t -> t.key().equals(reading.typeKey()))
+                            .findFirst()
+                            .orElse(matched);
+                }
+                String method = reading != null ? METHOD_LLM_OPEN : null;
+                String summary = reading == null ? null : reading.summary();
+                String importance = reading == null ? null : reading.importance();
+                List<ClauseRepository.SlotWrite> slots = reading == null
+                        ? List.of()
+                        : reading.slots().stream()
+                                .map(s -> ClauseSlots.normalize(s.key(), s.value()))
+                                .flatMap(Optional::stream)
+                                .toList();
+                if (matched != null) {
+                    long clauseTypeId = clauses.upsertPackType(pack.code(), pack.version(), matched);
+                    storeClause(clauses, docs, assessment, version, parseRunId, segment,
+                            clauseTypeId, "bound", "known",
+                            method != null ? method : METHOD_ALIAS, summary, importance, slots);
                     bound++;
                     total++;
-                } else if (pack.clauseOpenExtraction()) {
-                    storeClause(connection, clauses, docs, assessment, version, parseRunId,
-                            segment, null, pack, null, null, null, List.of());
-                    open++;
-                    total++;
+                    continue;
                 }
+                if (!pack.clauseOpenExtraction()) {
+                    continue;
+                }
+                Long proposedTypeId = null;
+                if (reading != null && reading.proposedCode() != null) {
+                    proposedTypeId = clauses.findOrInsertProposedType(
+                            reading.proposedCode(),
+                            reading.proposedLabel() != null ? reading.proposedLabel()
+                                    : reading.proposedCode(),
+                            reading.proposedFamily());
+                }
+                storeClause(clauses, docs, assessment, version, parseRunId, segment,
+                        proposedTypeId, "open", "new", method, summary, importance, slots);
+                open++;
+                total++;
             }
         }
 
@@ -192,21 +224,15 @@ public final class AssessClausesRunner implements AssessStage {
     }
 
     /** Inserts the clause and, when the text is in the layout, its provenance anchor. */
-    private static long storeClause(Connection connection, ClauseRepository clauses,
-            DocumentRepository docs, AssessmentRepository assessment,
-            AssessmentRepository.VersionRow version, Long parseRunId,
-            ClauseSegmenter.Segment segment, PackClauseType type, DocTypePack pack,
-            String method, String summary, String importance,
+    private static long storeClause(ClauseRepository clauses, DocumentRepository docs,
+            AssessmentRepository assessment, AssessmentRepository.VersionRow version,
+            Long parseRunId, ClauseSegmenter.Segment segment, Long clauseTypeId,
+            String status, String novelty, String method, String summary, String importance,
             List<ClauseRepository.SlotWrite> slots) throws Exception {
-        Long clauseTypeId = type == null
-                ? null
-                : clauses.upsertPackType(pack.code(), pack.version(), type);
-        String boundStatus = type == null ? "open" : "bound";
-        String novelty = type == null ? "new" : "known";
         long clauseId = clauses.insertClause(new ClauseWrite(
                 version.documentVersionId(), parseRunId, clauseTypeId,
                 segment.heading(), segment.text(), segment.pageStart(), segment.pageEnd(),
-                boundStatus, novelty, summary, importance, method));
+                status, novelty, summary, importance, method));
 
         String anchorNeedle = segment.heading() == null ? firstLine(segment.text())
                 : segment.heading();
