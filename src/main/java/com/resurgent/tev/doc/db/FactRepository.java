@@ -214,6 +214,69 @@ public final class FactRepository {
     }
 
     /**
+     * Inserts one passage-linked fact (a chapter data point or one row of a listed
+     * table) with its evidence and provenance. The caller already removed the stage's
+     * previous facts (see {@code AssessPassagesRunner}), so this is a plain insert —
+     * re-running the stage replaces and never duplicates.
+     *
+     * @param parseRunId parse_run carrying the assessment stage
+     * @param documentVersionId version the fact is about
+     * @param passageId passage the fact is linked to
+     * @param f normalized fact to insert
+     * @return the new {@code fact_id}
+     * @throws SQLException if any insert fails
+     */
+    public long insertPassageFact(long parseRunId, long documentVersionId, long passageId,
+            FactWrite f) throws SQLException {
+        long factId;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO fact (parse_run_id, document_version_id, region_id, field_key,"
+                        + " ontology_path, path_root, subject_entity, value_kind, value_text,"
+                        + " value_number, value_date, unit, currency, scale, absolute_amount,"
+                        + " lang_source, extraction_method, extractor_id, confidence,"
+                        + " nomenclature_status, unbound_reason, stated_or_derived, line_key,"
+                        + " group_keys_json, valid_from, valid_to, is_current, created_at,"
+                        + " passage_id)"
+                        + " VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
+                        + " 'unbound', NULL, ?, ?, ?, NULL, NULL, 1, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, documentVersionId);
+            setNullableString(ps, 3, f.fieldKey());
+            setNullableString(ps, 4, f.ontologyPath());
+            setNullableString(ps, 5, f.pathRoot());
+            setNullableString(ps, 6, f.subjectEntity());
+            ps.setString(7, f.valueKind());
+            setNullableString(ps, 8, f.valueText());
+            setNullableDouble(ps, 9, f.valueNumber());
+            setNullableString(ps, 10, f.valueDate());
+            setNullableString(ps, 11, f.unit());
+            setNullableString(ps, 12, f.currency());
+            setNullableString(ps, 13, f.scale());
+            setNullableString(ps, 14, f.absoluteAmount());
+            setNullableString(ps, 15, f.langSource());
+            ps.setString(16, f.extractionMethod());
+            setNullableString(ps, 17, f.extractorId());
+            setNullableDouble(ps, 18, f.confidence());
+            setNullableString(ps, 19, f.statedOrDerived());
+            setNullableString(ps, 20, f.lineKey());
+            setNullableString(ps, 21, f.groupKeysJson());
+            ps.setString(22, Timestamps.now());
+            ps.setLong(23, passageId);
+            ps.executeUpdate();
+            factId = generatedId(ps);
+        }
+        int ordinal = 0;
+        for (Citation citation : f.citations()) {
+            QuoteHit hit = resolveQuote(documentVersionId, citation);
+            long provenanceId = insertProvenance(factId, documentVersionId, citation, hit);
+            insertFactEvidence(factId, ordinal++, "verbatim_quote", provenanceId,
+                    citation.verbatim(), hit.resolved() ? "resolved" : "missing", null, null);
+        }
+        return factId;
+    }
+
+    /**
      * Deletes the fact set for a parse_run (children first). Used by replace and tests.
      *
      * @throws SQLException if any delete fails

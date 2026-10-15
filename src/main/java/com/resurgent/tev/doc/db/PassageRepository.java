@@ -8,7 +8,10 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Chapter passages (M3-06, spec #133 / issue #139): persistence of the passages split
@@ -156,6 +159,7 @@ public final class PassageRepository {
      * @throws SQLException if the query fails
      */
     public List<MandateQa.PassageRow> passagesForMandate(long mandateId) throws SQLException {
+        Map<Long, List<MandateQa.PassageFactRow>> factsByPassage = factsForMandate(mandateId);
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT p.passage_id, p.document_version_id, p.passage_index, p.heading,"
                         + " p.topic, p.page_from, p.page_to, p.summary,"
@@ -175,8 +179,9 @@ public final class PassageRepository {
                     int provenancePage = rs.getInt("provenance_page");
                     boolean hasProvenancePage = !rs.wasNull();
                     int pageFrom = rs.getInt("page_from");
+                    long passageId = rs.getLong("passage_id");
                     rows.add(new MandateQa.PassageRow(
-                            rs.getLong("passage_id"),
+                            passageId,
                             rs.getLong("document_version_id"),
                             rs.getInt("passage_index"),
                             rs.getString("heading"),
@@ -186,10 +191,156 @@ public final class PassageRepository {
                             hasProvenancePage ? provenancePage : pageFrom,
                             rs.getString("verbatim"),
                             rs.getString("summary"),
-                            List.of()));
+                            factsByPassage.getOrDefault(passageId, List.of())));
                 }
                 return rows;
             }
         }
+    }
+
+    /**
+     * The mandate's passage-linked facts with their verbatim evidence, grouped by
+     * passage. Row facts keep their line key and evidence order, so listed tables come
+     * back in source order.
+     */
+    private Map<Long, List<MandateQa.PassageFactRow>> factsForMandate(long mandateId)
+            throws SQLException {
+        Map<Long, PassageFactBuilder> builders = new LinkedHashMap<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT f.fact_id, f.passage_id, f.field_key, f.ontology_path, f.line_key,"
+                        + " f.value_text, f.value_number, f.value_date, f.unit, f.currency,"
+                        + " f.confidence, f.extraction_method"
+                        + " FROM fact f"
+                        + " JOIN passage p ON p.passage_id = f.passage_id"
+                        + " JOIN document_version dv"
+                        + "  ON dv.document_version_id = p.document_version_id"
+                        + " JOIN document d ON d.document_id = dv.document_id"
+                        + " WHERE d.mandate_id = ? AND d.status != 'deleted_by_analyst'"
+                        + " ORDER BY f.passage_id, f.fact_id")) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    PassageFactBuilder b = new PassageFactBuilder(
+                            rs.getLong("fact_id"),
+                            rs.getLong("passage_id"),
+                            rs.getString("field_key"),
+                            rs.getString("ontology_path"),
+                            rs.getString("line_key"),
+                            rs.getString("value_text"),
+                            asDouble(rs.getObject("value_number")),
+                            rs.getString("value_date"),
+                            rs.getString("unit"),
+                            rs.getString("currency"),
+                            asDouble(rs.getObject("confidence")),
+                            rs.getString("extraction_method"));
+                    builders.put(b.factId, b);
+                }
+            }
+        }
+        if (builders.isEmpty()) {
+            return Map.of();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT e.fact_id, COALESCE(pd.verbatim, e.source_text) AS quote,"
+                        + " pg.page_index AS page_index"
+                        + " FROM fact_evidence e"
+                        + " JOIN fact f ON f.fact_id = e.fact_id"
+                        + " JOIN passage p ON p.passage_id = f.passage_id"
+                        + " JOIN document_version dv"
+                        + "  ON dv.document_version_id = p.document_version_id"
+                        + " JOIN document d ON d.document_id = dv.document_id"
+                        + " LEFT JOIN provenance_doc pd ON pd.provenance_id = e.provenance_id"
+                        + " LEFT JOIN page pg ON pg.page_id = pd.page_id"
+                        + " WHERE d.mandate_id = ? AND d.status != 'deleted_by_analyst'"
+                        + " AND e.role = 'verbatim_quote'"
+                        + " ORDER BY e.fact_id, e.ordinal")) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    PassageFactBuilder b = builders.get(rs.getLong("fact_id"));
+                    if (b != null) {
+                        b.addEvidence(rs.getString("quote"), asInteger(rs.getObject("page_index")));
+                    }
+                }
+            }
+        }
+        Map<Long, List<MandateQa.PassageFactRow>> factsByPassage = new LinkedHashMap<>();
+        for (PassageFactBuilder b : builders.values()) {
+            MandateQa.PassageFactRow row = b.build();
+            factsByPassage.computeIfAbsent(b.passageId, k -> new ArrayList<>()).add(row);
+        }
+        return factsByPassage;
+    }
+
+    /** Evidence quotes may carry no page, so the list copies tolerate nulls. */
+    private static final class PassageFactBuilder {
+        final long factId;
+        final long passageId;
+        final String fieldKey;
+        final String ontologyPath;
+        final String lineKey;
+        final String valueText;
+        final Double valueNumber;
+        final String valueDate;
+        final String unit;
+        final String currency;
+        final Double confidence;
+        final String extractionMethod;
+        final List<String> quotes = new ArrayList<>();
+        final List<Integer> pages = new ArrayList<>();
+
+        PassageFactBuilder(long factId, long passageId, String fieldKey, String ontologyPath,
+                String lineKey, String valueText, Double valueNumber, String valueDate,
+                String unit, String currency, Double confidence, String extractionMethod) {
+            this.factId = factId;
+            this.passageId = passageId;
+            this.fieldKey = fieldKey;
+            this.ontologyPath = ontologyPath;
+            this.lineKey = lineKey;
+            this.valueText = valueText;
+            this.valueNumber = valueNumber;
+            this.valueDate = valueDate;
+            this.unit = unit;
+            this.currency = currency;
+            this.confidence = confidence;
+            this.extractionMethod = extractionMethod;
+        }
+
+        void addEvidence(String quote, Integer page) {
+            if (quote != null) {
+                quotes.add(quote);
+            }
+            pages.add(page);
+        }
+
+        MandateQa.PassageFactRow build() {
+            return new MandateQa.PassageFactRow(factId, fieldKey, ontologyPath, lineKey,
+                    valueText, valueNumber, valueDate, unit, currency, confidence,
+                    extractionMethod,
+                    Collections.unmodifiableList(new ArrayList<>(quotes)),
+                    Collections.unmodifiableList(new ArrayList<>(pages)));
+        }
+    }
+
+    /** SQLite JDBC returns Integer for small INTEGER values; widen safely. */
+    private static Integer asInteger(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number n) {
+            return n.intValue();
+        }
+        return Integer.valueOf(value.toString());
+    }
+
+    /** SQLite JDBC returns Integer or Double for REAL/INTEGER values; widen safely. */
+    private static Double asDouble(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number n) {
+            return n.doubleValue();
+        }
+        return Double.valueOf(value.toString());
     }
 }

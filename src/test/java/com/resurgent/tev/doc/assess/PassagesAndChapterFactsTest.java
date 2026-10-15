@@ -17,6 +17,7 @@ import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.doc.query.MandateQa;
 import com.resurgent.tev.doc.query.MandateQaQuery;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -163,7 +164,81 @@ class PassagesAndChapterFactsTest {
         assertThat(passages.get(1).summary()).contains("main plant and machinery");
     }
 
+    @Test
+    void chapterOneCarriesLandAreaAndCapacityFactsWithVerbatimProvenance() throws Exception {
+        long versionId = ingestDpr();
+        seedStoredParse(versionId, DPR_PAGE_1, DPR_PAGE_2);
+        classify(versionId);
+        stageExtractFixture();
+
+        new AssessPassagesRunner().run(MANDATE, dbPath, null);
+
+        List<MandateQa.PassageRow> passages = qa().passages();
+        MandateQa.PassageRow chapterOne = passages.get(0);
+        assertThat(chapterOne.facts()).extracting(MandateQa.PassageFactRow::fieldKey)
+                .contains("land_area", "capacity_mw");
+
+        MandateQa.PassageFactRow landArea = fact(chapterOne, "land_area");
+        assertThat(landArea.valueText()).isEqualTo("4.5 acres");
+        assertThat(landArea.evidenceQuotes()).contains("Land area: 4.5 acres");
+        assertThat(landArea.evidencePages()).contains(1);
+
+        MandateQa.PassageFactRow capacity = fact(chapterOne, "capacity_mw");
+        assertThat(capacity.valueText()).isEqualTo("10 MW");
+        assertThat(capacity.evidenceQuotes()).contains("Capacity: 10 MW");
+        assertThat(capacity.evidencePages()).contains(1);
+
+        // The chapter's data points stay with their chapter.
+        assertThat(passages.get(1).facts()).extracting(MandateQa.PassageFactRow::fieldKey)
+                .doesNotContain("land_area", "capacity_mw");
+    }
+
+    @Test
+    void plantAndMachineryListIsStoredAsRowFacts() throws Exception {
+        long versionId = ingestDpr();
+        seedStoredParse(versionId, DPR_PAGE_1, DPR_PAGE_2);
+        classify(versionId);
+        stageExtractFixture();
+
+        new AssessPassagesRunner().run(MANDATE, dbPath, null);
+
+        MandateQa.PassageRow chapterTwo = qa().passages().get(1);
+        List<MandateQa.PassageFactRow> rows = chapterTwo.facts();
+        assertThat(rows).hasSize(3);
+        assertThat(rows).extracting(MandateQa.PassageFactRow::fieldKey)
+                .containsOnly("plant_and_machinery");
+        // M2 quotation-row style: one fact per row, the row description as line key.
+        assertThat(rows).extracting(MandateQa.PassageFactRow::lineKey).containsExactly(
+                "Module Mounting Structure - 400 sets",
+                "Inverter 100 kW - 10 nos",
+                "SCADA System - 1 nos");
+        MandateQa.PassageFactRow firstRow = rows.get(0);
+        assertThat(firstRow.valueText()).isEqualTo("Module Mounting Structure - 400 sets");
+        assertThat(firstRow.evidenceQuotes()).contains("Module Mounting Structure - 400 sets");
+        assertThat(firstRow.evidencePages()).contains(2);
+    }
+
     // --- fixture helpers ---
+
+    /** Stages the golden extract sidecar beside the workspace db, as the M2 goldens do. */
+    private void stageExtractFixture() throws Exception {
+        Path dir = tempDir.resolve("docfixtures");
+        Files.createDirectories(dir);
+        Files.copy(fixture("golden_dpr.expected.json"),
+                dir.resolve("golden_dpr.expected.json"));
+    }
+
+    private static Path fixture(String name) {
+        Path p = Path.of("src/test/resources/docfixtures", name);
+        return Files.exists(p) ? p : Path.of("docfixtures", name);
+    }
+
+    private static MandateQa.PassageFactRow fact(MandateQa.PassageRow passage, String fieldKey) {
+        return passage.facts().stream()
+                .filter(f -> fieldKey.equals(f.fieldKey()))
+                .findFirst()
+                .orElseThrow();
+    }
 
     private long ingestDpr() throws Exception {
         Path pdf = writeDprPdf();

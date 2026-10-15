@@ -72,19 +72,28 @@ final class PassageSplitter {
     }
 
     /**
-     * The pack topic whose chapter fields cover this heading, or null when no declared
-     * spec's heading terms occur in it. First declared spec wins, deterministically.
+     * The pack passage spec whose heading terms cover this heading, or null when no
+     * declared spec's terms occur in it. First declared spec wins, deterministically.
      */
-    static String topicFor(DocTypePack pack, String heading) {
+    static PackPassage specFor(DocTypePack pack, String heading) {
         String lower = heading.toLowerCase(Locale.ROOT);
         for (PackPassage spec : pack.passages()) {
             for (String term : spec.headingTerms()) {
                 if (lower.contains(term)) {
-                    return spec.topic();
+                    return spec;
                 }
             }
         }
         return null;
+    }
+
+    /**
+     * The pack topic whose chapter fields cover this heading, or null when no declared
+     * spec's heading terms occur in it. First declared spec wins, deterministically.
+     */
+    static String topicFor(DocTypePack pack, String heading) {
+        PackPassage spec = specFor(pack, heading);
+        return spec == null ? null : spec.topic();
     }
 
     private static void flush(List<Passage> passages, String heading, int pageFrom,

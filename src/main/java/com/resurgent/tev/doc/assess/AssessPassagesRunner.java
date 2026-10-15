@@ -1,5 +1,6 @@
 package com.resurgent.tev.doc.assess;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.resurgent.tev.doc.db.AssessmentRepository;
@@ -9,10 +10,22 @@ import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.db.PassageRepository;
 import com.resurgent.tev.doc.db.PassageRepository.ParsePage;
+import com.resurgent.tev.doc.extract.CandidateNormalizer;
+import com.resurgent.tev.doc.extract.ExtractClient;
+import com.resurgent.tev.doc.extract.ExtractException;
+import com.resurgent.tev.doc.extract.ExtractRequest;
+import com.resurgent.tev.doc.extract.ExtractResult;
+import com.resurgent.tev.doc.extract.FactCandidate;
+import com.resurgent.tev.doc.extract.FixtureExtractClient;
+import com.resurgent.tev.doc.extract.LlamaExtractAdapter;
 import com.resurgent.tev.doc.induce.PackStore;
+import com.resurgent.tev.doc.ingest.BlobStore;
 import com.resurgent.tev.doc.llm.DocLlmClient;
 import com.resurgent.tev.doc.pack.DocTypePack;
+import com.resurgent.tev.doc.pack.PackField;
 import com.resurgent.tev.doc.pack.PackLoader;
+import com.resurgent.tev.doc.pack.PackPassage;
+import com.resurgent.tev.doc.pack.SchemaCompiler;
 import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
@@ -29,11 +42,13 @@ import java.util.Optional;
  * {@code assess_passages} (issue #139): splits each mandate document version's stored
  * parse output into chapter passages, assigns each chapter the pack-declared topic whose
  * heading terms match, stores a one-line summary — one LLM call per document with a
- * deterministic first-sentence fallback — and anchors the passage to the layout. The
- * stage reads only stored parse pages, never triggering a new parse call. One
- * transaction per run; re-running replaces the previous passages and their provenance.
- * LLM usage and stage counters are recorded against the mandate's assess
- * {@code parse_run}.
+ * deterministic first-sentence fallback — and anchors the passage to the layout. Each
+ * chapter then yields its topic's declared data points as facts linked to the passage
+ * (listed tables become one row fact per entry, M2 quotation-row style), extracted
+ * schema-guided from that chapter's stored pages. The stage reads only stored parse
+ * pages, never triggering a new parse call. One transaction per run; re-running
+ * replaces the previous passages and their facts. LLM usage and stage counters are
+ * recorded against the mandate's assess {@code parse_run}.
  */
 public final class AssessPassagesRunner implements AssessStage {
 
@@ -85,6 +100,8 @@ public final class AssessPassagesRunner implements AssessStage {
         WorkspaceRepository repo = new WorkspaceRepository(connection);
         Map<String, DocTypePack> packsByCode = loadPacks(dbPath);
         List<VersionRow> versions = assessment.versionsForMandate(mandateId);
+        ExtractClient extractor = resolveExtractor(dbPath);
+        BlobStore blobs = BlobStore.besideDatabase(dbPath);
 
         String startedAt = Timestamps.now();
         Long parseRunId = null;
@@ -114,6 +131,7 @@ public final class AssessPassagesRunner implements AssessStage {
         int topicMatched = 0;
         int summarised = 0;
         int summarisedLlm = 0;
+        int chapterFacts = 0;
         for (VersionRow version : versions) {
             DocTypePack pack = version.docTypeCode() == null
                     ? null
@@ -121,6 +139,8 @@ public final class AssessPassagesRunner implements AssessStage {
             if (pack == null || pack.passages().isEmpty()) {
                 continue; // no pack passage topics: nothing to assess per chapter
             }
+            DocumentRepository.DocumentVersionRow docVersion =
+                    docs.findVersion(version.documentVersionId()).orElse(null);
             List<ParsePage> pages = passages.parsePages(version.documentVersionId());
             List<PassageSplitter.Passage> chapters = PassageSplitter.split(pages);
             List<String> digests = new ArrayList<>();
@@ -132,7 +152,8 @@ public final class AssessPassagesRunner implements AssessStage {
             int index = 0;
             for (PassageSplitter.Passage chapter : chapters) {
                 index++;
-                String topic = PassageSplitter.topicFor(pack, chapter.heading());
+                PackPassage spec = PassageSplitter.specFor(pack, chapter.heading());
+                String topic = spec == null ? null : spec.topic();
                 if (topic != null) {
                     topicMatched++;
                 }
@@ -155,19 +176,24 @@ public final class AssessPassagesRunner implements AssessStage {
                 if (provenanceId != null) {
                     passages.linkProvenance(passageId, provenanceId);
                 }
+                if (spec != null && docVersion != null && extractor != null
+                        && parseRunId != null) {
+                    chapterFacts += extractChapterFacts(facts, blobs, docVersion, pack, spec,
+                            chapter, passageId, parseRunId, extractor);
+                }
                 passagesTotal++;
             }
         }
 
         recordStats(repo, parseRunId, usage, versions.size(), passagesTotal, topicMatched,
-                summarised, summarisedLlm);
+                summarised, summarisedLlm, chapterFacts);
         assessment.upsertAssessmentRun(mandateId, STAGE, "completed", parseRunId,
                 startedAt, Timestamps.now(), metricsJson(versions.size(), passagesTotal,
-                        topicMatched, summarised, summarisedLlm, usage));
+                        topicMatched, summarised, summarisedLlm, chapterFacts, usage));
 
         String detail = String.format(Locale.ROOT,
-                "%d documents (%d passages, %d topic-matched)",
-                versions.size(), passagesTotal, topicMatched);
+                "%d documents (%d passages, %d topic-matched, %d chapter facts)",
+                versions.size(), passagesTotal, topicMatched, chapterFacts);
         return new StageResult(STAGE, passagesTotal, detail);
     }
 
@@ -210,6 +236,121 @@ public final class AssessPassagesRunner implements AssessStage {
     }
 
     /**
+     * The extractor chapter facts are read through: the live LlamaExtract adapter when
+     * a key is configured, else the offline fixture client loading {@code *.expected.json}
+     * staged beside the workspace (mirrors the {@code {db-parent}/packs} convention).
+     * Never a parser — chapter facts are extracted from stored pages.
+     */
+    private static ExtractClient resolveExtractor(Path dbPath) {
+        if (LlamaExtractAdapter.hasApiKey()) {
+            return new LlamaExtractAdapter();
+        }
+        FixtureExtractClient fixture = new FixtureExtractClient();
+        Path dir = dbPath.toAbsolutePath().getParent() == null
+                ? Path.of("docfixtures")
+                : dbPath.toAbsolutePath().getParent().resolve("docfixtures");
+        try {
+            fixture.loadDirectory(dir);
+        } catch (Exception e) {
+            // No staged fixtures is a legitimate empty state: chapters yield no facts.
+        }
+        return fixture;
+    }
+
+    /**
+     * Reads one chapter's declared data points through the extractor: a schema compiled
+     * from just the topic's fields, scoped to the chapter's stored pages. Returns how
+     * many facts were written; an extractor failure leaves the passage without facts
+     * rather than failing the stage.
+     */
+    private static int extractChapterFacts(FactRepository facts, BlobStore blobs,
+            DocumentRepository.DocumentVersionRow docVersion, DocTypePack pack,
+            PackPassage spec, PassageSplitter.Passage chapter, long passageId, long parseRunId,
+            ExtractClient extractor) throws Exception {
+        List<String> wanted = spec.fields();
+        if (wanted.isEmpty()) {
+            return 0;
+        }
+        JsonNode schema = SchemaCompiler.compileForFields(pack, wanted);
+        List<Integer> pageIndices = new ArrayList<>();
+        for (int page = chapter.pageFrom(); page <= chapter.pageTo(); page++) {
+            pageIndices.add(page);
+        }
+        Path bundleDir = blobs.root().resolve(docVersion.fileHash());
+        Path original = blobs.originalPath(docVersion.fileHash(), docVersion.fileExt());
+        String instructions = "Extract fields for pack " + pack.identity()
+                + " chapter '" + chapter.heading() + "' from pages " + pageIndices
+                + ". Return exact quotes from the source.";
+        ExtractRequest request = new ExtractRequest(bundleDir, original, pageIndices, null,
+                pack.code(), instructions, null);
+
+        ExtractResult result;
+        try {
+            result = extractor.extractFieldSchema(request, schema);
+        } catch (ExtractException e) {
+            System.err.println("[doc-assess] " + STAGE + " chapter '" + chapter.heading()
+                    + "' of version " + docVersion.documentVersionId()
+                    + " yielded no facts: " + e.getMessage());
+            return 0;
+        }
+        int written = 0;
+        for (FactCandidate candidate : result.facts()) {
+            if (candidate.key() == null || !wanted.contains(candidate.key())) {
+                continue;
+            }
+            CandidateNormalizer.normalize(candidate);
+            facts.insertPassageFact(parseRunId, docVersion.documentVersionId(), passageId,
+                    chapterFactWrite(pack, candidate, extractor.id()));
+            written++;
+        }
+        return written;
+    }
+
+    /** Maps a chapter candidate to a fact write: pack path for fields, table path for rows. */
+    private static FactRepository.FactWrite chapterFactWrite(DocTypePack pack,
+            FactCandidate candidate, String extractorId) {
+        String path = null;
+        String pathRoot = null;
+        for (Map<String, Object> table : pack.tables()) {
+            if (candidate.key().equals(String.valueOf(table.get("name")))) {
+                path = String.valueOf(table.get("path"));
+                Object root = table.get("path_root");
+                pathRoot = root == null ? null : String.valueOf(root).toLowerCase(Locale.ROOT);
+                break;
+            }
+        }
+        if (path == null) {
+            Optional<PackField> field = pack.field(candidate.key());
+            if (field.isPresent()) {
+                path = field.get().path();
+                pathRoot = field.get().pathRootWire();
+            }
+        }
+        return new FactRepository.FactWrite(
+                candidate.key(),
+                path,
+                pathRoot,
+                candidate.subjectEntity(),
+                candidate.valueKind().wireName(),
+                candidate.valueText(),
+                candidate.valueNumber(),
+                candidate.valueDate(),
+                candidate.unit(),
+                candidate.currency(),
+                candidate.scale(),
+                candidate.absoluteAmount(),
+                null,
+                candidate.extractionMethod(),
+                extractorId,
+                candidate.confidence(),
+                candidate.statedOrDerived(),
+                candidate.lineKey(),
+                null,
+                candidate.citations(),
+                List.of());
+    }
+
+    /**
      * The provenance row anchoring a passage: the heading's layout block when found,
      * with the passage's stored text as the verbatim. Null never — provenance_doc
      * allows an unanchored row.
@@ -242,7 +383,8 @@ public final class AssessPassagesRunner implements AssessStage {
 
     private static void recordStats(WorkspaceRepository repo, Long parseRunId,
             List<DocLlmClient.Usage> usage, int documents, int passagesTotal,
-            int topicMatched, int summarised, int summarisedLlm) throws Exception {
+            int topicMatched, int summarised, int summarisedLlm, int chapterFacts)
+            throws Exception {
         if (parseRunId == null) {
             return;
         }
@@ -253,6 +395,8 @@ public final class AssessPassagesRunner implements AssessStage {
         repo.recordRunStat(parseRunId, STAGE, "passages_summarised", (double) summarised, null);
         repo.recordRunStat(parseRunId, STAGE, "passages_summaries_llm",
                 (double) summarisedLlm, null);
+        repo.recordRunStat(parseRunId, STAGE, "chapter_facts_total",
+                (double) chapterFacts, null);
         repo.recordRunStat(parseRunId, STAGE, "llm_calls",
                 (double) usage.stream().mapToInt(DocLlmClient.Usage::calls).sum(), null);
 
@@ -270,13 +414,15 @@ public final class AssessPassagesRunner implements AssessStage {
     }
 
     private static String metricsJson(int documents, int passagesTotal, int topicMatched,
-            int summarised, int summarisedLlm, List<DocLlmClient.Usage> usage) {
+            int summarised, int summarisedLlm, int chapterFacts,
+            List<DocLlmClient.Usage> usage) {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("documents_total", documents);
         node.put("passages_total", passagesTotal);
         node.put("passages_topic_matched", topicMatched);
         node.put("passages_summarised", summarised);
         node.put("passages_summaries_llm", summarisedLlm);
+        node.put("chapter_facts_total", chapterFacts);
         node.put("llm_calls", usage.stream().mapToInt(DocLlmClient.Usage::calls).sum());
         return node.toString();
     }
