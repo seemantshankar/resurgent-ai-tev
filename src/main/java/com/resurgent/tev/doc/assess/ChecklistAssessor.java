@@ -77,8 +77,9 @@ public final class ChecklistAssessor {
      * @param definitionScope {@code spine} | {@code industry}
      * @param country country the definition applies to
      * @param industry industry of an industry definition, or null for a spine
-     * @param note the definition's label (e.g. {@code new industry: first mandate}),
-     *     or null
+     * @param note the item's own note (e.g. why it became optional — M3-15) when
+     *     it carries one, else the definition's label (e.g.
+     *     {@code new industry: first mandate}), or null
      * @param entityId entity the result is for, or null
      * @param entityName that entity's name, or null
      * @param siteId site the result is for, or null
@@ -565,7 +566,7 @@ public final class ChecklistAssessor {
         return new Result(item, definition.code(), definition.version(),
                 definition.scope(), definition.country(),
                 definition.isSpine() ? null : definition.industries().get(0),
-                definition.note(),
+                item.note() != null ? item.note() : definition.note(),
                 scope.entityId(), scope.entityName(), scope.siteId(), scope.siteName(),
                 status, reason, documentVersionId, documentFileName, pageIndex, confidence,
                 evidenceVerbatim, clientRequest);

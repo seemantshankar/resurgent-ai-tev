@@ -112,7 +112,8 @@ public final class ChecklistRepository {
      * @param scope {@code spine} | {@code industry}
      * @param country country the definition applies to
      * @param industry industry for an industry checklist, or null
-     * @param note the definition's label when it carries one, or null
+     * @param note the item's own note when it carries one, else the definition's
+     *     label when it carries one, or null
      */
     public record ItemRow(
             String itemKey,
@@ -549,7 +550,8 @@ public final class ChecklistRepository {
      */
     public List<MandateQa.ChecklistResultRow> results(long mandateId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT r.checklist_result_id, i.item_key, i.label, i.level, i.granularity,"
+                "SELECT r.checklist_result_id, i.item_key, i.checklist_version, i.label,"
+                        + " i.level, i.granularity,"
                         + " i.mandatory, i.basis_kind, i.basis_text, i.origin, i.document_type,"
                         + " i.field_key, i.ontology_path, r.entity_id, e.name AS entity_name,"
                         + " r.site_id, s.site_name, r.status, r.reason, r.document_version_id,"
@@ -571,6 +573,7 @@ public final class ChecklistRepository {
                     rows.add(new MandateQa.ChecklistResultRow(
                             rs.getLong("checklist_result_id"),
                             rs.getString("item_key"),
+                            rs.getString("checklist_version"),
                             rs.getString("label"),
                             rs.getString("level"),
                             rs.getString("granularity"),

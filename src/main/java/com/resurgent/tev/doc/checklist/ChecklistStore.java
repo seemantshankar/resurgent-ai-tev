@@ -80,10 +80,40 @@ public final class ChecklistStore {
         Map<String, ChecklistDefinition> catalog = new LinkedHashMap<>();
         ChecklistDefinition seed = ChecklistLoader.loadSeedSpine();
         catalog.put(seed.code(), seed);
-        for (ChecklistDefinition definition : new ChecklistStore(storeRoot(dbPath)).loadAll()) {
+        for (ChecklistDefinition definition : latestPerCode(
+                new ChecklistStore(storeRoot(dbPath)).loadAll()).values()) {
             catalog.put(definition.code(), definition);
         }
         return catalog;
+    }
+
+    /**
+     * One definition per code: the highest semver wins, so learning a new version
+     * ({@code {code}@{version}.yaml}) never fights the file that introduced the
+     * code — newer learning outcomes simply outrank older files.
+     */
+    static Map<String, ChecklistDefinition> latestPerCode(List<ChecklistDefinition> definitions) {
+        Map<String, ChecklistDefinition> latest = new LinkedHashMap<>();
+        for (ChecklistDefinition definition : definitions) {
+            ChecklistDefinition current = latest.get(definition.code());
+            if (current == null || compareVersions(definition.version(), current.version()) >= 0) {
+                latest.put(definition.code(), definition);
+            }
+        }
+        return latest;
+    }
+
+    /** Compares two validated semver strings numerically. */
+    private static int compareVersions(String left, String right) {
+        String[] a = left.split("\\.");
+        String[] b = right.split("\\.");
+        for (int i = 0; i < 3; i++) {
+            int cmp = Integer.compare(Integer.parseInt(a[i]), Integer.parseInt(b[i]));
+            if (cmp != 0) {
+                return cmp;
+            }
+        }
+        return 0;
     }
 
     /**
@@ -111,6 +141,30 @@ public final class ChecklistStore {
     public Path publish(ChecklistDefinition definition)
             throws ChecklistLoader.ChecklistValidationException, IOException {
         Path file = checklistsRoot.resolve(definition.code() + ".yaml");
+        if (Files.exists(file)) {
+            return file;
+        }
+        Files.createDirectories(checklistsRoot);
+        Files.writeString(file, render(definition));
+        return file;
+    }
+
+    /**
+     * Publishes one definition as a new version ({@code {code}@{version}.yaml}),
+     * leaving every existing file untouched — a checklist change is a new version
+     * recording its reason, never an edit of history (M3-15). The loader validates
+     * the written file when the caller re-loads it, so what is assessed is exactly
+     * what was written.
+     *
+     * @param definition the definition to publish (required)
+     * @return the file path back into the store ({@code {code}@{version}.yaml})
+     * @throws ChecklistLoader.ChecklistValidationException when rendering fails
+     * @throws IOException when the directory or file cannot be written
+     */
+    public Path publishVersioned(ChecklistDefinition definition)
+            throws ChecklistLoader.ChecklistValidationException, IOException {
+        Path file = checklistsRoot.resolve(
+                definition.code() + "@" + definition.version() + ".yaml");
         if (Files.exists(file)) {
             return file;
         }
@@ -157,6 +211,9 @@ public final class ChecklistStore {
                     .append("      text: ").append(quote(item.basisText())).append('\n')
                     .append("    origin: ").append(item.origin()).append('\n')
                     .append("    request: ").append(quote(item.clientRequest())).append('\n');
+            if (item.note() != null) {
+                yaml.append("    note: ").append(quote(item.note())).append('\n');
+            }
         }
         return yaml.toString();
     }

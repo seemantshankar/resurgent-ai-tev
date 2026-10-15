@@ -335,6 +335,7 @@ public record MandateQa(
      *
      * @param resultId result row id
      * @param itemKey the item's stable key
+     * @param checklistVersion definition version the item was assessed from
      * @param label human label
      * @param level {@code document} | {@code data_point}
      * @param granularity {@code mandate} | {@code entity} | {@code site}
@@ -358,12 +359,14 @@ public record MandateQa(
      * @param pageIndex cited page; always present for {@code provided}
      * @param confidence evidence confidence, or null
      * @param clientRequest ask-the-client wording, set when {@code not_provided}
-     * @param note the definition's label when it carries one (e.g.
+     * @param note the item's own note when it carries one (e.g. why it became
+     *     optional), else the definition's label when it carries one (e.g.
      *     {@code new industry: first mandate}), or null
      */
     public record ChecklistResultRow(
             long resultId,
             String itemKey,
+            String checklistVersion,
             String label,
             String level,
             String granularity,

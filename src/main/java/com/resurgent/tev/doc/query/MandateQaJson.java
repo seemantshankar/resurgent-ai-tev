@@ -251,6 +251,7 @@ public final class MandateQaJson {
             ObjectNode n = checklist.addObject();
             n.put("result_id", row.resultId());
             n.put("item_key", row.itemKey());
+            n.put("checklist_version", row.checklistVersion());
             n.put("label", row.label());
             n.put("level", row.level());
             n.put("granularity", row.granularity());

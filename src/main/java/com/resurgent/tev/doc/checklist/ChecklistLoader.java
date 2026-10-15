@@ -277,8 +277,13 @@ public final class ChecklistLoader {
         }
 
         String clientRequest = requireText(item, "request", where);
+        String note = item.hasNonNull("note") ? item.get("note").asText().trim() : null;
+        if (note != null && note.isEmpty()) {
+            note = null;
+        }
         return new ChecklistItemDef(key, label, level, granularity, entityRole, documentType,
-                fieldKey, ontologyPath, mandatory, basisKind, basisText, origin, clientRequest);
+                fieldKey, ontologyPath, mandatory, basisKind, basisText, origin, clientRequest,
+                note);
     }
 
     private static String containsKey(JsonNode item, String where, Set<String> keys)

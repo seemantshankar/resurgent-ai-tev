@@ -26,6 +26,9 @@ import java.util.List;
  * @param origin {@code drafted} | {@code observed} | {@code promoted}
  * @param clientRequest ask-the-client wording template ({@code {entity}} and
  *     {@code {item}} are substituted when the item is Not provided)
+ * @param note item-level note recorded with the item (e.g. why it became
+ *     optional — M3-15), or null; it takes precedence over the definition note
+ *     when the result is persisted
  */
 public record ChecklistItemDef(
         String key,
@@ -40,7 +43,8 @@ public record ChecklistItemDef(
         String basisKind,
         String basisText,
         String origin,
-        String clientRequest) {
+        String clientRequest,
+        String note) {
 
     /** True when this item expects a whole document. */
     public boolean isDocumentLevel() {
