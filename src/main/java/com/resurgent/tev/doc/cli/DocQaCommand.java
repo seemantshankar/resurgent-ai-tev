@@ -293,7 +293,7 @@ public final class DocQaCommand implements Callable<Integer> {
             out.printf("versions differ: %d%n", qa.versionsDiffer().size());
             for (MandateQa.ConflictSkipRow row : qa.conflictSkips()) {
                 out.printf("conflict skip %s [%s] cell %s: %s%n",
-                        row.dataPoint(), row.kind(), row.fmSource(), row.reason());
+                        row.dataPoint(), row.kind(), blankToDash(row.fmSource()), row.reason());
             }
             out.printf("conflict skips: %d%n", qa.conflictSkips().size());
             return 0;

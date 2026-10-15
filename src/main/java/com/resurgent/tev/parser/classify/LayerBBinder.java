@@ -1,10 +1,7 @@
 package com.resurgent.tev.parser.classify;
 
 import com.resurgent.tev.parser.db.BindCellRow;
-import com.resurgent.tev.parser.nomenclature.NomenclatureAlias;
-import com.resurgent.tev.parser.nomenclature.NomenclatureSeed;
-import com.resurgent.tev.parser.nomenclature.ProjectFactField;
-import com.resurgent.tev.parser.nomenclature.ProjectFactSeed;
+import com.resurgent.tev.parser.nomenclature.OntologyVocabulary;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,21 +19,21 @@ import java.util.regex.Pattern;
  */
 final class LayerBBinder {
 
-    static final String LEGAL_NAME = "Project Identity > Legal Name";
-    static final String CONSTITUTION = "Project Identity > Constitution / Entity Type";
-    static final String PARTNERS = "Project Identity > Partners / Promoters";
-    static final String ADDRESS = "Project Identity > Address";
-    static final String POWER = "Project > Power Connection";
-    static final String MANPOWER = "Project > Manpower";
-    static final String CAPACITY = "Project > Installed Capacity";
+    static final String LEGAL_NAME = OntologyVocabulary.LEGAL_NAME;
+    static final String CONSTITUTION = OntologyVocabulary.CONSTITUTION;
+    static final String PARTNERS = OntologyVocabulary.PARTNERS;
+    static final String ADDRESS = OntologyVocabulary.ADDRESS;
+    static final String POWER = OntologyVocabulary.POWER;
+    static final String MANPOWER = OntologyVocabulary.MANPOWER;
+    static final String CAPACITY = OntologyVocabulary.CAPACITY;
 
-    static final String FRAME_TITLE = "Frame > Schedule Title";
-    static final String FRAME_ANNEXURE = "Frame > Annexure";
-    static final String FRAME_BANNER = "Frame > Section Banner";
-    static final String FRAME_PERIOD = "Frame > Period";
-    static final String FRAME_SCALE = "Frame > Scale";
-    static final String FRAME_MARK = "Frame > Field Mark";
-    static final String FRAME_BLANK = "Frame > Blank";
+    static final String FRAME_TITLE = OntologyVocabulary.FRAME_TITLE;
+    static final String FRAME_ANNEXURE = OntologyVocabulary.FRAME_ANNEXURE;
+    static final String FRAME_BANNER = OntologyVocabulary.FRAME_BANNER;
+    static final String FRAME_PERIOD = OntologyVocabulary.FRAME_PERIOD;
+    static final String FRAME_SCALE = OntologyVocabulary.FRAME_SCALE;
+    static final String FRAME_MARK = OntologyVocabulary.FRAME_MARK;
+    static final String FRAME_BLANK = OntologyVocabulary.FRAME_BLANK;
 
     private static final Pattern PERIOD = Pattern.compile(
             "(?i)^(year(\\s+\\d+)?|construction|fy\\s*\\d{2,4})$");
@@ -52,7 +49,6 @@ final class LayerBBinder {
     private static final Pattern SUM = Pattern.compile("(?i)^SUM\\(([^)]+)\\)$");
     private static final Pattern RESCALE = Pattern.compile(
             "(?i)^\\+?(?:ROUND\\()?\\$?([A-Z]{1,3})\\$?(\\d+)\\s*[*/]\\s*[\\d.]+(?:\\s*,\\s*-?\\d+\\))?$");
-    private static final Pattern CATEGORY = Pattern.compile("^[A-Za-z][A-Za-z0-9 /&'\\-]{0,48}$");
     private static final Pattern A1 = Pattern.compile("(?i)\\$?([A-Z]{1,3})\\$?(\\d+)");
 
     private LayerBBinder() {}
@@ -60,72 +56,20 @@ final class LayerBBinder {
     record Draft(long cellId, String coord, String pathRoot, String path, String amountRole, String verbatim) {}
 
     static Map<String, String> aliasIndex() {
-        Map<String, String> aliases = new LinkedHashMap<>();
-        for (String path : NomenclatureSeed.SPINE_PATHS) {
-            putAlias(aliases, NomenclatureSeed.nameOf(path), path);
-            putAlias(aliases, path, path);
-        }
-        for (NomenclatureAlias alias : NomenclatureSeed.SPINE_ALIASES) {
-            putAlias(aliases, alias.aliasText(), alias.leafPath());
-        }
-        for (String path : NomenclatureSeed.HOTEL_LEAVES) {
-            putAlias(aliases, NomenclatureSeed.nameOf(path), path);
-        }
-        for (NomenclatureAlias alias : NomenclatureSeed.HOTEL_ALIASES) {
-            putAlias(aliases, alias.aliasText(), alias.leafPath());
-        }
-        for (ProjectFactField field : ProjectFactSeed.FIELDS) {
-            putAlias(aliases, field.name(), field.path());
-            putAlias(aliases, field.path(), field.path());
-            putAlias(aliases, NomenclatureSeed.nameOf(field.path()), field.path());
-        }
-        return Map.copyOf(aliases);
+        return OntologyVocabulary.aliasIndex();
     }
 
     /** Alias index from a living ontology slice, then the seed defaults. */
     static Map<String, String> aliasIndex(Map<String, String> living) {
-        Map<String, String> aliases = new LinkedHashMap<>(aliasIndex());
-        if (living != null) {
-            for (Map.Entry<String, String> entry : living.entrySet()) {
-                if (entry.getKey() == null || entry.getValue() == null) {
-                    continue;
-                }
-                putAlias(aliases, entry.getKey(), entry.getValue());
-            }
-        }
-        return Map.copyOf(aliases);
+        return OntologyVocabulary.aliasIndex(living);
     }
 
     static List<String> allowedPaths() {
-        List<String> paths = new ArrayList<>();
-        paths.addAll(NomenclatureSeed.SPINE_PATHS);
-        paths.addAll(NomenclatureSeed.HOTEL_LEAVES);
-        for (ProjectFactField field : ProjectFactSeed.FIELDS) {
-            paths.add(field.path());
-        }
-        paths.add(FRAME_TITLE);
-        paths.add(FRAME_ANNEXURE);
-        paths.add(FRAME_BANNER);
-        paths.add(FRAME_PERIOD);
-        paths.add(FRAME_SCALE);
-        paths.add(FRAME_MARK);
-        paths.add(FRAME_BLANK);
-        return List.copyOf(paths);
+        return OntologyVocabulary.allowedPaths();
     }
 
     static List<String> allowedPaths(List<String> living) {
-        LinkedHashMap<String, Boolean> paths = new LinkedHashMap<>();
-        for (String path : allowedPaths()) {
-            paths.put(path, Boolean.TRUE);
-        }
-        if (living != null) {
-            for (String path : living) {
-                if (path != null && !path.isBlank()) {
-                    paths.put(path, Boolean.TRUE);
-                }
-            }
-        }
-        return List.copyOf(paths.keySet());
+        return OntologyVocabulary.allowedPaths(living);
     }
 
     static List<Draft> bind(
@@ -715,43 +659,7 @@ final class LayerBBinder {
     }
 
     static boolean allowed(String root, String path) {
-        if (root == null || path == null || path.isBlank()) {
-            return false;
-        }
-        if ("frame".equals(root)) {
-            return path.equals(FRAME_TITLE)
-                    || path.equals(FRAME_ANNEXURE)
-                    || path.equals(FRAME_BANNER)
-                    || path.equals(FRAME_PERIOD)
-                    || path.equals(FRAME_SCALE)
-                    || path.equals(FRAME_MARK)
-                    || path.equals(FRAME_BLANK);
-        }
-        if ("identity".equals(root)) {
-            return path.equals(LEGAL_NAME)
-                    || path.equals(CONSTITUTION)
-                    || path.equals(PARTNERS)
-                    || path.equals(ADDRESS);
-        }
-        if (!"economic".equals(root) || path.startsWith("Frame > ") || path.startsWith("Project Identity > ")) {
-            return false;
-        }
-        if (allowedPaths().contains(path)) {
-            return true;
-        }
-        int sep = path.lastIndexOf(" > ");
-        if (sep <= 0) {
-            return false;
-        }
-        String parent = path.substring(0, sep);
-        String leaf = path.substring(sep + 3);
-        boolean knownParent = parent.equals("Cash Flow")
-                || parent.equals("Profit & Loss")
-                || parent.equals("Balance Sheet")
-                || parent.equals("Project Cost")
-                || parent.equals("Means of Finance")
-                || NomenclatureSeed.SPINE_PATHS.contains(parent);
-        return knownParent && CATEGORY.matcher(leaf).matches() && !leaf.contains("!") && !leaf.contains("#");
+        return OntologyVocabulary.allowed(root, path);
     }
 
     private static IdentityField identityField(List<BindCellRow> row, Map<String, String> aliases) {
@@ -982,29 +890,8 @@ final class LayerBBinder {
         return draft == null ? null : draft.pathRoot();
     }
 
-    private static void putAlias(Map<String, String> aliases, String text, String path) {
-        String key = norm(text);
-        if (key.isBlank()) {
-            return;
-        }
-        String existing = aliases.get(key);
-        if (existing == null) {
-            aliases.put(key, path);
-        } else if (existing.isBlank() || !existing.equals(path)) {
-            aliases.put(key, "");
-        }
-    }
-
     static String norm(String text) {
-        if (text == null) {
-            return "";
-        }
-        return text.toUpperCase(Locale.ROOT)
-                .replace("'", "")
-                .replace("’", "")
-                .replaceAll("[^A-Z0-9&/ ]", " ")
-                .replaceAll("\\s+", " ")
-                .trim();
+        return OntologyVocabulary.norm(text);
     }
 
     private record IdentityField(BindCellRow label, String root, String path) {}

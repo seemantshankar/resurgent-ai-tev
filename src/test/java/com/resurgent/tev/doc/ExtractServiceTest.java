@@ -96,6 +96,26 @@ class ExtractServiceTest {
                 List.of(), List.of(), List.of());
     }
 
+    /**
+     * M3-17 AC2 (issue #153): the certificate pack trimmed to leaves the shared
+     * nomenclature already names, so bind must need no model at all.
+     */
+    static DocTypePack knownLeavesPack() {
+        return new DocTypePack(
+                "identity.promoter_net_worth", "1.0.0", "certificate", "certificate",
+                List.of("general"), List.of(),
+                List.of(
+                        PackField.required("subject_name", "identity > Legal Name",
+                                "identity", ValueKind.TEXT),
+                        PackField.required("net_worth",
+                                "economic > Audited Financials > Net Worth", "economic",
+                                ValueKind.MONEY),
+                        PackField.required("revenue",
+                                "economic > Audited Financials > Revenue", "economic",
+                                ValueKind.MONEY)),
+                List.of(), List.of(), List.of());
+    }
+
     static DocTypePack quotationPack() {
         return new DocTypePack(
                 "quotation.vendor", "1.0.0", "quotation", "quotation",

@@ -127,7 +127,7 @@ class InducedPackIntegrationTest {
                 dbPath, versionId, 1L, pack, client, "fixture-extract");
         assertThat(extract.factsTotal()).isPositive();
 
-        new PackPathBinder().bind(dbPath, extract.parseRunId(), pack);
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), 1L, pack, null);
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
             List<FactRow> rows = new com.resurgent.tev.doc.db.FactRepository(db.connection())
                     .query(FactQuery.forMandate(1L).withVersion(versionId));
