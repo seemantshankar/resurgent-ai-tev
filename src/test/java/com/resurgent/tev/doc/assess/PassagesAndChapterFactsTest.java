@@ -11,6 +11,7 @@ import com.resurgent.tev.doc.db.MandateQaQueryRunner;
 import com.resurgent.tev.doc.ingest.BlobStore;
 import com.resurgent.tev.doc.ingest.DocumentIngestService;
 import com.resurgent.tev.doc.layout.DocumentLayoutService;
+import com.resurgent.tev.doc.llm.FakeDocLlmClient;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.doc.query.MandateQa;
@@ -114,6 +115,52 @@ class PassagesAndChapterFactsTest {
         assertThat(second.pageIndex()).isEqualTo(2);
         assertThat(second.verbatim()).contains("Module Mounting Structure - 400 sets");
         assertThat(second.summary()).isNotBlank();
+    }
+
+    @Test
+    void llmSummariesAreUsedAndUsageRecordedPerDocument() throws Exception {
+        long versionId = ingestDpr();
+        seedStoredParse(versionId, DPR_PAGE_1, DPR_PAGE_2);
+        classify(versionId);
+
+        FakeDocLlmClient fake = new FakeDocLlmClient(
+                "{\"summaries\": [\"Overview of the 10 MW solar project.\","
+                        + " \"Plant and machinery list of the project.\"]}");
+        AssessStage.StageResult result = new AssessPassagesRunner().run(MANDATE, dbPath, fake);
+
+        // One summary call per document — never one call per passage.
+        assertThat(fake.calls()).isEqualTo(1);
+        assertThat(result.stage()).isEqualTo("assess_passages");
+
+        List<MandateQa.PassageRow> passages = qa().passages();
+        assertThat(passages.get(0).summary()).isEqualTo("Overview of the 10 MW solar project.");
+        assertThat(passages.get(1).summary()).isEqualTo("Plant and machinery list of the project.");
+
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            try (var rs = db.connection().createStatement().executeQuery(
+                    "SELECT calls, failed_calls FROM llm_usage"
+                            + " WHERE stage = 'assess_passages'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getLong("calls")).isEqualTo(1);
+                assertThat(rs.getLong("failed_calls")).isZero();
+                assertThat(rs.next()).isFalse();
+            }
+        }
+    }
+
+    @Test
+    void summaryFallsBackToFirstSentenceWhenLlmReplyIsUnusable() throws Exception {
+        long versionId = ingestDpr();
+        seedStoredParse(versionId, DPR_PAGE_1, DPR_PAGE_2);
+        classify(versionId);
+
+        new AssessPassagesRunner().run(MANDATE, dbPath, new FakeDocLlmClient("no json here"));
+
+        List<MandateQa.PassageRow> passages = qa().passages();
+        assertThat(passages).hasSize(2);
+        assertThat(passages.get(0).summary())
+                .contains("10 MW solar photovoltaic power plant");
+        assertThat(passages.get(1).summary()).contains("main plant and machinery");
     }
 
     // --- fixture helpers ---

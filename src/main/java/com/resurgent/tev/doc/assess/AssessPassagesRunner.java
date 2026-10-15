@@ -28,8 +28,9 @@ import java.util.Optional;
 /**
  * {@code assess_passages} (issue #139): splits each mandate document version's stored
  * parse output into chapter passages, assigns each chapter the pack-declared topic whose
- * heading terms match, stores a one-line summary and anchors the passage to the layout.
- * The stage reads only stored parse pages — it never triggers a new parse call. One
+ * heading terms match, stores a one-line summary — one LLM call per document with a
+ * deterministic first-sentence fallback — and anchors the passage to the layout. The
+ * stage reads only stored parse pages, never triggering a new parse call. One
  * transaction per run; re-running replaces the previous passages and their provenance.
  * LLM usage and stage counters are recorded against the mandate's assess
  * {@code parse_run}.
@@ -112,6 +113,7 @@ public final class AssessPassagesRunner implements AssessStage {
         int passagesTotal = 0;
         int topicMatched = 0;
         int summarised = 0;
+        int summarisedLlm = 0;
         for (VersionRow version : versions) {
             DocTypePack pack = version.docTypeCode() == null
                     ? null
@@ -121,6 +123,12 @@ public final class AssessPassagesRunner implements AssessStage {
             }
             List<ParsePage> pages = passages.parsePages(version.documentVersionId());
             List<PassageSplitter.Passage> chapters = PassageSplitter.split(pages);
+            List<String> digests = new ArrayList<>();
+            for (PassageSplitter.Passage chapter : chapters) {
+                digests.add(chapter.heading() + "\n" + chapter.text());
+            }
+            // One summary call per document, never per passage.
+            List<String> llmSummaries = LlmPassageSummaries.find(client, digests, usage::add);
             int index = 0;
             for (PassageSplitter.Passage chapter : chapters) {
                 index++;
@@ -128,7 +136,15 @@ public final class AssessPassagesRunner implements AssessStage {
                 if (topic != null) {
                     topicMatched++;
                 }
-                String summary = deterministicSummary(chapter.text());
+                String summary = null;
+                if (index <= llmSummaries.size()) {
+                    summary = llmSummaries.get(index - 1);
+                }
+                if (summary == null || summary.isBlank()) {
+                    summary = deterministicSummary(chapter.text());
+                } else {
+                    summarisedLlm++;
+                }
                 if (summary != null) {
                     summarised++;
                 }
@@ -144,10 +160,10 @@ public final class AssessPassagesRunner implements AssessStage {
         }
 
         recordStats(repo, parseRunId, usage, versions.size(), passagesTotal, topicMatched,
-                summarised);
+                summarised, summarisedLlm);
         assessment.upsertAssessmentRun(mandateId, STAGE, "completed", parseRunId,
                 startedAt, Timestamps.now(), metricsJson(versions.size(), passagesTotal,
-                        topicMatched, summarised, usage));
+                        topicMatched, summarised, summarisedLlm, usage));
 
         String detail = String.format(Locale.ROOT,
                 "%d documents (%d passages, %d topic-matched)",
@@ -226,7 +242,7 @@ public final class AssessPassagesRunner implements AssessStage {
 
     private static void recordStats(WorkspaceRepository repo, Long parseRunId,
             List<DocLlmClient.Usage> usage, int documents, int passagesTotal,
-            int topicMatched, int summarised) throws Exception {
+            int topicMatched, int summarised, int summarisedLlm) throws Exception {
         if (parseRunId == null) {
             return;
         }
@@ -235,6 +251,8 @@ public final class AssessPassagesRunner implements AssessStage {
         repo.recordRunStat(parseRunId, STAGE, "passages_topic_matched",
                 (double) topicMatched, null);
         repo.recordRunStat(parseRunId, STAGE, "passages_summarised", (double) summarised, null);
+        repo.recordRunStat(parseRunId, STAGE, "passages_summaries_llm",
+                (double) summarisedLlm, null);
         repo.recordRunStat(parseRunId, STAGE, "llm_calls",
                 (double) usage.stream().mapToInt(DocLlmClient.Usage::calls).sum(), null);
 
@@ -252,12 +270,13 @@ public final class AssessPassagesRunner implements AssessStage {
     }
 
     private static String metricsJson(int documents, int passagesTotal, int topicMatched,
-            int summarised, List<DocLlmClient.Usage> usage) {
+            int summarised, int summarisedLlm, List<DocLlmClient.Usage> usage) {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("documents_total", documents);
         node.put("passages_total", passagesTotal);
         node.put("passages_topic_matched", topicMatched);
         node.put("passages_summarised", summarised);
+        node.put("passages_summaries_llm", summarisedLlm);
         node.put("llm_calls", usage.stream().mapToInt(DocLlmClient.Usage::calls).sum());
         return node.toString();
     }
