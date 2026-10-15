@@ -4,7 +4,9 @@ import com.resurgent.tev.doc.db.MandateQaQueryRunner;
 import com.resurgent.tev.doc.query.MandateQa;
 import com.resurgent.tev.doc.query.MandateQaQuery;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.stream.Collectors;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Option;
@@ -12,11 +14,12 @@ import picocli.CommandLine.Spec;
 
 /**
  * {@code tev-doc qa}: print the persisted mandate assessment results — per-document
- * document date, precision, source and upload date, plus the assessment runs — without
- * re-parsing anything. Read-through-API only, like {@code facts}.
+ * document date, precision, source and upload date, the assessment runs, and the
+ * mandate entities with their roles, aliases and source pages — without re-parsing
+ * anything. Read-through-API only, like {@code facts}.
  */
 @Command(name = "qa",
-        description = "Show persisted mandate QA: document dates and assessment stages")
+        description = "Show persisted mandate QA: document dates, stages and entities")
 public final class DocQaCommand implements Callable<Integer> {
 
     @Option(names = "--mandate", required = true, description = "Mandate id")
@@ -68,6 +71,16 @@ public final class DocQaCommand implements Callable<Integer> {
                         stage.parseRunId() != null ? " parse_run=" + stage.parseRunId() : "");
             }
             out.printf("stages: %d%n", qa.stages().size());
+            for (MandateQa.EntityRow entity : qa.entities()) {
+                out.printf("%s: %s | %s%n", entity.role(), entity.name(),
+                        blankToDash(entity.reason()));
+                for (MandateQa.AliasRow alias : entity.aliases()) {
+                    out.printf("  alias: %s%s%n", alias.alias(),
+                            alias.pageIndex() != null ? " (page " + alias.pageIndex() + ")" : "");
+                }
+                out.printf("  pages: %s%n", pagesText(entity.pageIndexes()));
+            }
+            out.printf("entities: %d%n", qa.entities().size());
             return 0;
         } catch (IllegalArgumentException e) {
             err.println("qa rejected: " + e.getMessage());
@@ -80,5 +93,12 @@ public final class DocQaCommand implements Callable<Integer> {
 
     private static String blankToDash(String value) {
         return value == null || value.isBlank() ? "-" : value;
+    }
+
+    private static String pagesText(List<Integer> pageIndexes) {
+        if (pageIndexes == null || pageIndexes.isEmpty()) {
+            return "-";
+        }
+        return pageIndexes.stream().map(String::valueOf).collect(Collectors.joining(", "));
     }
 }
