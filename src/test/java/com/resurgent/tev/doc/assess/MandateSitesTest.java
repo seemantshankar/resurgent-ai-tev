@@ -480,7 +480,7 @@ class MandateSitesTest {
                 .contains("quotation_b.pdf")
                 .contains("ppa_b.pdf")
                 .contains("sites: 2");
-        // #134's output is untouched.
-        assertThat(text).contains("documents: 4").contains("stages: 1");
+        // #134's sections are untouched; #141 appends its own clauses stage.
+        assertThat(text).contains("documents: 4").contains("stages: 2");
     }
 }

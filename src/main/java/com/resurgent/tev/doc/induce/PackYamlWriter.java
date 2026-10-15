@@ -75,6 +75,24 @@ public final class PackYamlWriter {
         ArrayNode checklist = root.putArray("checklist");
         pack.checklist().forEach(checklist::add);
 
+        if (pack.declaresClauses()) {
+            ObjectNode clauses = root.putObject("clauses");
+            clauses.put("open_extraction", pack.clauseOpenExtraction());
+            ArrayNode types = clauses.putArray("types");
+            for (com.resurgent.tev.doc.pack.PackClauseType t : pack.clauseTypes()) {
+                ObjectNode n = types.addObject();
+                n.put("key", t.key());
+                n.put("label", t.label());
+                if (t.parentFamily() != null && !t.parentFamily().isBlank()) {
+                    n.put("parent_family", t.parentFamily());
+                }
+                if (!t.aliases().isEmpty()) {
+                    ArrayNode aliases = n.putArray("aliases");
+                    t.aliases().forEach(aliases::add);
+                }
+            }
+        }
+
         if (pack.documentDateKind() != null) {
             ObjectNode date = root.putObject("document_date");
             date.put("kind", pack.documentDateKind());

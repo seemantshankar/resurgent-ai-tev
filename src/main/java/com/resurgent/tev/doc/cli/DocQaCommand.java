@@ -16,12 +16,12 @@ import picocli.CommandLine.Spec;
 /**
  * {@code tev-doc qa}: print the persisted mandate assessment results — per-document
  * document date, precision, source and upload date, the assessment runs, the mandate
- * entities with their roles, aliases and source pages, and the mandate sites with their
- * aliases and mentioning documents — without re-parsing anything. Read-through-API only,
- * like {@code facts}.
+ * entities with their roles, aliases and source pages, the clauses with their types
+ * and slots, and the mandate sites with their aliases and mentioning documents —
+ * without re-parsing anything. Read-through-API only, like {@code facts}.
  */
 @Command(name = "qa",
-        description = "Show persisted mandate QA: document dates, stages, entities and sites")
+        description = "Show persisted mandate QA: document dates, stages, entities, clauses and sites")
 public final class DocQaCommand implements Callable<Integer> {
 
     @Option(names = "--mandate", required = true, description = "Mandate id")
@@ -84,6 +84,32 @@ public final class DocQaCommand implements Callable<Integer> {
                 out.printf("  pages: %s%n", pagesText(entity.pageIndexes()));
             }
             out.printf("entities: %d%n", qa.entities().size());
+            // M3-08 (#141): clauses with their type, slots and provenance.
+            for (MandateQa.ClauseRow clause : qa.clauses()) {
+                out.printf("clause %s%s [%s%s] | %s | %s | importance=%s%n",
+                        blankToDash(clause.heading()),
+                        pageRange(clause),
+                        clause.status(),
+                        clause.novelty() != null ? ", " + clause.novelty() : "",
+                        clause.typeLabel() != null ? clause.typeLabel() : "(untyped)",
+                        blankToDash(clause.fileName()),
+                        blankToDash(clause.importance()));
+                if (clause.summary() != null) {
+                    out.printf("  summary: %s%n", clause.summary());
+                }
+                out.printf("  %s%n", shorten(clause.verbatim()));
+                for (MandateQa.ClauseSlotRow slot : clause.slots()) {
+                    out.printf("  slot %s: %s%s%n",
+                            slot.slotKey(),
+                            slot.valueText(),
+                            slot.valueNumber() != null
+                                    ? String.format(java.util.Locale.ROOT, " (%s%s)",
+                                            formatNumber(slot.valueNumber()),
+                                            slot.unit() != null ? " " + slot.unit() : "")
+                                    : "");
+                }
+            }
+            out.printf("clauses: %d%n", qa.clauses().size());
             // M3-04 (#137): sites with their spelling variants and mentioning
             // documents — appended at the end so #134's output is untouched.
             for (MandateQa.SiteRow site : qa.sites()) {
@@ -126,5 +152,25 @@ public final class DocQaCommand implements Callable<Integer> {
             return "-";
         }
         return pageIndexes.stream().map(String::valueOf).collect(Collectors.joining(", "));
+    }
+
+    private static String pageRange(MandateQa.ClauseRow clause) {
+        if (clause.pageStart() == null) {
+            return "";
+        }
+        return clause.pageEnd() == null || clause.pageEnd().equals(clause.pageStart())
+                ? " p" + clause.pageStart()
+                : " p" + clause.pageStart() + "-p" + clause.pageEnd();
+    }
+
+    private static String shorten(String text) {
+        String compact = text.replaceAll("\\s+", " ").strip();
+        return compact.length() <= 200 ? compact : compact.substring(0, 200) + "…";
+    }
+
+    private static String formatNumber(double value) {
+        return value == java.lang.Math.rint(value)
+                ? Long.toString((long) value)
+                : java.math.BigDecimal.valueOf(value).stripTrailingZeros().toPlainString();
     }
 }

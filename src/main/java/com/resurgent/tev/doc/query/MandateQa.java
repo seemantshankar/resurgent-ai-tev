@@ -13,6 +13,7 @@ import java.util.List;
  * @param stages the latest assessment run per stage
  * @param entities the mandate's entities (borrower, promoters, group companies) with
  *     their roles, aliases and source pages
+ * @param clauses every clause read for the mandate's clause-carrying documents (M3-08)
  * @param sites the identified sites with their spelling aliases and mentioning documents
  *     (M3-04; appended)
  */
@@ -21,6 +22,7 @@ public record MandateQa(
         List<DocumentDateRow> documents,
         List<AssessmentRunRow> stages,
         List<EntityRow> entities,
+        List<ClauseRow> clauses,
         List<SiteRow> sites) {
 
     /**
@@ -94,6 +96,66 @@ public record MandateQa(
      * @param pageIndex page the spelling was first read from, or null when unanchored
      */
     public record AliasRow(String alias, Integer pageIndex) {}
+
+    /**
+     * One persisted clause (M3-08).
+     *
+     * @param clauseId clause row id
+     * @param documentId logical document id
+     * @param documentVersionId version the clause was read from
+     * @param logicalName document logical name
+     * @param fileName stored file name
+     * @param heading clause heading as read (e.g. {@code 12. TERMINATION})
+     * @param verbatim clause text exactly as stored in the parse/layout text
+     * @param pageStart first page of the clause, or null when unanchored
+     * @param pageEnd last page of the clause, or null when unanchored
+     * @param typeCode matched or proposed clause type key, or null when untyped
+     * @param typeLabel human label of the type
+     * @param parentFamily parent clause family of the type
+     * @param status {@code bound} (matched a pack type) | {@code open} (kept for new types)
+     * @param novelty {@code known} | {@code new}
+     * @param summary one-line English summary, or null when not read by the model
+     * @param importance lender-risk importance {@code high} | {@code medium} | {@code low}, or null
+     * @param extractionMethod {@code alias} | {@code llm_open}, or null when untyped offline
+     * @param slots normalised key numbers (notice period, penalty, tenure, …)
+     */
+    public record ClauseRow(
+            long clauseId,
+            long documentId,
+            long documentVersionId,
+            String logicalName,
+            String fileName,
+            String heading,
+            String verbatim,
+            Integer pageStart,
+            Integer pageEnd,
+            String typeCode,
+            String typeLabel,
+            String parentFamily,
+            String status,
+            String novelty,
+            String summary,
+            String importance,
+            String extractionMethod,
+            List<ClauseSlotRow> slots) {}
+
+    /**
+     * One normalised key number of a clause.
+     *
+     * @param slotKey {@code notice_period} | {@code penalty} | {@code tenure} | …
+     * @param valueText the value as stated in the clause
+     * @param valueNumber normalised magnitude, or null when unparsed
+     * @param unit duration unit (days/months/years), or null
+     * @param currency ISO-like currency code when stated, or null
+     * @param scale named money scale when stated, or null
+     */
+    public record ClauseSlotRow(
+            String slotKey,
+            String valueText,
+            Double valueNumber,
+            String unit,
+            String currency,
+            String scale) {}
 
     /**
      * One identified mandate site (GLOSSARY "Site"): the canonical name, the spelling

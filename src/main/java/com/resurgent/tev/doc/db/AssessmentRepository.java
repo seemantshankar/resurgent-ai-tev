@@ -405,6 +405,7 @@ public final class AssessmentRepository {
     public MandateQa readMandateQa(long mandateId) throws SQLException {
         return new MandateQa(mandateId, documentDates(mandateId), assessmentRuns(mandateId),
                 new EntityRepository(connection).entities(mandateId),
+                new ClauseRepository(connection).clauses(mandateId),
                 new SiteRepository(connection).sitesForMandate(mandateId));
     }
 

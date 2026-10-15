@@ -41,6 +41,7 @@ public final class DocTypePack {
     private final List<String> checklist;
     private final List<String> reportSections;
     private final String documentDateKind;
+    private final ClauseSection clauseSection;
 
     /**
      * Creates a validated pack. Use {@link PackLoader} for YAML; this constructor
@@ -58,7 +59,7 @@ public final class DocTypePack {
             List<String> checklist,
             List<String> reportSections) {
         this(code, version, family, fileRole, industryTags, identitySignals, fields, tables,
-                checklist, reportSections, null);
+                checklist, reportSections, null, ClauseSection.NONE);
     }
 
     /**
@@ -79,6 +80,28 @@ public final class DocTypePack {
             List<String> checklist,
             List<String> reportSections,
             String documentDateKind) {
+        this(code, version, family, fileRole, industryTags, identitySignals, fields, tables,
+                checklist, reportSections, documentDateKind, ClauseSection.NONE);
+    }
+
+    /**
+     * Creates a validated pack with its document-date kind and clause section (M3-08).
+     *
+     * @param clauseSection the clause section the pack declares, null when none
+     */
+    public DocTypePack(
+            String code,
+            String version,
+            String family,
+            String fileRole,
+            List<String> industryTags,
+            List<String> identitySignals,
+            List<PackField> fields,
+            List<Map<String, Object>> tables,
+            List<String> checklist,
+            List<String> reportSections,
+            String documentDateKind,
+            ClauseSection clauseSection) {
         this.code = Objects.requireNonNull(code, "code");
         this.version = Objects.requireNonNull(version, "version");
         this.family = Objects.requireNonNull(family, "family");
@@ -92,6 +115,7 @@ public final class DocTypePack {
         this.documentDateKind = documentDateKind == null || documentDateKind.isBlank()
                 ? null
                 : documentDateKind.trim().toLowerCase(Locale.ROOT);
+        this.clauseSection = clauseSection == null ? ClauseSection.NONE : clauseSection;
     }
 
     public String code() {
@@ -142,6 +166,26 @@ public final class DocTypePack {
     /** The document-date kind this type carries ({@code execution}/…), or null when undeclared. */
     public String documentDateKind() {
         return documentDateKind;
+    }
+
+    /** The clause section this pack declares (never null; {@link ClauseSection#NONE} when absent). */
+    public ClauseSection clauseSection() {
+        return clauseSection;
+    }
+
+    /** True when the pack declares clauses — only such document types are read for them. */
+    public boolean declaresClauses() {
+        return clauseSection.declared();
+    }
+
+    /** True when unmatched clauses are stored open (Pass B) for this type. */
+    public boolean clauseOpenExtraction() {
+        return clauseSection.declared() && clauseSection.openExtraction();
+    }
+
+    /** The clause types bound for this document type, in declaration order. */
+    public List<PackClauseType> clauseTypes() {
+        return clauseSection.types();
     }
 
     /** Required fields only. */

@@ -24,6 +24,8 @@ public final class PackLoader {
     private static final ObjectMapper YAML = new ObjectMapper(new YAMLFactory());
     private static final Pattern SEMVER = Pattern.compile("\\d+\\.\\d+\\.\\d+");
     private static final Pattern PACK_CODE = Pattern.compile("[a-z0-9_]+(\\.[a-z0-9_]+)+");
+    /** Clause type keys are snake_case so they can be stored and joined on. */
+    private static final Pattern CLAUSE_KEY = Pattern.compile("[a-z0-9_]+");
     /** Person/company/PAN-like tokens that must never become field keys (S2.11). */
     private static final Pattern ENTITY_TOKEN = Pattern.compile(
             "(?i)(bhagyanagar|sharma|ramesh|\\b[A-Z]{5}[0-9]{4}[A-Z]\\b|\\b[A-Z]{2}[0-9]{2}[A-Z]{7}\\b"
@@ -182,8 +184,61 @@ public final class PackLoader {
 
         String documentDateKind = documentDateKind(root.get("document_date"), source);
 
+        ClauseSection clauseSection = clauseSection(root.get("clauses"), source);
+
         return new DocTypePack(code, version, family, fileRole, industryTags, identitySignals,
-                fields, tables, checklist, reportSections, documentDateKind);
+                fields, tables, checklist, reportSections, documentDateKind, clauseSection);
+    }
+
+    /**
+     * Optional {@code clauses} section (M3-08): {@code open_extraction} (default true)
+     * and the {@code types} bound for this document type. Only packs carrying the
+     * section are read for clauses.
+     */
+    private static ClauseSection clauseSection(JsonNode node, String source)
+            throws PackValidationException {
+        if (node == null || node.isNull()) {
+            return ClauseSection.NONE;
+        }
+        if (!node.isObject()) {
+            throw new PackValidationException(source
+                    + ": clauses must be a mapping ({open_extraction: true, types: [...]})");
+        }
+        boolean openExtraction = !node.hasNonNull("open_extraction")
+                || node.get("open_extraction").asBoolean(true);
+        List<PackClauseType> types = new ArrayList<>();
+        java.util.Set<String> keys = new java.util.HashSet<>();
+        JsonNode typesNode = node.get("types");
+        if (typesNode != null && !typesNode.isNull()) {
+            if (!typesNode.isArray()) {
+                throw new PackValidationException(source + ": clauses.types must be a list");
+            }
+            int index = 0;
+            for (JsonNode t : typesNode) {
+                index++;
+                String where = source + ": clauses.types[" + index + "]";
+                if (!t.isObject()) {
+                    throw new PackValidationException(where + " must be a mapping");
+                }
+                String key = requireText(t, "key", where);
+                if (!CLAUSE_KEY.matcher(key).matches()) {
+                    throw new PackValidationException(where + ": key '" + key
+                            + "' must be snake_case (lowercase letters, digits, underscores)");
+                }
+                if (!keys.add(key)) {
+                    throw new PackValidationException(where + ": duplicate clause type key '" + key + "'");
+                }
+                String label = requireText(t, "label", where);
+                String parentFamily = t.hasNonNull("parent_family")
+                        ? t.get("parent_family").asText().trim()
+                        : null;
+                if (parentFamily != null && parentFamily.isEmpty()) {
+                    parentFamily = null;
+                }
+                types.add(new PackClauseType(key, label, parentFamily, textList(t.get("aliases"))));
+            }
+        }
+        return new ClauseSection(true, openExtraction, types);
     }
 
     /**
