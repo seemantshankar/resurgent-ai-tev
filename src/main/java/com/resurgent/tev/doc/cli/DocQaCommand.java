@@ -218,6 +218,9 @@ public final class DocQaCommand implements Callable<Integer> {
                             row.fileName() != null ? " of " + row.fileName() : "");
                 }
                 out.printf("  basis %s: %s%n", row.basisKind(), shorten(row.basisText()));
+                if (row.note() != null) {
+                    out.printf("  note: %s%n", row.note());
+                }
             }
             List<MandateQa.ChecklistResultRow> asks = qa.checklist().stream()
                     .filter(r -> "not_provided".equals(r.status()))

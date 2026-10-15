@@ -358,6 +358,8 @@ public record MandateQa(
      * @param pageIndex cited page; always present for {@code provided}
      * @param confidence evidence confidence, or null
      * @param clientRequest ask-the-client wording, set when {@code not_provided}
+     * @param note the definition's label when it carries one (e.g.
+     *     {@code new industry: first mandate}), or null
      */
     public record ChecklistResultRow(
             long resultId,
@@ -383,7 +385,8 @@ public record MandateQa(
             String fileName,
             Integer pageIndex,
             Double confidence,
-            String clientRequest) {}
+            String clientRequest,
+            String note) {}
 
     /**
      * Persisted checklist counts by status, overall or per entity (M3-10).

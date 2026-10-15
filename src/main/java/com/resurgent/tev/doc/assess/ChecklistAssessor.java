@@ -36,10 +36,11 @@ import java.util.stream.Collectors;
  * reproducible for the same workspace. Entity-granularity items expand once per
  * matching entity (a fact of the document tagged to that entity owns it for the
  * entity); a mandate with no such entity still gets one row with no entity, so an
- * expected item never silently vanishes. An item whose data point carries a
- * conflict no rule or AI judgement settled becomes Conflicting through
- * {@link #applyOpenConflicts} (M3-12); Not applicable is a later ticket and is not
- * produced here.
+ * expected item never silently vanishes. The effective checklist is the mandate's
+ * country spine plus each of its industries (M3-11); an item whose data point
+ * carries a conflict no rule or AI judgement settled becomes Conflicting through
+ * {@link #applyOpenConflicts} (M3-12). Not applicable is decided by the model in a
+ * separate pass, never marked by hand.
  */
 public final class ChecklistAssessor {
 
@@ -55,12 +56,17 @@ public final class ChecklistAssessor {
     /** An open conflict on the item's data point: no value is chosen (M3-12). */
     public static final String STATUS_CONFLICTING = "conflicting";
 
+    /** Decided by the model with a reason and page (M3-11) — never marked by hand. */
+    public static final String STATUS_NOT_APPLICABLE = "not_applicable";
+
     /** Everything the engine reads — all persisted by the earlier stages. */
     public record Inputs(
             List<MandateQa.EntityRow> entities,
             List<MandateQa.SiteRow> sites,
             List<DocScopeRow> documents,
-            List<FactEvidenceRow> facts) {}
+            List<FactEvidenceRow> facts,
+            List<MandateQa.IndustryRow> industries,
+            MandateQa.CountryRow country) {}
 
     /**
      * One assessed (item, scope) standing, ready for persistence.
@@ -71,11 +77,14 @@ public final class ChecklistAssessor {
      * @param definitionScope {@code spine} | {@code industry}
      * @param country country the definition applies to
      * @param industry industry of an industry definition, or null for a spine
+     * @param note the definition's label (e.g. {@code new industry: first mandate}),
+     *     or null
      * @param entityId entity the result is for, or null
      * @param entityName that entity's name, or null
      * @param siteId site the result is for, or null
      * @param siteName that site's name, or null
-     * @param status {@code provided} | {@code unclear} | {@code not_provided}
+     * @param status {@code provided} | {@code unclear} | {@code not_provided} |
+     *     {@code not_applicable} | {@code conflicting}
      * @param reason why the status was set (never blank)
      * @param documentVersionId evidence or owning document version, or null
      * @param documentFileName that version's file name, or null
@@ -91,6 +100,7 @@ public final class ChecklistAssessor {
             String definitionScope,
             String country,
             String industry,
+            String note,
             Long entityId,
             String entityName,
             Long siteId,
@@ -213,6 +223,7 @@ public final class ChecklistAssessor {
     private static Result conflicting(Result result, MandateQa.ConflictRow conflict) {
         return new Result(result.item(), result.checklistCode(), result.checklistVersion(),
                 result.definitionScope(), result.country(), result.industry(),
+                result.note(),
                 result.entityId(), result.entityName(), result.siteId(), result.siteName(),
                 STATUS_CONFLICTING,
                 "conflicting " + conflict.dataPoint() + " across documents: "
@@ -238,9 +249,8 @@ public final class ChecklistAssessor {
         Set<String> included = new HashSet<>();
         for (ChecklistDefinition definition : inScope(catalog, inputs)) {
             for (ChecklistItemDef item : definition.items()) {
-                if (!"remove".equals(latestAction.get(item.key()))) {
+                if (!"remove".equals(latestAction.get(item.key())) && included.add(item.key())) {
                     effective.add(new Effective(item, definition));
-                    included.add(item.key());
                 }
             }
         }
@@ -261,24 +271,69 @@ public final class ChecklistAssessor {
     }
 
     /**
-     * The definitions in scope: every country spine always; an industry checklist
-     * when a classified document carries one of its industries (until the mandate
-     * profile decides scopes in a later ticket).
+     * The definitions in scope (M3-11): each definition's country must match the
+     * mandate's country (an unknown country on either side matches everything, so
+     * mandates without a recorded country keep their spine), and an industry
+     * definition additionally needs one of its industries to be one of the
+     * mandate's industry tags. The spine of a matching country is always on top —
+     * the mandate's effective checklist is the spine plus each of its industries,
+     * and items outside its industries are never asked.
      */
     static List<ChecklistDefinition> inScope(Collection<ChecklistDefinition> catalog,
             Inputs inputs) {
-        Set<String> presentIndustries = inputs.documents().stream()
-                .map(DocScopeRow::industryTag)
-                .filter(tag -> tag != null && !tag.isBlank())
+        String mandateCountry = countryCode(inputs.country());
+        Set<String> mandateIndustries = inputs.industries().stream()
+                .map(MandateQa.IndustryRow::industry)
+                .filter(industry -> industry != null && !industry.isBlank())
+                .map(ChecklistAssessor::normaliseIndustry)
                 .collect(Collectors.toSet());
         List<ChecklistDefinition> inScope = new ArrayList<>();
         for (ChecklistDefinition definition : catalog) {
-            if (definition.isSpine()
-                    || definition.industries().stream().anyMatch(presentIndustries::contains)) {
+            if (!countryMatches(definition, mandateCountry)) {
+                continue;
+            }
+            if (definition.isSpine()) {
+                inScope.add(definition);
+            } else if (definition.industries().stream()
+                    .map(ChecklistAssessor::normaliseIndustry)
+                    .anyMatch(mandateIndustries::contains)) {
                 inScope.add(definition);
             }
         }
         return inScope;
+    }
+
+    /** Whether a definition's country matches the mandate's: unknown on either side matches. */
+    private static boolean countryMatches(ChecklistDefinition definition, String mandateCountry) {
+        String definitionCountry = definition.country();
+        if (definitionCountry == null || definitionCountry.isBlank() || mandateCountry == null) {
+            return true;
+        }
+        return definitionCountry.trim().equalsIgnoreCase(mandateCountry);
+    }
+
+    /**
+     * The ISO-3166 alpha-2 code of the mandate's country, or null when no country is
+     * recorded: {@code India} (its canonical scan name) maps to {@code IN}, a two
+     * letter name is upper-cased, anything else stays unknown and matches all.
+     */
+    public static String countryCode(MandateQa.CountryRow country) {
+        if (country == null || country.country() == null) {
+            return null;
+        }
+        String name = country.country().trim();
+        if (name.isEmpty()) {
+            return null;
+        }
+        if ("india".equalsIgnoreCase(name)) {
+            return "IN";
+        }
+        return name.length() == 2 ? name.toUpperCase(Locale.ROOT) : null;
+    }
+
+    /** Industry labels compare case-insensitively with underscores and spaces folded. */
+    static String normaliseIndustry(String industry) {
+        return industry.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
     }
 
     private static Effective findInCatalog(Collection<ChecklistDefinition> catalog, String key) {
@@ -510,6 +565,7 @@ public final class ChecklistAssessor {
         return new Result(item, definition.code(), definition.version(),
                 definition.scope(), definition.country(),
                 definition.isSpine() ? null : definition.industries().get(0),
+                definition.note(),
                 scope.entityId(), scope.entityName(), scope.siteId(), scope.siteName(),
                 status, reason, documentVersionId, documentFileName, pageIndex, confidence,
                 evidenceVerbatim, clientRequest);
@@ -553,12 +609,18 @@ public final class ChecklistAssessor {
         return false;
     }
 
-    /** The filled ask-the-client wording: {@code {entity}} and {@code {item}} substituted. */
+    /**
+     * The filled ask-the-client wording: {@code {entity}}, {@code {site}} and
+     * {@code {item}} substituted per scope.
+     */
     static String clientWording(ChecklistItemDef item, Scope scope) {
         String entity = scope.entityName() != null ? scope.entityName()
                 : scope.entityRole() != null ? "the " + scope.entityRole() : "the entity";
+        String site = scope.siteName() != null ? "site " + scope.siteName()
+                : scope.fallback() ? "the site" : "";
         return item.clientRequest()
                 .replace("{entity}", entity)
+                .replace("{site}", site)
                 .replace("{item}", item.label());
     }
 

@@ -283,6 +283,7 @@ public final class MandateQaJson {
                 n.put("confidence", row.confidence());
             }
             n.put("client_request", row.clientRequest());
+            n.put("note", row.note());
         }
 
         ArrayNode checklistSummary = root.putArray("checklist_summary");

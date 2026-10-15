@@ -80,12 +80,90 @@ public final class ChecklistStore {
         Map<String, ChecklistDefinition> catalog = new LinkedHashMap<>();
         ChecklistDefinition seed = ChecklistLoader.loadSeedSpine();
         catalog.put(seed.code(), seed);
-        Path parent = dbPath.toAbsolutePath().getParent();
-        Path root = parent == null ? Path.of(DIRECTORY) : parent.resolve(DIRECTORY);
-        for (ChecklistDefinition definition : new ChecklistStore(root).loadAll()) {
+        for (ChecklistDefinition definition : new ChecklistStore(storeRoot(dbPath)).loadAll()) {
             catalog.put(definition.code(), definition);
         }
         return catalog;
+    }
+
+    /**
+     * The checklist store directory beside a workspace database.
+     *
+     * @param dbPath workspace database path
+     * @return {@code {db-parent}/checklists}
+     */
+    public static Path storeRoot(Path dbPath) {
+        Path parent = dbPath.toAbsolutePath().getParent();
+        return parent == null ? Path.of(DIRECTORY) : parent.resolve(DIRECTORY);
+    }
+
+    /**
+     * Publishes one definition as versioned data ({@code {code}.yaml}), the pack
+     * store's discipline: an existing file is never overwritten — a definition the
+     * catalog already carries is reused, not republished. The caller re-loads the
+     * file so what is assessed is exactly what was written and validated.
+     *
+     * @param definition the definition to publish (required)
+     * @return the file path back into the store ({@code {code}.yaml})
+     * @throws ChecklistLoader.ChecklistValidationException when rendering fails
+     * @throws IOException when the directory or file cannot be written
+     */
+    public Path publish(ChecklistDefinition definition)
+            throws ChecklistLoader.ChecklistValidationException, IOException {
+        Path file = checklistsRoot.resolve(definition.code() + ".yaml");
+        if (Files.exists(file)) {
+            return file;
+        }
+        Files.createDirectories(checklistsRoot);
+        Files.writeString(file, render(definition));
+        return file;
+    }
+
+    /** Renders one definition back to the store's YAML shape (the loader's input). */
+    static String render(ChecklistDefinition definition) {
+        StringBuilder yaml = new StringBuilder()
+                .append("code: ").append(definition.code()).append('\n')
+                .append("version: ").append(definition.version()).append('\n')
+                .append("scope: ").append(definition.scope()).append('\n')
+                .append("country: ").append(definition.country()).append('\n');
+        if (definition.note() != null) {
+            yaml.append("note: ").append(quote(definition.note())).append('\n');
+        }
+        if (!definition.industries().isEmpty()) {
+            yaml.append("industries:\n");
+            for (String industry : definition.industries()) {
+                yaml.append("  - ").append(quote(industry)).append('\n');
+            }
+        }
+        yaml.append("items:\n");
+        for (ChecklistItemDef item : definition.items()) {
+            yaml.append("  - key: ").append(item.key()).append('\n')
+                    .append("    label: ").append(quote(item.label())).append('\n')
+                    .append("    level: ").append(item.level()).append('\n')
+                    .append("    granularity: ").append(item.granularity()).append('\n');
+            if (item.entityRole() != null) {
+                yaml.append("    entity_role: ").append(item.entityRole()).append('\n');
+            }
+            yaml.append("    document_type: ").append(quote(item.documentType())).append('\n');
+            if (item.fieldKey() != null) {
+                yaml.append("    field_key: ").append(quote(item.fieldKey())).append('\n');
+            }
+            if (item.ontologyPath() != null) {
+                yaml.append("    ontology_path: ").append(quote(item.ontologyPath())).append('\n');
+            }
+            yaml.append("    mandatory: ").append(item.mandatory()).append('\n')
+                    .append("    basis:\n")
+                    .append("      kind: ").append(item.basisKind()).append('\n')
+                    .append("      text: ").append(quote(item.basisText())).append('\n')
+                    .append("    origin: ").append(item.origin()).append('\n')
+                    .append("    request: ").append(quote(item.clientRequest())).append('\n');
+        }
+        return yaml.toString();
+    }
+
+    /** Double-quotes a YAML scalar, escaping backslashes and quotes. */
+    private static String quote(String value) {
+        return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 
     /**

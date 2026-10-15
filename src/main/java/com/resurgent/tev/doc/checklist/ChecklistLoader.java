@@ -173,7 +173,26 @@ public final class ChecklistLoader {
             }
             items.add(itemFromNode(item, where, keys));
         }
-        return new ChecklistDefinition(code, version, scope, country, industries, items);
+        String note = root.hasNonNull("note") ? root.get("note").asText().trim() : null;
+        return new ChecklistDefinition(code, version, scope, country, industries, items, note);
+    }
+
+    /**
+     * Validates one item mapping against the same rules the loader applies to file
+     * items — the draft path rejects a model-drafted item that breaks any rule
+     * (a missing basis included), so a bad item is dropped, never stored.
+     *
+     * @param item one item mapping from a drafted definition
+     * @param source label used in error messages
+     * @return the validated item
+     * @throws ChecklistValidationException when the item breaks any rule
+     */
+    public static ChecklistItemDef parseItem(JsonNode item, String source)
+            throws ChecklistValidationException {
+        if (item == null || !item.isObject()) {
+            throw new ChecklistValidationException(source + " must be a mapping");
+        }
+        return itemFromNode(item, source, new HashSet<>());
     }
 
     private static ChecklistItemDef itemFromNode(JsonNode item, String where, Set<String> keys)
