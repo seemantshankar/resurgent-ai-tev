@@ -480,7 +480,8 @@ class MandateSitesTest {
                 .contains("quotation_b.pdf")
                 .contains("ppa_b.pdf")
                 .contains("sites: 2");
-        // #134's output is untouched.
-        assertThat(text).contains("documents: 4").contains("stages: 1");
+        // #134's output is untouched: all four documents and the profile stage still
+        // print — the passages stage (#139) only appends.
+        assertThat(text).contains("documents: 4").contains("stage assess_profile");
     }
 }
