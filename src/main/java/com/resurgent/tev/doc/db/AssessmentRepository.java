@@ -404,7 +404,8 @@ public final class AssessmentRepository {
      */
     public MandateQa readMandateQa(long mandateId) throws SQLException {
         return new MandateQa(mandateId, documentDates(mandateId), assessmentRuns(mandateId),
-                new ClauseRepository(connection).clauses(mandateId));
+                new ClauseRepository(connection).clauses(mandateId),
+                new SiteRepository(connection).sitesForMandate(mandateId));
     }
 
     /** Collapses whitespace runs to single spaces, like the layout's {@code text_norm}. */

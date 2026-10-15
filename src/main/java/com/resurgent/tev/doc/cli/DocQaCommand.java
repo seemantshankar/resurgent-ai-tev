@@ -4,6 +4,7 @@ import com.resurgent.tev.doc.db.MandateQaQueryRunner;
 import com.resurgent.tev.doc.query.MandateQa;
 import com.resurgent.tev.doc.query.MandateQaQuery;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.concurrent.Callable;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
@@ -93,6 +94,29 @@ public final class DocQaCommand implements Callable<Integer> {
                 }
             }
             out.printf("clauses: %d%n", qa.clauses().size());
+            // M3-04 (#137): sites with their spelling variants and mentioning
+            // documents — appended at the end so #134's output is untouched.
+            for (MandateQa.SiteRow site : qa.sites()) {
+                out.printf("site %d: %s%n", site.siteId(), site.siteName());
+                for (MandateQa.SiteAliasRow alias : site.aliases()) {
+                    out.printf("  alias %s | %s | score %s | %s%n",
+                            blankToDash(alias.aliasText()),
+                            blankToDash(alias.fileName()),
+                            alias.matchScore() != null
+                                    ? String.format(Locale.ROOT, "%.2f", alias.matchScore())
+                                    : "-",
+                            blankToDash(alias.matchReason()));
+                }
+                StringBuilder files = new StringBuilder();
+                for (MandateQa.SiteDocumentRow doc : site.documents()) {
+                    if (files.length() > 0) {
+                        files.append(", ");
+                    }
+                    files.append(blankToDash(doc.fileName()));
+                }
+                out.printf("  documents: %s%n", files.length() == 0 ? "-" : files);
+            }
+            out.printf("sites: %d%n", qa.sites().size());
             return 0;
         } catch (IllegalArgumentException e) {
             err.println("qa rejected: " + e.getMessage());

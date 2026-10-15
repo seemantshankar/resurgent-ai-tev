@@ -12,12 +12,15 @@ import java.util.List;
  *     and upload date
  * @param stages the latest assessment run per stage
  * @param clauses every clause read for the mandate's clause-carrying documents (M3-08)
+ * @param sites the identified sites with their spelling aliases and mentioning documents
+ *     (M3-04; appended)
  */
 public record MandateQa(
         long mandateId,
         List<DocumentDateRow> documents,
         List<AssessmentRunRow> stages,
-        List<ClauseRow> clauses) {
+        List<ClauseRow> clauses,
+        List<SiteRow> sites) {
 
     /**
      * One document version's date assessment.
@@ -124,4 +127,50 @@ public record MandateQa(
             String unit,
             String currency,
             String scale) {}
+
+    /**
+     * One identified mandate site (GLOSSARY "Site"): the canonical name, the spelling
+     * mentions recorded per document and the documents the site was seen in.
+     *
+     * @param siteId site id
+     * @param siteName canonical site name (the first mention that created the site)
+     * @param aliases one row per spelling mention, each with why it matched
+     * @param documents distinct documents that mention the site
+     */
+    public record SiteRow(
+            long siteId,
+            String siteName,
+            List<SiteAliasRow> aliases,
+            List<SiteDocumentRow> documents) {}
+
+    /**
+     * One spelling of a site as seen in one document (M3-04).
+     *
+     * @param documentVersionId document the spelling was seen in
+     * @param logicalName document logical name
+     * @param fileName stored file name
+     * @param aliasText the spelling exactly as seen
+     * @param matchScore loose site score when the mention was merged, 1.0 for the first
+     *     mention that created the site
+     * @param matchReason why the mention matched (never blank — "every match records why")
+     */
+    public record SiteAliasRow(
+            long documentVersionId,
+            String logicalName,
+            String fileName,
+            String aliasText,
+            Double matchScore,
+            String matchReason) {}
+
+    /**
+     * A document that mentions a site (M3-04).
+     *
+     * @param documentVersionId version id
+     * @param logicalName document logical name
+     * @param fileName stored file name
+     */
+    public record SiteDocumentRow(
+            long documentVersionId,
+            String logicalName,
+            String fileName) {}
 }

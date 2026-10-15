@@ -27,7 +27,9 @@ public record FactRow(
         String extractionMethod,
         Double confidence,
         String statedOrDerived,
-        List<EvidenceRow> evidence) {
+        List<EvidenceRow> evidence,
+        Long siteId,
+        String siteName) {
 
     public FactRow {
         Objects.requireNonNull(evidence, "evidence");
