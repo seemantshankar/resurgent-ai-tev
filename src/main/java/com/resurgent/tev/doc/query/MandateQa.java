@@ -18,6 +18,10 @@ import java.util.List;
  *     (M3-04; appended)
  * @param passages the chapter passages assessed from the stored parse output, with the
  *     facts linked to each chapter (M3-06; appended)
+ * @param industries the mandate's industries, several allowed, each with its reason and
+ *     page provenance; an industry the packs have not seen is marked new (M3-05; appended)
+ * @param country the mandate's country with its reason and page provenance, or null when
+ *     none was detected (M3-05; appended)
  */
 public record MandateQa(
         long mandateId,
@@ -26,7 +30,9 @@ public record MandateQa(
         List<EntityRow> entities,
         List<ClauseRow> clauses,
         List<SiteRow> sites,
-        List<PassageRow> passages) {
+        List<PassageRow> passages,
+        List<IndustryRow> industries,
+        CountryRow country) {
 
     /**
      * One document version's date assessment.
@@ -268,4 +274,43 @@ public record MandateQa(
             long documentVersionId,
             String logicalName,
             String fileName) {}
+
+    /**
+     * One industry recorded for the mandate, with its reason and page provenance.
+     *
+     * @param industryRecordId the stored record id
+     * @param industry industry name as recorded
+     * @param isNewIndustry true when the packs have not seen this industry before
+     * @param reason why the industry was recorded (human-readable)
+     * @param verbatim the verbatim text the industry was read from, when anchored
+     * @param pageIndex provenance page for the verbatim, when anchored
+     * @param documentVersionId the version the industry was read from, may be null
+     */
+    public record IndustryRow(
+            long industryRecordId,
+            String industry,
+            boolean isNewIndustry,
+            String reason,
+            String verbatim,
+            Integer pageIndex,
+            Long documentVersionId) {}
+
+    /**
+     * The mandate's single country with its reason and page provenance, or absent
+     * (null {@code MandateQa.country}) when none was detected.
+     *
+     * @param countryRecordId the stored record id
+     * @param country country name as recorded
+     * @param reason why the country was recorded (human-readable)
+     * @param verbatim the verbatim text the country was read from, when anchored
+     * @param pageIndex provenance page for the verbatim, when anchored
+     * @param documentVersionId the version the country was read from, may be null
+     */
+    public record CountryRow(
+            long countryRecordId,
+            String country,
+            String reason,
+            String verbatim,
+            Integer pageIndex,
+            Long documentVersionId) {}
 }

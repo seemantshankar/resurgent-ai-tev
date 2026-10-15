@@ -317,7 +317,10 @@ class MandateSitesTest {
         assertThat(ambiguous.matchReason())
                 .startsWith("llm confirmed score 0.73:")
                 .contains("transliteration variant of the same project");
-        assertThat(fake.calls()).isEqualTo(1);
+        // The full pipeline shares this fake (industry and country fallbacks also
+        // ask), so count the site confirmations only: exactly one was made.
+        assertThat(fake.callsWithSystemContaining("whether two spellings of a project site name"))
+                .isEqualTo(1);
     }
 
     @Test
@@ -343,7 +346,10 @@ class MandateSitesTest {
                 .startsWith("llm rejected score 0.73:")
                 .contains("different village names");
         assertThat(denied.matchScore()).isBetween(0.5, 0.8);
-        assertThat(fake.calls()).isEqualTo(1);
+        // The full pipeline shares this fake (industry and country fallbacks also
+        // ask), so count the site confirmations only: exactly one was made.
+        assertThat(fake.callsWithSystemContaining("whether two spellings of a project site name"))
+                .isEqualTo(1);
         assertThat(siteNamed(qa, "Jaisingpura").aliases()).hasSize(1);
     }
 

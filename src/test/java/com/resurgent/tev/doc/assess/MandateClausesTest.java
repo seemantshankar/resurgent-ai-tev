@@ -135,8 +135,10 @@ class MandateClausesTest {
         FakeDocLlmClient fake = new FakeDocLlmClient(LLM_REPLY);
         DocAssessRunner.run(MANDATE, dbPath, fake);
 
-        // Exactly one clause call: the profile stage found the stated execution date.
-        assertThat(fake.calls()).isEqualTo(1);
+        // Exactly one clause call: the profile stage found the stated execution date,
+        // and the industry/country fallbacks in that stage also ask — so count the
+        // clause step only (M3-05 #138 scopes call counts this way).
+        assertThat(fake.callsWithSystemContaining("You read contract clauses")).isEqualTo(1);
 
         List<MandateQa.ClauseRow> clauses = qa().clauses();
         MandateQa.ClauseRow termination = clauseByType(clauses, "termination");

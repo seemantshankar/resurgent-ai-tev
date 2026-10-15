@@ -142,20 +142,31 @@ public final class AssessProfileRunner implements AssessStage {
         // group companies — and tag the facts (appended step; see EntityScan).
         EntityScan.Stats entityStats = EntityScan.run(connection, mandateId, client, usage::add);
 
+        // M3-05 (issue #138): the mandate's industries and country, detected from the
+        // documents. Replace semantics like the dates: clear this run's predecessor first.
+        assessment.clearIndustryCountry(mandateId);
+        IndustryScan.Counts industries = IndustryScan.scan(mandateId, assessment, docs,
+                versions, dbPath, client, usage::add);
+        CountryScan.Counts country = CountryScan.scan(mandateId, assessment, docs,
+                versions, client, usage::add);
+
         recordStats(repo, parseRunId, usage, versions.size(), statedCount, metadataCount,
-                noneCount, entityStats, siteResult);
+                noneCount, entityStats, siteResult, industries, country);
         assessment.upsertAssessmentRun(mandateId, STAGE, "completed", parseRunId,
                 startedAt, Timestamps.now(),
-                metricsJson(versions.size(), statedCount, metadataCount, noneCount, entityStats,
-                        siteResult, usage));
+                metricsJson(versions.size(), statedCount, metadataCount, noneCount,
+                        entityStats, siteResult, usage, industries, country));
 
         String detail = String.format(Locale.ROOT,
                 "%d documents (%d stated, %d file_metadata, %d none); %d sites (%d aliases),"
-                        + " %d entities, %d facts (%d tagged)",
+                        + " %d entities, %d facts (%d tagged); %d industries (%d new);"
+                        + " country: %s",
                 versions.size(), statedCount, metadataCount, noneCount,
                 siteResult.sites(), siteResult.aliases(),
                 entityStats.entitiesTotal(), entityStats.factsTagged()
-                        + entityStats.factsUntagged(), entityStats.factsTagged());
+                        + entityStats.factsUntagged(), entityStats.factsTagged(),
+                industries.recorded(), industries.newIndustries(),
+                country.country() == null ? "none" : country.country());
         return new StageResult(STAGE, versions.size(), detail);
     }
 
@@ -222,7 +233,8 @@ public final class AssessProfileRunner implements AssessStage {
 
     private static void recordStats(WorkspaceRepository repo, Long parseRunId,
             List<DocLlmClient.Usage> usage, int total, int stated, int metadata, int none,
-            EntityScan.Stats entities, SiteScan.Result sites) throws Exception {
+            EntityScan.Stats entities, SiteScan.Result sites, IndustryScan.Counts industries,
+            CountryScan.Counts country) throws Exception {
         if (parseRunId == null) {
             return;
         }
@@ -244,6 +256,12 @@ public final class AssessProfileRunner implements AssessStage {
                 (double) entities.factsUntagged(), null);
         repo.recordRunStat(parseRunId, STAGE, "sites_total", (double) sites.sites(), null);
         repo.recordRunStat(parseRunId, STAGE, "site_aliases", (double) sites.aliases(), null);
+        repo.recordRunStat(parseRunId, STAGE, "industries_recorded",
+                (double) industries.recorded(), null);
+        repo.recordRunStat(parseRunId, STAGE, "industries_new",
+                (double) industries.newIndustries(), null);
+        repo.recordRunStat(parseRunId, STAGE, "country_recorded",
+                country.country() == null ? 0.0 : 1.0, null);
         repo.recordRunStat(parseRunId, STAGE, "llm_calls",
                 (double) usage.stream().mapToInt(DocLlmClient.Usage::calls).sum(), null);
 
@@ -261,7 +279,8 @@ public final class AssessProfileRunner implements AssessStage {
     }
 
     private static String metricsJson(int total, int stated, int metadata, int none,
-            EntityScan.Stats entities, SiteScan.Result sites, List<DocLlmClient.Usage> usage) {
+            EntityScan.Stats entities, SiteScan.Result sites, List<DocLlmClient.Usage> usage,
+            IndustryScan.Counts industries, CountryScan.Counts country) {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("documents_total", total);
         node.put("dates_stated", stated);
@@ -275,6 +294,11 @@ public final class AssessProfileRunner implements AssessStage {
         node.put("facts_untagged", entities.factsUntagged());
         node.put("sites_total", sites.sites());
         node.put("site_aliases", sites.aliases());
+        node.put("industries", industries.recorded());
+        node.put("industries_new", industries.newIndustries());
+        if (country.country() != null) {
+            node.put("country", country.country());
+        }
         node.put("llm_calls", usage.stream().mapToInt(DocLlmClient.Usage::calls).sum());
         return node.toString();
     }
