@@ -21,7 +21,8 @@ import java.util.Map;
  * Persistence for extracted facts, evidence, and provenance (Architecture §6.5, S2.5).
  * Re-extract replaces the fact set for a parse_run (children first). Quote resolution
  * matches {@code span.text_raw} → {@code block.text_raw} → {@code table_cell.text_raw}
- * on the cited page; unresolved quotes stay citable with {@code resolution='missing'}.
+ * on the cited page, then the parsed page text ({@code cloud_parse_page}) for scans with
+ * no layout rows; unresolved quotes stay citable with {@code resolution='missing'}.
  *
  * <p>Connection is owned by the caller; methods never commit or roll back.
  */
@@ -332,54 +333,103 @@ public final class FactRepository {
 
     /**
      * Quote resolution: exact match on {@code span.text_raw}, then {@code block.text_raw},
-     * then {@code table_cell.text_raw} for the cited page. First hit wins.
+     * then {@code table_cell.text_raw} for the cited page; finally a text containment
+     * match against the LlamaParse page ({@code cloud_parse_page}) — scanned documents
+     * have no layout rows, so the parsed markdown is their only citable text. First hit
+     * wins.
      */
     public QuoteHit resolveQuote(long documentVersionId, Citation citation) throws SQLException {
         Long pageId = findPageId(documentVersionId, citation.pageIndex());
-        if (pageId == null) {
-            return QuoteHit.missing(citation.verbatim(), citation.pageIndex());
-        }
-        // span
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT s.span_id, s.block_id FROM span s"
-                        + " JOIN block b ON b.block_id = s.block_id"
-                        + " WHERE b.page_id = ? AND s.text_raw = ? LIMIT 1")) {
-            ps.setLong(1, pageId);
-            ps.setString(2, citation.verbatim());
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    return new QuoteHit(true, pageId, rs.getLong("block_id"),
-                            rs.getLong("span_id"), null, citation);
+        if (pageId != null) {
+            // span
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT s.span_id, s.block_id FROM span s"
+                            + " JOIN block b ON b.block_id = s.block_id"
+                            + " WHERE b.page_id = ? AND s.text_raw = ? LIMIT 1")) {
+                ps.setLong(1, pageId);
+                ps.setString(2, citation.verbatim());
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return new QuoteHit(true, pageId, rs.getLong("block_id"),
+                                rs.getLong("span_id"), null, citation);
+                    }
+                }
+            }
+            // block
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT block_id FROM block WHERE page_id = ? AND text_raw = ? LIMIT 1")) {
+                ps.setLong(1, pageId);
+                ps.setString(2, citation.verbatim());
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return new QuoteHit(true, pageId, rs.getLong("block_id"), null, null,
+                                citation);
+                    }
+                }
+            }
+            // table_cell
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT tc.table_cell_id, tg.block_id FROM table_cell tc"
+                            + " JOIN table_grid tg ON tg.table_grid_id = tc.table_grid_id"
+                            + " JOIN block b ON b.block_id = tg.block_id"
+                            + " WHERE b.page_id = ? AND tc.text_raw = ? LIMIT 1")) {
+                ps.setLong(1, pageId);
+                ps.setString(2, citation.verbatim());
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return new QuoteHit(true, pageId, rs.getLong("block_id"), null,
+                                rs.getLong("table_cell_id"), citation);
+                    }
                 }
             }
         }
-        // block
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT block_id FROM block WHERE page_id = ? AND text_raw = ? LIMIT 1")) {
-            ps.setLong(1, pageId);
-            ps.setString(2, citation.verbatim());
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    return new QuoteHit(true, pageId, rs.getLong("block_id"), null, null, citation);
-                }
-            }
-        }
-        // table_cell
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT tc.table_cell_id, tg.block_id FROM table_cell tc"
-                        + " JOIN table_grid tg ON tg.table_grid_id = tc.table_grid_id"
-                        + " JOIN block b ON b.block_id = tg.block_id"
-                        + " WHERE b.page_id = ? AND tc.text_raw = ? LIMIT 1")) {
-            ps.setLong(1, pageId);
-            ps.setString(2, citation.verbatim());
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    return new QuoteHit(true, pageId, rs.getLong("block_id"), null,
-                            rs.getLong("table_cell_id"), citation);
-                }
-            }
+        QuoteHit pageHit = resolveQuoteInParsedPages(documentVersionId, citation, pageId);
+        if (pageHit != null) {
+            return pageHit;
         }
         return QuoteHit.missing(citation, pageId);
+    }
+
+    /** Containment match of the verbatim against the cited page's parsed text. */
+    private QuoteHit resolveQuoteInParsedPages(long documentVersionId, Citation citation,
+            Long pageId) throws SQLException {
+        String loose = normalizeLoose(citation.verbatim());
+        String tight = normalizeTight(citation.verbatim());
+        if (tight.isEmpty()) {
+            return null;
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT page_markdown, page_text FROM cloud_parse_page"
+                        + " WHERE document_version_id = ? AND page_index = ?")) {
+            ps.setLong(1, documentVersionId);
+            ps.setInt(2, citation.pageIndex());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    for (int column = 1; column <= 2; column++) {
+                        String page = rs.getString(column);
+                        if (page == null || page.isBlank()) {
+                            continue;
+                        }
+                        // loose keeps word shapes (space-normalized containment);
+                        // tight drops markdown pipes and layout gaps so table cells
+                        // still match a quote read across them
+                        if (normalizeLoose(page).contains(loose)
+                                || normalizeTight(page).contains(tight)) {
+                            return new QuoteHit(true, pageId, null, null, null, citation);
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String normalizeLoose(String text) {
+        return text == null ? "" : text.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+    }
+
+    private static String normalizeTight(String text) {
+        return text == null ? "" : text.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
     }
 
     /**
@@ -635,10 +685,6 @@ public final class FactRepository {
             Long spanId,
             Long tableCellId,
             Citation citation) {
-
-        static QuoteHit missing(String verbatim, int pageIndex) {
-            return new QuoteHit(false, null, null, null, null, Citation.of(pageIndex, verbatim));
-        }
 
         static QuoteHit missing(Citation citation, Long pageId) {
             return new QuoteHit(false, pageId, null, null, null, citation);

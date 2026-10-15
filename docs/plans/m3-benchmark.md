@@ -11,13 +11,26 @@ class skips cleanly (one skipped test in every `mvn test` run).
 ```bash
 mvn test -Dtest=RealDocumentBenchmarkTest \
     -Dtev.live.extract=true \
-    -Dtev.benchmark.dirs="/absolute/path/to/Bhagyanager Solar Ltd. Client Docs"
+    -Dtev.benchmark.dirs="/absolute/path/to/Bhagyanager Solar Ltd. Client Docs" \
+    -Dtev.benchmark.packdir="/absolute/path/to/an/earlier/run/packs/general"
 ```
 
 - `-Dtev.benchmark.dirs` — comma-separated client document folders; **each folder
   is one mandate** and gets its own `workspace.db`.
+- `-Dtev.benchmark.packdir` — pack store of an earlier run (the `packs/` folder
+  containing `registry.json`, or one of its industry subfolders). When the
+  mandate's own store is empty it is copied to `{db-parent}/packs`, so classify,
+  extract, bind and assess all resolve induced packs exactly like production.
+  Without a matching pack a document stays `unknown` — a pack is never invented.
+  The benchmark ingests unlabeled folders, so it classifies with an empty role
+  (no role filter) and uses the same live LLM tie-break as the CLI.
 - `-Dtev.benchmark.out` — optional output root (default `target/benchmark/`,
   gitignored; the folder name is sanitized to one subdirectory per mandate).
+  If the repo sits inside a cloud-synced folder (macOS iCloud Drive under
+  `~/Documents`), pass an output root **outside** it, e.g.
+  `-Dtev.benchmark.out=/tmp/tev-benchmark`: the sync daemon evicts and copies
+  concurrent SQLite writes, which fails commits with `SQLITE_IOERR_DELETE_NOENT`
+  and leaves `X 2` conflict folders behind.
 - `-Dtev.benchmark.assert=false` — print-only mode (skips the Bhagyanager
   expectation checks).
 
@@ -32,8 +45,12 @@ Per mandate: every document's classified pack and fact counts, the five assess
 stage statuses, country/industries, entities by role, sites with their document
 evidence, passages and clause counts, checklist results grouped by status,
 conflicts grouped by settlement tier (`rule`/`ai`/`open`), versions-differ rows,
-recorded comparison skips, and the LLM cost rollup from `llm_usage`
-(calls, tokens, USD per stage plus a total).
+recorded comparison skips, and the LLM cost rollup from `llm_usage` (calls,
+tokens and cost per stage plus a total). LlamaCloud bills credits, not USD, and
+`LlamaExtractAdapter` stores that credit total in the `llm_usage.cost_usd` slot,
+so `llama*` rows are reported as credits and converted to USD at
+`llama.credits_usd_rate` (default 1,000 credits = $1.20); other rows already hold
+USD. The total is USD either way.
 
 ## Bhagyanager expectations (issue #149 AC2)
 

@@ -81,7 +81,7 @@ public final class ClauseSlots {
                     money.ok() ? money.amount().doubleValue() : null,
                     null,
                     money.ok() ? money.currency() : null,
-                    money.ok() ? money.scale().wireName() : null,
+                    money.ok() && money.scale() != null ? money.scale().wireName() : null,
                     null));
         }
         if (DATE_KEYS.contains(slotKey)) {

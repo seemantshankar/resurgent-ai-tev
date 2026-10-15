@@ -2,6 +2,7 @@ package com.resurgent.tev.doc.extract;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.resurgent.tev.doc.db.CloudParsePageRepository;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.ingest.BlobStore;
@@ -125,9 +126,15 @@ public final class ExtractService {
                         0, 0, 0, 0, 0, e.getMessage());
             }
 
-            List<FactCandidate> candidates = normalizeAll(result.facts());
+            // Money context from the parsed pages (Excel treatment: figures stay
+            // numbers; currency and scale come from what the document states).
+            // No parse pages means no context and nothing invented.
+            DocMoneyContext moneyContext = DocMoneyContext.from(
+                    new CloudParsePageRepository(db.connection())
+                            .loadTextPages(documentVersionId));
+            List<FactCandidate> candidates = normalizeAll(result.facts(), moneyContext);
             List<FactRepository.FactWrite> writes =
-                    buildFactWrites(pack, candidates, result, client.id());
+                    buildFactWrites(pack, candidates, result, client.id(), moneyContext);
 
             int derivedCount = (int) writes.stream()
                     .filter(w -> "derived".equals(w.extractionMethod())).count();
@@ -247,11 +254,11 @@ public final class ExtractService {
 
     // --- pipeline steps ---
 
-    static List<FactCandidate> normalizeAll(List<FactCandidate> input) {
+    static List<FactCandidate> normalizeAll(List<FactCandidate> input, DocMoneyContext context) {
         List<FactCandidate> out = new ArrayList<>();
         if (input != null) {
             for (FactCandidate c : input) {
-                out.add(CandidateNormalizer.normalize(c));
+                out.add(CandidateNormalizer.normalize(c, context));
             }
         }
         return out;
@@ -262,7 +269,8 @@ public final class ExtractService {
      * including the derived net-worth fact when the pack can support it.
      */
     static List<FactRepository.FactWrite> buildFactWrites(DocTypePack pack,
-            List<FactCandidate> candidates, ExtractResult result, String extractorId) {
+            List<FactCandidate> candidates, ExtractResult result, String extractorId,
+            DocMoneyContext moneyContext) {
         List<FactRepository.FactWrite> writes = new ArrayList<>();
         List<FactCandidate> stated = new ArrayList<>();
         List<FactCandidate> lineCandidates = new ArrayList<>();
@@ -284,7 +292,8 @@ public final class ExtractService {
         }
 
         // Quotation line items: one fact per line + parent totals (already in candidates).
-        writes.addAll(lineItemWrites(pack, lineCandidates, result, documentSubject, extractorId));
+        writes.addAll(lineItemWrites(pack, lineCandidates, result, documentSubject, extractorId,
+                moneyContext));
 
         // Derived net worth when the pack can compute it and none was stated.
         FactRepository.FactWrite derived =
@@ -357,7 +366,7 @@ public final class ExtractService {
      */
     static List<FactRepository.FactWrite> lineItemWrites(DocTypePack pack,
             List<FactCandidate> lineCandidates, ExtractResult result, String vendor,
-            String extractorId) {
+            String extractorId, DocMoneyContext moneyContext) {
         List<FactRepository.FactWrite> lines = new ArrayList<>();
         String tablePath = null;
         String tableRoot = null;
@@ -385,7 +394,8 @@ public final class ExtractService {
             line.confidence(c.confidence());
             if (c.valueNumber() != null) {
                 line.valueNumber(c.valueNumber());
-                line.valueText(c.valueText() != null ? c.valueText() : String.valueOf(c.valueNumber()));
+                line.valueText(c.valueText() != null ? c.valueText()
+                        : MoneyNormalizer.plain(c.valueNumber()));
             } else if (c.valueText() != null) {
                 line.valueText(c.valueText());
             } else if (description != null) {
@@ -394,7 +404,7 @@ public final class ExtractService {
             line.currency(c.currency());
             line.scale(c.scale());
             line.absoluteAmount(c.absoluteAmount());
-            CandidateNormalizer.normalize(line);
+            CandidateNormalizer.normalize(line, moneyContext);
             lines.add(new FactRepository.FactWrite(
                     "line_items",
                     path,
@@ -445,7 +455,7 @@ public final class ExtractService {
             } else if (description != null) {
                 line.valueText(description);
             }
-            CandidateNormalizer.normalize(line);
+            CandidateNormalizer.normalize(line, moneyContext);
             lines.add(new FactRepository.FactWrite(
                     "line_items",
                     path,
@@ -500,11 +510,20 @@ public final class ExtractService {
         if (a == null || l == null) {
             return null;
         }
+        // V36 mirror: derivation needs both parents read at the same scale.
+        // Same stated scale → an absolute difference. Both unstated → the
+        // difference of the displayed figures, scale and absolute stay empty.
+        // Mixed scales → refuse rather than combine incompatible bases.
+        if (!java.util.Objects.equals(assets.scale(), liabilities.scale())) {
+            return null;
+        }
         BigDecimal net = a.subtract(l);
         FactCandidate derived = new FactCandidate("net_worth", ValueKind.MONEY);
-        derived.absoluteAmount(net.toPlainString());
+        if (assets.scale() != null) {
+            derived.absoluteAmount(net.toPlainString());
+        }
         derived.currency(assets.currency() != null ? assets.currency() : liabilities.currency());
-        derived.scale(assets.scale() != null ? assets.scale() : liabilities.scale());
+        derived.scale(assets.scale());
         derived.valueNumber(net.doubleValue());
         derived.valueText(net.toPlainString());
         derived.confidence(minConfidence(assets, liabilities));

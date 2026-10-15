@@ -87,8 +87,16 @@ public final class Comparisons {
             return Comparison.notComparable(
                     "different currencies: " + left.currency() + " vs " + right.currency());
         }
-        return compareMagnitudes(new BigDecimal(left.absoluteAmount()),
-                new BigDecimal(right.absoluteAmount()), "");
+        // V36 left unstated money without an absolute amount. The comparator
+        // still judges such figures at face value (the pre-V36 assumption),
+        // but that assumption stays a comparison rule, not stored data.
+        return compareMagnitudes(faceValue(left), faceValue(right), "");
+    }
+
+    private static BigDecimal faceValue(MoneyNormalizer.Result money) {
+        return money.absoluteAmount() != null
+                ? new BigDecimal(money.absoluteAmount())
+                : money.amount();
     }
 
     /**

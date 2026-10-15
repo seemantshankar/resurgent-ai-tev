@@ -11,8 +11,11 @@ import java.util.regex.Pattern;
  * One home currency for a parse run, read from address text on any sheet.
  * A country, an Indian state, or a 6-digit PIN names India. Two different
  * currencies leave the home currency unresolved, so a bare {@code $} stays unresolved.
+ *
+ * <p>{@link #collectInto} is also the document-extract side's region cue
+ * ({@code DocMoneyContext}) so both pipelines resolve home currency the same way.
  */
-final class HomeCurrency {
+public final class HomeCurrency {
 
     private static final Pattern INDIA = Pattern.compile(
             "(?i)\\b(?:india|andhra pradesh|arunachal pradesh|assam|bihar|chhattisgarh|goa|"
@@ -38,9 +41,9 @@ final class HomeCurrency {
             if (cell.numericValue() != null && !cell.numericValue().isBlank()) {
                 continue;
             }
-            collect(found, cell.textValue());
+            collectInto(found, cell.textValue());
             if (!sameText(cell.textValue(), cell.displayValue())) {
-                collect(found, cell.displayValue());
+                collectInto(found, cell.displayValue());
             }
         }
         if (found.size() == 1) {
@@ -56,7 +59,11 @@ final class HomeCurrency {
         return left.equals(right);
     }
 
-    private static void collect(Set<String> found, String text) {
+    /**
+     * Adds the currencies one text names (address region, PIN, bare currency-name cell).
+     * Shared with the document side so region rules never drift apart.
+     */
+    public static void collectInto(Set<String> found, String text) {
         if (text == null || text.isBlank()) {
             return;
         }

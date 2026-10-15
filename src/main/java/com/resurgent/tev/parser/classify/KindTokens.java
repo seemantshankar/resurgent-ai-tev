@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
  * scale or currency term added to one silently missed the others. Each regex lives
  * here once, with its normalizer beside it.
  */
-final class KindTokens {
+public final class KindTokens {
 
     /** Currency symbols and ISO codes. A bare {@code $} is not an ISO code. */
     static final Pattern CURRENCY = Pattern.compile(
@@ -168,8 +168,12 @@ final class KindTokens {
         return null;
     }
 
-    /** Canonical unit key so case/plural spellings of one unit agree on the wire. */
-    static String normalizeUnit(String token) {
+    /**
+     * Canonical unit key so case/plural spellings of one unit agree on the wire.
+     * Shared with the document side ({@code doc.extract.CandidateNormalizer}) so
+     * quantity/rate groupings and comparisons key identically.
+     */
+    public static String normalizeUnit(String token) {
         String t = token.toLowerCase(Locale.ROOT).replace(".", "").replace(" ", "");
         if (t.equals("%") || t.equals("percent")) {
             return "percent";

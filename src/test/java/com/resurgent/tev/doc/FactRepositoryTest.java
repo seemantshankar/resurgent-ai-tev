@@ -2,6 +2,7 @@ package com.resurgent.tev.doc;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.resurgent.tev.doc.db.CloudParsePageRepository;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.extract.Citation;
@@ -237,6 +238,46 @@ class FactRepositoryTest {
             assertThat(rs.next()).isTrue();
             assertThat(rs.getString(1)).isEqualTo("extracted");
         }
+    }
+
+    @Test
+    void quoteResolvesFromCloudParsePageWhenNoLayoutText() throws Exception {
+        // scanned doc: no spans/blocks, only the LlamaParse markdown carries the text
+        new CloudParsePageRepository(connection).replacePages(documentVersionId, "pjb-test",
+                "agentic",
+                List.of("| Net Sales | 571,178,252.43 |\nTotal Income of the year"),
+                List.of("Net Sales 571,178,252.43"));
+
+        facts.replaceFacts(parseRunId, documentVersionId, List.of(
+                moneyFact("a", "x", "1", 0.9, Citation.of(1, "Net Sales 571,178,252.43")),
+                moneyFact("b", "y", "2", 0.9, Citation.of(1, "net sales 571,178,252.43")),
+                moneyFact("c", "z", "3", 0.9, Citation.of(1, "text on no parsed page"))));
+
+        List<FactRow> rows = facts.query(FactQuery.forMandate(1L).withVersion(documentVersionId));
+        assertThat(byKey(rows, "a").evidence().get(0).resolution()).isEqualTo("resolved");
+        assertThat(byKey(rows, "b").evidence().get(0).resolution()).isEqualTo("resolved");
+        assertThat(byKey(rows, "c").evidence().get(0).resolution()).isEqualTo("missing");
+    }
+
+    @Test
+    void quoteResolvesFromCloudParsePageWithoutPageRow() throws Exception {
+        // scan-only docs can have facts cited to pages that never got a layout page row
+        long docId = docs.insertDocument(1L, "SCAN", "agreement", null);
+        long versionId = docs.insertDocumentVersion(docId, "v1", "scan.pdf",
+                "hash-scan", ".pdf", "agreement", 2, true, null, null);
+        new CloudParsePageRepository(connection).replacePages(versionId, "pjb-scan", "agentic",
+                List.of("Consolidated Balance Sheet", "Gross Profit 25,616,169.45 for the year"),
+                List.of("Consolidated Balance Sheet", "Gross Profit 25,616,169.45 for the year"));
+
+        facts.replaceFacts(parseRunId, versionId, List.of(
+                moneyFact("gp", "25,616,169.45", "25616169.45", 0.9,
+                        Citation.of(2, "Gross Profit 25,616,169.45 for the year"))));
+
+        List<FactRow> rows = facts.query(FactQuery.forMandate(1L).withVersion(versionId));
+        FactRow gp = byKey(rows, "gp");
+        assertThat(gp.evidence()).hasSize(1);
+        assertThat(gp.evidence().get(0).resolution()).isEqualTo("resolved");
+        assertThat(gp.evidence().get(0).provenanceId()).isNotNull();
     }
 
     private static FactRow byKey(List<FactRow> rows, String fieldKey) {

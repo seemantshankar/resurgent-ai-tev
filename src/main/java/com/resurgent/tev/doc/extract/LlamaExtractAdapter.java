@@ -157,6 +157,17 @@ public final class LlamaExtractAdapter implements ExtractClient {
     }
 
     /**
+     * Vendor credit rate as configured in the environment, for callers that report on
+     * {@code llm_usage.cost_usd} rows written by this adapter (those hold credits, not USD).
+     */
+    public static double usdPerCredit() {
+        Map<String, String> env = loadEnv();
+        Double rate = parseDouble(
+                firstNonBlank(env, KEY_CREDITS_USD_RATE, envName(KEY_CREDITS_USD_RATE)));
+        return rate == null || rate <= 0 ? DEFAULT_USD_PER_CREDIT : rate;
+    }
+
+    /**
      * Process env plus optional {@code .env} in the working directory (and parents).
      * Process env wins. Keys are kept as written so lowercase {@code llamaparse_api_key} works.
      */
@@ -514,7 +525,9 @@ public final class LlamaExtractAdapter implements ExtractClient {
 
         if (value.isNumber()) {
             candidate.valueNumber(value.asDouble());
-            candidate.valueText(value.asText());
+            // plain figure text: Double.toString turns large amounts into
+            // scientific notation, which money parsing and quote matching lose
+            candidate.valueText(value.decimalValue().stripTrailingZeros().toPlainString());
         } else if (value.isBoolean()) {
             candidate.valueText(value.asBoolean() ? "true" : "false");
         } else {
@@ -596,14 +609,24 @@ public final class LlamaExtractAdapter implements ExtractClient {
         return ValueKind.TEXT;
     }
 
-    /** Tier from the request option, else the configured default; never a blanket agentic. */
+    /**
+     * Extract tier for the request: the parse tier mapped onto what LlamaExtract accepts,
+     * else the configured default. Never a blanket agentic.
+     *
+     * <p>LlamaParse's cheapest tier, {@code fast}, has no LlamaExtract equivalent — sending
+     * it in {@code configuration.tier} is rejected with HTTP 422 — so a fast parse extracts
+     * at {@code cost_effective}, the next tier up that both services accept.
+     */
     private String resolveTier(Map<String, String> options) {
         String raw = options != null ? options.get(KEY_PARSE_TIER) : null;
         if (raw == null || raw.isBlank()) {
             return defaultTier;
         }
         try {
-            return ParseTier.fromWire(raw).wireName();
+            ParseTier parsed = ParseTier.fromWire(raw);
+            return parsed == ParseTier.FAST
+                    ? ParseTier.COST_EFFECTIVE.wireName()
+                    : parsed.wireName();
         } catch (IllegalArgumentException e) {
             return defaultTier;
         }

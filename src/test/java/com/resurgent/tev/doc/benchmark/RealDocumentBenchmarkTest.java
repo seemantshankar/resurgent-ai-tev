@@ -6,7 +6,10 @@ import com.resurgent.tev.doc.assess.DocAssessRunner;
 import com.resurgent.tev.doc.bind.PackPathBinder;
 import com.resurgent.tev.doc.classify.ClassifyRequest;
 import com.resurgent.tev.doc.classify.ClassifyResult;
+import com.resurgent.tev.doc.classify.ClassifyTieBreak;
+import com.resurgent.tev.doc.classify.DocClassifyRunner;
 import com.resurgent.tev.doc.classify.DocTypeClassifier;
+import com.resurgent.tev.doc.classify.LlmClassifyTieBreak;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.MandateQaQueryRunner;
 import com.resurgent.tev.doc.extract.DocExtractRunner;
@@ -17,7 +20,6 @@ import com.resurgent.tev.doc.layout.DocumentLayoutService;
 import com.resurgent.tev.doc.llm.DocLlmClient;
 import com.resurgent.tev.doc.llm.DocLlmEnvironment;
 import com.resurgent.tev.doc.pack.DocTypePack;
-import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.doc.query.MandateQa;
 import com.resurgent.tev.doc.query.MandateQaQuery;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
@@ -50,8 +52,15 @@ import org.junit.jupiter.api.Test;
  * <p>Run with (see docs/plans/m3-benchmark.md):
  * <pre>{@code
  * mvn test -Dtest=RealDocumentBenchmarkTest -Dtev.live.extract=true \
- *     -Dtev.benchmark.dirs="/path/to/Project Docs/Bhagyanager Solar Ltd. Client Docs"
+ *     -Dtev.benchmark.dirs="/path/to/Project Docs/Bhagyanager Solar Ltd. Client Docs" \
+ *     -Dtev.benchmark.packdir="/path/to/an/earlier/run/packs/general"
  * }</pre>
+ *
+ * <p>{@code tev.benchmark.packdir} points at the pack store of an earlier run
+ * ({@code packs/} root with {@code registry.json}, or an industry subfolder);
+ * it is copied into the mandate's own {@code {db-parent}/packs} when that is
+ * empty, so induced packs are visible to every stage. Without any matching
+ * pack a document stays {@code unknown} — a pack is never invented.
  *
  * <p>For the Bhagyanager set the ticket's expected outcomes are asserted
  * (eight sites, quoted PPA/PVsyst/quotation evidence, borrower and promoters,
@@ -94,6 +103,7 @@ class RealDocumentBenchmarkTest {
         Path outDir = Path.of(System.getProperty("tev.benchmark.out", "target/benchmark"))
                 .resolve(sanitize(mandateName));
         Files.createDirectories(outDir);
+        seedPackStore(outDir);
         Path dbPath = outDir.resolve("workspace.db");
         System.out.println("=== benchmark: " + mandateName + " -> " + dbPath.toAbsolutePath() + " ===");
 
@@ -101,7 +111,7 @@ class RealDocumentBenchmarkTest {
             // opening applies migrations
         }
         BlobStore blobs = BlobStore.besideDatabase(dbPath);
-        List<DocTypePack> packs = PackLoader.loadSeedPacks();
+        List<DocTypePack> packs = candidatePacks(dbPath);
 
         List<Path> files = documentFiles(setDir);
         System.out.printf("Found %d document file(s) under %s%n", files.size(), setDir);
@@ -146,6 +156,62 @@ class RealDocumentBenchmarkTest {
         return qa;
     }
 
+    /**
+     * Seeds the mandate's pack store: copies the pack store given by
+     * {@code -Dtev.benchmark.packdir} (the {@code packs/} root of an earlier run,
+     * with {@code registry.json}, or its industry subfolder) into
+     * {@code {outDir}/packs} when that is empty. Every later stage resolves packs
+     * from seed plus {@code {db-parent}/packs}, so one copy makes induced packs
+     * visible to classify, extract, bind and assess exactly as in production.
+     */
+    static void seedPackStore(Path outDir) throws Exception {
+        String raw = System.getProperty("tev.benchmark.packdir");
+        if (raw == null || raw.isBlank()) {
+            return;
+        }
+        Path given = Path.of(raw.trim()).toAbsolutePath();
+        Path storeRoot = Files.exists(given.resolve("registry.json"))
+                ? given
+                : given.getParent();
+        if (storeRoot == null || !Files.exists(storeRoot.resolve("registry.json"))) {
+            System.err.println("[benchmark] tev.benchmark.packdir has no registry.json; "
+                    + "induced packs will be invisible: " + given);
+            return;
+        }
+        Path target = outDir.resolve("packs");
+        if (Files.exists(target.resolve("registry.json"))) {
+            return;
+        }
+        try (var stream = Files.list(storeRoot)) {
+            if (stream.findAny().isEmpty()) {
+                return;
+            }
+        }
+        Files.createDirectories(target);
+        try (var stream = Files.walk(storeRoot)) {
+            for (Path src : stream.toList()) {
+                Path dest = target.resolve(storeRoot.relativize(src).toString());
+                if (Files.isDirectory(src)) {
+                    Files.createDirectories(dest);
+                } else {
+                    Files.copy(src, dest);
+                }
+            }
+        }
+        System.out.println("[benchmark] seeded pack store " + storeRoot + " -> " + target);
+    }
+
+    /**
+     * Candidate packs exactly as production classify assembles them: seed packs
+     * plus the workspace pack store at {@code {db-parent}/packs} (seeded by
+     * {@link #seedPackStore}). Reusing {@link DocClassifyRunner} keeps the
+     * benchmark from diverging from the CLI (the divergence that left induced
+     * packs invisible and every document unclassified).
+     */
+    static List<DocTypePack> candidatePacks(Path dbPath) throws Exception {
+        return DocClassifyRunner.loadCandidatePacks(dbPath, null);
+    }
+
     private static String classify(Path dbPath, DocumentIngestService.IngestResult ingested,
             List<DocTypePack> packs) throws Exception {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
@@ -154,8 +220,16 @@ class RealDocumentBenchmarkTest {
                     docs.findVersion(ingested.documentVersionId()).orElseThrow();
             String page1 = DocTypeClassifier.loadPage1Text(db.connection(),
                     ingested.documentVersionId());
-            ClassifyResult result = new DocTypeClassifier().classify(new ClassifyRequest(
-                    ingested.documentVersionId(), version.fileRole(), version.fileName(),
+            // The benchmark ingests unlabeled folders, so the ingest-default role
+            // (every PDF = agreement) is noise: pass an empty role and let the
+            // packs' own identity signals decide, with the same live tie-break
+            // the CLI wires when a document is ambiguous or scanned.
+            DocLlmClient client = DocLlmEnvironment.clientOrNull();
+            ClassifyTieBreak tieBreak = client == null
+                    ? ClassifyTieBreak.offline()
+                    : new LlmClassifyTieBreak(client, usage -> { });
+            ClassifyResult result = new DocTypeClassifier(tieBreak).classify(new ClassifyRequest(
+                    ingested.documentVersionId(), "", version.fileName(),
                     page1, "general", packs, true), db.connection());
             return "unknown".equalsIgnoreCase(result.docTypeCode())
                     ? null : result.docTypeCode();
@@ -200,28 +274,44 @@ class RealDocumentBenchmarkTest {
                 qa.conflicts().size(), conflictsBySettlement,
                 qa.versionsDiffer().size(), qa.conflictSkips().size());
 
-        System.out.println("--- LLM cost (llm_usage for this mandate) ---");
+        // LlamaCloud bills credits, and LlamaExtractAdapter stores that credit total in the
+        // llm_usage cost column, so the slot holds credits for llama rows and USD for the rest.
+        double usdPerCredit = LlamaExtractAdapter.usdPerCredit();
+        System.out.printf(Locale.ROOT,
+                "--- LLM cost (llm_usage for this mandate; llama rows are credits, %.6f USD each) ---%n",
+                usdPerCredit);
         double totalUsd = 0;
+        double totalCredits = 0;
         boolean any = false;
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath);
                 Statement s = db.connection().createStatement();
                 ResultSet rs = s.executeQuery(
                         "SELECT u.stage, u.model_id, SUM(u.calls) calls,"
                                 + " SUM(u.prompt_tokens) pt, SUM(u.completion_tokens) ct,"
-                                + " SUM(COALESCE(u.cost_usd, 0)) usd"
+                                + " SUM(COALESCE(u.cost_usd, 0)) cost"
                                 + " FROM llm_usage u JOIN parse_run r USING (parse_run_id)"
                                 + " WHERE r.mandate_id = " + MANDATE
                                 + " GROUP BY u.stage, u.model_id ORDER BY u.stage")) {
             while (rs.next()) {
                 any = true;
-                totalUsd += rs.getDouble("usd");
-                System.out.printf("  %-18s %-32s calls=%-4d tokens=%-10d usd=%.6f%n",
-                        rs.getString("stage"), rs.getString("model_id"), rs.getInt("calls"),
-                        rs.getLong("pt") + rs.getLong("ct"), rs.getDouble("usd"));
+                double cost = rs.getDouble("cost");
+                String model = rs.getString("model_id");
+                boolean credits = model.startsWith("llama");
+                double usd = credits ? cost * usdPerCredit : cost;
+                if (credits) {
+                    totalCredits += cost;
+                }
+                totalUsd += usd;
+                System.out.printf(Locale.ROOT,
+                        "  %-18s %-32s calls=%-4d tokens=%-10d %s=%-10.2f usd=$%.6f%n",
+                        rs.getString("stage"), model, rs.getInt("calls"),
+                        rs.getLong("pt") + rs.getLong("ct"),
+                        credits ? "credits" : "usd", credits ? cost : usd, usd);
             }
         }
         System.out.println(any
-                ? String.format(Locale.ROOT, "  TOTAL: $%.6f%n", totalUsd)
+                ? String.format(Locale.ROOT, "  TOTAL: $%.6f (incl. %.2f LlamaCloud credits)%n",
+                        totalUsd, totalCredits)
                 : "  (no usage rows)");
     }
 

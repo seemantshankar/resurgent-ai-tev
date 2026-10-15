@@ -2,7 +2,9 @@ package com.resurgent.tev.doc.extract;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.LinkedHashSet;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -44,8 +46,20 @@ public final class MoneyNormalizer {
         }
     }
 
+    // Currency markers are word-anchored the way the Excel side's KindTokens.CURRENCY
+    // is: "corps" must not read as "Rs", and a bare "$" names no ISO currency
+    // (HomeCurrency leaves it unresolved), so it is deliberately not a marker here.
+    private static final Pattern INR_TOKEN = Pattern.compile(
+            "(?i)(₹|\\brs\\.?|\\binr\\b|\\brupees?\\b)");
+    private static final Pattern USD_TOKEN = Pattern.compile(
+            "(?i)(\\busd\\b|\\bdollars?\\b)");
+    private static final Pattern EUR_TOKEN = Pattern.compile(
+            "(?i)(€|\\beur\\b|\\beuros?\\b)");
+    private static final Pattern GBP_TOKEN = Pattern.compile(
+            "(?i)(£|\\bgbp\\b|\\bpounds?\\b)");
+
     private static final Pattern MONEY = Pattern.compile(
-            "(?i)(?:₹|rs\\.?|inr)\\s*"
+            "(?i)(?:₹|[€£]|\\b(?:rs\\.?|inr|usd|eur|gbp|dollars?|pounds?))\\.?\\s*"
                     + "([0-9][0-9,]*(?:\\.[0-9]+)?)"
                     + "(?:\\s+(lakhs?|lacs?|crores?|millions?|billions?|thousands?|000s?|mn|cr))?");
     private static final Pattern SUFFIX_SCALE = Pattern.compile(
@@ -59,6 +73,12 @@ public final class MoneyNormalizer {
      * Parses a money string into slots. Leaves {@code unit} empty (money has no rate unit);
      * rate/percent units are never invented here.
      *
+     * <p>Scale follows the Excel {@code cell_reading} rule (V36): a scale is only
+     * returned when the text itself writes a scale token ("12.5 lakhs"). A figure
+     * that states no scale — with or without a currency marker — comes back with
+     * null scale and null absolute amount; the document's stated-scale context
+     * may label it later, and nothing is written as "unit" by default.
+     *
      * @param raw source text (required)
      * @return normalized money, or empty when the text has no parseable amount
      */
@@ -70,7 +90,7 @@ public final class MoneyNormalizer {
         Matcher money = MONEY.matcher(text);
         if (money.find()) {
             BigDecimal amount = parseNumber(money.group(1));
-            Scale scale = scaleFromToken(money.group(2));
+            Scale scale = money.group(2) == null ? null : scaleFromToken(money.group(2));
             return build(amount, scale, detectCurrency(text), text);
         }
         Matcher suffix = SUFFIX_SCALE.matcher(text);
@@ -85,7 +105,7 @@ public final class MoneyNormalizer {
         }
         Matcher bare = BARE_NUMBER.matcher(text);
         if (bare.matches()) {
-            return build(parseNumber(bare.group(1)), Scale.UNIT, detectCurrency(text), text);
+            return build(parseNumber(bare.group(1)), null, detectCurrency(text), text);
         }
         return Result.empty();
     }
@@ -117,7 +137,37 @@ public final class MoneyNormalizer {
         }
     }
 
-    private static Scale scaleFromToken(String token) {
+    /** Adds the currencies one text names to {@code found} (stated markers only). */
+    public static void collectCurrencies(String text, Set<String> found) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        if (INR_TOKEN.matcher(text).find()) {
+            found.add("INR");
+        }
+        if (USD_TOKEN.matcher(text).find()) {
+            found.add("USD");
+        }
+        if (EUR_TOKEN.matcher(text).find()) {
+            found.add("EUR");
+        }
+        if (GBP_TOKEN.matcher(text).find()) {
+            found.add("GBP");
+        }
+    }
+
+    private static String detectCurrency(String text) {
+        Set<String> found = new LinkedHashSet<>();
+        collectCurrencies(text, found);
+        return found.size() == 1 ? found.iterator().next() : null;
+    }
+
+    /**
+     * Maps a written scale token ("lakhs", "cr", "000s") to its multiplier.
+     * Callers pass only tokens the text actually states; unstated figures
+     * never reach here (V36: nothing defaults them to unit).
+     */
+    static Scale scaleFromToken(String token) {
         if (token == null || token.isBlank()) {
             return Scale.UNIT;
         }
@@ -138,17 +188,6 @@ public final class MoneyNormalizer {
             return Scale.THOUSAND;
         }
         return Scale.UNIT;
-    }
-
-    private static String detectCurrency(String text) {
-        String t = text.toLowerCase(Locale.ROOT);
-        if (t.contains("₹") || t.contains("rs") || t.contains("inr")) {
-            return "INR";
-        }
-        if (t.contains("$") || t.contains("usd")) {
-            return "USD";
-        }
-        return null;
     }
 
     /**
