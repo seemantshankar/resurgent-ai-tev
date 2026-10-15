@@ -134,15 +134,19 @@ public final class AssessProfileRunner implements AssessStage {
             }
         }
 
+        EntityScan.Stats entityStats = EntityScan.run(connection, mandateId, client, usage::add);
+
         recordStats(repo, parseRunId, usage, versions.size(), statedCount, metadataCount,
-                noneCount);
+                noneCount, entityStats);
         assessment.upsertAssessmentRun(mandateId, STAGE, "completed", parseRunId,
                 startedAt, Timestamps.now(),
-                metricsJson(versions.size(), statedCount, metadataCount, noneCount, usage));
+                metricsJson(versions.size(), statedCount, metadataCount, noneCount, entityStats,
+                        usage));
 
         String detail = String.format(Locale.ROOT,
-                "%d documents (%d stated, %d file_metadata, %d none)",
-                versions.size(), statedCount, metadataCount, noneCount);
+                "%d documents (%d stated, %d file_metadata, %d none), %d entities",
+                versions.size(), statedCount, metadataCount, noneCount,
+                entityStats.entitiesTotal());
         return new StageResult(STAGE, versions.size(), detail);
     }
 
@@ -208,7 +212,8 @@ public final class AssessProfileRunner implements AssessStage {
     }
 
     private static void recordStats(WorkspaceRepository repo, Long parseRunId,
-            List<DocLlmClient.Usage> usage, int total, int stated, int metadata, int none)
+            List<DocLlmClient.Usage> usage, int total, int stated, int metadata, int none,
+            EntityScan.Stats entities)
             throws Exception {
         if (parseRunId == null) {
             return;
@@ -217,6 +222,14 @@ public final class AssessProfileRunner implements AssessStage {
         repo.recordRunStat(parseRunId, STAGE, "dates_stated", (double) stated, null);
         repo.recordRunStat(parseRunId, STAGE, "dates_file_metadata", (double) metadata, null);
         repo.recordRunStat(parseRunId, STAGE, "dates_none", (double) none, null);
+        repo.recordRunStat(parseRunId, STAGE, "entities_total",
+                (double) entities.entitiesTotal(), null);
+        repo.recordRunStat(parseRunId, STAGE, "entities_borrower",
+                (double) entities.entitiesBorrower(), null);
+        repo.recordRunStat(parseRunId, STAGE, "entities_promoter",
+                (double) entities.entitiesPromoter(), null);
+        repo.recordRunStat(parseRunId, STAGE, "entities_group_company",
+                (double) entities.entitiesGroupCompany(), null);
         repo.recordRunStat(parseRunId, STAGE, "llm_calls",
                 (double) usage.stream().mapToInt(DocLlmClient.Usage::calls).sum(), null);
 
@@ -234,12 +247,16 @@ public final class AssessProfileRunner implements AssessStage {
     }
 
     private static String metricsJson(int total, int stated, int metadata, int none,
-            List<DocLlmClient.Usage> usage) {
+            EntityScan.Stats entities, List<DocLlmClient.Usage> usage) {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("documents_total", total);
         node.put("dates_stated", stated);
         node.put("dates_file_metadata", metadata);
         node.put("dates_none", none);
+        node.put("entities_total", entities.entitiesTotal());
+        node.put("entities_borrower", entities.entitiesBorrower());
+        node.put("entities_promoter", entities.entitiesPromoter());
+        node.put("entities_group_company", entities.entitiesGroupCompany());
         node.put("llm_calls", usage.stream().mapToInt(DocLlmClient.Usage::calls).sum());
         return node.toString();
     }

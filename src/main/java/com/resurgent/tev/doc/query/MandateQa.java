@@ -11,11 +11,14 @@ import java.util.List;
  * @param documents one row per document version with its document date, precision, source
  *     and upload date
  * @param stages the latest assessment run per stage
+ * @param entities the mandate's entities (borrower, promoters, group companies) with
+ *     their roles, aliases and source pages
  */
 public record MandateQa(
         long mandateId,
         List<DocumentDateRow> documents,
-        List<AssessmentRunRow> stages) {
+        List<AssessmentRunRow> stages,
+        List<EntityRow> entities) {
 
     /**
      * One document version's date assessment.
@@ -62,4 +65,30 @@ public record MandateQa(
             String startedAt,
             String finishedAt,
             Long parseRunId) {}
+
+    /**
+     * One mandate entity (M3-03): a company or person the documents are about.
+     *
+     * @param entityId entity id
+     * @param role {@code borrower} | {@code promoter} | {@code group_company}
+     * @param name the normalised (first identified) name
+     * @param reason the recorded reason this entity has this role, may be null
+     * @param aliases every spelling of the name seen, with its source page
+     * @param pageIndexes the distinct source pages of the entity's identifications
+     */
+    public record EntityRow(
+            long entityId,
+            String role,
+            String name,
+            String reason,
+            List<AliasRow> aliases,
+            List<Integer> pageIndexes) {}
+
+    /**
+     * One spelling variant of an entity's name.
+     *
+     * @param alias the spelling as stated in the document
+     * @param pageIndex page the spelling was first read from, or null when unanchored
+     */
+    public record AliasRow(String alias, Integer pageIndex) {}
 }
