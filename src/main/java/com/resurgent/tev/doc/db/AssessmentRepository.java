@@ -406,7 +406,8 @@ public final class AssessmentRepository {
         return new MandateQa(mandateId, documentDates(mandateId), assessmentRuns(mandateId),
                 new EntityRepository(connection).entities(mandateId),
                 new ClauseRepository(connection).clauses(mandateId),
-                new SiteRepository(connection).sitesForMandate(mandateId));
+                new SiteRepository(connection).sitesForMandate(mandateId),
+                new PassageRepository(connection).passagesForMandate(mandateId));
     }
 
     /** Collapses whitespace runs to single spaces, like the layout's {@code text_norm}. */
