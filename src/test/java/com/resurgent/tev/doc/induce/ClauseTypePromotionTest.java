@@ -252,7 +252,7 @@ class ClauseTypePromotionTest {
                 "execution",
                 new ClauseSection(true, true, List.of(
                         new PackClauseType("security_package", "Security Package", "security",
-                                List.of("Security Package")))));
+                                List.of("Security Package")))), List.of());
     }
 
     /** One page: a stated execution date plus two open clause candidates. */

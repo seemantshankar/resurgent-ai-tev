@@ -308,7 +308,8 @@ public final class ClauseTypePromoter {
                 base.industryTags(), base.identitySignals(), base.fields(), base.tables(),
                 base.checklist(), base.reportSections(), base.documentDateKind(),
                 new ClauseSection(base.clauseSection().declared(),
-                        base.clauseOpenExtraction(), types));
+                        base.clauseOpenExtraction(), types),
+                base.passages());
     }
 
     /**

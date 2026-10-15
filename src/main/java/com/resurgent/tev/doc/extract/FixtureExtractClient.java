@@ -119,11 +119,20 @@ public final class FixtureExtractClient implements ExtractClient {
                     facts.add(candidate);
                 }
             }
-            JsonNode lineItems = fixture.path("line_items");
-            if (lineItems.isArray()) {
-                for (JsonNode line : lineItems) {
+            // Row tables (quotation line_items, plant-and-machinery lists, …): every
+            // top-level array entry becomes one row fact per element, keyed by the
+            // array's name — the M2 quotation-row style.
+            Iterator<Map.Entry<String, JsonNode>> tables = fixture.fields();
+            while (tables.hasNext()) {
+                Map.Entry<String, JsonNode> table = tables.next();
+                JsonNode lines = table.getValue();
+                if (!lines.isArray()) {
+                    continue;
+                }
+                String tableKey = table.getKey();
+                for (JsonNode line : lines) {
                     String description = line.path("description").asText(null);
-                    FactCandidate row = new FactCandidate("line_items", ValueKind.TEXT)
+                    FactCandidate row = new FactCandidate(tableKey, ValueKind.TEXT)
                             .valueText(description)
                             .lineKey(description)
                             .subjectEntity(fields.path("vendor_name").path("value").asText(null))

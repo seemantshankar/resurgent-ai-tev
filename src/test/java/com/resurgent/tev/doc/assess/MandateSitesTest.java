@@ -458,7 +458,8 @@ class MandateSitesTest {
         ppa("ppa_b.pdf", "PPA B - Karawal Nagar",
                 "Project: Karawal Nagar Solar Park");
 
-        DocAssessRunner.run(MANDATE, dbPath, new FakeDocLlmClient("{\"same\": false}"));
+        DocAssessRunner.Result result = DocAssessRunner.run(
+                MANDATE, dbPath, new FakeDocLlmClient("{\"same\": false}"));
 
         picocli.CommandLine cmd =
                 new picocli.CommandLine(new com.resurgent.tev.doc.cli.DocQaCommand());
@@ -480,7 +481,9 @@ class MandateSitesTest {
                 .contains("quotation_b.pdf")
                 .contains("ppa_b.pdf")
                 .contains("sites: 2");
-        // #134's sections are untouched; #141 appends its own clauses stage.
-        assertThat(text).contains("documents: 4").contains("stages: 2");
+        // #134's sections are untouched: all four documents, the profile stage and the
+        // stage count still print — clauses (#141) and passages (#139) only append.
+        assertThat(text).contains("documents: 4").contains("stage assess_profile");
+        assertThat(text).contains("stages: " + result.stages().size());
     }
 }

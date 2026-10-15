@@ -342,7 +342,8 @@ public final class PackStore {
                 pack.checklist(),
                 pack.reportSections(),
                 pack.documentDateKind(),
-                pack.clauseSection());
+                pack.clauseSection(),
+                pack.passages());
     }
 
     /** registry.json document shape. */

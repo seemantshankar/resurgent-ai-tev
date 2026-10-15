@@ -111,7 +111,7 @@ public final class DocQaCommand implements Callable<Integer> {
             }
             out.printf("clauses: %d%n", qa.clauses().size());
             // M3-04 (#137): sites with their spelling variants and mentioning
-            // documents — appended at the end so #134's output is untouched.
+            // documents — appended after #134's output.
             for (MandateQa.SiteRow site : qa.sites()) {
                 out.printf("site %d: %s%n", site.siteId(), site.siteName());
                 for (MandateQa.SiteAliasRow alias : site.aliases()) {
@@ -133,6 +133,45 @@ public final class DocQaCommand implements Callable<Integer> {
                 out.printf("  documents: %s%n", files.length() == 0 ? "-" : files);
             }
             out.printf("sites: %d%n", qa.sites().size());
+            // M3-06 (#139): chapter passages from the stored parse output with their
+            // per-chapter facts — appended at the end so the earlier sections stand.
+            for (MandateQa.PassageRow row : qa.passages()) {
+                out.printf("passage %d | %s | topic=%s | pages %d-%d | page=%d%n",
+                        row.passageIndex(),
+                        blankToDash(row.heading()),
+                        blankToDash(row.topic()),
+                        row.pageFrom(),
+                        row.pageTo(),
+                        row.pageIndex());
+                if (row.summary() != null) {
+                    out.printf("  summary: %s%n", row.summary());
+                }
+                if (row.verbatim() != null) {
+                    out.printf("  verbatim: %s%n",
+                            com.resurgent.tev.doc.db.AssessmentRepository
+                                    .normalizeWhitespace(row.verbatim()));
+                }
+                for (MandateQa.PassageFactRow fact : row.facts()) {
+                    out.printf("  fact %s%s = %s%s%n",
+                            fact.fieldKey(),
+                            fact.lineKey() != null ? " [" + fact.lineKey() + "]" : "",
+                            fact.valueText() != null
+                                    ? fact.valueText()
+                                    : fact.valueNumber() != null
+                                            ? String.valueOf(fact.valueNumber())
+                                            : fact.valueDate(),
+                            fact.unit() != null ? " " + fact.unit() : "");
+                    for (int i = 0; i < fact.evidenceQuotes().size(); i++) {
+                        Integer page = i < fact.evidencePages().size()
+                                ? fact.evidencePages().get(i)
+                                : null;
+                        out.printf("    quote%s: %s%n",
+                                page != null ? " (page " + page + ")" : "",
+                                fact.evidenceQuotes().get(i));
+                    }
+                }
+            }
+            out.printf("passages: %d%n", qa.passages().size());
             return 0;
         } catch (IllegalArgumentException e) {
             err.println("qa rejected: " + e.getMessage());
