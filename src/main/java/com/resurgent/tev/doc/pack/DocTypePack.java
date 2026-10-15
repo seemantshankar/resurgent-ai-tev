@@ -41,6 +41,7 @@ public final class DocTypePack {
     private final List<String> checklist;
     private final List<String> reportSections;
     private final String documentDateKind;
+    private final List<PackPassage> passages;
 
     /**
      * Creates a validated pack. Use {@link PackLoader} for YAML; this constructor
@@ -79,6 +80,29 @@ public final class DocTypePack {
             List<String> checklist,
             List<String> reportSections,
             String documentDateKind) {
+        this(code, version, family, fileRole, industryTags, identitySignals, fields, tables,
+                checklist, reportSections, documentDateKind, null);
+    }
+
+    /**
+     * Creates a validated pack with document-date kind and passage topics (M3-06).
+     *
+     * @param passages chapter topics prose documents of this type are split into,
+     *     each naming the data points to take; empty for non-prose packs
+     */
+    public DocTypePack(
+            String code,
+            String version,
+            String family,
+            String fileRole,
+            List<String> industryTags,
+            List<String> identitySignals,
+            List<PackField> fields,
+            List<Map<String, Object>> tables,
+            List<String> checklist,
+            List<String> reportSections,
+            String documentDateKind,
+            List<PackPassage> passages) {
         this.code = Objects.requireNonNull(code, "code");
         this.version = Objects.requireNonNull(version, "version");
         this.family = Objects.requireNonNull(family, "family");
@@ -92,6 +116,7 @@ public final class DocTypePack {
         this.documentDateKind = documentDateKind == null || documentDateKind.isBlank()
                 ? null
                 : documentDateKind.trim().toLowerCase(Locale.ROOT);
+        this.passages = passages == null ? List.of() : List.copyOf(passages);
     }
 
     public String code() {
@@ -142,6 +167,14 @@ public final class DocTypePack {
     /** The document-date kind this type carries ({@code execution}/…), or null when undeclared. */
     public String documentDateKind() {
         return documentDateKind;
+    }
+
+    /**
+     * Chapter topics prose of this type is split into (M3-06), each naming the data
+     * points to take; empty for packs that declare none.
+     */
+    public List<PackPassage> passages() {
+        return passages;
     }
 
     /** Required fields only. */
