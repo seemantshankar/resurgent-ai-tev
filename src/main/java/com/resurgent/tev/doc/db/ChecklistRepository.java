@@ -112,6 +112,7 @@ public final class ChecklistRepository {
      * @param scope {@code spine} | {@code industry}
      * @param country country the definition applies to
      * @param industry industry for an industry checklist, or null
+     * @param note the definition's label when it carries one, or null
      */
     public record ItemRow(
             String itemKey,
@@ -131,7 +132,8 @@ public final class ChecklistRepository {
             String checklistVersion,
             String scope,
             String country,
-            String industry) {}
+            String industry,
+            String note) {}
 
     /**
      * Drops the mandate's previous checklist wholesale — result provenance first
@@ -203,13 +205,13 @@ public final class ChecklistRepository {
             String checklistVersion, String scope, String country, String industry, String level,
             String granularity, String entityRole, String documentType, String fieldKey,
             String ontologyPath, boolean mandatory, String basisKind, String basisText,
-            String origin, String clientRequest) throws SQLException {
+            String origin, String clientRequest, String note) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO checklist_item (mandate_id, item_key, label, checklist_code,"
                         + " checklist_version, scope, country, industry, level, granularity,"
                         + " entity_role, document_type, field_key, ontology_path, mandatory,"
-                        + " basis_kind, basis_text, origin, client_request, created_at)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        + " basis_kind, basis_text, origin, client_request, note, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, mandateId);
             ps.setString(2, itemKey);
@@ -230,7 +232,8 @@ public final class ChecklistRepository {
             ps.setString(17, basisText);
             ps.setString(18, origin);
             ps.setString(19, clientRequest);
-            ps.setString(20, Timestamps.now());
+            setString(ps, 20, note);
+            ps.setString(21, Timestamps.now());
             ps.executeUpdate();
             return generatedId(ps);
         }
@@ -384,7 +387,7 @@ public final class ChecklistRepository {
                 "SELECT item_key, label, level, granularity, entity_role, document_type,"
                         + " field_key, ontology_path, mandatory, basis_kind, basis_text, origin,"
                         + " client_request, checklist_code, checklist_version, scope, country,"
-                        + " industry FROM checklist_item WHERE mandate_id = ?"
+                        + " industry, note FROM checklist_item WHERE mandate_id = ?"
                         + " ORDER BY checklist_item_id")) {
             ps.setLong(1, mandateId);
             try (ResultSet rs = ps.executeQuery()) {
@@ -408,7 +411,8 @@ public final class ChecklistRepository {
                             rs.getString("checklist_version"),
                             rs.getString("scope"),
                             rs.getString("country"),
-                            rs.getString("industry")));
+                            rs.getString("industry"),
+                            rs.getString("note")));
                 }
                 return rows;
             }
@@ -550,7 +554,7 @@ public final class ChecklistRepository {
                         + " i.field_key, i.ontology_path, r.entity_id, e.name AS entity_name,"
                         + " r.site_id, s.site_name, r.status, r.reason, r.document_version_id,"
                         + " d.logical_name, dv.file_name, r.page_index, r.confidence,"
-                        + " r.client_request"
+                        + " r.client_request, i.note"
                         + " FROM checklist_result r"
                         + " JOIN checklist_item i ON i.checklist_item_id = r.checklist_item_id"
                         + " LEFT JOIN entity e ON e.entity_id = r.entity_id"
@@ -588,7 +592,8 @@ public final class ChecklistRepository {
                             rs.getString("file_name"),
                             asInt(rs.getObject("page_index")),
                             asDouble(rs.getObject("confidence")),
-                            rs.getString("client_request")));
+                            rs.getString("client_request"),
+                            rs.getString("note")));
                 }
                 return rows;
             }

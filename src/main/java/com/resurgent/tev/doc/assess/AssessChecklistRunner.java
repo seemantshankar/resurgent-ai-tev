@@ -26,15 +26,17 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * {@code assess_checklist} (issue #143): instantiates the mandate's checklist from the
- * in-scope versioned definitions (seed spine plus the store beside the workspace), lets
- * the analyst's recorded overrides add or remove items, and stores one result per item
- * and scope — Provided with page evidence, Unclear when the reading is not trustworthy,
- * Not provided with the ask-the-client wording. Not provided and Unclear raise
- * non-blocking review_queue flags. Counts by status are persisted overall and per
- * entity (and site) in {@code checklist_summary}. One transaction per run; a re-run
- * replaces the previous checklist wholesale and never duplicates it. The stage is
- * deterministic — it reads only persisted state and never calls the model.
+ * {@code assess_checklist} (issues #143, #144): instantiates the mandate's checklist
+ * from the in-scope versioned definitions (seed spine plus the store beside the
+ * workspace), first-drafting an industry checklist with the model for every mandate
+ * industry the catalog does not cover — an item whose basis cannot be named is
+ * dropped — lets the analyst's recorded overrides add or remove items, and stores
+ * one result per item and scope: Provided with page evidence, Unclear when the
+ * reading is not trustworthy, Not provided with the ask-the-client wording. Not
+ * provided and Unclear raise non-blocking review_queue flags. Counts by status are
+ * persisted overall, per entity and per site in {@code checklist_summary}. One
+ * transaction per run; a re-run replaces the previous checklist wholesale and never
+ * duplicates it.
  */
 public final class AssessChecklistRunner implements AssessStage {
 
@@ -62,7 +64,7 @@ public final class AssessChecklistRunner implements AssessStage {
             Connection connection = workspace.connection();
             connection.setAutoCommit(false);
             try {
-                StageResult result = assess(connection, mandateId, dbPath);
+                StageResult result = assess(connection, mandateId, dbPath, client);
                 connection.commit();
                 return result;
             } catch (Exception e) {
@@ -82,8 +84,8 @@ public final class AssessChecklistRunner implements AssessStage {
         }
     }
 
-    private StageResult assess(Connection connection, long mandateId, Path dbPath)
-            throws Exception {
+    private StageResult assess(Connection connection, long mandateId, Path dbPath,
+            DocLlmClient client) throws Exception {
         AssessmentRepository assessment = new AssessmentRepository(connection);
         ChecklistRepository checklist = new ChecklistRepository(connection);
         DocumentRepository docs = new DocumentRepository(connection);
@@ -117,14 +119,34 @@ public final class AssessChecklistRunner implements AssessStage {
         }
 
         Map<String, ChecklistDefinition> catalog = ChecklistStore.loadCatalogLenient(dbPath);
+        List<DocLlmClient.Usage> usage = new ArrayList<>();
+        List<MandateQa.IndustryRow> industries = assessment.industries(mandateId);
+        MandateQa.CountryRow country = assessment.country(mandateId);
+        if (client != null) {
+            // M3-11: first-draft an industry checklist for every mandate industry the
+            // in-scope catalog does not cover. The draft is published to the store, so
+            // every later run of the mandate reuses it and asks the model nothing.
+            for (ChecklistDefinition drafted : IndustryChecklistDrafter.draftMissing(
+                    industries, country, dbPath, catalog.values(), client, usage::add)) {
+                catalog.put(drafted.code(), drafted);
+            }
+        }
         ChecklistAssessor.Inputs inputs = new ChecklistAssessor.Inputs(
                 new EntityRepository(connection).entities(mandateId),
                 new SiteRepository(connection).sitesForMandate(mandateId),
                 checklist.documentScopes(mandateId),
-                checklist.facts(mandateId));
+                checklist.facts(mandateId),
+                industries,
+                country);
         List<MandateQa.ChecklistOverrideRow> overrides = checklist.overrides(mandateId);
         List<ChecklistAssessor.Result> plan =
                 ChecklistAssessor.plan(inputs, catalog.values(), overrides);
+        if (client != null) {
+            // M3-11: the model decides Not applicable from the documents, always with
+            // the reason and the page — nobody marks it by hand.
+            plan = ChecklistNotApplicableScan.apply(plan, mandateId, assessment, client,
+                    usage::add);
+        }
 
         // Replace semantics: drop the previous items, results, their provenance and the
         // summaries first, so the new inserts can never be deleted by the same run.
@@ -136,6 +158,7 @@ public final class AssessChecklistRunner implements AssessStage {
         int provided = 0;
         int unclear = 0;
         int notProvided = 0;
+        int notApplicable = 0;
         for (ChecklistAssessor.Result result : plan) {
             Long itemId = itemIds.get(result.item().key());
             if (itemId == null) {
@@ -147,7 +170,7 @@ public final class AssessChecklistRunner implements AssessStage {
                         result.item().fieldKey(), result.item().ontologyPath(),
                         result.item().mandatory(), result.item().basisKind(),
                         result.item().basisText(), result.item().origin(),
-                        result.item().clientRequest());
+                        result.item().clientRequest(), result.note());
                 itemIds.put(result.item().key(), itemId);
             }
             long resultId = checklist.insertResult(itemId, runId, result.entityId(),
@@ -161,7 +184,11 @@ public final class AssessChecklistRunner implements AssessStage {
                     insertProvidedProvenance(assessment, docs, checklist, result, resultId);
                 }
                 case ChecklistAssessor.STATUS_UNCLEAR -> unclear++;
-                default -> notProvided++;
+                case ChecklistAssessor.STATUS_NOT_PROVIDED -> notProvided++;
+                case ChecklistAssessor.STATUS_NOT_APPLICABLE -> notApplicable++;
+                default -> {
+                    // future statuses (conflicting) only count in the summaries
+                }
             }
         }
 
@@ -169,14 +196,15 @@ public final class AssessChecklistRunner implements AssessStage {
         int[] flags = insertFlags(repo, checklist, parseRunId, plan);
 
         recordStats(repo, parseRunId, itemIds.size(), plan.size(), provided, unclear,
-                notProvided, flags);
+                notProvided, notApplicable, flags, usage);
         assessment.upsertAssessmentRun(mandateId, STAGE, "completed", parseRunId, startedAt,
                 Timestamps.now(), metricsJson(itemIds.size(), plan.size(), provided, unclear,
-                        notProvided, flags));
+                        notProvided, notApplicable, flags, usage));
 
         String detail = String.format(Locale.ROOT,
-                "%d items, %d results (%d provided, %d unclear, %d not provided), %d flags",
-                itemIds.size(), plan.size(), provided, unclear, notProvided,
+                "%d items, %d results (%d provided, %d unclear, %d not provided,"
+                        + " %d not applicable), %d flags",
+                itemIds.size(), plan.size(), provided, unclear, notProvided, notApplicable,
                 flags[0] + flags[1]);
         return new StageResult(STAGE, plan.size(), detail);
     }
@@ -336,8 +364,8 @@ public final class AssessChecklistRunner implements AssessStage {
     }
 
     private static void recordStats(WorkspaceRepository repo, Long parseRunId, int items,
-            int results, int provided, int unclear, int notProvided, int[] flags)
-            throws Exception {
+            int results, int provided, int unclear, int notProvided, int notApplicable,
+            int[] flags, List<DocLlmClient.Usage> usage) throws Exception {
         if (parseRunId == null) {
             return;
         }
@@ -346,21 +374,38 @@ public final class AssessChecklistRunner implements AssessStage {
         repo.recordRunStat(parseRunId, STAGE, "checklist_provided", (double) provided, null);
         repo.recordRunStat(parseRunId, STAGE, "checklist_unclear", (double) unclear, null);
         repo.recordRunStat(parseRunId, STAGE, "checklist_not_provided", (double) notProvided, null);
+        repo.recordRunStat(parseRunId, STAGE, "checklist_not_applicable",
+                (double) notApplicable, null);
         repo.recordRunStat(parseRunId, STAGE, "flags_not_provided", (double) flags[0], null);
         repo.recordRunStat(parseRunId, STAGE, "flags_unclear", (double) flags[1], null);
+        repo.recordRunStat(parseRunId, STAGE, "llm_calls",
+                (double) usage.stream().mapToInt(DocLlmClient.Usage::calls).sum(), null);
+
+        Map<String, DocLlmClient.Usage> totals = new LinkedHashMap<>();
+        for (DocLlmClient.Usage u : usage) {
+            totals.merge(u.modelId(), u, DocLlmClient.Usage::plus);
+        }
+        for (DocLlmClient.Usage modelTotal : totals.values()) {
+            repo.recordLlmUsage(parseRunId, STAGE, modelTotal.modelId(), modelTotal.calls(),
+                    modelTotal.failedCalls(), 0, modelTotal.promptTokens(),
+                    modelTotal.completionTokens(), modelTotal.costUsd(),
+                    modelTotal.costUsd() == null ? 1 : 0, modelTotal.latencyMsTotal());
+        }
         repo.updateParseRunResult(parseRunId, Timestamps.now(), "success", null);
     }
 
     private static String metricsJson(int items, int results, int provided, int unclear,
-            int notProvided, int[] flags) {
+            int notProvided, int notApplicable, int[] flags, List<DocLlmClient.Usage> usage) {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("items", items);
         node.put("results", results);
         node.put("provided", provided);
         node.put("unclear", unclear);
         node.put("not_provided", notProvided);
+        node.put("not_applicable", notApplicable);
         node.put("flags_not_provided", flags[0]);
         node.put("flags_unclear", flags[1]);
+        node.put("llm_calls", usage.stream().mapToInt(DocLlmClient.Usage::calls).sum());
         return node.toString();
     }
 }
