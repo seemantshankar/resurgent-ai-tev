@@ -21,14 +21,15 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * {@code assess_conflicts} (issue #145, ADR 0026): finds the disagreements between the
- * mandate's documents, stores one {@code conflict} row per disagreement — both sources
- * and values kept in full — and settles each by precedence rule or AI judgement, or
- * leaves it open. A conflict left open raises a {@code conflicting} review flag (and
- * the checklist shows the item Conflicting); an AI-settled conflict is flagged as
- * settled by AI with no action required. Revisions are stored as {@code versions-differ}
- * with no settlement. One transaction per run; a re-run replaces the previous conflict
- * rows and flags wholesale and never duplicates them.
+ * {@code assess_conflicts} (issues #145, #146, ADR 0026): finds the disagreements
+ * between the mandate's documents and between sections of one document, stores one
+ * {@code conflict} row per disagreement — both sources and values kept in full — and
+ * settles each by precedence rule or AI judgement, or leaves it open. A conflict left
+ * open raises a {@code conflicting} review flag (and the checklist shows the item
+ * Conflicting); an AI-settled conflict is flagged as settled by AI with no action
+ * required. Revisions are stored as {@code versions-differ} with no settlement. One
+ * transaction per run; a re-run replaces the previous conflict rows and flags
+ * wholesale and never duplicates them.
  */
 public final class AssessConflictsRunner implements AssessStage {
 

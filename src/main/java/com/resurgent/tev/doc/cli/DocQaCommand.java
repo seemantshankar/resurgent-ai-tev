@@ -305,7 +305,11 @@ public final class DocQaCommand implements Callable<Integer> {
         return value == null || value.isBlank() ? "-" : value;
     }
 
-    /** {@code left: <file pN>, right: <file pN>} — where each conflict value was read. */
+    /**
+     * {@code left: <file pN "passage">, right: …} — where each conflict value was read.
+     * The passage heading names the section for an intra-document conflict; it is
+     * absent for document-level sides.
+     */
     private static String conflictSides(MandateQa.ConflictRow row) {
         return "left: " + conflictSide(row.left()) + ", right: " + conflictSide(row.right());
     }
@@ -314,6 +318,9 @@ public final class DocQaCommand implements Callable<Integer> {
         StringBuilder text = new StringBuilder(blankToDash(side.fileName()));
         if (side.pageIndex() != null) {
             text.append(" p").append(side.pageIndex());
+        }
+        if (side.passageHeading() != null && !side.passageHeading().isBlank()) {
+            text.append(" \"").append(side.passageHeading()).append('"');
         }
         return text.toString();
     }

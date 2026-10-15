@@ -18,7 +18,8 @@ import java.util.function.Consumer;
 final class LlmConflictSettlement {
 
     private static final String SYSTEM = """
-            You settle ONE disagreement between two documents of a mandate.
+            You settle ONE disagreement between two sources of a mandate.
+            Sources may be different documents or different passages of one document.
             Both values are kept either way; you only say which one to use.
             Reply with a single JSON object: \
             {"settle": true, "chosen_side": "left" | "right", "reasoning": "<why, citing the page of each value>"}.
