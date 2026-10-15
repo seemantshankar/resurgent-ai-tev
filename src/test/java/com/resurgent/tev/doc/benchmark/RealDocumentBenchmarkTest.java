@@ -139,7 +139,7 @@ class RealDocumentBenchmarkTest {
                         .filter(candidate -> candidate.code().equals(docType))
                         .findFirst().orElse(null);
                 if (pack != null) {
-                    new PackPathBinder().bind(dbPath, extract.parseRunId(), pack);
+                    new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, pack, null);
                 }
                 System.out.printf("  %-60s %s -> pack %s via %s: %d fact(s), missing=%d ambiguous=%d (%s)%n",
                         relativise(setDir, file), ingested.fileRole(), extract.packIdentity(),

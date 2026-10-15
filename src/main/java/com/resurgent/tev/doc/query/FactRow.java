@@ -11,11 +11,20 @@ import java.util.Objects;
  * (null for mandate-wide facts); {@code entityId} is the M3-03 tag naming the
  * mandate entity the fact is about (null when it could not be determined);
  * {@code entityReason} records why — the tag or the reason it was left untagged.
+ *
+ * <p>{@code nomenclatureStatus} is the M3-17 binding verdict: {@code bound} when
+ * {@code ontologyPath} names a path of the shared nomenclature, {@code unbound}
+ * when it does not, {@code not_applicable} when the fact can never be compared.
+ * {@code nomenclatureReason} says how the binding was reached and {@code unboundReason}
+ * says why an unbound fact did not.
  */
 public record FactRow(
         long factId,
         String ontologyPath,
         String pathRoot,
+        String nomenclatureStatus,
+        String nomenclatureReason,
+        String unboundReason,
         String fieldKey,
         String valueKind,
         String valueText,

@@ -71,8 +71,10 @@ import picocli.CommandLine;
  * ontology path, and every disagreement is recorded as a {@code doc-fm} conflict whose
  * model side names the sheet and the cell — settled through the same three tiers, with
  * the model read and never changed. An ambiguous model path or period is skipped with a
- * recorded reason row instead of a conflict. Asserted through the mandate QA read API,
- * and the CLI text/JSON export only; no direct SQL assertions.
+ * recorded reason row instead of a conflict. A money fact the shared nomenclature cannot
+ * name (issue #153) is skipped the same way, naming the path it could not bind. Asserted
+ * through the mandate QA read API, and the CLI text/JSON export only; no direct SQL
+ * assertions.
  */
 class MandateDocVsFmTest {
 
@@ -86,6 +88,7 @@ class MandateDocVsFmTest {
     private Path dbPath;
     private BlobStore blobs;
     private DocTypePack dprPack;
+    private DocTypePack netWorthPack;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -95,6 +98,7 @@ class MandateDocVsFmTest {
         }
         blobs = BlobStore.besideDatabase(dbPath);
         dprPack = PackLoader.loadClasspath("docpacks/report.dpr.yaml");
+        netWorthPack = PackLoader.loadClasspath("docpacks/identity.promoter_net_worth.yaml");
     }
 
     // --- AC1: the model's project-cost path disagrees with the DPR -------------
@@ -379,6 +383,110 @@ class MandateDocVsFmTest {
                 assertThat(skip.reason()).contains("different periods", "2026", "2027"));
     }
 
+    // --- #153: a fact bound to a shared path joins the model cell on that path --
+
+    @Test
+    void netWorthBoundToTheSharedBalanceSheetPathIsComparedWithTheModelsNetWorthCell()
+            throws Exception {
+        // The model's net worth cell (Rs. in Lakhs): 2,000 lakh = Rs. 20 crore.
+        Path xlsx = modelWorkbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Net worth (Rs. In Lakhs)");
+            sheet.createRow(2).createCell(0).setCellValue("Net worth");
+            sheet.getRow(2).createCell(1).setCellValue(2000);
+        });
+        long fmRun = ingestFm(xlsx, List.of(
+                new LayerBAssignment(null, "B3", "economic", "Balance Sheet > Net Worth")));
+        assertThat(readingOf(fmRun, "B3").absoluteAmount()).isEqualTo("200000000");
+        long certificate = ingestNetWorthCertificate();
+
+        DocAssessRunner.run(MANDATE, dbPath, null);
+
+        // The pack said "Promoter Net Worth > Net Worth"; the shared nomenclature owns
+        // the path, and that is the path the model cell is bound to too — so the two
+        // statements of one data point meet and disagree.
+        assertThat(qa().conflicts()).filteredOn(row -> "net_worth".equals(row.dataPoint()))
+                .singleElement().satisfies(conflict -> {
+                    assertThat(conflict.kind()).isEqualTo("doc-fm");
+                    assertThat(conflict.ontologyPath())
+                            .isEqualTo("economic > Balance Sheet > Net Worth");
+                    assertThat(conflict.verdict()).isEqualTo("disagree");
+                    assertThat(conflict.left().documentVersionId()).isEqualTo(certificate);
+                    assertThat(conflict.left().value()).isEqualTo("Rs. 1,60,00,000");
+                    assertThat(conflict.right().value()).isEqualTo("INR 200000000");
+                    assertThat(conflict.right().quote()).isEqualTo("MODEL!B3");
+                    assertThat(conflict.settlement()).isEqualTo("open");
+                });
+    }
+
+    // --- #153: a money fact the shared nomenclature does not know is skipped -----
+
+    @Test
+    void unboundMoneyFactsAreSkippedWithARecordedRowNamingTheirPath() throws Exception {
+        Path xlsx = modelWorkbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Net worth (Rs. In Lakhs)");
+            sheet.createRow(2).createCell(0).setCellValue("Net worth");
+            sheet.getRow(2).createCell(1).setCellValue(2000);
+        });
+        ingestFm(xlsx, List.of(
+                new LayerBAssignment(null, "B3", "economic", "Balance Sheet > Net Worth")));
+        long certificate = ingestNetWorthCertificate();
+
+        DocAssessRunner.run(MANDATE, dbPath, null);
+
+        // Assets and liabilities are the certificate's other money statements. No shared
+        // leaf names them, so they are never compared silently: each records why.
+        assertThat(qa().conflictSkips()).hasSize(2);
+        assertThat(qa().conflictSkips())
+                .filteredOn(skip -> "assets_total".equals(skip.dataPoint()))
+                .singleElement().satisfies(skip -> {
+                    assertThat(skip.kind()).isEqualTo("doc-fm");
+                    assertThat(skip.ontologyPath())
+                            .isEqualTo("economic > Promoter Net Worth > Assets");
+                    assertThat(skip.fmSource()).isNull();
+                    assertThat(skip.documentVersionId()).isEqualTo(certificate);
+                    assertThat(skip.pageIndex()).isEqualTo(1);
+                    assertThat(skip.reason())
+                            .contains("unbound")
+                            .contains("Promoter Net Worth > Assets");
+                });
+        assertThat(qa().conflictSkips())
+                .filteredOn(skip -> "liabilities_total".equals(skip.dataPoint()))
+                .singleElement().satisfies(skip -> assertThat(skip.ontologyPath())
+                        .isEqualTo("economic > Promoter Net Worth > Liabilities"));
+        // The fact that did bind is compared, not skipped, and the text export says so.
+        assertThat(qa().conflictSkips())
+                .extracting(MandateQa.ConflictSkipRow::dataPoint)
+                .doesNotContain("net_worth");
+        Run text = run(new DocQaCommand(), "--mandate", "1", "--db", dbPath.toString());
+        assertThat(text.exitCode()).isZero();
+        assertThat(text.out())
+                .contains("conflict skip assets_total [doc-fm]")
+                .contains("conflict skips: 2");
+
+        DocAssessRunner.run(MANDATE, dbPath, null);
+        assertThat(qa().conflictSkips()).hasSize(2);
+    }
+
+    @Test
+    void anUnboundMoneyFactIsStillSkippedWhenTheModelProvesNoPath() throws Exception {
+        // The workbook is this mandate's model even when Layer B bound nothing on it.
+        // Silence here is the green-but-blind read AC4 (#153) forbids: the comparison
+        // was possible and refused, not absent.
+        // The workbook is this mandate's model even when Layer B proved no path on it:
+        // a numeric cell with no label anywhere. Silence here is the green-but-blind
+        // read AC4 (#153) forbids — the comparison was possible and refused, not absent.
+        Path xlsx = modelWorkbook(sheet -> sheet.createRow(2).createCell(1).setCellValue(2000));
+        long fmRun = ingestFm(xlsx, List.of());
+        assertThat(bindingsOf(fmRun)).isEmpty();
+        ingestNetWorthCertificate();
+
+        DocAssessRunner.run(MANDATE, dbPath, null);
+
+        assertThat(qa().conflictSkips())
+                .extracting(MandateQa.ConflictSkipRow::dataPoint)
+                .containsExactlyInAnyOrder("assets_total", "liabilities_total");
+    }
+
     // --- FM seams: the unchanged pipeline over a synthetic workbook ------------
 
     /**
@@ -466,7 +574,7 @@ class MandateDocVsFmTest {
                 dbPath, ingested.documentVersionId(), MANDATE, dprPack, extractClient,
                 FixtureExtractClient.ID);
         assertThat(extract.status()).isEqualTo("success");
-        new PackPathBinder().bind(dbPath, extract.parseRunId(), dprPack);
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, dprPack, null);
         assertThat(com.resurgent.tev.doc.db.FactQueryRunner.query(dbPath,
                 com.resurgent.tev.doc.query.FactQuery.forMandate(MANDATE)))
                 .anySatisfy(fact -> {
@@ -478,6 +586,10 @@ class MandateDocVsFmTest {
     }
 
     private void classify(long versionId) throws Exception {
+        classify(versionId, dprPack);
+    }
+
+    private void classify(long versionId, DocTypePack pack) throws Exception {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
             DocumentRepository docs = new DocumentRepository(db.connection());
             DocumentRepository.DocumentVersionRow version = docs.findVersion(versionId)
@@ -485,9 +597,59 @@ class MandateDocVsFmTest {
             String page1 = DocTypeClassifier.loadPage1Text(db.connection(), versionId);
             ClassifyResult result = new DocTypeClassifier().classify(new ClassifyRequest(
                     versionId, version.fileRole(), version.fileName(), page1,
-                    "general", List.of(dprPack), true), db.connection());
-            assertThat(result.docTypeCode()).isEqualTo("report.dpr");
+                    "general", List.of(pack), true), db.connection());
+            assertThat(result.docTypeCode()).isEqualTo(pack.code());
         }
+    }
+
+    /**
+     * Ingests a promoter net-worth certificate: its net worth lands on the shared
+     * Balance Sheet path, its assets and liabilities on no shared leaf at all. It states
+     * no as-on date — a period the model cannot state would only be a period skip, and
+     * these tests are about the path join.
+     */
+    private long ingestNetWorthCertificate() throws Exception {
+        Path pdf = writePdf("net_worth_sharma.pdf", List.of(
+                "Certificate of Net Worth",
+                "Name of the Member: RAMESH KUMAR SHARMA",
+                "Total Assets: Rs. 2,45,00,000",
+                "Total Liabilities: Rs. 85,00,000",
+                "Net Worth of RAMESH KUMAR SHARMA: Rs. 1,60,00,000"));
+        DocumentIngestService.IngestResult ingested = new DocumentIngestService().ingest(
+                new DocumentIngestService.IngestRequest(
+                        pdf, MANDATE, "Promoter Net Worth - Sharma", "v1",
+                        "certificate", "certificate"),
+                dbPath, blobs);
+        new DocumentLayoutService().layout(ingested.documentVersionId(), dbPath, blobs);
+        classify(ingested.documentVersionId(), netWorthPack);
+        FixtureExtractClient extractClient = new FixtureExtractClient();
+        extractClient.putFixture("identity.promoter_net_worth", MAPPER.readTree("""
+                {
+                  "doc_type_code": "identity.promoter_net_worth",
+                  "fields": {
+                    "subject_name": {"value": "RAMESH KUMAR SHARMA",
+                      "quote": "Name of the Member: RAMESH KUMAR SHARMA", "page": 1},
+                    "assets_total": {"value": "Rs. 2,45,00,000",
+                      "quote": "Total Assets: Rs. 2,45,00,000", "page": 1},
+                    "liabilities_total": {"value": "Rs. 85,00,000",
+                      "quote": "Total Liabilities: Rs. 85,00,000", "page": 1},
+                    "net_worth": {"value": "Rs. 1,60,00,000",
+                      "quote": "Net Worth of RAMESH KUMAR SHARMA: Rs. 1,60,00,000",
+                      "page": 1}
+                  }
+                }"""));
+        ExtractService.ExtractOutcome extract = new ExtractService().extract(
+                dbPath, ingested.documentVersionId(), MANDATE, netWorthPack, extractClient,
+                FixtureExtractClient.ID);
+        assertThat(extract.status()).isEqualTo("success");
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, netWorthPack, null);
+        assertThat(com.resurgent.tev.doc.db.FactQueryRunner.query(dbPath,
+                com.resurgent.tev.doc.query.FactQuery.forMandate(MANDATE)))
+                .anySatisfy(fact -> {
+                    assertThat(fact.fieldKey()).isEqualTo("net_worth");
+                    assertThat(fact.ontologyPath()).isEqualTo("economic > Balance Sheet > Net Worth");
+                });
+        return ingested.documentVersionId();
     }
 
     private static JsonNode dprFixture(String total) throws Exception {
