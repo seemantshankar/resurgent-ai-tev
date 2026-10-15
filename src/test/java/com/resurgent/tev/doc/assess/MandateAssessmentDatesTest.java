@@ -72,8 +72,8 @@ class MandateAssessmentDatesTest {
         DocAssessRunner.Result result = DocAssessRunner.run(
                 MANDATE, dbPath, new FakeDocLlmClient("{\"date\": null}"));
 
-        assertThat(result.stages()).hasSize(1);
-        assertThat(result.stages().get(0).stage()).isEqualTo("assess_profile");
+        assertThat(result.stages())
+                .anySatisfy(s -> assertThat(s.stage()).isEqualTo("assess_profile"));
 
         MandateQa.DocumentDateRow row = docRow(versionId);
         assertThat(row.dateKind()).isEqualTo("execution");
@@ -84,10 +84,12 @@ class MandateAssessmentDatesTest {
         assertThat(row.pageIndex()).isEqualTo(1);
         assertThat(row.uploadDate()).isNotBlank();
 
-        assertThat(qa().stages()).hasSize(1);
-        assertThat(qa().stages().get(0).stage()).isEqualTo("assess_profile");
-        assertThat(qa().stages().get(0).status()).isEqualTo("completed");
-        assertThat(qa().stages().get(0).parseRunId()).isNotNull();
+        MandateQa.AssessmentRunRow profile = qa().stages().stream()
+                .filter(s -> s.stage().equals("assess_profile"))
+                .findFirst()
+                .orElseThrow();
+        assertThat(profile.status()).isEqualTo("completed");
+        assertThat(profile.parseRunId()).isNotNull();
     }
 
     @Test
@@ -168,7 +170,8 @@ class MandateAssessmentDatesTest {
         }
         assertThat(qa().documents()).hasSize(1);
         assertThat(docRow(versionId).documentDate()).isEqualTo("2024-03-12");
-        assertThat(qa().stages()).hasSize(1);
+        assertThat(qa().stages())
+                .anySatisfy(s -> assertThat(s.stage()).isEqualTo("assess_profile"));
     }
 
     @Test

@@ -1,7 +1,7 @@
 code: report.dpr
 version: 1.0.0
-family: report
-file_role: report
+family: dpr
+file_role: dpr
 industry_tags: [solar_power, wind_power, hybrid, general]
 identity_signals:
   any_of:

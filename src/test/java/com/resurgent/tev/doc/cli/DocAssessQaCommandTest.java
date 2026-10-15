@@ -187,7 +187,8 @@ class DocAssessQaCommandTest {
         }
         MandateQa after = MandateQaQueryRunner.query(dbPath, MandateQaQuery.forMandate(MANDATE));
         assertThat(after.documents()).hasSize(1);
-        assertThat(after.stages()).hasSize(1);
+        assertThat(after.stages())
+                .anySatisfy(s -> assertThat(s.stage()).isEqualTo("assess_profile"));
     }
 
     private static long count(java.sql.Connection c, String sql) throws Exception {

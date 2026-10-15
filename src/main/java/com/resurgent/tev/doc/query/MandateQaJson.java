@@ -52,6 +52,68 @@ public final class MandateQaJson {
             }
         }
 
+        ArrayNode passages = root.putArray("passages");
+        for (MandateQa.PassageRow row : qa.passages()) {
+            ObjectNode n = passages.addObject();
+            n.put("passage_id", row.passageId());
+            n.put("document_version_id", row.documentVersionId());
+            n.put("passage_index", row.passageIndex());
+            n.put("heading", row.heading());
+            if (row.topic() != null) {
+                n.put("topic", row.topic());
+            }
+            n.put("page_from", row.pageFrom());
+            n.put("page_to", row.pageTo());
+            n.put("page_index", row.pageIndex());
+            if (row.verbatim() != null) {
+                n.put("verbatim", row.verbatim());
+            }
+            if (row.summary() != null) {
+                n.put("summary", row.summary());
+            }
+            ArrayNode facts = n.putArray("facts");
+            for (MandateQa.PassageFactRow fact : row.facts()) {
+                ObjectNode f = facts.addObject();
+                f.put("fact_id", fact.factId());
+                f.put("field_key", fact.fieldKey());
+                f.put("ontology_path", fact.ontologyPath());
+                if (fact.lineKey() != null) {
+                    f.put("line_key", fact.lineKey());
+                }
+                if (fact.valueText() != null) {
+                    f.put("value_text", fact.valueText());
+                }
+                if (fact.valueNumber() != null) {
+                    f.put("value_number", fact.valueNumber());
+                }
+                if (fact.valueDate() != null) {
+                    f.put("value_date", fact.valueDate());
+                }
+                if (fact.unit() != null) {
+                    f.put("unit", fact.unit());
+                }
+                if (fact.currency() != null) {
+                    f.put("currency", fact.currency());
+                }
+                if (fact.confidence() != null) {
+                    f.put("confidence", fact.confidence());
+                }
+                if (fact.extractionMethod() != null) {
+                    f.put("extraction_method", fact.extractionMethod());
+                }
+                ArrayNode quotes = f.putArray("evidence_quotes");
+                fact.evidenceQuotes().forEach(quotes::add);
+                ArrayNode pages = f.putArray("evidence_pages");
+                for (Integer page : fact.evidencePages()) {
+                    if (page == null) {
+                        pages.addNull();
+                    } else {
+                        pages.add(page);
+                    }
+                }
+            }
+        }
+
         try {
             return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root);
         } catch (Exception e) {
