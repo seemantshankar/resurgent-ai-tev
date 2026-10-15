@@ -17,13 +17,14 @@ import picocli.CommandLine.Spec;
  * {@code tev-doc qa}: print the persisted mandate assessment results — per-document
  * document date, precision, source and upload date, the assessment runs, the mandate
  * entities with their roles, aliases and source pages, the clauses with their types
- * and slots, the mandate sites with their aliases and mentioning documents, and the
- * checklist with its statuses, ask-the-client list and counts — without re-parsing
- * anything. Read-through-API only, like {@code facts}.
+ * and slots, the mandate sites with their aliases and mentioning documents, the
+ * chapter passages with their facts, the industries and country, and the checklist
+ * with its statuses, ask-the-client list and counts — without re-parsing anything.
+ * Read-through-API only, like {@code facts}.
  */
 @Command(name = "qa",
         description = "Show persisted mandate QA: document dates, stages, entities,"
-                + " clauses, sites and the checklist")
+                + " clauses, sites, passages, industries, country and the checklist")
 public final class DocQaCommand implements Callable<Integer> {
 
     @Option(names = "--mandate", required = true, description = "Mandate id")
@@ -113,7 +114,7 @@ public final class DocQaCommand implements Callable<Integer> {
             }
             out.printf("clauses: %d%n", qa.clauses().size());
             // M3-04 (#137): sites with their spelling variants and mentioning
-            // documents — appended at the end so #134's output is untouched.
+            // documents — appended after #134's output.
             for (MandateQa.SiteRow site : qa.sites()) {
                 out.printf("site %d: %s%n", site.siteId(), site.siteName());
                 for (MandateQa.SiteAliasRow alias : site.aliases()) {
@@ -135,6 +136,70 @@ public final class DocQaCommand implements Callable<Integer> {
                 out.printf("  documents: %s%n", files.length() == 0 ? "-" : files);
             }
             out.printf("sites: %d%n", qa.sites().size());
+            // M3-06 (#139): chapter passages from the stored parse output with their
+            // per-chapter facts — appended at the end so the earlier sections stand.
+            for (MandateQa.PassageRow row : qa.passages()) {
+                out.printf("passage %d | %s | topic=%s | pages %d-%d | page=%d%n",
+                        row.passageIndex(),
+                        blankToDash(row.heading()),
+                        blankToDash(row.topic()),
+                        row.pageFrom(),
+                        row.pageTo(),
+                        row.pageIndex());
+                if (row.summary() != null) {
+                    out.printf("  summary: %s%n", row.summary());
+                }
+                if (row.verbatim() != null) {
+                    out.printf("  verbatim: %s%n",
+                            com.resurgent.tev.doc.db.AssessmentRepository
+                                    .normalizeWhitespace(row.verbatim()));
+                }
+                for (MandateQa.PassageFactRow fact : row.facts()) {
+                    out.printf("  fact %s%s = %s%s%n",
+                            fact.fieldKey(),
+                            fact.lineKey() != null ? " [" + fact.lineKey() + "]" : "",
+                            fact.valueText() != null
+                                    ? fact.valueText()
+                                    : fact.valueNumber() != null
+                                            ? String.valueOf(fact.valueNumber())
+                                            : fact.valueDate(),
+                            fact.unit() != null ? " " + fact.unit() : "");
+                    for (int i = 0; i < fact.evidenceQuotes().size(); i++) {
+                        Integer page = i < fact.evidencePages().size()
+                                ? fact.evidencePages().get(i)
+                                : null;
+                        out.printf("    quote%s: %s%n",
+                                page != null ? " (page " + page + ")" : "",
+                                fact.evidenceQuotes().get(i));
+                    }
+                }
+            }
+            out.printf("passages: %d%n", qa.passages().size());
+            // M3-05 (#138): the mandate's industries and country — appended at the end
+            // so earlier tickets' output is untouched.
+            for (MandateQa.IndustryRow industry : qa.industries()) {
+                out.printf("industry %s%s | %s%s%n",
+                        industry.industry(),
+                        industry.isNewIndustry() ? " (new)" : "",
+                        industry.reason(),
+                        industry.pageIndex() != null ? " | page=" + industry.pageIndex() : "");
+                if (industry.verbatim() != null) {
+                    out.printf("  named: %s%n", industry.verbatim());
+                }
+            }
+            out.printf("industries: %d%n", qa.industries().size());
+            if (qa.country() != null) {
+                out.printf("country %s | %s%s%n",
+                        qa.country().country(),
+                        qa.country().reason(),
+                        qa.country().pageIndex() != null
+                                ? " | page=" + qa.country().pageIndex() : "");
+                if (qa.country().verbatim() != null) {
+                    out.printf("  named: %s%n", qa.country().verbatim());
+                }
+            } else {
+                out.printf("country: -%n");
+            }
             // M3-10 (#143): checklist results with their status, page evidence and
             // basis, the ask-the-client list, the unclear items and the persisted
             // counts — appended at the end so the earlier output is untouched.

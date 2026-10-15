@@ -8,9 +8,9 @@ import java.util.List;
 
 /**
  * CLI facade for the M3 mandate assessment. Runs the registered stages in pipeline
- * order — profile now; passages, clauses, conflicts and checklist slot in as the later
- * M3 tickets land — each replacing its previous results for the mandate. Processing new
- * documents (extract/bind) ends by re-running this.
+ * order — profile, clauses, passages and checklist now; conflicts slot in as the
+ * later M3 tickets land — each replacing its previous results for the mandate.
+ * Processing new documents (extract/bind) ends by re-running this.
  */
 public final class DocAssessRunner {
 
@@ -19,7 +19,8 @@ public final class DocAssessRunner {
 
     /** Pipeline contract: later M3 tickets append their stage runners here, in order. */
     private static final List<AssessStage> STAGES = List.of(
-            new AssessProfileRunner(), new AssessClausesRunner(), new AssessChecklistRunner());
+            new AssessProfileRunner(), new AssessClausesRunner(), new AssessPassagesRunner(),
+            new AssessChecklistRunner());
 
     private DocAssessRunner() {}
 

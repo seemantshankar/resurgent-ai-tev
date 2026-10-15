@@ -1,5 +1,8 @@
 package com.resurgent.tev.doc.llm;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /** Deterministic in-memory {@link DocLlmClient} for tests; never touches a network. */
 public final class FakeDocLlmClient implements DocLlmClient {
 
@@ -7,6 +10,7 @@ public final class FakeDocLlmClient implements DocLlmClient {
     private final DocLlmException failure;
 
     private int calls;
+    private final List<String> systems = new ArrayList<>();
     private String lastSystem;
     private String lastUser;
     private int lastMaxTokens;
@@ -32,6 +36,17 @@ public final class FakeDocLlmClient implements DocLlmClient {
         return calls;
     }
 
+    /** Calls whose system prompt contains {@code needle} — counts one step of a pipeline. */
+    public int callsWithSystemContaining(String needle) {
+        int matching = 0;
+        for (String system : systems) {
+            if (system.contains(needle)) {
+                matching++;
+            }
+        }
+        return matching;
+    }
+
     public String lastSystem() {
         return lastSystem;
     }
@@ -52,6 +67,7 @@ public final class FakeDocLlmClient implements DocLlmClient {
     @Override
     public Completion complete(String system, String user, int maxTokens) {
         calls++;
+        systems.add(system);
         lastSystem = system;
         lastUser = user;
         lastMaxTokens = maxTokens;

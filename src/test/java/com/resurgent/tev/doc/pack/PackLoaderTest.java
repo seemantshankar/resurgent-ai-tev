@@ -45,10 +45,11 @@ class PackLoaderTest {
     @Test
     void seedPacksLoadFromPackDirAndClasspath() throws Exception {
         List<DocTypePack> seed = PackLoader.loadSeedPacks();
-        assertThat(seed).hasSize(3);
+        assertThat(seed).hasSize(4);
         assertThat(seed.stream().map(DocTypePack::code))
                 .containsExactlyInAnyOrder(
-                        "identity.promoter_net_worth", "quotation.vendor", "agreement.ppa");
+                        "identity.promoter_net_worth", "quotation.vendor", "agreement.ppa",
+                        "report.dpr");
 
         Path packDir = tempDir.resolve("packs");
         Files.createDirectories(packDir);

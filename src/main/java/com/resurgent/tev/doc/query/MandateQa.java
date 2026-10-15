@@ -16,6 +16,12 @@ import java.util.List;
  * @param clauses every clause read for the mandate's clause-carrying documents (M3-08)
  * @param sites the identified sites with their spelling aliases and mentioning documents
  *     (M3-04; appended)
+ * @param passages the chapter passages assessed from the stored parse output, with the
+ *     facts linked to each chapter (M3-06; appended)
+ * @param industries the mandate's industries, several allowed, each with its reason and
+ *     page provenance; an industry the packs have not seen is marked new (M3-05; appended)
+ * @param country the mandate's country with its reason and page provenance, or null when
+ *     none was detected (M3-05; appended)
  * @param checklist every checklist result of the last assessment — item, scope, status,
  *     reason, page evidence and ask-the-client wording (M3-10; appended)
  * @param checklistSummary the persisted counts by status, overall and per entity
@@ -28,6 +34,9 @@ public record MandateQa(
         List<EntityRow> entities,
         List<ClauseRow> clauses,
         List<SiteRow> sites,
+        List<PassageRow> passages,
+        List<IndustryRow> industries,
+        CountryRow country,
         List<ChecklistResultRow> checklist,
         List<ChecklistSummaryRow> checklistSummary) {
 
@@ -76,6 +85,69 @@ public record MandateQa(
             String startedAt,
             String finishedAt,
             Long parseRunId) {}
+
+    /**
+     * One chapter passage of a mandate document version, with the facts assessed from
+     * that chapter.
+     *
+     * @param passageId passage id
+     * @param documentVersionId version the passage was split from
+     * @param passageIndex 1-based chapter order within the version
+     * @param heading the chapter heading as stored by the parser
+     * @param topic pack passage topic matched on the heading, or null when none matches
+     * @param pageFrom first page of the passage
+     * @param pageTo last page carrying the passage's text
+     * @param pageIndex provenance page of the heading (falls back to {@code pageFrom})
+     * @param verbatim the passage's stored text (provenance), or null when unanchored
+     * @param summary one-line chapter summary
+     * @param facts facts linked to this passage; row facts keep their line key
+     */
+    public record PassageRow(
+            long passageId,
+            long documentVersionId,
+            int passageIndex,
+            String heading,
+            String topic,
+            int pageFrom,
+            int pageTo,
+            int pageIndex,
+            String verbatim,
+            String summary,
+            List<PassageFactRow> facts) {}
+
+    /**
+     * One fact linked to a passage — a chapter data point (land area, capacity, …) or a
+     * single row of a listed table such as the plant and machinery list (M2
+     * quotation-row style: one fact per row, line key carries the row description).
+     *
+     * @param factId fact id
+     * @param fieldKey pack field (or table) key the fact belongs to
+     * @param ontologyPath canonical spine path of the fact
+     * @param lineKey row/line identifier for row facts, else null
+     * @param valueText text value, when the fact is textual
+     * @param valueNumber numeric value, when numeric
+     * @param valueDate date value, when a date
+     * @param unit unit string (row facts may carry {@code qty:N}), or null
+     * @param currency currency code, or null
+     * @param confidence extraction confidence, 0..1
+     * @param extractionMethod how the fact was extracted
+     * @param evidenceQuotes the verbatim quotes backing the fact, in evidence order
+     * @param evidencePages the pages of those quotes, aligned by index (nulls allowed)
+     */
+    public record PassageFactRow(
+            long factId,
+            String fieldKey,
+            String ontologyPath,
+            String lineKey,
+            String valueText,
+            Double valueNumber,
+            String valueDate,
+            String unit,
+            String currency,
+            Double confidence,
+            String extractionMethod,
+            List<String> evidenceQuotes,
+            List<Integer> evidencePages) {}
 
     /**
      * One mandate entity (M3-03): a company or person the documents are about.
@@ -208,6 +280,45 @@ public record MandateQa(
             long documentVersionId,
             String logicalName,
             String fileName) {}
+
+    /**
+     * One industry recorded for the mandate, with its reason and page provenance.
+     *
+     * @param industryRecordId the stored record id
+     * @param industry industry name as recorded
+     * @param isNewIndustry true when the packs have not seen this industry before
+     * @param reason why the industry was recorded (human-readable)
+     * @param verbatim the verbatim text the industry was read from, when anchored
+     * @param pageIndex provenance page for the verbatim, when anchored
+     * @param documentVersionId the version the industry was read from, may be null
+     */
+    public record IndustryRow(
+            long industryRecordId,
+            String industry,
+            boolean isNewIndustry,
+            String reason,
+            String verbatim,
+            Integer pageIndex,
+            Long documentVersionId) {}
+
+    /**
+     * The mandate's single country with its reason and page provenance, or absent
+     * (null {@code MandateQa.country}) when none was detected.
+     *
+     * @param countryRecordId the stored record id
+     * @param country country name as recorded
+     * @param reason why the country was recorded (human-readable)
+     * @param verbatim the verbatim text the country was read from, when anchored
+     * @param pageIndex provenance page for the verbatim, when anchored
+     * @param documentVersionId the version the country was read from, may be null
+     */
+    public record CountryRow(
+            long countryRecordId,
+            String country,
+            String reason,
+            String verbatim,
+            Integer pageIndex,
+            Long documentVersionId) {}
 
     /**
      * One checklist result (M3-10, GLOSSARY "Checklist status"): where one expected
