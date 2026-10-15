@@ -22,15 +22,18 @@ import java.util.Set;
 import java.util.function.Consumer;
 
 /**
- * The M3-12 conflict step of the {@code assess_conflicts} stage (issue #145, ADR 0026):
- * finds the mandate's data points stated by more than one document, compares the
+ * The M3-12/M3-13 conflict step of the {@code assess_conflicts} stage (issues #145,
+ * #146, ADR 0026): finds the mandate's data points stated by more than one document
+ * or by more than one section (chapter passage) of the same document, compares the
  * statements through the one {@link Comparisons} module, and persists one
  * {@code conflict} row per genuine disagreement — both sides in full, never
  * overwritten. A disagreement is only formed when the two statements are of the same
  * kind (two rates, two amounts, two numbers in the same unit), within the same entity
  * and site scope, and about the same period: a different as-on date makes them
  * different readings, not a conflict, and differing free text (names) never forms a
- * row at all.
+ * row at all. A pair inside one document version is comparable only when both facts
+ * are passage-linked and the passages differ — two sections of one document
+ * (kind {@code intra-doc}); a document-level fact carries no section.
  *
  * <p>Settlement follows ADR 0026's tiers: the versioned {@link PrecedenceRules} first,
  * else AI judgement through the {@link LlmConflictSettlement} seam (confident → settled
@@ -148,13 +151,14 @@ public final class ConflictScan {
     }
 
     /**
-     * Whether two facts can even be about the same thing: different document versions,
-     * the same entity and site scope, and a compatible stated period — a different
-     * as-on date (or financial year) makes them different readings, never a conflict.
+     * Whether two facts can even be about the same thing: different sources (two
+     * documents, or two different sections of one document), the same entity and site
+     * scope, and a compatible stated period — a different as-on date (or financial
+     * year) makes them different readings, never a conflict.
      */
     private static boolean comparable(ConflictFactRow left, ConflictFactRow right,
             Map<Long, String> periodsByVersion) {
-        if (left.documentVersionId() == right.documentVersionId()) {
+        if (!differentSources(left, right)) {
             return false;
         }
         if (!Objects.equals(left.entityId(), right.entityId())
@@ -172,6 +176,20 @@ public final class ConflictScan {
         }
         return comparison.verdict() != Verdict.NOT_COMPARABLE
                 || leftPeriod.trim().equalsIgnoreCase(rightPeriod.trim());
+    }
+
+    /**
+     * Two different sources: facts from two document versions, or two facts of one
+     * version read from two different passages (sections) of it. A fact with no
+     * passage carries no section, and two statements of one section are the same
+     * statement — neither can contradict the other.
+     */
+    private static boolean differentSources(ConflictFactRow left, ConflictFactRow right) {
+        if (left.documentVersionId() != right.documentVersionId()) {
+            return true;
+        }
+        return left.passageId() != null && right.passageId() != null
+                && !left.passageId().equals(right.passageId());
     }
 
     private static String periodOf(ConflictFactRow fact, Map<Long, String> periodsByVersion) {
@@ -223,7 +241,9 @@ public final class ConflictScan {
     /**
      * The row to store for one disagreeing pair: a same-type, differently-dated pair is
      * a revision ({@code versions-differ}, left side the newest, no settlement); anything
-     * else settles by precedence rule, else by AI judgement, else stays open.
+     * else — two documents ({@code doc-doc}) or two sections of one document
+     * ({@code intra-doc}) — settles by precedence rule, else by AI judgement, else
+     * stays open.
      */
     private static ConflictWrite writeFor(ConflictFactRow left, ConflictFactRow right,
             Comparison comparison, Map<Long, String> periodsByVersion, DocLlmClient client,
@@ -239,6 +259,11 @@ public final class ConflictScan {
                     periodsByVersion, null, null, null, null, reasoning);
         }
 
+        // Two sections of one document are the same document type by definition, so a
+        // precedence rule can never cover them — they settle by AI judgement or stay open.
+        String kind = left.documentVersionId() == right.documentVersionId()
+                ? ConflictRepository.KIND_INTRA_DOC
+                : ConflictRepository.KIND_DOC_DOC;
         String dataPoint = dataPointOf(left);
         Optional<PrecedenceRules.Decision> decision =
                 PrecedenceRules.settle(left.docTypeCode(), right.docTypeCode());
@@ -247,7 +272,7 @@ public final class ConflictScan {
             String reasoning = String.format(Locale.ROOT,
                     "precedence rule %s (rules %s): %s", settled.ruleId(),
                     settled.rulesVersion(), settled.reason());
-            return write(ConflictRepository.KIND_DOC_DOC, left, right, comparison,
+            return write(kind, left, right, comparison,
                     periodsByVersion, ConflictRepository.SETTLEMENT_RULE,
                     settled.choseLeft() ? "left" : "right", settled.ruleId(),
                     settled.rulesVersion(), reasoning);
@@ -256,11 +281,11 @@ public final class ConflictScan {
         Optional<LlmConflictSettlement.Verdict> ai = LlmConflictSettlement.settle(client,
                 dataPoint, describe(left), describe(right), usageSink);
         if (ai.isPresent()) {
-            return write(ConflictRepository.KIND_DOC_DOC, left, right, comparison,
+            return write(kind, left, right, comparison,
                     periodsByVersion, ConflictRepository.SETTLEMENT_AI,
                     ai.get().choseLeft() ? "left" : "right", null, null, ai.get().reasoning());
         }
-        return write(ConflictRepository.KIND_DOC_DOC, left, right, comparison,
+        return write(kind, left, right, comparison,
                 periodsByVersion, ConflictRepository.SETTLEMENT_OPEN, null, null, null,
                 "no precedence rule covers this disagreement and AI judgement did not"
                         + " settle it (declined or unavailable)");
@@ -328,12 +353,20 @@ public final class ConflictScan {
         return fact.valueDate() == null ? "" : fact.valueDate();
     }
 
-    /** One side's description for the AI tier: document, page, stated value and quote. */
+    /**
+     * One side's description for the AI tier: document, page, chapter section when
+     * passage-linked, stated value and quote. For an intra-document conflict both
+     * sides name the same document but their own section and page, so the reasoning
+     * can cite which section of the document each value was read from.
+     */
     private static String describe(ConflictFactRow fact) {
         StringBuilder text = new StringBuilder();
         text.append(fact.fileName() == null ? "document" : fact.fileName());
         if (fact.pageIndex() != null) {
             text.append(" page ").append(fact.pageIndex());
+        }
+        if (fact.passageHeading() != null && !fact.passageHeading().isBlank()) {
+            text.append(", chapter \"").append(fact.passageHeading()).append('"');
         }
         text.append(" states ").append(valueOf(fact));
         if (fact.quote() != null && !fact.quote().isBlank()) {

@@ -56,6 +56,14 @@ fields:
     value_kind: text
     required: false
     prompt_hint: "Implementation schedule / timeline as stated"
+  - key: project_cost
+    path: economic > Project Cost
+    path_root: economic
+    value_kind: money
+    required: false
+    slots: [currency, scale]
+    prompt_hint: "Project cost as stated (total project cost / cost estimate)"
+    synonyms: ["Project Cost", "Total project cost", "Estimated project cost"]
 tables:
   - name: plant_and_machinery
     path: technical > Plant and machinery > Item
@@ -70,6 +78,13 @@ tables:
       - key: amount
         value_kind: money
         prompt_hint: "Item amount when stated"
+  - name: cost_summary
+    path: economic > Project Cost Summary
+    path_root: economic
+    fields:
+      - key: project_cost
+        value_kind: money
+        prompt_hint: "Project cost as stated in the cost summary table"
 passages:
   - topic: project_overview
     heading_terms: [introduction, project overview, project description, salient features, at a glance]
@@ -83,6 +98,9 @@ passages:
   - topic: implementation
     heading_terms: [implementation, timeline, schedule, milestones]
     fields: [implementation_timeline]
+  - topic: project_cost
+    heading_terms: [project cost, cost of the project, cost summary, cost estimate, financial viability, means of finance]
+    fields: [project_cost, cost_summary]
 checklist: []
 document_date:
   kind: report

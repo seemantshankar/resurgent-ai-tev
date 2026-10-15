@@ -355,6 +355,7 @@ public final class MandateQaJson {
         if (side.pageIndex() != null) {
             n.put("page_index", side.pageIndex());
         }
+        putOrNull(n, "passage_heading", side.passageHeading());
         putOrNull(n, "value", side.value());
         putOrNull(n, "quote", side.quote());
     }
