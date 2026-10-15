@@ -42,6 +42,8 @@ public final class DocBindCommand implements Callable<Integer> {
             for (String path : result.paths()) {
                 out.printf("  path: %s%n", path);
             }
+            // Processing new documents ends by re-running the assessment (M3-01).
+            reassess(mandateId, db, out, err);
             return 0;
         } catch (IllegalArgumentException e) {
             err.println("bind rejected: " + e.getMessage());
@@ -49,6 +51,23 @@ public final class DocBindCommand implements Callable<Integer> {
         } catch (Exception e) {
             err.println("bind failed: " + (e.getMessage() != null ? e.getMessage() : e));
             return 1;
+        }
+    }
+
+    /**
+     * Re-runs the mandate assessment after a successful bind. A failed assessment is a
+     * warning, not a bind failure: the bound facts are already persisted.
+     */
+    private static void reassess(long mandateId, java.nio.file.Path db,
+            java.io.PrintWriter out, java.io.PrintWriter err) {
+        try {
+            var assessment = com.resurgent.tev.doc.assess.DocAssessRunner.run(mandateId, db);
+            for (String line : assessment.summaryLines()) {
+                out.println("assessment: " + line);
+            }
+        } catch (Exception e) {
+            err.println("warning: assessment re-run failed: "
+                    + (e.getMessage() != null ? e.getMessage() : e));
         }
     }
 }
