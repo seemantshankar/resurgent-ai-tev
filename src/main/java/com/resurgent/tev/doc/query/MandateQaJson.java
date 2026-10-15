@@ -52,6 +52,37 @@ public final class MandateQaJson {
             }
         }
 
+        // M3-04 (#137): sites with their spelling variants and the documents that
+        // mention them — appended at the end so #134's sections are untouched.
+        ArrayNode sites = root.putArray("sites");
+        for (MandateQa.SiteRow row : qa.sites()) {
+            ObjectNode n = sites.addObject();
+            n.put("site_id", row.siteId());
+            n.put("site_name", row.siteName());
+            ArrayNode aliases = n.putArray("aliases");
+            for (MandateQa.SiteAliasRow alias : row.aliases()) {
+                ObjectNode a = aliases.addObject();
+                a.put("alias_text", alias.aliasText());
+                a.put("document_version_id", alias.documentVersionId());
+                if (alias.fileName() != null) {
+                    a.put("file_name", alias.fileName());
+                }
+                if (alias.matchScore() != null) {
+                    a.put("match_score", alias.matchScore());
+                }
+                a.put("match_reason", alias.matchReason());
+            }
+            ArrayNode mentioning = n.putArray("documents");
+            for (MandateQa.SiteDocumentRow doc : row.documents()) {
+                ObjectNode d = mentioning.addObject();
+                d.put("document_version_id", doc.documentVersionId());
+                d.put("logical_name", doc.logicalName());
+                d.put("file_name", doc.fileName());
+            }
+        }
+
+        // M3-05 (#138): the mandate's industries and country — appended after the sites
+        // section so earlier tickets' sections are untouched.
         ArrayNode industries = root.putArray("industries");
         for (MandateQa.IndustryRow row : qa.industries()) {
             ObjectNode n = industries.addObject();

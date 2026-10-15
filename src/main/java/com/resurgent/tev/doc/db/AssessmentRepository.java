@@ -643,6 +643,7 @@ public final class AssessmentRepository {
      */
     public MandateQa readMandateQa(long mandateId) throws SQLException {
         return new MandateQa(mandateId, documentDates(mandateId), assessmentRuns(mandateId),
+                new SiteRepository(connection).sitesForMandate(mandateId),
                 industries(mandateId), country(mandateId));
     }
 

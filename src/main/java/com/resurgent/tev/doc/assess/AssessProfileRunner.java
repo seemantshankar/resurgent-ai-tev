@@ -134,6 +134,10 @@ public final class AssessProfileRunner implements AssessStage {
             }
         }
 
+        // M3-04 sites: after the document dates, identify the mandate's sites from the
+        // facts and texts (appended step; see SiteScan).
+        SiteScan.Result siteResult = SiteScan.scan(connection, mandateId, client, usage::add);
+
         // M3-05 (issue #138): the mandate's industries and country, detected from the
         // documents. Replace semantics like the dates: clear this run's predecessor first.
         assessment.clearIndustryCountry(mandateId);
@@ -143,16 +147,17 @@ public final class AssessProfileRunner implements AssessStage {
                 versions, client, usage::add);
 
         recordStats(repo, parseRunId, usage, versions.size(), statedCount, metadataCount,
-                noneCount, industries, country);
+                noneCount, siteResult, industries, country);
         assessment.upsertAssessmentRun(mandateId, STAGE, "completed", parseRunId,
                 startedAt, Timestamps.now(),
                 metricsJson(versions.size(), statedCount, metadataCount, noneCount, usage,
-                        industries, country));
+                        siteResult, industries, country));
 
         String detail = String.format(Locale.ROOT,
-                "%d documents (%d stated, %d file_metadata, %d none);"
+                "%d documents (%d stated, %d file_metadata, %d none); %d sites (%d aliases);"
                         + " %d industries (%d new); country: %s",
                 versions.size(), statedCount, metadataCount, noneCount,
+                siteResult.sites(), siteResult.aliases(),
                 industries.recorded(), industries.newIndustries(),
                 country.country() == null ? "none" : country.country());
         return new StageResult(STAGE, versions.size(), detail);
@@ -221,7 +226,8 @@ public final class AssessProfileRunner implements AssessStage {
 
     private static void recordStats(WorkspaceRepository repo, Long parseRunId,
             List<DocLlmClient.Usage> usage, int total, int stated, int metadata, int none,
-            IndustryScan.Counts industries, CountryScan.Counts country) throws Exception {
+            SiteScan.Result sites, IndustryScan.Counts industries,
+            CountryScan.Counts country) throws Exception {
         if (parseRunId == null) {
             return;
         }
@@ -229,6 +235,8 @@ public final class AssessProfileRunner implements AssessStage {
         repo.recordRunStat(parseRunId, STAGE, "dates_stated", (double) stated, null);
         repo.recordRunStat(parseRunId, STAGE, "dates_file_metadata", (double) metadata, null);
         repo.recordRunStat(parseRunId, STAGE, "dates_none", (double) none, null);
+        repo.recordRunStat(parseRunId, STAGE, "sites_total", (double) sites.sites(), null);
+        repo.recordRunStat(parseRunId, STAGE, "site_aliases", (double) sites.aliases(), null);
         repo.recordRunStat(parseRunId, STAGE, "industries_recorded",
                 (double) industries.recorded(), null);
         repo.recordRunStat(parseRunId, STAGE, "industries_new",
@@ -252,13 +260,15 @@ public final class AssessProfileRunner implements AssessStage {
     }
 
     private static String metricsJson(int total, int stated, int metadata, int none,
-            List<DocLlmClient.Usage> usage, IndustryScan.Counts industries,
-            CountryScan.Counts country) {
+            List<DocLlmClient.Usage> usage, SiteScan.Result sites,
+            IndustryScan.Counts industries, CountryScan.Counts country) {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("documents_total", total);
         node.put("dates_stated", stated);
         node.put("dates_file_metadata", metadata);
         node.put("dates_none", none);
+        node.put("sites_total", sites.sites());
+        node.put("site_aliases", sites.aliases());
         node.put("industries", industries.recorded());
         node.put("industries_new", industries.newIndustries());
         if (country.country() != null) {
