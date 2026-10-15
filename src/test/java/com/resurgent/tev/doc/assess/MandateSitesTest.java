@@ -346,4 +346,141 @@ class MandateSitesTest {
         assertThat(fake.calls()).isEqualTo(1);
         assertThat(siteNamed(qa, "Jaisingpura").aliases()).hasSize(1);
     }
+
+    @Test
+    void singleSiteMandateNeverInventsASecondSite() throws Exception {
+        long quote = quotation("quotation_e.pdf", "Quote E - Bhagyanagar", "Bhagyanagar",
+                "Project: Bhagyanagar Solar Plant");
+        // The PPA only mentions the site in free text, under an equivalent spelling.
+        long ppaE = ppa("ppa_e.pdf", "PPA E - Bhagyanagar",
+                "Project: Bhagya Nagar Solar Plant");
+        netWorthCertificate("net_worth_e.pdf", "Promoter NW - PAN");
+
+        DocAssessRunner.run(MANDATE, dbPath, new FakeDocLlmClient("{\"same\": false}"));
+
+        MandateQa qa = qa();
+        assertThat(qa.sites()).hasSize(1);
+        MandateQa.SiteRow site = siteNamed(qa, "Bhagyanagar");
+        assertThat(site.documents())
+                .extracting(MandateQa.SiteDocumentRow::documentVersionId)
+                .containsExactlyInAnyOrder(quote, ppaE);
+        assertThat(site.aliases()).hasSize(2);
+        MandateQa.SiteAliasRow ppaAlias = site.aliases().stream()
+                .filter(a -> a.documentVersionId() == ppaE)
+                .findFirst().orElseThrow();
+        assertThat(ppaAlias.aliasText()).isEqualTo("Bhagya Nagar");
+        assertThat(ppaAlias.matchReason()).isEqualTo("same loose key");
+    }
+
+    @Test
+    void reassessmentReplacesSitesAliasesAndFactTagsWithoutDuplicates() throws Exception {
+        quotation("quotation_a.pdf", "Quote A - Jaisingpura", "Jaisingpura",
+                "Project: Jaisingpura Solar Plant");
+        long ppaA = ppa("ppa_a.pdf", "PPA A - Jaisingh Pura",
+                "Project: Jaisingh Pura Solar Project");
+        quotation("quotation_b.pdf", "Quote B - Karawal Nagar", "Karawal Nagar",
+                "Project: Karawal Nagar Solar Park");
+        ppa("ppa_b.pdf", "PPA B - Karawal Nagar",
+                "Project: Karawal Nagar Solar Park");
+        FakeDocLlmClient fake = new FakeDocLlmClient("{\"same\": false}");
+
+        DocAssessRunner.run(MANDATE, dbPath, fake);
+        DocAssessRunner.run(MANDATE, dbPath, fake);
+
+        MandateQa qa = qa();
+        assertThat(qa.sites()).hasSize(2);
+        MandateQa.SiteRow siteA = siteNamed(qa, "Jaisingpura");
+        assertThat(siteA.aliases()).hasSize(2);
+        assertThat(siteA.documents()).hasSize(2);
+        assertThat(siteNamed(qa, "Karawal Nagar").aliases()).hasSize(2);
+
+        // Fact tags survive the replace: the tariff is on the re-created site A.
+        FactRow tariff = factByKey(factsFor(ppaA), "tariff");
+        assertThat(tariff.siteId()).isEqualTo(siteA.siteId());
+        assertThat(tariff.siteName()).isEqualTo("Jaisingpura");
+    }
+
+    @Test
+    void qaJsonListsSitesWithAliasesAndMentioningDocuments() throws Exception {
+        quotation("quotation_a.pdf", "Quote A - Jaisingpura", "Jaisingpura",
+                "Project: Jaisingpura Solar Plant");
+        long ppaA = ppa("ppa_a.pdf", "PPA A - Jaisingh Pura",
+                "Project: Jaisingh Pura Solar Project");
+        quotation("quotation_b.pdf", "Quote B - Karawal Nagar", "Karawal Nagar",
+                "Project: Karawal Nagar Solar Park");
+        ppa("ppa_b.pdf", "PPA B - Karawal Nagar",
+                "Project: Karawal Nagar Solar Park");
+
+        DocAssessRunner.run(MANDATE, dbPath, new FakeDocLlmClient("{\"same\": false}"));
+
+        JsonNode root = MAPPER.readTree(
+                com.resurgent.tev.doc.query.MandateQaJson.write(qa()));
+        // #134's sections are untouched; sites were appended at the end.
+        assertThat(root.has("documents")).isTrue();
+        assertThat(root.has("stages")).isTrue();
+        JsonNode sites = root.get("sites");
+        assertThat(sites).isNotNull();
+        assertThat(sites).hasSize(2);
+
+        JsonNode siteA = null;
+        for (JsonNode site : sites) {
+            if ("Jaisingpura".equals(site.get("site_name").asText())) {
+                siteA = site;
+            }
+        }
+        assertThat(siteA).isNotNull();
+        JsonNode variant = null;
+        for (JsonNode alias : siteA.get("aliases")) {
+            if ("Jaisingh Pura".equals(alias.get("alias_text").asText())) {
+                variant = alias;
+            }
+        }
+        assertThat(variant).isNotNull();
+        assertThat(variant.get("document_version_id").asLong()).isEqualTo(ppaA);
+        assertThat(variant.get("file_name").asText()).isEqualTo("ppa_a.pdf");
+        assertThat(variant.get("match_score").asDouble()).isBetween(0.8, 1.0);
+        assertThat(variant.get("match_reason").asText()).startsWith("loose score");
+        List<String> files = new java.util.ArrayList<>();
+        for (JsonNode doc : siteA.get("documents")) {
+            files.add(doc.get("file_name").asText());
+        }
+        assertThat(files).containsExactlyInAnyOrder("quotation_a.pdf", "ppa_a.pdf");
+    }
+
+    @Test
+    void qaTextListsSitesWithAliasesAndMentioningDocuments() throws Exception {
+        quotation("quotation_a.pdf", "Quote A - Jaisingpura", "Jaisingpura",
+                "Project: Jaisingpura Solar Plant");
+        ppa("ppa_a.pdf", "PPA A - Jaisingh Pura",
+                "Project: Jaisingh Pura Solar Project");
+        quotation("quotation_b.pdf", "Quote B - Karawal Nagar", "Karawal Nagar",
+                "Project: Karawal Nagar Solar Park");
+        ppa("ppa_b.pdf", "PPA B - Karawal Nagar",
+                "Project: Karawal Nagar Solar Park");
+
+        DocAssessRunner.run(MANDATE, dbPath, new FakeDocLlmClient("{\"same\": false}"));
+
+        picocli.CommandLine cmd =
+                new picocli.CommandLine(new com.resurgent.tev.doc.cli.DocQaCommand());
+        java.io.StringWriter out = new java.io.StringWriter();
+        cmd.setOut(new java.io.PrintWriter(out));
+        cmd.setErr(new java.io.PrintWriter(out));
+        Integer exit = cmd.execute("--mandate", Long.toString(MANDATE),
+                "--db", dbPath.toString());
+        assertThat(exit).isZero();
+        String text = out.toString();
+        assertThat(text)
+                .contains(": Jaisingpura")
+                .contains("Jaisingh Pura")
+                .contains("loose score")
+                .contains(": Karawal Nagar")
+                .contains("documents: ")
+                .contains("quotation_a.pdf")
+                .contains("ppa_a.pdf")
+                .contains("quotation_b.pdf")
+                .contains("ppa_b.pdf")
+                .contains("sites: 2");
+        // #134's output is untouched.
+        assertThat(text).contains("documents: 4").contains("stages: 1");
+    }
 }
