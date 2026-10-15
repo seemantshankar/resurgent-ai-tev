@@ -1,10 +1,15 @@
 package com.resurgent.tev.doc.compare;
 
+import com.resurgent.tev.doc.extract.DateNormalizer;
 import com.resurgent.tev.doc.extract.MoneyNormalizer;
 import com.resurgent.tev.doc.extract.RateNormalizer;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.DateTimeException;
+import java.time.LocalDate;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * The one pure, deterministic comparison module every M3 check uses to decide
@@ -107,6 +112,96 @@ public final class Comparisons {
         }
         return measured("rate", left.valueNumber(), left.unit(),
                 right.valueNumber(), right.unit());
+    }
+
+    private static final Pattern FY_TEXT = Pattern.compile(
+            "^FY\\s*(\\d{4})\\s*[-/]\\s*(\\d{2,4})$", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Compares two dates exactly at the stated precision, through M2's
+     * {@link DateNormalizer}. Days equal → AGREE; two different dates or
+     * periods → {@link Verdict#DIFFERENT_READINGS} (dates are never a
+     * disagreement); a coarser statement overlapping a finer one — a month
+     * and a day inside it, a financial year and a day inside it — →
+     * {@link Verdict#PRECISION_MISMATCH}. Unrecognised text, or a day M2
+     * recognises but no calendar has (31 Feb), refuses.
+     */
+    public static Comparison date(String leftRaw, String rightRaw) {
+        Span left = span(DateNormalizer.parse(leftRaw));
+        Span right = span(DateNormalizer.parse(rightRaw));
+        if (left == null || right == null) {
+            return Comparison.notComparable(
+                    "cannot interpret date: " + quote(leftRaw) + " vs " + quote(rightRaw));
+        }
+        if (left.start().equals(right.start()) && left.end().equals(right.end())) {
+            return Comparison.agree(left.text() + " = " + right.text()
+                    + " (" + left.grain() + ")");
+        }
+        boolean overlaps = !left.end().isBefore(right.start())
+                && !right.end().isBefore(left.start());
+        if (overlaps) {
+            return Comparison.precisionMismatch(left.text() + " (" + left.grain()
+                    + ") overlaps " + right.text() + " (" + right.grain() + ")");
+        }
+        return Comparison.differentReadings(left.text() + " (" + left.grain()
+                + ") and " + right.text() + " (" + right.grain() + ") are different readings");
+    }
+
+    /** The calendar interval a stated date covers at its own precision. */
+    private record Span(LocalDate start, LocalDate end, String grain, String text) {}
+
+    private static Span span(DateNormalizer.Result parsed) {
+        if (!parsed.ok()) {
+            return null;
+        }
+        if (parsed.precise() && parsed.valueDate() != null) {
+            LocalDate day = isoDay(parsed.valueDate());
+            return day == null ? null : new Span(day, day, "day", parsed.valueText());
+        }
+        String text = parsed.valueText();
+        if (text == null) {
+            return null;
+        }
+        // Month grain: M2 keeps "March 2025" as text and never guesses a day.
+        // Re-asking the same normalizer for day 1 bounds the month without
+        // inventing a day in any stored value.
+        DateNormalizer.Result anchored = DateNormalizer.parse("1 " + text);
+        if (anchored.precise() && anchored.valueDate() != null) {
+            LocalDate first = isoDay(anchored.valueDate());
+            if (first != null) {
+                return new Span(first, first.withDayOfMonth(first.lengthOfMonth()),
+                        "month", text);
+            }
+        }
+        Matcher fy = FY_TEXT.matcher(text.trim());
+        if (fy.matches()) {
+            int startYear = Integer.parseInt(fy.group(1));
+            int endYear = fiscalEndYear(startYear, fy.group(2));
+            if (endYear == startYear + 1) {
+                return new Span(LocalDate.of(startYear, 4, 1), LocalDate.of(endYear, 3, 31),
+                        "financial year", text);
+            }
+        }
+        // Recognised as a date by M2 but no precision interval can be built:
+        // refuse rather than guess.
+        return null;
+    }
+
+    /** "26" after FY 2025 means 2026; "1999" after FY 1998 means 1999. */
+    private static int fiscalEndYear(int startYear, String endText) {
+        int end = Integer.parseInt(endText);
+        if (endText.length() <= 2) {
+            return startYear - (startYear % 100) + end;
+        }
+        return end;
+    }
+
+    private static LocalDate isoDay(String iso) {
+        try {
+            return LocalDate.parse(iso);
+        } catch (DateTimeException e) {
+            return null;
+        }
     }
 
     private static Comparison measured(
