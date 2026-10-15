@@ -62,4 +62,6 @@ fields:
     prompt_hint: "Governing law / jurisdiction as stated"
 tables: []
 checklist: []
+document_date:
+  kind: execution
 report_sections: [financial_viability, risk]

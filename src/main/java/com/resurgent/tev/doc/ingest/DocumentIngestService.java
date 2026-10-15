@@ -250,6 +250,9 @@ public final class DocumentIngestService {
         meta.put("kind", kind.name().toLowerCase(Locale.ROOT));
         meta.put("file_name", file.getFileName().toString());
         meta.put("size_bytes", Files.size(file));
+        // M3 document dates: the only file metadata date the workspace keeps. Weak by
+        // nature (a download time, not the paper's date) — the assessment marks it as such.
+        meta.put("file_modified_at", Files.getLastModifiedTime(file).toInstant().toString());
         return MAPPER.writeValueAsString(meta);
     }
 

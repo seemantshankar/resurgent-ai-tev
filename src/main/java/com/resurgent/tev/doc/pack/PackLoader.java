@@ -180,8 +180,32 @@ public final class PackLoader {
         List<String> checklist = textList(root.get("checklist"));
         List<String> reportSections = textList(root.get("report_sections"));
 
+        String documentDateKind = documentDateKind(root.get("document_date"), source);
+
         return new DocTypePack(code, version, family, fileRole, industryTags, identitySignals,
-                fields, tables, checklist, reportSections);
+                fields, tables, checklist, reportSections, documentDateKind);
+    }
+
+    /**
+     * Optional {@code document_date: {kind: execution}} declaration (M3). The kind is
+     * from the closed set; an absent declaration means the generic {@code date} kind.
+     */
+    private static String documentDateKind(JsonNode node, String source)
+            throws PackValidationException {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (!node.isObject()) {
+            throw new PackValidationException(source
+                    + ": document_date must be a mapping (e.g. {kind: execution})");
+        }
+        String kind = requireText(node, "kind", source + ": document_date");
+        try {
+            DocTypePack.requireDocumentDateKind(kind);
+        } catch (IllegalArgumentException e) {
+            throw new PackValidationException(source + ": document_date: " + e.getMessage());
+        }
+        return kind.toLowerCase(Locale.ROOT);
     }
 
     /**

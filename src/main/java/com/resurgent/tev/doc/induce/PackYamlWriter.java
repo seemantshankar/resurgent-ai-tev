@@ -75,6 +75,11 @@ public final class PackYamlWriter {
         ArrayNode checklist = root.putArray("checklist");
         pack.checklist().forEach(checklist::add);
 
+        if (pack.documentDateKind() != null) {
+            ObjectNode date = root.putObject("document_date");
+            date.put("kind", pack.documentDateKind());
+        }
+
         ArrayNode reportSections = root.putArray("report_sections");
         pack.reportSections().forEach(reportSections::add);
 
