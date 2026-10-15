@@ -15,6 +15,13 @@ fields:
     value_kind: text
     required: false
     prompt_hint: "Project name as stated"
+  - key: project_cost
+    path: economic > Project Cost
+    path_root: economic
+    value_kind: money
+    required: false
+    slots: [currency, scale]
+    prompt_hint: "Total project cost with its stated currency and scale"
   - key: land_location
     path: technical > Site > Location
     path_root: technical
