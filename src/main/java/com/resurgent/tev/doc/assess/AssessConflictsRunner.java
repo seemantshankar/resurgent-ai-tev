@@ -110,13 +110,17 @@ public final class AssessConflictsRunner implements AssessStage {
                 usage::add);
 
         int docDoc = 0;
+        int docFm = 0;
         int versionsDiffer = 0;
         int settledRule = 0;
         int settledAi = 0;
         int open = 0;
         for (Written row : written) {
-            if (ConflictRepository.KIND_VERSIONS_DIFFER.equals(row.write().kind())) {
+            String kind = row.write().kind();
+            if (ConflictRepository.KIND_VERSIONS_DIFFER.equals(kind)) {
                 versionsDiffer++;
+            } else if (ConflictRepository.KIND_DOC_FM.equals(kind)) {
+                docFm++;
             } else {
                 docDoc++;
             }
@@ -129,14 +133,16 @@ public final class AssessConflictsRunner implements AssessStage {
         }
 
         insertFlags(repo, parseRunId, written);
-        recordStats(repo, parseRunId, usage, docDoc, versionsDiffer, settledRule, settledAi, open);
+        recordStats(repo, parseRunId, usage, docDoc + docFm, docFm, versionsDiffer, settledRule,
+                settledAi, open);
         assessment.upsertAssessmentRun(mandateId, STAGE, "completed", parseRunId, startedAt,
-                Timestamps.now(), metricsJson(docDoc, versionsDiffer, settledRule, settledAi,
-                        open, usage));
+                Timestamps.now(), metricsJson(docDoc + docFm, docFm, versionsDiffer, settledRule,
+                        settledAi, open, usage));
 
         String detail = String.format(Locale.ROOT,
-                "%d conflicts (%d rule, %d ai, %d open), %d versions differ",
-                docDoc, settledRule, settledAi, open, versionsDiffer);
+                "%d conflicts (%d document-vs-document, %d document-vs-model,"
+                        + " %d rule, %d ai, %d open), %d versions differ",
+                docDoc + docFm, docDoc, docFm, settledRule, settledAi, open, versionsDiffer);
         return new StageResult(STAGE, written.size(), detail);
     }
 
@@ -197,12 +203,15 @@ public final class AssessConflictsRunner implements AssessStage {
     }
 
     private static void recordStats(WorkspaceRepository repo, Long parseRunId,
-            List<DocLlmClient.Usage> usage, int docDoc, int versionsDiffer, int settledRule,
-            int settledAi, int open) throws Exception {
+            List<DocLlmClient.Usage> usage, int conflicts, int docFm, int versionsDiffer,
+            int settledRule, int settledAi, int open) throws Exception {
         if (parseRunId == null) {
             return;
         }
-        repo.recordRunStat(parseRunId, STAGE, "conflicts_total", (double) docDoc, null);
+        repo.recordRunStat(parseRunId, STAGE, "conflicts_total", (double) conflicts, null);
+        // The model comparison is reported apart from document-vs-document: a run that
+        // compared nothing against the model must not read as a run that agreed.
+        repo.recordRunStat(parseRunId, STAGE, "conflicts_doc_fm", (double) docFm, null);
         repo.recordRunStat(parseRunId, STAGE, "versions_differ", (double) versionsDiffer, null);
         repo.recordRunStat(parseRunId, STAGE, "settled_rule", (double) settledRule, null);
         repo.recordRunStat(parseRunId, STAGE, "settled_ai", (double) settledAi, null);
@@ -223,10 +232,11 @@ public final class AssessConflictsRunner implements AssessStage {
         repo.updateParseRunResult(parseRunId, Timestamps.now(), "success", null);
     }
 
-    private static String metricsJson(int docDoc, int versionsDiffer, int settledRule,
-            int settledAi, int open, List<DocLlmClient.Usage> usage) {
+    private static String metricsJson(int conflicts, int docFm, int versionsDiffer,
+            int settledRule, int settledAi, int open, List<DocLlmClient.Usage> usage) {
         ObjectNode node = MAPPER.createObjectNode();
-        node.put("conflicts_total", docDoc);
+        node.put("conflicts_total", conflicts);
+        node.put("conflicts_doc_fm", docFm);
         node.put("versions_differ", versionsDiffer);
         node.put("settled_rule", settledRule);
         node.put("settled_ai", settledAi);

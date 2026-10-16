@@ -11,6 +11,8 @@ import com.resurgent.tev.doc.extract.MoneyNormalizer;
 import com.resurgent.tev.doc.extract.RateNormalizer;
 import com.resurgent.tev.doc.llm.DocLlmClient;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -34,7 +36,10 @@ import java.util.function.Consumer;
  * different readings, not a conflict, and differing free text (names) never forms a
  * row at all. A pair inside one document version is comparable only when both facts
  * are passage-linked and the passages differ — two sections of one document
- * (kind {@code intra-doc}); a document-level fact carries no section.
+ * (kind {@code intra-doc}); a document-level fact carries no section. A money fact the
+ * bind stage left {@code unbound} (issue #153) has no shared path a model cell could
+ * meet it on, and a bound money amount may simply have no cell in the model: both are
+ * recorded as skips naming the path, never dropped from the comparison in silence.
  *
  * <p>Settlement follows ADR 0026's tiers: the versioned {@link PrecedenceRules} first,
  * else AI judgement through the {@link LlmConflictSettlement} seam (confident → settled
@@ -107,15 +112,54 @@ public final class ConflictScan {
         return written;
     }
 
+    /**
+     * Whether this mandate has a financial model at all: cells read by the Excel side,
+     * bound or not. The document pipeline never writes them, so any row here is a model.
+     */
+    private static boolean hasFinancialModel(Connection connection, long mandateId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT 1 FROM cell_interpretation ci"
+                        + " JOIN parse_run p ON p.parse_run_id = ci.parse_run_id"
+                        + " WHERE p.mandate_id = ? LIMIT 1")) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
     private static void scanFm(Connection connection, long mandateId, Long runId,
             List<ConflictFactRow> facts, Map<Long, String> periods, DocLlmClient client,
             Consumer<DocLlmClient.Usage> usageSink, ConflictRepository repository,
             List<Written> written) throws SQLException {
         Map<String, List<FmConflictSources.Cell>> paths =
                 FmConflictSources.forMandate(connection, mandateId);
+        if (paths.isEmpty() && !hasFinancialModel(connection, mandateId)) {
+            // Nothing was ever read as this mandate's model: there is no comparison to
+            // refuse, and a skip would cite a model that does not exist. A model whose
+            // cells proved no path is still a model — its refusals stay recorded.
+            return;
+        }
         for (ConflictFactRow fact : facts) {
+            if ("unbound".equals(fact.nomenclatureStatus()) && "money".equals(fact.valueKind())) {
+                // An unbound amount has no shared path to meet a model cell on. It is
+                // still retrievable; it is never dropped from the comparison in silence.
+                String why = fact.unboundReason() == null ? "" : " (" + fact.unboundReason() + ")";
+                repository.insertConflictSkip(mandateId, runId, fact, null,
+                        "unbound fact: no shared nomenclature path names '"
+                                + fact.ontologyPath() + "'" + why);
+                continue;
+            }
             List<FmConflictSources.Cell> cells = paths.get(fact.ontologyPath());
             if (cells == null || cells.isEmpty()) {
+                // A bound amount the model says nothing about is a comparison that was
+                // possible and refused, not one that agreed. Silent here is the green-but-
+                // blind read #147 forbids, so the model's silence is recorded per amount.
+                if ("money".equals(fact.valueKind())) {
+                    repository.insertConflictSkip(mandateId, runId, fact, null,
+                            "financial model has no cell bound to " + fact.ontologyPath());
+                }
                 continue;
             }
             // Layer B also binds row labels. They identify the amount, not a second value.

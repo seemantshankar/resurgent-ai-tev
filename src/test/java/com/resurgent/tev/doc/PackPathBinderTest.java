@@ -14,15 +14,16 @@ import com.resurgent.tev.doc.query.FactRow;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import java.nio.file.Path;
-import java.sql.Connection;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Pack-path bind (T8): pack fields bound with ontology_path/path_root; extras stay
- * unbound with {@code no_pack_field}; derived facts bind to the primary leaf path.
+ * Pack-path bind (T8, read through M3-17 / issue #153): a fact binds only to a path of
+ * the shared nomenclature, and every fact that does not is {@code unbound} with the
+ * reason — {@code no_pack_field} for a stray, the pack's own path kept so the fact is
+ * still retrievable. Offline, a leaf the nomenclature does not know stays unbound too.
  */
 class PackPathBinderTest {
 
@@ -73,44 +74,49 @@ class PackPathBinderTest {
     }
 
     @Test
-    void packFieldsBindAndExtrasStayUnbound() throws Exception {
-        PackPathBinder.BindOutcome outcome = new PackPathBinder().bind(dbPath, parseRunId, pack);
+    void sharedLeavesBindAndNovelOnesStayUnboundOffline() throws Exception {
+        PackPathBinder.BindOutcome outcome =
+                new PackPathBinder().bind(dbPath, parseRunId, mandateId, pack, null);
 
-        // subject_name + assets_total + liabilities_total + derived net_worth
-        assertThat(outcome.bound()).isEqualTo(4);
-        // pan_number has no pack field
-        assertThat(outcome.unbound()).isEqualTo(1);
+        // subject_name is an identity head and derived net_worth is the bank's
+        // Balance Sheet > Net Worth; the two promoter-only totals are leaves that
+        // nothing in the shared nomenclature names.
+        assertThat(outcome.bound()).isEqualTo(2);
+        assertThat(outcome.unbound()).isEqualTo(3);
 
-        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            FactRepository facts = new FactRepository(db.connection());
-            List<FactRow> rows = facts.query(FactQuery.forMandate(mandateId)
-                    .withVersion(documentVersionId));
+        List<FactRow> rows = facts();
+        FactRow subject = byKey(rows, "subject_name");
+        assertThat(subject.ontologyPath()).isEqualTo("identity > Project Identity > Legal Name");
+        assertThat(subject.pathRoot()).isEqualTo("identity");
+        assertThat(subject.nomenclatureReason()).contains("alias");
 
-            FactRow subject = byKey(rows, "subject_name");
-            assertThat(subject.ontologyPath()).isEqualTo("identity > Legal Name");
-            assertThat(subject.pathRoot()).isEqualTo("identity");
+        FactRow netWorth = byKey(rows, "net_worth");
+        assertThat(netWorth.extractionMethod()).isEqualTo("derived");
+        assertThat(netWorth.ontologyPath()).isEqualTo("economic > Balance Sheet > Net Worth");
+        assertThat(netWorth.nomenclatureStatus()).isEqualTo("bound");
 
-            FactRow assets = byKey(rows, "assets_total");
-            assertThat(assets.ontologyPath()).isEqualTo("economic > Promoter Net Worth > Assets");
-            assertThat(assets.pathRoot()).isEqualTo("economic");
+        // an unknown leaf keeps the pack's own path so the fact stays retrievable
+        FactRow assets = byKey(rows, "assets_total");
+        assertThat(assets.ontologyPath()).isEqualTo("economic > Promoter Net Worth > Assets");
+        assertThat(assets.nomenclatureStatus()).isEqualTo("unbound");
 
-            FactRow netWorth = byKey(rows, "net_worth");
-            assertThat(netWorth.extractionMethod()).isEqualTo("derived");
-            assertThat(netWorth.ontologyPath())
-                    .isEqualTo("economic > Promoter Net Worth > Net Worth");
+        FactRow pan = byKey(rows, "pan_number");
+        assertThat(pan.nomenclatureStatus()).isEqualTo("unbound");
+    }
 
-            // nomenclature_status via SQL
-            assertThat(statusOf(db.connection(), "pan_number")).isEqualTo("unbound");
-            assertThat(unboundReasonOf(db.connection(), "pan_number"))
-                    .isEqualTo("no_pack_field");
-            assertThat(statusOf(db.connection(), "assets_total")).isEqualTo("bound");
-            assertThat(statusOf(db.connection(), "net_worth")).isEqualTo("bound");
-        }
+    @Test
+    void unboundReasonsSayWhyEachFactDidNotBind() throws Exception {
+        new PackPathBinder().bind(dbPath, parseRunId, mandateId, pack, null);
+        List<FactRow> rows = facts();
+        assertThat(byKey(rows, "pan_number").unboundReason()).isEqualTo("no_pack_field");
+        assertThat(byKey(rows, "assets_total").unboundReason()).isEqualTo("no_model");
+        assertThat(byKey(rows, "assets_total").nomenclatureStatus()).isEqualTo("unbound");
+        assertThat(byKey(rows, "net_worth").nomenclatureStatus()).isEqualTo("bound");
     }
 
     @Test
     void bindWritesRunStatCounts() throws Exception {
-        new PackPathBinder().bind(dbPath, parseRunId, pack);
+        new PackPathBinder().bind(dbPath, parseRunId, mandateId, pack, null);
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath);
                 var st = db.connection().createStatement();
                 var rs = st.executeQuery(
@@ -121,13 +127,13 @@ class PackPathBinderTest {
                 stats.put(rs.getString(1), rs.getDouble(2));
             }
             assertThat(stats).containsKeys("facts_bound", "facts_unbound", "facts_not_applicable");
-            assertThat(stats.get("facts_bound")).isEqualTo(4.0); // 3 pack + derived net_worth
-            assertThat(stats.get("facts_unbound")).isEqualTo(1.0); // pan_number
+            assertThat(stats.get("facts_bound")).isEqualTo(2.0);
+            assertThat(stats.get("facts_unbound")).isEqualTo(3.0);
         }
     }
 
     @Test
-    void lineItemsBindToTablePath() throws Exception {
+    void lineItemsKeepTheirTablePathWhenTheSharedOntologyHasNoSuchLeaf() throws Exception {
         // reuse quotation pack + line fact
         DocTypePack quotation = ExtractServiceTest.quotationPack();
         ExtractServiceTest.FakeExtractClient quotationClient =
@@ -151,39 +157,30 @@ class PackPathBinderTest {
         ExtractService.ExtractOutcome extracted = new ExtractService().extract(
                 dbPath, versionId, mandateId, quotation, quotationClient, "1");
         PackPathBinder.BindOutcome bound =
-                new PackPathBinder().bind(dbPath, extracted.parseRunId(), quotation);
+                new PackPathBinder().bind(dbPath, extracted.parseRunId(), mandateId,
+                        quotation, null);
 
-        assertThat(bound.bound()).isEqualTo(2);
+        // the vendor is the shared legal name; "Line Item" is a shape, not a head
+        assertThat(bound.bound()).isEqualTo(1);
+        assertThat(bound.unbound()).isEqualTo(1);
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            FactRepository facts = new FactRepository(db.connection());
-            List<FactRow> rows = facts.query(FactQuery.forMandate(mandateId).withVersion(versionId));
+            List<FactRow> rows = new FactRepository(db.connection())
+                    .query(FactQuery.forMandate(mandateId).withVersion(versionId));
             FactRow line = byKey(rows, "line_items");
             assertThat(line.ontologyPath()).isEqualTo("economic > Project Cost > Line Item");
-            assertThat(statusOf(db.connection(), "line_items")).isEqualTo("bound");
+            assertThat(line.nomenclatureStatus()).isEqualTo("unbound");
+            assertThat(line.unboundReason()).isEqualTo("no_model");
+        }
+    }
+
+    private List<FactRow> facts() throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            return new FactRepository(db.connection())
+                    .query(FactQuery.forMandate(mandateId).withVersion(documentVersionId));
         }
     }
 
     private static FactRow byKey(List<FactRow> rows, String fieldKey) {
         return rows.stream().filter(r -> fieldKey.equals(r.fieldKey())).findFirst().orElseThrow();
-    }
-
-    private static String statusOf(Connection c, String fieldKey) throws Exception {
-        try (var ps = c.prepareStatement(
-                "SELECT nomenclature_status FROM fact WHERE field_key = ? LIMIT 1")) {
-            ps.setString(1, fieldKey);
-            try (var rs = ps.executeQuery()) {
-                return rs.next() ? rs.getString(1) : null;
-            }
-        }
-    }
-
-    private static String unboundReasonOf(Connection c, String fieldKey) throws Exception {
-        try (var ps = c.prepareStatement(
-                "SELECT unbound_reason FROM fact WHERE field_key = ? LIMIT 1")) {
-            ps.setString(1, fieldKey);
-            try (var rs = ps.executeQuery()) {
-                return rs.next() ? rs.getString(1) : null;
-            }
-        }
     }
 }

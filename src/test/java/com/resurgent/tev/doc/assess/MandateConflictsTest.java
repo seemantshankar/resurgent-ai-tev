@@ -559,7 +559,7 @@ class MandateConflictsTest {
                 dbPath, ingested.documentVersionId(), MANDATE, pack, extractClient,
                 FixtureExtractClient.ID);
         assertThat(extract.status()).isEqualTo("success");
-        new PackPathBinder().bind(dbPath, extract.parseRunId(), pack);
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, pack, null);
         return ingested.documentVersionId();
     }
 

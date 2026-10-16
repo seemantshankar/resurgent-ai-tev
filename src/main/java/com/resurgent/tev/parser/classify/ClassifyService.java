@@ -14,11 +14,9 @@ import com.resurgent.tev.parser.db.WorksheetRef;
 import com.resurgent.tev.parser.discover.DiscoverService;
 import com.resurgent.tev.parser.discover.Packet;
 import com.resurgent.tev.parser.discover.PacketCell;
-import com.resurgent.tev.parser.nomenclature.NomenclatureAlias;
+import com.resurgent.tev.parser.nomenclature.LivingOntology;
 import com.resurgent.tev.parser.nomenclature.NomenclatureCatalog;
-import com.resurgent.tev.parser.nomenclature.NomenclatureNode;
 import com.resurgent.tev.parser.nomenclature.OntologySlice;
-import com.resurgent.tev.parser.nomenclature.ProjectFactField;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
@@ -1780,57 +1778,4 @@ public final class ClassifyService {
     private record PreparedPacket(CandidateRow candidate, Packet redacted, String sheetName) {}
 
     private record BindResult(List<LayerBBinder.Draft> drafts, int unbound, LivingOntology living) {}
-
-    /** In-memory view of the living master ontology for one bind run. */
-    static final class LivingOntology {
-        private final Map<String, String> aliases;
-        private final List<String> paths;
-
-        private LivingOntology(Map<String, String> aliases, List<String> paths) {
-            this.aliases = Map.copyOf(aliases);
-            this.paths = List.copyOf(paths);
-        }
-
-        static LivingOntology from(OntologySlice slice) {
-            Map<String, String> living = new LinkedHashMap<>();
-            List<String> paths = new ArrayList<>();
-            for (NomenclatureNode node : slice.nodes()) {
-                paths.add(node.path());
-                living.put(node.name(), node.path());
-                living.put(node.path(), node.path());
-            }
-            for (NomenclatureAlias alias : slice.aliases()) {
-                living.put(alias.aliasText(), alias.leafPath());
-            }
-            for (ProjectFactField field : slice.projectFactFields()) {
-                paths.add(field.path());
-                living.put(field.name(), field.path());
-                living.put(field.path(), field.path());
-            }
-            return new LivingOntology(LayerBBinder.aliasIndex(living), LayerBBinder.allowedPaths(paths));
-        }
-
-        Map<String, String> aliases() {
-            return aliases;
-        }
-
-        List<String> paths() {
-            return paths;
-        }
-
-        boolean contains(String path) {
-            return paths.contains(path);
-        }
-
-        LivingOntology withLeaf(String path, String aliasText) {
-            Map<String, String> nextAliases = new LinkedHashMap<>(aliases);
-            nextAliases.put(LayerBBinder.norm(aliasText), path);
-            nextAliases.put(LayerBBinder.norm(path), path);
-            List<String> nextPaths = new ArrayList<>(paths);
-            if (!nextPaths.contains(path)) {
-                nextPaths.add(path);
-            }
-            return new LivingOntology(nextAliases, nextPaths);
-        }
-    }
 }
