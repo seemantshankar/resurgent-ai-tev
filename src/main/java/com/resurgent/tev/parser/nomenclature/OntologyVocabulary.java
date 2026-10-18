@@ -186,7 +186,11 @@ public final class OntologyVocabulary {
         return "economic";
     }
 
-    private static void putAlias(Map<String, String> aliases, String text, String path) {
+    /**
+     * Adds one alias under the shared collision rule: a label that names two paths
+     * becomes ambiguous (empty) rather than silently replacing its earlier mapping.
+     */
+    public static void putAlias(Map<String, String> aliases, String text, String path) {
         String key = norm(text);
         if (key.isBlank()) {
             return;

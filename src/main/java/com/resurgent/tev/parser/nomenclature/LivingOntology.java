@@ -57,8 +57,8 @@ public final class LivingOntology {
 
     public LivingOntology withLeaf(String path, String aliasText) {
         Map<String, String> nextAliases = new LinkedHashMap<>(aliases);
-        nextAliases.put(OntologyVocabulary.norm(aliasText), path);
-        nextAliases.put(OntologyVocabulary.norm(path), path);
+        OntologyVocabulary.putAlias(nextAliases, aliasText, path);
+        OntologyVocabulary.putAlias(nextAliases, path, path);
         List<String> nextPaths = new ArrayList<>(paths);
         if (!nextPaths.contains(path)) {
             nextPaths.add(path);
