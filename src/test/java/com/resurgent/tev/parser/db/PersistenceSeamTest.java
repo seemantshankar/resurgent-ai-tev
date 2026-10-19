@@ -756,6 +756,64 @@ class PersistenceSeamTest {
         return statements;
     }
 
+    /** #151: a stage whose document-LLM calls partly failed is neither clean nor a total loss. */
+    @Test
+    void assessmentRunRecordsPartialAndFailedStages() throws Exception {
+        try (WorkspaceDatabase db = openDb("assessment-status.db")) {
+            java.sql.Connection c = db.connection();
+            String[][] runs = {
+                {"assess_profile", "running"},
+                {"assess_clauses", "completed"},
+                {"assess_passages", "partial"},
+                {"assess_conflicts", "failed"},
+            };
+            try (java.sql.Statement s = c.createStatement()) {
+                for (String[] run : runs) {
+                    s.execute("INSERT INTO assessment_run (mandate_id, stage, status,"
+                            + " llm_failures, started_at) VALUES (1, '" + run[0] + "', '"
+                            + run[1] + "', 7, 'now')");
+                }
+                assertThatThrownBy(() -> s.execute(
+                        "INSERT INTO assessment_run (mandate_id, stage, status, started_at)"
+                                + " VALUES (1, 'assess_checklist', 'mostly_done', 'now')"))
+                        .isInstanceOf(java.sql.SQLException.class);
+                try (ResultSet rs = s.executeQuery(
+                        "SELECT llm_failures FROM assessment_run WHERE mandate_id = 1"
+                                + " AND stage = 'assess_passages'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getLong(1)).isEqualTo(7L);
+                }
+            }
+        }
+    }
+
+    /**
+     * #151: widening the status CHECK meant rebuilding the table. A rebuild restarts an
+     * AUTOINCREMENT sequence unless the rename carries it over, and checklist, conflict and
+     * skip rows cite these ids — so a restart would collide with history.
+     */
+    @Test
+    void assessmentRunIdsKeepIncreasingAfterTheRebuild() throws Exception {
+        try (WorkspaceDatabase db = openDb("assessment-status-ids.db")) {
+            try (java.sql.Statement s = db.connection().createStatement()) {
+                s.execute("INSERT INTO assessment_run (assessment_run_id, mandate_id, stage,"
+                        + " status, started_at) VALUES (500, 1, 'assess_profile',"
+                        + " 'partial', 'now')");
+                s.execute("INSERT INTO assessment_run (mandate_id, stage, status, started_at)"
+                        + " VALUES (2, 'assess_clauses', 'completed', 'now')");
+                try (ResultSet rs = s.executeQuery(
+                        "SELECT assessment_run_id, llm_failures FROM assessment_run"
+                                + " WHERE mandate_id = 2")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getLong(1)).isGreaterThan(500L);
+                    // rows written before #151 — and any writer that has no count to give
+                    // — read back as zero failures, not as an unknown.
+                    assertThat(rs.getLong(2)).isZero();
+                }
+            }
+        }
+    }
+
     private static java.util.Set<String> columnNames(java.sql.Connection c, String table) throws Exception {
         java.util.Set<String> columns = new java.util.HashSet<>();
         try (ResultSet rs = c.createStatement().executeQuery("PRAGMA table_info(" + table + ")")) {

@@ -92,6 +92,82 @@ class MandateAssessmentDatesTest {
         assertThat(qa().stages().get(0).parseRunId()).isNotNull();
     }
 
+    /**
+     * #151: the document LLM was down for the whole stage. A clean {@code completed} here is
+     * the silent data loss the ticket is about — the mandate looks fully assessed.
+     */
+    @Test
+    void profileStageRecordsTheLlmBeingDownInsteadOfClaimingClean() throws Exception {
+        long versionId = ingestAndLayout(
+                writePdf("quotation_down.pdf",
+                        "Quotation for Supply of Solar Modules",
+                        "Supply of 10 MW solar modules at the indicated rates."),
+                "Vendor Quote - Down", "quotation");
+        classify(versionId, quotationPack);
+
+        DocAssessRunner.Result result = DocAssessRunner.run(
+                MANDATE, dbPath, FakeDocLlmClient.failing("request timed out"));
+
+        AssessStage.StageResult profile = result.stages().get(0);
+        assertThat(profile.stage()).isEqualTo("assess_profile");
+        // Partial, not clean: the date itself came from the file metadata, so the stage
+        // recorded something — but every model read it makes was lost.
+        assertThat(profile.status()).isEqualTo("partial");
+        assertThat(profile.llmFailures()).isPositive();
+        assertThat(result.summaryLines().get(0))
+                .startsWith("assess_profile: ")
+                .endsWith("[partial, " + profile.llmFailures() + " LLM calls failed]");
+
+        MandateQa.AssessmentRunRow row = qaStage("assess_profile");
+        assertThat(row.status()).isEqualTo("partial");
+        assertThat(row.llmFailures()).isEqualTo(profile.llmFailures());
+
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            Connection c = db.connection();
+            try (var rs = c.createStatement().executeQuery(
+                    "SELECT status, llm_failures FROM assessment_run"
+                            + " WHERE mandate_id = 1 AND stage = 'assess_profile'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("status")).isEqualTo(profile.status());
+                assertThat(rs.getLong("llm_failures")).isEqualTo(profile.llmFailures());
+            }
+        }
+    }
+
+    /**
+     * #151: the model was down for the whole stage and the document had no date to fall
+     * back to — not stated in its text, and no file metadata either. Nothing was recorded
+     * at all, which is the one case {@code failed} is reserved for.
+     */
+    @Test
+    void profileStageRecordsFailedWhenNothingAtAllWasStored() throws Exception {
+        long versionId = ingestAndLayout(
+                writePdf("undated_down.pdf",
+                        "Certificate of Net Worth",
+                        "Net worth of the promoter is Rs. 10 crore as certified."),
+                "Promoter NW - Down", "certificate");
+        classify(versionId, netWorthPack);
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            try (var ps = db.connection().prepareStatement(
+                    "UPDATE document_version SET raw_metadata = NULL"
+                            + " WHERE document_version_id = ?")) {
+                ps.setLong(1, versionId);
+                ps.executeUpdate();
+            }
+        }
+
+        DocAssessRunner.Result result = DocAssessRunner.run(
+                MANDATE, dbPath, FakeDocLlmClient.failing("request timed out"));
+
+        AssessStage.StageResult profile = result.stages().get(0);
+        assertThat(profile.stage()).isEqualTo("assess_profile");
+        assertThat(profile.status()).isEqualTo("failed");
+        assertThat(profile.llmFailures()).isPositive();
+        assertThat(qaStage("assess_profile").status()).isEqualTo("failed");
+        assertThat(result.summaryLines().get(0))
+                .endsWith("[failed, " + profile.llmFailures() + " LLM calls failed]");
+    }
+
     @Test
     void llmFallbackKeepsMonthPrecisionAndNeverInventsDay() throws Exception {
         long versionId = ingestAndLayout(
@@ -283,6 +359,13 @@ class MandateAssessmentDatesTest {
 
     private MandateQa qa() throws Exception {
         return MandateQaQueryRunner.query(dbPath, MandateQaQuery.forMandate(MANDATE));
+    }
+
+    private MandateQa.AssessmentRunRow qaStage(String stage) throws Exception {
+        return qa().stages().stream()
+                .filter(r -> r.stage().equals(stage))
+                .findFirst()
+                .orElseThrow();
     }
 
     private MandateQa.DocumentDateRow docRow(long versionId) throws Exception {

@@ -94,7 +94,10 @@ public record MandateQa(
      * Latest run of one assessment stage.
      *
      * @param stage M3 stage name ({@code assess_profile}/…)
-     * @param status {@code running} | {@code completed} | {@code failed}
+     * @param status {@code running} | {@code completed} | {@code partial}
+     *     | {@code failed}
+     * @param llmFailures document-LLM calls that failed during this run; non-zero is
+     *     why a stage is not {@code completed} (#151)
      * @param startedAt run start timestamp
      * @param finishedAt run finish timestamp, or null while running
      * @param parseRunId parse_run carrying this stage's usage stats, or null
@@ -102,6 +105,7 @@ public record MandateQa(
     public record AssessmentRunRow(
             String stage,
             String status,
+            long llmFailures,
             String startedAt,
             String finishedAt,
             Long parseRunId) {}

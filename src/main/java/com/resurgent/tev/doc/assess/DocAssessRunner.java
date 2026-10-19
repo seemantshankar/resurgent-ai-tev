@@ -5,6 +5,7 @@ import com.resurgent.tev.doc.llm.DocLlmEnvironment;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * CLI facade for the M3 mandate assessment. Runs the registered stages in pipeline
@@ -62,11 +63,20 @@ public final class DocAssessRunner {
      */
     public record Result(long mandateId, List<AssessStage.StageResult> stages) {
 
-        /** One printable line per executed stage, in pipeline order. */
+        /**
+         * One printable line per executed stage, in pipeline order. A stage that is not
+         * clean names its status and how many document-LLM calls were lost (#151); a
+         * clean line stays exactly as it always read.
+         */
         public List<String> summaryLines() {
             List<String> lines = new ArrayList<>();
             for (AssessStage.StageResult stage : stages) {
-                lines.add(stage.stage() + ": " + stage.detail());
+                String line = stage.stage() + ": " + stage.detail();
+                if (!StageOutcome.COMPLETED.equals(stage.status())) {
+                    line += String.format(Locale.ROOT, " [%s, %d LLM calls failed]",
+                            stage.status(), stage.llmFailures());
+                }
+                lines.add(line);
             }
             return lines;
         }

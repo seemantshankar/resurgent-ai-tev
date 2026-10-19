@@ -48,6 +48,7 @@ public final class MandateQaJson {
             n.put("status", row.status());
             n.put("started_at", row.startedAt());
             n.put("finished_at", row.finishedAt());
+            n.put("llm_failures", row.llmFailures());
             if (row.parseRunId() != null) {
                 n.put("parse_run_id", row.parseRunId());
             }

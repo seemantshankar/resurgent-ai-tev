@@ -243,7 +243,9 @@ class RealDocumentBenchmarkTest {
             throws Exception {
         System.out.println("--- assessment stages ---");
         for (var stage : qa.stages()) {
-            System.out.printf("  %-18s %s%n", stage.stage(), stage.status());
+            System.out.printf("  %-18s %s%s%n", stage.stage(), stage.status(),
+                    stage.llmFailures() > 0
+                            ? " (" + stage.llmFailures() + " LLM calls failed)" : "");
         }
         System.out.printf("--- documents: %d file(s), %d classified & extracted, %d version(s) ---%n",
                 fileCount, classified, qa.documents().size());

@@ -68,12 +68,14 @@ public final class DocQaCommand implements Callable<Integer> {
             }
             out.printf("documents: %d%n", qa.documents().size());
             for (MandateQa.AssessmentRunRow stage : qa.stages()) {
-                out.printf("stage %s: %s (started %s, finished %s)%s%n",
+                out.printf("stage %s: %s (started %s, finished %s)%s%s%n",
                         stage.stage(),
                         stage.status(),
                         blankToDash(stage.startedAt()),
                         stage.finishedAt() != null ? stage.finishedAt() : "-",
-                        stage.parseRunId() != null ? " parse_run=" + stage.parseRunId() : "");
+                        stage.parseRunId() != null ? " parse_run=" + stage.parseRunId() : "",
+                        stage.llmFailures() > 0
+                                ? " " + stage.llmFailures() + " LLM calls failed" : "");
             }
             out.printf("stages: %d%n", qa.stages().size());
             // M3-03 (#136): entities with their roles, aliases and source pages.
