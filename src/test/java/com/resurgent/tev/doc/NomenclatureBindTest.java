@@ -10,6 +10,7 @@ import com.resurgent.tev.doc.extract.FactCandidate;
 import com.resurgent.tev.doc.extract.ValueKind;
 import com.resurgent.tev.doc.llm.FakeDocLlmClient;
 import com.resurgent.tev.doc.pack.DocTypePack;
+import com.resurgent.tev.doc.pack.PackField;
 import com.resurgent.tev.doc.query.FactQuery;
 import com.resurgent.tev.doc.query.FactRow;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
@@ -195,6 +196,37 @@ class NomenclatureBindTest {
     }
 
     @Test
+    void aLeafUnderAKnownHeadIsNeverRelocatedByItsBareLabel() throws Exception {
+        // "Tax" alone aliases Profit & Loss > Tax in the shared spine. A quotation's
+        // Project Cost > Tax is GST inside the cost — the label must not move it.
+        long versionId = seedVersion("quote.pdf", "QUOTE");
+        long runId = extractTax(versionId);
+
+        FakeDocLlmClient declining = new FakeDocLlmClient("{\"assignments\": []}");
+        new PackPathBinder().bind(dbPath, runId, MANDATE, taxPack(), declining);
+
+        assertThat(declining.calls()).isEqualTo(1);
+        assertThat(declining.lastUser()).contains("<label key=\"tax\">Project Cost &gt; Tax</label>");
+        FactRow tax = fact(versionId, "tax");
+        assertThat(tax.nomenclatureStatus()).isEqualTo("unbound");
+        assertThat(tax.ontologyPath()).isEqualTo("economic > Project Cost > Tax");
+
+        // The model putting it under its own head grows that head, not another one.
+        FakeDocLlmClient placed = new FakeDocLlmClient("""
+                {"assignments": [
+                  {"key": "tax", "path": "Project Cost > Tax",
+                   "reasoning": "the GST line of the quoted cost"}]}
+                """);
+        new PackPathBinder().bind(dbPath, runId, MANDATE, taxPack(), placed);
+
+        FactRow bound = fact(versionId, "tax");
+        assertThat(bound.nomenclatureStatus()).isEqualTo("bound");
+        assertThat(bound.ontologyPath()).isEqualTo("economic > Project Cost > Tax");
+        assertThat(bound.nomenclatureReason()).contains("mandate_soft");
+        assertThat(stat(runId, "soft_leaves_added")).isEqualTo(1.0);
+    }
+
+    @Test
     void packPathsWhoseLeavesTheSharedNomenclatureNamesBindWithNoCallToTheModel()
             throws Exception {
         // AC2 (#153): the certificate trimmed to known leaves. Every path lands on the
@@ -224,6 +256,23 @@ class NomenclatureBindTest {
                 .isEqualTo("economic > Balance Sheet > Net Worth");
         assertThat(fact(versionId, "revenue").ontologyPath())
                 .isEqualTo("economic > Profit & Loss > Revenue");
+    }
+
+    /** A quotation whose only leaf shares its name with a P&amp;L head. */
+    private static DocTypePack taxPack() {
+        return new DocTypePack("quotation.vendor", "1.0.0", "quotation", "quotation",
+                List.of("general"), List.of(),
+                List.of(PackField.required("tax", "economic > Project Cost > Tax",
+                        "economic", ValueKind.MONEY)),
+                List.of(), List.of(), List.of());
+    }
+
+    private long extractTax(long versionId) throws Exception {
+        ExtractServiceTest.FakeExtractClient extractor = new ExtractServiceTest.FakeExtractClient();
+        extractor.facts.add(new FactCandidate("tax", ValueKind.MONEY)
+                .valueText("Rs. 1,00,000").confidence(0.9).extractionMethod("llm_field"));
+        return new ExtractService().extract(dbPath, versionId, MANDATE, taxPack(), extractor, "1")
+                .parseRunId();
     }
 
     private double stat(String name) throws Exception {

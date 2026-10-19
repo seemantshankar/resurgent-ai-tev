@@ -274,6 +274,11 @@ public final class PackPathBinder {
      * alias index knows — the whole qualified leaf first, then its last segment, so
      * {@code Audited Financials > Net Worth} lands on {@code Balance Sheet > Net Worth}.
      * An alias the index marks ambiguous (empty) resolves nothing.
+     *
+     * <p>The last segment is tried only when the pack's own parent is a head the shared
+     * ontology does not carry. Under a head the ontology does carry, a bare label would
+     * move the leaf to another head — a quotation's {@code Project Cost > Tax} is GST in
+     * the cost, not the P&amp;L's tax expense — so the leaf goes to the model instead.
      */
     private static Resolved resolveShared(String packPath, LivingOntology living) {
         String leaf = stripPackRoot(packPath);
@@ -288,6 +293,9 @@ public final class PackPathBinder {
         if (whole != null && !whole.isBlank()) {
             return canonical(whole, "alias: " + leaf);
         }
+        if (parentKnown(leaf, living)) {
+            return null;
+        }
         String name = leaf.contains(OntologySlice.SEPARATOR)
                 ? leaf.substring(leaf.lastIndexOf(OntologySlice.SEPARATOR) + 3) : leaf;
         String byName = aliases.get(OntologyVocabulary.norm(name));
@@ -295,6 +303,12 @@ public final class PackPathBinder {
             return canonical(byName, "alias: " + name);
         }
         return null;
+    }
+
+    /** Whether the leaf's own parent is a path the shared ontology already carries. */
+    private static boolean parentKnown(String leaf, LivingOntology living) {
+        int sep = leaf.lastIndexOf(OntologySlice.SEPARATOR);
+        return sep > 0 && living.contains(leaf.substring(0, sep).trim());
     }
 
     private static Resolved canonical(String sharedPath, String reason) {
