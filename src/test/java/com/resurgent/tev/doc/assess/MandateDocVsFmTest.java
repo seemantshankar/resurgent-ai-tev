@@ -10,6 +10,7 @@ import com.resurgent.tev.doc.classify.ClassifyResult;
 import com.resurgent.tev.doc.classify.DocTypeClassifier;
 import com.resurgent.tev.doc.cli.DocQaCommand;
 import com.resurgent.tev.doc.db.DocumentRepository;
+import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.db.MandateQaQueryRunner;
 import com.resurgent.tev.doc.extract.ExtractService;
 import com.resurgent.tev.doc.extract.FixtureExtractClient;
@@ -544,8 +545,40 @@ class MandateDocVsFmTest {
         assertThat(qa().conflictSkips()).hasSize(3);
     }
 
-    // --- #147: the model comparison is counted apart from document-vs-document ----
+    @Test
+    void aMoneyFactWithNoPathAtAllIsSkippedWithoutFailingTheStage() throws Exception {
+        // A fact stores no shared path until doc-bind runs: that is the insert default,
+        // and it is what a chapter fact looks like before any binder sees it. The model
+        // comparison must record that instead of failing the whole assess transaction
+        // on the skip row's NOT NULL path column.
+        Path xlsx = modelWorkbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lakhs)");
+            sheet.createRow(2).createCell(0).setCellValue("Project cost");
+            sheet.getRow(2).createCell(1).setCellValue(6000);
+        });
+        ingestFm(xlsx, List.of(new LayerBAssignment(null, "B3", "economic", "Project Cost")));
+        long certificate = ingestNetWorthCertificate();
+        insertPathlessMoneyFact(certificate, "Rs. 50,00,000");
 
+        DocAssessRunner.run(MANDATE, dbPath, null);
+
+        assertThat(qa().conflictSkips())
+                .filteredOn(skip -> "chapter_amount".equals(skip.dataPoint()))
+                .singleElement().satisfies(skip -> {
+                    assertThat(skip.kind()).isEqualTo("doc-fm");
+                    assertThat(skip.ontologyPath()).isNull();
+                    assertThat(skip.fmSource()).isNull();
+                    assertThat(skip.documentVersionId()).isEqualTo(certificate);
+                    assertThat(skip.reason()).contains("no shared path");
+                });
+        // The certificate's own facts keep their own reasons.
+        assertThat(qa().conflictSkips())
+                .filteredOn(skip -> "assets_total".equals(skip.dataPoint()))
+                .singleElement().satisfies(skip -> assertThat(skip.reason())
+                        .contains("bind stage"));
+    }
+
+    // --- #147: the model comparison is counted apart from document-vs-document ----
     @Test
     void theConflictsStageReportsTheModelComparisonApartFromDocumentVersusDocument()
             throws Exception {
@@ -665,6 +698,24 @@ class MandateDocVsFmTest {
                     assertThat(fact.valueText()).isEqualTo(total);
                 });
         return ingested.documentVersionId();
+    }
+
+    /**
+     * One money fact with no path and the insert default status: exactly what a chapter
+     * fact looks like when no binder has ever run over its parse run.
+     */
+    private void insertPathlessMoneyFact(long versionId, String value) throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            long sourceFileId = repo.insertSourceFile(MANDATE, "chapter.pdf", "hash-chapter",
+                    "pdf", "2026-01-01T00:00:00Z", "0.1.0", null);
+            long runId = repo.insertParseRun(sourceFileId, MANDATE, "0.1.0", "assess_passages",
+                    "2026-01-01T00:00:00Z", "2026-01-01T00:00:01Z", "success", null);
+            new FactRepository(db.connection()).replaceFacts(runId, versionId, List.of(
+                    new FactRepository.FactWrite("chapter_amount", null, null, null, "money",
+                            value, null, null, null, null, null, null, null, "llm_field",
+                            "fixture", 0.9, "stated", null, null, List.of(), List.of())));
+        }
     }
 
     private void classify(long versionId) throws Exception {
