@@ -98,14 +98,20 @@ public final class FactRepository {
         }
     }
 
-    /** Bind mutation applied by {@code PackPathBinder}. */
+    /**
+     * One fact as bind sees it: the pack's own path plus the value and the page it
+     * was read on, which is the context the model gets for an unknown leaf.
+     */
     public record FactBindRow(
             long factId,
             String fieldKey,
             String extractionMethod,
             String ontologyPath,
             String pathRoot,
-            String statedOrDerived) {}
+            String statedOrDerived,
+            String valueText,
+            Long pageIndex,
+            String verbatim) {}
 
     /** Outcome of a replace: counts for run_stat / tests. */
     public record ReplaceStats(
@@ -447,7 +453,8 @@ public final class FactRepository {
                         + " f.value_number, f.value_date, f.unit, f.currency, f.scale,"
                         + " f.absolute_amount, f.subject_entity, f.line_key, f.document_version_id,"
                         + " dv.file_name, f.extraction_method, f.confidence, f.stated_or_derived,"
-                        + " f.site_id, s.site_name, f.entity_id, f.entity_reason"
+                        + " f.site_id, s.site_name, f.entity_id, f.entity_reason,"
+                        + " f.nomenclature_status, f.nomenclature_reason, f.unbound_reason"
                         + " FROM fact f"
                         + " JOIN document_version dv ON dv.document_version_id = f.document_version_id"
                         + " JOIN document d ON d.document_id = dv.document_id"
@@ -502,6 +509,9 @@ public final class FactRepository {
                             factId,
                             rs.getString("ontology_path"),
                             rs.getString("path_root"),
+                            rs.getString("nomenclature_status"),
+                            rs.getString("nomenclature_reason"),
+                            rs.getString("unbound_reason"),
                             rs.getString("field_key"),
                             rs.getString("value_kind"),
                             rs.getString("value_text"),
@@ -541,9 +551,16 @@ public final class FactRepository {
     /** Facts of a parse_run for bind (id, field_key, method, current path, stated flag). */
     public List<FactBindRow> selectFactsForParseRun(long parseRunId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT fact_id, field_key, extraction_method, ontology_path, path_root,"
-                        + " stated_or_derived FROM fact WHERE parse_run_id = ?"
-                        + " ORDER BY fact_id")) {
+                "SELECT f.fact_id, f.field_key, f.extraction_method, f.ontology_path,"
+                        + " f.path_root, f.stated_or_derived, f.value_text,"
+                        + " (SELECT pg.page_index FROM fact_evidence e"
+                        + "   LEFT JOIN provenance_doc p ON p.provenance_id = e.provenance_id"
+                        + "   LEFT JOIN page pg ON pg.page_id = p.page_id"
+                        + "   WHERE e.fact_id = f.fact_id ORDER BY e.ordinal LIMIT 1) AS page_index,"
+                        + " (SELECT COALESCE(p.verbatim, e.source_text) FROM fact_evidence e"
+                        + "   LEFT JOIN provenance_doc p ON p.provenance_id = e.provenance_id"
+                        + "   WHERE e.fact_id = f.fact_id ORDER BY e.ordinal LIMIT 1) AS verbatim"
+                        + " FROM fact f WHERE f.parse_run_id = ? ORDER BY f.fact_id")) {
             ps.setLong(1, parseRunId);
             try (ResultSet rs = ps.executeQuery()) {
                 List<FactBindRow> rows = new ArrayList<>();
@@ -554,7 +571,11 @@ public final class FactRepository {
                             rs.getString("extraction_method"),
                             rs.getString("ontology_path"),
                             rs.getString("path_root"),
-                            rs.getString("stated_or_derived")));
+                            rs.getString("stated_or_derived"),
+                            rs.getString("value_text"),
+                            rs.getObject("page_index") == null
+                                    ? null : rs.getLong("page_index"),
+                            rs.getString("verbatim")));
                 }
                 return rows;
             }
@@ -563,18 +584,21 @@ public final class FactRepository {
 
     /**
      * Applies a bind decision to one fact. {@code nomenclatureStatus} is
-     * {@code bound} | {@code not_applicable} | {@code unbound}.
+     * {@code bound} | {@code not_applicable} | {@code unbound}; {@code nomenclatureReason}
+     * says how a bound path was reached.
      */
     public void updateFactBinding(long factId, String ontologyPath, String pathRoot,
-            String nomenclatureStatus, String unboundReason) throws SQLException {
+            String nomenclatureStatus, String unboundReason, String nomenclatureReason)
+            throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "UPDATE fact SET ontology_path = ?, path_root = ?, nomenclature_status = ?,"
-                        + " unbound_reason = ? WHERE fact_id = ?")) {
+                        + " unbound_reason = ?, nomenclature_reason = ? WHERE fact_id = ?")) {
             setNullableString(ps, 1, ontologyPath);
             setNullableString(ps, 2, pathRoot);
             ps.setString(3, nomenclatureStatus);
             setNullableString(ps, 4, unboundReason);
-            ps.setLong(5, factId);
+            setNullableString(ps, 5, nomenclatureReason);
+            ps.setLong(6, factId);
             ps.executeUpdate();
         }
     }
@@ -695,6 +719,9 @@ public final class FactRepository {
         final long factId;
         final String ontologyPath;
         final String pathRoot;
+        final String nomenclatureStatus;
+        final String nomenclatureReason;
+        final String unboundReason;
         final String fieldKey;
         final String valueKind;
         final String valueText;
@@ -717,7 +744,9 @@ public final class FactRepository {
         final String entityReason;
         final List<FactRow.EvidenceRow> evidence = new ArrayList<>();
 
-        FactRowBuilder(long factId, String ontologyPath, String pathRoot, String fieldKey,
+        FactRowBuilder(long factId, String ontologyPath, String pathRoot,
+                String nomenclatureStatus, String nomenclatureReason, String unboundReason,
+                String fieldKey,
                 String valueKind, String valueText, Double valueNumber, String valueDate,
                 String unit, String currency, String scale, String absoluteAmount,
                 String subjectEntity, String lineKey, long documentVersionId, String fileName,
@@ -726,6 +755,9 @@ public final class FactRepository {
             this.factId = factId;
             this.ontologyPath = ontologyPath;
             this.pathRoot = pathRoot;
+            this.nomenclatureStatus = nomenclatureStatus;
+            this.nomenclatureReason = nomenclatureReason;
+            this.unboundReason = unboundReason;
             this.fieldKey = fieldKey;
             this.valueKind = valueKind;
             this.valueText = valueText;
@@ -749,7 +781,8 @@ public final class FactRepository {
         }
 
         FactRow build() {
-            return new FactRow(factId, ontologyPath, pathRoot, fieldKey, valueKind, valueText,
+            return new FactRow(factId, ontologyPath, pathRoot, nomenclatureStatus,
+                    nomenclatureReason, unboundReason, fieldKey, valueKind, valueText,
                     valueNumber, valueDate, unit, currency, scale, absoluteAmount, subjectEntity,
                     lineKey, documentVersionId, fileName, extractionMethod, confidence,
                     statedOrDerived, evidence, siteId, siteName, entityId, entityReason);

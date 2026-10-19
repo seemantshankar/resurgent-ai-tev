@@ -81,7 +81,10 @@ public final class WorkspaceDatabase implements AutoCloseable {
             "db/migration/V58__m3_industry_checklists.sql",
             "db/migration/V59__m3_conflicts.sql",
             "db/migration/V61__m3_doc_fm_conflict_skips.sql",
-            "db/migration/V62__m3_checklist_learning_stage.sql"
+            "db/migration/V62__m3_checklist_learning_stage.sql",
+            "db/migration/V63__doc_nomenclature_reason.sql",
+            "db/migration/V64__conflict_skip_nullable_fm_source.sql",
+            "db/migration/V65__conflict_skip_nullable_ontology_path.sql"
     };
 
     /** Number of bundled migrations, i.e. the schema version a fully migrated database reports. */

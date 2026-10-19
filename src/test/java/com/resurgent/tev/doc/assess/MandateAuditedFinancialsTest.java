@@ -19,6 +19,7 @@ import com.resurgent.tev.doc.ingest.BlobStore;
 import com.resurgent.tev.doc.ingest.DocumentIngestService;
 import com.resurgent.tev.doc.layout.DocumentLayoutService;
 import com.resurgent.tev.doc.llm.DocLlmClient;
+import com.resurgent.tev.doc.llm.FakeDocLlmClient;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.doc.query.FactQuery;
@@ -59,6 +60,14 @@ class MandateAuditedFinancialsTest {
     private static final List<String> HEADLINE_FIGURES =
             List.of("revenue", "pat", "net_worth", "total_borrowings");
 
+    // M3-17 (#153): each pack leaf is one of the bank's heads, named the way the
+    // financial model names it, so bind lands on the shared spine, not the pack string.
+    private static final Map<String, String> SHARED_PATHS = Map.of(
+            "revenue", "economic > Profit & Loss > Revenue",
+            "pat", "economic > Profit & Loss > PAT",
+            "net_worth", "economic > Balance Sheet > Net Worth",
+            "total_borrowings", "economic > Balance Sheet > Total Debt");
+
     @TempDir
     Path tempDir;
 
@@ -91,7 +100,7 @@ class MandateAuditedFinancialsTest {
         assertThat(extract.status()).isEqualTo("success");
         // presence (entity, two financial years, auditor) + four figures x two years
         assertThat(extract.factsTotal()).isEqualTo(11);
-        new PackPathBinder().bind(dbPath, extract.parseRunId(), pack);
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, pack, null);
 
         DocAssessRunner.run(MANDATE, dbPath, new DocumentReplyLlm());
 
@@ -123,7 +132,9 @@ class MandateAuditedFinancialsTest {
                 assertThat(f.entityId()).isEqualTo(borrower.entityId());
                 assertThat(f.entityReason()).isNotBlank();
                 assertThat(pageOf(f)).isEqualTo(2);
-                assertThat(f.ontologyPath()).startsWith("economic > Audited Financials");
+                assertThat(f.ontologyPath()).isEqualTo(SHARED_PATHS.get(key));
+                assertThat(f.nomenclatureStatus()).isEqualTo("bound");
+                assertThat(f.nomenclatureReason()).contains("alias");
                 assertThat(f.currency()).isEqualTo("INR");
                 assertThat(f.scale()).isEqualTo("crore");
             });
@@ -145,12 +156,43 @@ class MandateAuditedFinancialsTest {
     }
 
     @Test
+    void aLeafTheModelPlacesStoresItsReasonAndThePageTheLabelWasReadOn() throws Exception {
+        // M3-17 (#153) asks the LLM pass to record reason + page. The page is the
+        // pipeline's own provenance, not the model's prose, so a wrong citation in the
+        // answer cannot move the record.
+        ingestAndLayout(mandateLetterPdf(), "Mandate Letter - ABC", "mandate_letter");
+        long auditedVersion = ingestAndLayout(auditedSummaryPdf(),
+                "Audited Financials - ABC", "audited_financials");
+        ExtractService.ExtractOutcome extract = extractAudited(auditedVersion);
+
+        FakeDocLlmClient llm = new FakeDocLlmClient("""
+                {"assignments": [
+                  {"key": "financial_years", "path": "Frame > Period",
+                   "reasoning": "the statement names the two years it was audited for"}]}
+                """);
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, pack, llm);
+
+        List<FactRow> facts = facts();
+        FactRow years = fact(facts, "financial_years");
+        assertThat(years.nomenclatureStatus()).isEqualTo("bound");
+        assertThat(years.nomenclatureReason())
+                .contains("model")
+                .contains("the statement names the two years it was audited for")
+                .contains("page " + pageOf(years));
+        // the model was offered that same page with the label
+        assertThat(llm.calls()).isEqualTo(1);
+        assertThat(llm.lastUser()).contains("page " + pageOf(years));
+        // the four headline figures never reached it: the alias index named them all
+        assertThat(llm.lastUser()).doesNotContain("net_worth");
+    }
+
+    @Test
     void twoYearsNetWorthAreDifferentReadingsNotAConflict() throws Exception {
         ingestAndLayout(mandateLetterPdf(), "Mandate Letter - ABC", "mandate_letter");
         long auditedVersion = ingestAndLayout(auditedSummaryPdf(),
                 "Audited Financials - ABC", "audited_financials");
         ExtractService.ExtractOutcome extract = extractAudited(auditedVersion);
-        new PackPathBinder().bind(dbPath, extract.parseRunId(), pack);
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, pack, null);
         DocAssessRunner.run(MANDATE, dbPath, new DocumentReplyLlm());
 
         List<FactRow> facts = facts();
@@ -174,14 +216,14 @@ class MandateAuditedFinancialsTest {
         long auditedVersion = ingestAndLayout(auditedSummaryPdf(),
                 "Audited Financials - ABC", "audited_financials");
         ExtractService.ExtractOutcome first = extractAudited(auditedVersion);
-        new PackPathBinder().bind(dbPath, first.parseRunId(), pack);
+        new PackPathBinder().bind(dbPath, first.parseRunId(), MANDATE, pack, null);
         DocAssessRunner.run(MANDATE, dbPath, new DocumentReplyLlm());
         List<FactRow> before = facts();
 
         // Same extract identity: the re-run replaces the fact set, never duplicates.
         ExtractService.ExtractOutcome again = extractAudited(auditedVersion);
         assertThat(again.parseRunId()).isEqualTo(first.parseRunId());
-        new PackPathBinder().bind(dbPath, again.parseRunId(), pack);
+        new PackPathBinder().bind(dbPath, again.parseRunId(), MANDATE, pack, null);
         DocAssessRunner.run(MANDATE, dbPath, new DocumentReplyLlm());
 
         List<FactRow> after = facts();

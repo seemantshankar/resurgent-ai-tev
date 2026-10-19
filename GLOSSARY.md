@@ -223,8 +223,12 @@ The same document type present on two different document dates (a revised quotat
 _Avoid_: superseded conflict, duplicate documents
 
 **Skipped comparison**:
-A source pair the system deliberately did not compare — an ambiguous financial-model path or period, or an unusable cell reading — recorded with its reason so the decision is visible instead of silently absent.
+A source pair the system deliberately did not compare — an ambiguous financial-model path or period, an unusable cell reading, a document amount that bound to no shared nomenclature path, or a bound amount the model states no cell for — recorded with its reason so the decision is visible instead of silently absent.
 _Avoid_: missed conflict, ignored pair
+
+**Fact binding**:
+How a document fact got its place on the shared nomenclature (the same heads the financial model binds cells to): the pack's own wording is only a candidate, resolved by the shared label and alias rules, or — for a label none of them names — by one system judgement restricted to the paths of the living master set. It ends **bound** with that path, or **unbound** with the reason it stayed out, and a written note of how it was placed (a model-placed note names the page the label was read on — the pipeline's own provenance, never the model's prose). Unbound is a successful result, not an error: the fact is still retrievable, and the system never asks a person to place it. The document-side unbound reasons are `no_pack_field` (the pack names no field for it), `no_model` (no document model was configured for the run), `model_declined` (the model left that label unplaced), and `model_path_refused` (the path it named is not of the living master set) — enumerated in code and pinned by a unit test, never by a database CHECK.
+_Avoid_: pack path as truth, analyst mapping, unmapped parking lot
 
 ## Phase 1 (current scope)
 

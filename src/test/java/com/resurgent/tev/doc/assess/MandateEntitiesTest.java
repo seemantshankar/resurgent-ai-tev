@@ -112,7 +112,7 @@ class MandateEntitiesTest {
                 dbPath, netWorthVersion, MANDATE, netWorthPack, extractClient,
                 FixtureExtractClient.ID);
         assertThat(extract.status()).isEqualTo("success");
-        new PackPathBinder().bind(dbPath, extract.parseRunId(), netWorthPack);
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, netWorthPack, null);
 
         DocAssessRunner.run(MANDATE, dbPath, new DocumentReplyLlm());
 
@@ -149,7 +149,7 @@ class MandateEntitiesTest {
         ExtractService.ExtractOutcome extract = new ExtractService().extract(
                 dbPath, netWorthVersion, MANDATE, netWorthPack, extractClient,
                 FixtureExtractClient.ID);
-        new PackPathBinder().bind(dbPath, extract.parseRunId(), netWorthPack);
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, netWorthPack, null);
 
         // No LLM seam: no entities can be identified, so every fact must stay
         // untagged with a reason — even the one whose quote names a person.
@@ -176,7 +176,7 @@ class MandateEntitiesTest {
         ExtractService.ExtractOutcome extract = new ExtractService().extract(
                 dbPath, netWorthVersion, MANDATE, netWorthPack, extractClient,
                 FixtureExtractClient.ID);
-        new PackPathBinder().bind(dbPath, extract.parseRunId(), netWorthPack);
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, netWorthPack, null);
 
         DocAssessRunner.run(MANDATE, dbPath, new DocumentReplyLlm());
         MandateQa first = qa();

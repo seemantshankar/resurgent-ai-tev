@@ -1,5 +1,6 @@
 package com.resurgent.tev.doc.bind;
 
+import com.resurgent.tev.doc.llm.DocLlmEnvironment;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackField;
 import com.resurgent.tev.doc.pack.PackLoader;
@@ -31,7 +32,8 @@ public final class DocBindRunner {
         }
         DocTypePack pack = resolvePack(db, packCode);
         PackPathBinder binder = new PackPathBinder();
-        PackPathBinder.BindOutcome outcome = binder.bind(db, parseRunId, pack);
+        PackPathBinder.BindOutcome outcome = binder.bind(db, parseRunId, mandateId, pack,
+                DocLlmEnvironment.clientOrNull());
         List<String> paths = new ArrayList<>();
         for (PackField path : pack.fields()) {
             paths.add(path.path());

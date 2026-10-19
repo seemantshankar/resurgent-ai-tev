@@ -25,6 +25,9 @@ public final class FactJson {
             n.put("fact_id", row.factId());
             n.put("ontology_path", row.ontologyPath());
             n.put("path_root", row.pathRoot());
+            n.put("nomenclature_status", row.nomenclatureStatus());
+            n.put("nomenclature_reason", row.nomenclatureReason());
+            n.put("unbound_reason", row.unboundReason());
             n.put("field_key", row.fieldKey());
             n.put("value_text", row.valueText());
             if (row.valueNumber() != null) {

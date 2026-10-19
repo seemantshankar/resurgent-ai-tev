@@ -143,7 +143,7 @@ class MandateChecklistTest {
         ExtractService.ExtractOutcome extract = new ExtractService().extract(
                 dbPath, versionId, MANDATE, quotationPack, extractClient, FixtureExtractClient.ID);
         assertThat(extract.status()).isEqualTo("success");
-        new PackPathBinder().bind(dbPath, extract.parseRunId(), quotationPack);
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, quotationPack, null);
 
         DocAssessRunner.run(MANDATE, dbPath, null);
 
@@ -379,7 +379,7 @@ class MandateChecklistTest {
         ExtractService.ExtractOutcome extract = new ExtractService().extract(
                 dbPath, versionId, MANDATE, netWorthPack, extractClient, FixtureExtractClient.ID);
         assertThat(extract.status()).isEqualTo("success");
-        new PackPathBinder().bind(dbPath, extract.parseRunId(), netWorthPack);
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, netWorthPack, null);
         return versionId;
     }
 

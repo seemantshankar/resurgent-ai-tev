@@ -97,7 +97,7 @@ class DocumentExtractBindTest {
         assertThat(extract.status()).isEqualTo("success");
         assertThat(extract.factsTotal()).isGreaterThanOrEqualTo(5);
 
-        new PackPathBinder().bind(dbPath, extract.parseRunId(), netWorthPack);
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, netWorthPack, null);
 
         List<FactRow> rows = factsFor(versionId);
         assertThat(rows).isNotEmpty();
@@ -130,7 +130,7 @@ class DocumentExtractBindTest {
         assertThat(extract.factsTotal()).isGreaterThanOrEqualTo(5);
         assertThat(extract.lineItemCount()).isGreaterThanOrEqualTo(3);
 
-        new PackPathBinder().bind(dbPath, extract.parseRunId(), quotationPack);
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, quotationPack, null);
 
         List<FactRow> rows = factsFor(versionId);
         assertThat(rows.stream().map(FactRow::fieldKey))
@@ -171,7 +171,7 @@ class DocumentExtractBindTest {
         ExtractService.ExtractOutcome extract = new ExtractService().extract(
                 dbPath, versionId, MANDATE, ppaPack,
                 fixtureClient("golden_ppa.expected.json"), "fixture-extract");
-        new PackPathBinder().bind(dbPath, extract.parseRunId(), ppaPack);
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, ppaPack, null);
 
         List<FactRow> rows = factsFor(versionId);
         FactRow tariff = rows.stream()

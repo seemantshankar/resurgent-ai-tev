@@ -75,6 +75,9 @@ public final class ConflictRepository {
      * @param documentDate canonical document date, or null
      * @param fieldKey pack field key, or null
      * @param ontologyPath bound ontology path, or null
+     * @param nomenclatureStatus {@code bound} | {@code unbound} from the bind stage, or
+     *     null for a fact that was never bound
+     * @param unboundReason why the fact did not bind, or null
      * @param lineKey row/line identifier for row facts, or null
      * @param valueKind value kind wire name
      * @param valueText the stated value text, or null
@@ -104,6 +107,8 @@ public final class ConflictRepository {
             String documentDate,
             String fieldKey,
             String ontologyPath,
+            String nomenclatureStatus,
+            String unboundReason,
             String lineKey,
             String valueKind,
             String valueText,
@@ -204,7 +209,8 @@ public final class ConflictRepository {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT f.fact_id, f.document_version_id, dv.document_id, d.logical_name,"
                         + " dv.file_name, dc.doc_type_code, dv.document_date, f.field_key,"
-                        + " f.ontology_path, f.line_key, f.value_kind, f.value_text,"
+                        + " f.ontology_path, f.nomenclature_status, f.unbound_reason,"
+                        + " f.line_key, f.value_kind, f.value_text,"
                         + " f.value_number, f.value_date, f.unit, f.currency, f.entity_id,"
                         + " e.name AS entity_name, f.site_id, s.site_name,"
                         + " ev.role AS evidence_role, ev.source_text, ev.resolution,"
@@ -270,6 +276,8 @@ public final class ConflictRepository {
         final String documentDate;
         final String fieldKey;
         final String ontologyPath;
+        final String nomenclatureStatus;
+        final String unboundReason;
         final String lineKey;
         final String valueKind;
         final String valueText;
@@ -298,6 +306,8 @@ public final class ConflictRepository {
             this.documentDate = rs.getString("document_date");
             this.fieldKey = rs.getString("field_key");
             this.ontologyPath = rs.getString("ontology_path");
+            this.nomenclatureStatus = rs.getString("nomenclature_status");
+            this.unboundReason = rs.getString("unbound_reason");
             this.lineKey = rs.getString("line_key");
             this.valueKind = rs.getString("value_kind");
             this.valueText = rs.getString("value_text");
@@ -315,7 +325,8 @@ public final class ConflictRepository {
 
         ConflictFactRow toRow() {
             return new ConflictFactRow(factId, documentVersionId, documentId, logicalName,
-                    fileName, docTypeCode, documentDate, fieldKey, ontologyPath, lineKey,
+                    fileName, docTypeCode, documentDate, fieldKey, ontologyPath,
+                    nomenclatureStatus, unboundReason, lineKey,
                     valueKind, valueText, valueNumber, valueDate, unit, currency,
                     entityId, entityName, siteId, siteName, periodEvidence, pageIndex,
                     quote, passageId, passageHeading);
