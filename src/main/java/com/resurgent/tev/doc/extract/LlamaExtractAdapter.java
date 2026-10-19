@@ -158,7 +158,8 @@ public final class LlamaExtractAdapter implements ExtractClient {
 
     /**
      * Vendor credit rate as configured in the environment, for callers that report on
-     * {@code llm_usage.cost_usd} rows written by this adapter (those hold credits, not USD).
+     * {@code llm_usage.cost_usd} rows written by this adapter (those hold credits, and their
+     * {@code cost_unit} says so).
      */
     public static double usdPerCredit() {
         Map<String, String> env = loadEnv();
@@ -683,6 +684,7 @@ public final class LlamaExtractAdapter implements ExtractClient {
         }
         // LlamaCloud bills credits, not USD; the credit total is stored in the llm_usage
         // cost slot for attribution, and the cost guard converts it via usdPerCredit.
+        // ExtractService records that slot as CostUnit.CREDITS so a reader can tell (#152).
         return new ExtractStats(1, 0, 0, 0, credits, latency);
     }
 

@@ -510,13 +510,13 @@ class ExtractServiceTest {
                 var st = db.connection().createStatement();
                 var rs = st.executeQuery(
                         "SELECT model_id, calls, prompt_tokens, completion_tokens, cost_usd,"
-                                + " cost_missing, latency_ms_total FROM llm_usage"
+                                + " cost_missing, latency_ms_total, cost_unit FROM llm_usage"
                                 + " WHERE parse_run_id = " + parseRunId + " AND stage = 'doc-extract'"
                                 + " ORDER BY model_id")) {
             while (rs.next()) {
                 rows.add(new String[] {
                         rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4),
-                        rs.getString(5), rs.getString(6), rs.getString(7)});
+                        rs.getString(5), rs.getString(6), rs.getString(7), rs.getString(8)});
             }
         }
         return rows;
@@ -551,6 +551,11 @@ class ExtractServiceTest {
         assertThat(Double.parseDouble(parse[4])).isEqualTo(30.0);
         assertThat(parse[5]).isEqualTo("0");
         assertThat(parse[6]).isEqualTo("900");
+
+        // Both are LlamaCloud spend, so both hold credits — including the extractor row, whose
+        // stub model id does not look like a llama one (#152: the writer knows the unit).
+        assertThat(extract[7]).isEqualTo("credits");
+        assertThat(parse[7]).isEqualTo("credits");
     }
 
     @Test

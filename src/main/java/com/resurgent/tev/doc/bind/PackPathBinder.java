@@ -6,6 +6,7 @@ import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackField;
 import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
+import com.resurgent.tev.parser.db.CostUnit;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import com.resurgent.tev.parser.nomenclature.LivingOntology;
 import com.resurgent.tev.parser.nomenclature.NomenclatureCatalog;
@@ -247,7 +248,7 @@ public final class PackPathBinder {
         repo.recordLlmUsage(parseRunId, "doc-bind", usage.modelId(),
                 usage.calls(), usage.failedCalls(), 0,
                 usage.promptTokens(), usage.completionTokens(),
-                usage.costUsd(), usage.costUsd() == null ? 1 : 0,
+                usage.costUsd(), CostUnit.USD, usage.costUsd() == null ? 1 : 0,
                 usage.latencyMsTotal());
     }
 

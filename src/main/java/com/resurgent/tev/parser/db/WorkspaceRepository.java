@@ -2259,18 +2259,22 @@ public final class WorkspaceRepository {
     /**
      * One model's totals within one stage. Re-running a stage replaces its rows: the table
      * describes the latest execution of each (stage, model).
+     *
+     * @param costUnit what {@code costUsd} is counted in — the writer knows, a reader cannot tell
+     *     by looking ({@link CostUnit#CREDITS} for LlamaCloud, {@link CostUnit#USD} otherwise)
      */
     public void recordLlmUsage(long parseRunId, String stage, String modelId, long calls, long failedCalls,
-            long failovers, long promptTokens, long completionTokens, Double costUsd, long costMissing,
-            long latencyMsTotal) throws SQLException {
+            long failovers, long promptTokens, long completionTokens, Double costUsd, CostUnit costUnit,
+            long costMissing, long latencyMsTotal) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO llm_usage (parse_run_id, stage, model_id, calls, failed_calls, failovers,"
-                        + " prompt_tokens, completion_tokens, cost_usd, cost_missing, latency_ms_total)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        + " prompt_tokens, completion_tokens, cost_usd, cost_unit, cost_missing, latency_ms_total)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                         + " ON CONFLICT (parse_run_id, stage, model_id) DO UPDATE SET"
                         + " calls = excluded.calls, failed_calls = excluded.failed_calls,"
                         + " failovers = excluded.failovers, prompt_tokens = excluded.prompt_tokens,"
                         + " completion_tokens = excluded.completion_tokens, cost_usd = excluded.cost_usd,"
+                        + " cost_unit = excluded.cost_unit,"
                         + " cost_missing = excluded.cost_missing,"
                         + " latency_ms_total = excluded.latency_ms_total,"
                         + " recorded_at = CURRENT_TIMESTAMP")) {
@@ -2287,8 +2291,9 @@ public final class WorkspaceRepository {
             } else {
                 ps.setNull(9, Types.DOUBLE);
             }
-            ps.setLong(10, costMissing);
-            ps.setLong(11, latencyMsTotal);
+            ps.setString(10, costUnit.wireName());
+            ps.setLong(11, costMissing);
+            ps.setLong(12, latencyMsTotal);
             ps.executeUpdate();
         }
     }

@@ -22,6 +22,8 @@ import com.resurgent.tev.doc.llm.DocLlmEnvironment;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.query.MandateQa;
 import com.resurgent.tev.doc.query.MandateQaQuery;
+import com.resurgent.tev.parser.db.CostUnit;
+import com.resurgent.tev.parser.db.LlmUsageCosts;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -274,45 +276,31 @@ class RealDocumentBenchmarkTest {
                 qa.conflicts().size(), conflictsBySettlement,
                 qa.versionsDiffer().size(), qa.conflictSkips().size());
 
-        // LlamaCloud bills credits, and LlamaExtractAdapter stores that credit total in the
-        // llm_usage cost column, so the slot holds credits for llama rows and USD for the rest.
+        // Cost is reported through the one shared converter: credit rows priced in USD, USD rows
+        // passed through (#152). Nothing here guesses a unit from the model id any more.
         double usdPerCredit = LlamaExtractAdapter.usdPerCredit();
         System.out.printf(Locale.ROOT,
-                "--- LLM cost (llm_usage for this mandate; llama rows are credits, %.6f USD each) ---%n",
+                "--- LLM cost (llm_usage for this mandate; credit rows at %.6f USD each) ---%n",
                 usdPerCredit);
-        double totalUsd = 0;
         double totalCredits = 0;
-        boolean any = false;
-        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath);
-                Statement s = db.connection().createStatement();
-                ResultSet rs = s.executeQuery(
-                        "SELECT u.stage, u.model_id, SUM(u.calls) calls,"
-                                + " SUM(u.prompt_tokens) pt, SUM(u.completion_tokens) ct,"
-                                + " SUM(COALESCE(u.cost_usd, 0)) cost"
-                                + " FROM llm_usage u JOIN parse_run r USING (parse_run_id)"
-                                + " WHERE r.mandate_id = " + MANDATE
-                                + " GROUP BY u.stage, u.model_id ORDER BY u.stage")) {
-            while (rs.next()) {
-                any = true;
-                double cost = rs.getDouble("cost");
-                String model = rs.getString("model_id");
-                boolean credits = model.startsWith("llama");
-                double usd = credits ? cost * usdPerCredit : cost;
-                if (credits) {
-                    totalCredits += cost;
-                }
-                totalUsd += usd;
-                System.out.printf(Locale.ROOT,
-                        "  %-18s %-32s calls=%-4d tokens=%-10d %s=%-10.2f usd=$%.6f%n",
-                        rs.getString("stage"), model, rs.getInt("calls"),
-                        rs.getLong("pt") + rs.getLong("ct"),
-                        credits ? "credits" : "usd", credits ? cost : usd, usd);
-            }
+        List<LlmUsageCosts.StageCost> usage;
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            usage = LlmUsageCosts.forMandate(db.connection(), MANDATE, usdPerCredit);
         }
-        System.out.println(any
-                ? String.format(Locale.ROOT, "  TOTAL: $%.6f (incl. %.2f LlamaCloud credits)%n",
-                        totalUsd, totalCredits)
-                : "  (no usage rows)");
+        for (LlmUsageCosts.StageCost row : usage) {
+            if (row.unit() == CostUnit.CREDITS) {
+                totalCredits += row.recordedAmount();
+            }
+            System.out.printf(Locale.ROOT,
+                    "  %-18s %-32s calls=%-4d tokens=%-10d %s=%-10.2f usd=$%.6f%n",
+                    row.stage(), row.modelId(), row.calls(),
+                    row.promptTokens() + row.completionTokens(),
+                    row.unit().wireName(), row.recordedAmount(), row.usd());
+        }
+        System.out.println(usage.isEmpty()
+                ? "  (no usage rows)"
+                : String.format(Locale.ROOT, "  TOTAL: $%.6f (incl. %.2f LlamaCloud credits)%n",
+                        LlmUsageCosts.totalUsd(usage), totalCredits));
     }
 
     // --- Bhagyanager expectations (issue #149 AC2), collected as one report ----

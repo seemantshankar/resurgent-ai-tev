@@ -690,6 +690,72 @@ class PersistenceSeamTest {
         }
     }
 
+    /** #152: the cost column means credits for LlamaCloud rows and USD for the rest, so each row says which. */
+    @Test
+    void llmUsageCostRowDeclaresItsUnit() throws Exception {
+        try (WorkspaceDatabase db = openDb("cost-unit.db")) {
+            java.sql.Connection c = db.connection();
+            assertThat(columnNames(c, "llm_usage")).contains("cost_unit");
+
+            try (java.sql.Statement s = c.createStatement()) {
+                s.execute("PRAGMA foreign_keys = OFF");
+                assertThatThrownBy(() -> s.execute(
+                        "INSERT INTO llm_usage (parse_run_id, stage, model_id, calls, prompt_tokens,"
+                                + " completion_tokens, cost_usd, cost_unit)"
+                                + " VALUES (1, 'doc-extract', 'llama-parse', 1, 0, 0, 10, 'eur')"))
+                        .isInstanceOf(java.sql.SQLException.class);
+            }
+        }
+    }
+
+    /** Rows already in a database before the column existed are labelled by vendor: llama credits, everything else USD. */
+    @Test
+    void costUnitBackfillsExistingRowsByVendor() throws Exception {
+        Path dbPath = tempDir.resolve("pre-cost-unit.db");
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            try (java.sql.Statement s = db.connection().createStatement()) {
+                s.execute("PRAGMA foreign_keys = OFF");
+                s.execute("ALTER TABLE llm_usage DROP COLUMN cost_unit"); // the shape before the new migration
+                s.execute("INSERT INTO llm_usage (parse_run_id, stage, model_id, calls, prompt_tokens,"
+                        + " completion_tokens, cost_usd) VALUES (1, 'doc-extract', 'llama-parse:standard',"
+                        + " 1, 0, 0, 878.0)");
+                s.execute("INSERT INTO llm_usage (parse_run_id, stage, model_id, calls, prompt_tokens,"
+                        + " completion_tokens, cost_usd) VALUES (1, 'assess_profile', 'openrouter/x',"
+                        + " 4, 0, 0, 1.05)");
+            }
+        }
+
+        try (java.sql.Connection c = java.sql.DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+                java.sql.Statement s = c.createStatement()) {
+            for (String statement : migrationStatements("V66__llm_usage_cost_unit.sql")) {
+                s.execute(statement);
+            }
+            try (ResultSet rs = s.executeQuery(
+                    "SELECT model_id, cost_unit FROM llm_usage ORDER BY model_id")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("model_id")).isEqualTo("llama-parse:standard");
+                assertThat(rs.getString("cost_unit")).isEqualTo("credits");
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("model_id")).isEqualTo("openrouter/x");
+                assertThat(rs.getString("cost_unit")).isEqualTo("usd");
+                assertThat(rs.next()).isFalse();
+            }
+        }
+    }
+
+    private static List<String> migrationStatements(String fileName) throws Exception {
+        String sql = new String(PersistenceSeamTest.class.getClassLoader()
+                .getResourceAsStream("db/migration/" + fileName).readAllBytes(), StandardCharsets.UTF_8);
+        List<String> statements = new java.util.ArrayList<>();
+        for (String part : sql.split(";\\s*\\R")) {
+            String trimmed = part.replaceAll("(?m)^--.*$", "").trim();
+            if (!trimmed.isEmpty()) {
+                statements.add(trimmed);
+            }
+        }
+        return statements;
+    }
+
     private static java.util.Set<String> columnNames(java.sql.Connection c, String table) throws Exception {
         java.util.Set<String> columns = new java.util.HashSet<>();
         try (ResultSet rs = c.createStatement().executeQuery("PRAGMA table_info(" + table + ")")) {

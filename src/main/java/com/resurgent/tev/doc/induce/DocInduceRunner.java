@@ -6,6 +6,7 @@ import com.resurgent.tev.doc.llm.DocLlmClient;
 import com.resurgent.tev.doc.llm.DocLlmEnvironment;
 import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
+import com.resurgent.tev.parser.db.CostUnit;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -181,7 +182,7 @@ public final class DocInduceRunner {
                         repo.recordLlmUsage(parseRunId, "doc-induce", total.modelId(),
                                 total.calls(), total.failedCalls(), 0,
                                 total.promptTokens(), total.completionTokens(),
-                                total.costUsd(), total.costUsd() == null ? 1 : 0,
+                                total.costUsd(), CostUnit.USD, total.costUsd() == null ? 1 : 0,
                                 total.latencyMsTotal());
                     }
                     repo.recordRunStat(parseRunId, "doc-induce", "documents_in_cluster",

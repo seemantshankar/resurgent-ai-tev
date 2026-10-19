@@ -8,6 +8,7 @@ import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.ingest.BlobStore;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackField;
+import com.resurgent.tev.parser.db.CostUnit;
 import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
@@ -611,8 +612,9 @@ public final class ExtractService {
      *   <li>the reused LlamaParse job under {@code llama-parse:<tier>} when
      *       {@code llama_parse_job_id} is set — its credits are billed separately.</li>
      * </ul>
-     * Credit totals are stored in the {@code cost_usd} slot (LlamaCloud reports credits, not
-     * USD); {@code cost_missing} marks a row whose credits were not recorded yet.
+     * LlamaCloud reports credits, never dollars, so both rows declare {@link CostUnit#CREDITS}
+     * and a reader converts them; {@code cost_missing} marks a row whose credits were not
+     * recorded yet.
      */
     private static void recordUsage(WorkspaceRepository repo, long parseRunId, String modelId,
             ExtractStats stats, Map<String, String> options) throws Exception {
@@ -620,7 +622,8 @@ public final class ExtractService {
                 || stats.promptTokens() > 0 || stats.completionTokens() > 0)) {
             repo.recordLlmUsage(parseRunId, "doc-extract", modelId, stats.calls(),
                     stats.failedCalls(), 0, stats.promptTokens(), stats.completionTokens(),
-                    stats.credits(), stats.credits() == null ? 1 : 0, stats.latencyMsTotal());
+                    stats.credits(), CostUnit.CREDITS, stats.credits() == null ? 1 : 0,
+                    stats.latencyMsTotal());
         }
         if (options == null) {
             return;
@@ -634,7 +637,7 @@ public final class ExtractService {
         Double credits = parseDoubleOrNull(options.get(LlamaExtractAdapter.KEY_PARSE_CREDITS));
         long latency = parseLongOrZero(options.get(LlamaExtractAdapter.KEY_PARSE_LATENCY_MS));
         repo.recordLlmUsage(parseRunId, "doc-extract", parseModel, 1, 0, 0, 0, 0,
-                credits, credits == null ? 1 : 0, latency);
+                credits, CostUnit.CREDITS, credits == null ? 1 : 0, latency);
     }
 
     private static Double parseDoubleOrNull(String raw) {
