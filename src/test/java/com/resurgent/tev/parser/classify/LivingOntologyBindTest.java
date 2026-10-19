@@ -9,6 +9,9 @@ import com.resurgent.tev.parser.discover.DiscoverService;
 import com.resurgent.tev.parser.ingest.IngestService;
 import com.resurgent.tev.parser.ingest.IngestSummary;
 import com.resurgent.tev.parser.nomenclature.NomenclatureCatalog;
+import com.resurgent.tev.parser.nomenclature.NomenclatureNode;
+import com.resurgent.tev.parser.nomenclature.OntologySlice;
+import com.resurgent.tev.parser.nomenclature.OntologyVocabulary;
 import java.io.FileOutputStream;
 import java.nio.file.Path;
 import java.util.List;
@@ -145,6 +148,130 @@ class LivingOntologyBindTest {
                     .filteredOn(b -> "add".equals(b.amountRole()))
                     .allSatisfy(b -> assertThat(b.path())
                             .startsWith("Project Cost > Preliminary & Pre-operative Expenses"));
+        }
+    }
+
+    @Test
+    void aLeafThatCopiesItsRowIsRefusedAndNeverStagedIntoTheOntology() throws Exception {
+        // ADR 0022 §2: the model answered with the row itself, "Supplier - Kone Brothers".
+        // That name cannot repeat in another mandate, so the cell stays unbound and the
+        // leaf never enters the shared nomenclature.
+        Path xlsx = tempDir.resolve("supplier.xlsx");
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("MACHINERY");
+            sheet.createRow(4).createCell(2).setCellValue("DETAILS OF PLANT & MACHINERIES");
+            Row lift = sheet.createRow(8);
+            lift.createCell(2).setCellValue("Elevator (Supplier - Kone Brothers)");
+            lift.createCell(3).setCellValue(1_200_000);
+            try (FileOutputStream out = new FileOutputStream(xlsx.toFile())) {
+                workbook.write(out);
+            }
+        }
+        Path db = tempDir.resolve("supplier.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 13L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        new ClassifyService(refusingLlm(
+                "Project Cost > Civil Works > Supplier - Kone Brothers"))
+                .classify(db, ingest.parseRunId());
+        new ClassifyService(refusingLlm(
+                "Project Cost > Civil Works > Supplier - Kone Brothers"))
+                .bindSheets(db, ingest.parseRunId(), List.of("MACHINERY"));
+
+        try (WorkspaceDatabase database = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(database.connection());
+            assertThat(repo.selectNomenclatureBindings(ingest.parseRunId()))
+                    .noneSatisfy(b -> assertThat(b.path()).contains("Supplier - Kone Brothers"));
+            assertThat(new NomenclatureCatalog(repo).sliceForMandate(13L)
+                    .node("Project Cost > Civil Works > Supplier - Kone Brothers")).isEmpty();
+            assertThat(transcribedRefused(database, ingest.parseRunId())).isEqualTo(1.0);
+            // ADR 0022 §4, in place of the harness script: a run that stages a row copy is
+            // caught here, whatever the model answered.
+            OntologySlice slice = new NomenclatureCatalog(repo).sliceForMandate(13L);
+            for (NomenclatureNode node : slice.nodes()) {
+                if (!NomenclatureNode.LAYER_MANDATE_SOFT.equals(node.layer())) {
+                    continue;
+                }
+                assertThat(OntologyVocabulary.transcribedLeaf(node.name()))
+                        .as(node.path())
+                        .isFalse();
+            }
+        }
+    }
+
+    @Test
+    void aTranscribedLeafTheCatalogueUniquelyNamesBindsToTheCataloguePath() throws Exception {
+        // The same §2, seen from the other side: "Less AC as per Quotation included Below"
+        // is a transcription by shape, but the hard catalogue names one leaf for it, so
+        // the amount lands on Air Conditioning and nothing is minted. The row's own label
+        // names no leaf, so it is the binder's catalogue check that puts it there.
+        Path xlsx = tempDir.resolve("lessac.xlsx");
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("MACHINERY");
+            sheet.createRow(4).createCell(2).setCellValue("DETAILS OF PLANT & MACHINERIES");
+            Row ac = sheet.createRow(8);
+            ac.createCell(2).setCellValue("AC - as per quotation below");
+            ac.createCell(3).setCellValue(800_000);
+            try (FileOutputStream out = new FileOutputStream(xlsx.toFile())) {
+                workbook.write(out);
+            }
+        }
+        Path db = tempDir.resolve("lessac.db");
+        IngestSummary ingest = new IngestService().ingest(xlsx, 14L, db);
+        new DiscoverService().discover(db, ingest.parseRunId());
+
+        String proposed = "Project Cost > Plant & Machinery"
+                + " > Less AC as per Quotation included Below";
+        new ClassifyService(refusingLlm(proposed)).classify(db, ingest.parseRunId());
+        new ClassifyService(refusingLlm(proposed))
+                .bindSheets(db, ingest.parseRunId(), List.of("MACHINERY"));
+
+        try (WorkspaceDatabase database = WorkspaceDatabase.open(db)) {
+            WorkspaceRepository repo = new WorkspaceRepository(database.connection());
+            assertThat(repo.selectNomenclatureBindings(ingest.parseRunId()))
+                    .anySatisfy(b -> assertThat(b.path())
+                            .isEqualTo("Project Cost > Plant & Machinery > Air Conditioning"));
+            assertThat(new NomenclatureCatalog(repo).sliceForMandate(14L).node(proposed)).isEmpty();
+            assertThat(transcribedRefused(database, ingest.parseRunId())).isZero();
+        }
+    }
+
+    /** A Layer B that always answers with {@code path} for row 9. */
+    private static ClassifierLlm refusingLlm(String path) {
+        return new ClassifierLlm() {
+            @Override
+            public List<RegionProposal> proposeRegions(RegionLayoutPrompt prompt) {
+                return List.of(new RegionProposal("main", "A1:D12", "machinery_main", "unit-test"));
+            }
+
+            @Override
+            public LayerAJudgment classifyLayerA(LayerAPrompt prompt) {
+                return new LayerAJudgment(
+                        ScheduleFamily.CAPEX_DETAIL,
+                        Triage.MAIN,
+                        Relevance.PRIMARY,
+                        List.of(),
+                        List.of(),
+                        null,
+                        "The plant and machinery schedule of the project cost.");
+            }
+
+            @Override
+            public List<LayerBAssignment> bindLayerB(LayerBPrompt prompt) {
+                return List.of(new LayerBAssignment(9, null, "economic", path));
+            }
+        };
+    }
+
+    private static double transcribedRefused(WorkspaceDatabase database, long parseRunId)
+            throws Exception {
+        try (var ps = database.connection().prepareStatement(
+                "SELECT value_num FROM run_stat WHERE parse_run_id = ?"
+                        + " AND stage = 'layer-b' AND name = 'transcribed_leaves_refused'")) {
+            ps.setLong(1, parseRunId);
+            try (var rs = ps.executeQuery()) {
+                return rs.next() ? rs.getDouble(1) : Double.NaN;
+            }
         }
     }
 

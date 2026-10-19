@@ -1,0 +1,10 @@
+-- #154 (ADR 0022 §2): the transcribed leaves already staged into a mandate's overlay are
+-- pruned — supplier names, tax rates, quantities, specifications, Less:/Add: qualifiers.
+-- Such a leaf can never name the same line in another mandate, so it pollutes the one join
+-- key every comparison reads and hides a real duplicate under two paths.
+--
+-- This file states no SQL on purpose. What counts as a transcription is decided by
+-- OntologyVocabulary.transcribedLeaf; restating that rule in LIKE patterns here would give
+-- the platform a second implementation free to disagree with the first. So the version owns
+-- the timing, and WorkspaceDatabase runs NomenclaturePruner inside this version's
+-- transaction — the same shape as V11, whose wipe is likewise a Java step.
