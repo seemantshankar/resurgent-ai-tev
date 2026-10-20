@@ -133,6 +133,9 @@ public final class ExtractService {
             DocMoneyContext moneyContext = DocMoneyContext.from(
                     new CloudParsePageRepository(db.connection())
                             .loadTextPages(documentVersionId));
+            if (moneyContext.isEmpty()) {
+                moneyContext = DocMoneyContext.fromBlocks(db.connection(), documentVersionId);
+            }
             List<FactCandidate> candidates = normalizeAll(result.facts(), moneyContext);
             List<FactRepository.FactWrite> writes =
                     buildFactWrites(pack, candidates, result, client.id(), moneyContext);
@@ -340,7 +343,8 @@ public final class ExtractService {
                 null,
                 c.citations(),
                 c.derivedFromKeys(),
-                c.period());
+                c.period(),
+                c.basisEvidence());
     }
 
     private static String findSubject(DocTypePack pack, List<FactCandidate> stated) {
@@ -427,7 +431,9 @@ public final class ExtractService {
                     description,
                     null,
                     c.citations(),
-                    List.of()));
+                    List.of(),
+                    null,
+                    line.basisEvidence()));
         }
 
         if (result == null || result.payload() == null) {
@@ -478,7 +484,9 @@ public final class ExtractService {
                     description,
                     null,
                     List.of(),
-                    List.of()));
+                    List.of(),
+                    null,
+                    line.basisEvidence()));
         }
         return lines;
     }

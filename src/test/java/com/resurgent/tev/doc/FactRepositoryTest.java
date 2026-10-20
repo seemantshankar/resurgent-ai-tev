@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.resurgent.tev.doc.db.CloudParsePageRepository;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.FactRepository;
+import com.resurgent.tev.doc.extract.BasisEvidenceWrite;
 import com.resurgent.tev.doc.extract.Citation;
 import com.resurgent.tev.doc.query.FactQuery;
 import com.resurgent.tev.doc.query.FactRow;
@@ -278,6 +279,76 @@ class FactRepositoryTest {
         assertThat(gp.evidence()).hasSize(1);
         assertThat(gp.evidence().get(0).resolution()).isEqualTo("resolved");
         assertThat(gp.evidence().get(0).provenanceId()).isNotNull();
+    }
+
+    @Test
+    void basisEvidenceRecordedForUnitCurrencyAndScale() throws Exception {
+        insertLayout();
+        long scaleBlockId = docs.insertBlock(pageId, 2, "paragraph", 72.0, 700.0, 500.0, 720.0,
+                "Project cost (Rs. in Lakhs)", "Project cost (Rs. in Lakhs)", 2, "test");
+        long unitBlockId = docs.insertBlock(pageId, 3, "paragraph", 72.0, 500.0, 500.0, 520.0,
+                "Installed Capacity 1200 kWp", "Installed Capacity 1200 kWp", 3, "test");
+        docs.insertSpan(unitBlockId, 0, "Installed Capacity 1200 kWp", 72.0, 500.0, 500.0, 520.0, 0.99);
+
+        FactRepository.FactWrite fact = new FactRepository.FactWrite(
+                "capacity", "technical > Capacity", "technical", null,
+                "quantity", "1200", 1200.0, null, "kWp", null, null, null,
+                null, "llm_field", "test-extract", 0.9, "stated", null, null,
+                List.of(Citation.of(1, "Installed Capacity 1200 kWp")),
+                List.of(),
+                null,
+                List.of(BasisEvidenceWrite.of("unit", "kWp", "kWp", Citation.of(1, "kWp"))));
+
+        FactRepository.FactWrite money = new FactRepository.FactWrite(
+                "cost", "economic > Cost", "economic", null,
+                "money", "45", 45.0, null, null, "INR", "lakh", "4500000",
+                null, "llm_field", "test-extract", 0.9, "stated", null, null,
+                List.of(Citation.of(1, "Total Assets are Rs. 1,00,00,000")),
+                List.of(),
+                null,
+                List.of(
+                        BasisEvidenceWrite.of("currency", "Rs.", "INR", Citation.of(1, "Rs.")),
+                        BasisEvidenceWrite.of("scale", "Rs. in Lakhs", "lakh", Citation.of(1, "Rs. in Lakhs"))));
+
+        facts.replaceFacts(parseRunId, documentVersionId, List.of(fact, money));
+
+        List<FactRow> rows = facts.query(FactQuery.forMandate(1L).withVersion(documentVersionId));
+        FactRow capRow = byKey(rows, "capacity");
+        assertThat(capRow.unit()).isEqualTo("kWp");
+        assertThat(capRow.evidence()).hasSize(2);
+        assertThat(capRow.evidence()).anySatisfy(e -> {
+            assertThat(e.role()).isEqualTo("verbatim_quote");
+            assertThat(e.resolution()).isEqualTo("resolved");
+        });
+        assertThat(capRow.evidence()).anySatisfy(e -> {
+            assertThat(e.role()).isEqualTo("unit");
+            assertThat(e.verbatim()).isEqualTo("kWp");
+            assertThat(e.normalizedValue()).isEqualTo("kWp");
+            assertThat(e.resolution()).isEqualTo("resolved");
+            assertThat(e.provenanceId()).isNotNull();
+            assertThat(e.pageIndex()).isEqualTo(1);
+        });
+
+        FactRow moneyRow = byKey(rows, "cost");
+        assertThat(moneyRow.currency()).isEqualTo("INR");
+        assertThat(moneyRow.scale()).isEqualTo("lakh");
+        assertThat(moneyRow.evidence()).hasSize(3);
+        assertThat(moneyRow.evidence()).anySatisfy(e -> {
+            assertThat(e.role()).isEqualTo("currency");
+            assertThat(e.verbatim()).isEqualTo("Rs.");
+            assertThat(e.normalizedValue()).isEqualTo("INR");
+            assertThat(e.resolution()).isEqualTo("resolved");
+            assertThat(e.provenanceId()).isNotNull();
+            assertThat(e.pageIndex()).isEqualTo(1);
+        });
+        assertThat(moneyRow.evidence()).anySatisfy(e -> {
+            assertThat(e.role()).isEqualTo("scale");
+            assertThat(e.verbatim()).isEqualTo("Rs. in Lakhs");
+            assertThat(e.normalizedValue()).isEqualTo("lakh");
+            assertThat(e.resolution()).isEqualTo("resolved");
+            assertThat(e.provenanceId()).isNotNull();
+            assertThat(e.pageIndex()).isEqualTo(1);
+        });
     }
 
     private static FactRow byKey(List<FactRow> rows, String fieldKey) {

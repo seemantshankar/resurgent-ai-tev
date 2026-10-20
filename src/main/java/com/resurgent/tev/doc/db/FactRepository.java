@@ -1,5 +1,6 @@
 package com.resurgent.tev.doc.db;
 
+import com.resurgent.tev.doc.extract.BasisEvidenceWrite;
 import com.resurgent.tev.doc.extract.Citation;
 import com.resurgent.tev.doc.query.FactQuery;
 import com.resurgent.tev.doc.query.FactRow;
@@ -76,11 +77,27 @@ public final class FactRepository {
             String groupKeysJson,
             List<Citation> citations,
             List<String> derivedFromKeys,
-            String period) {
+            String period,
+            List<BasisEvidenceWrite> basisEvidence) {
 
         public FactWrite {
             citations = citations == null ? List.of() : List.copyOf(citations);
             derivedFromKeys = derivedFromKeys == null ? List.of() : List.copyOf(derivedFromKeys);
+            basisEvidence = basisEvidence == null ? List.of() : List.copyOf(basisEvidence);
+        }
+
+        /** Full fact write with all parameters except basis evidence. */
+        public FactWrite(String fieldKey, String ontologyPath, String pathRoot,
+                String subjectEntity, String valueKind, String valueText, Double valueNumber,
+                String valueDate, String unit, String currency, String scale,
+                String absoluteAmount, String langSource, String extractionMethod,
+                String extractorId, Double confidence, String statedOrDerived, String lineKey,
+                String groupKeysJson, List<Citation> citations,
+                List<String> derivedFromKeys, String period) {
+            this(fieldKey, ontologyPath, pathRoot, subjectEntity, valueKind, valueText,
+                    valueNumber, valueDate, unit, currency, scale, absoluteAmount, langSource,
+                    extractionMethod, extractorId, confidence, statedOrDerived, lineKey,
+                    groupKeysJson, citations, derivedFromKeys, period, List.of());
         }
 
         /** Fact write with no period (presence fields, line items, derived values). */
@@ -94,7 +111,7 @@ public final class FactRepository {
             this(fieldKey, ontologyPath, pathRoot, subjectEntity, valueKind, valueText,
                     valueNumber, valueDate, unit, currency, scale, absoluteAmount, langSource,
                     extractionMethod, extractorId, confidence, statedOrDerived, lineKey,
-                    groupKeysJson, citations, derivedFromKeys, null);
+                    groupKeysJson, citations, derivedFromKeys, null, List.of());
         }
     }
 
@@ -206,6 +223,25 @@ public final class FactRepository {
                         citation.verbatim(), resolution, null, null);
                 evidenceInserted++;
             }
+            for (BasisEvidenceWrite bev : f.basisEvidence()) {
+                Long provenanceId = null;
+                String resolution = "missing";
+                if (bev.citation() != null) {
+                    QuoteHit hit = resolveQuote(documentVersionId, bev.citation());
+                    provenanceId = insertProvenance(factId, documentVersionId, bev.citation(), hit);
+                    provenanceInserted++;
+                    if (hit.resolved()) {
+                        quotesResolved++;
+                        resolution = "resolved";
+                    } else {
+                        quotesMissing++;
+                        resolution = "missing";
+                    }
+                }
+                insertFactEvidence(factId, ordinal++, bev.role(), provenanceId,
+                        bev.sourceText(), resolution, bev.normalizedValue(), bev.ruleId());
+                evidenceInserted++;
+            }
             if ("derived".equals(f.extractionMethod()) && !f.derivedFromKeys().isEmpty()) {
                 for (String parentKey : f.derivedFromKeys()) {
                     List<Long> parentIds = idsByFieldKey.get(parentKey);
@@ -303,6 +339,17 @@ public final class FactRepository {
             insertFactEvidence(factId, ordinal++, "verbatim_quote", provenanceId,
                     citation.verbatim(), hit.resolved() ? "resolved" : "missing", null, null);
         }
+        for (BasisEvidenceWrite bev : f.basisEvidence()) {
+            Long provenanceId = null;
+            String resolution = "missing";
+            if (bev.citation() != null) {
+                QuoteHit hit = resolveQuote(documentVersionId, bev.citation());
+                provenanceId = insertProvenance(factId, documentVersionId, bev.citation(), hit);
+                resolution = hit.resolved() ? "resolved" : "missing";
+            }
+            insertFactEvidence(factId, ordinal++, bev.role(), provenanceId,
+                    bev.sourceText(), resolution, bev.normalizedValue(), bev.ruleId());
+        }
         return factId;
     }
 
@@ -385,6 +432,47 @@ public final class FactRepository {
                     if (rs.next()) {
                         return new QuoteHit(true, pageId, rs.getLong("block_id"), null,
                                 rs.getLong("table_cell_id"), citation);
+                    }
+                }
+            }
+            // span containment
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT s.span_id, s.block_id FROM span s"
+                            + " JOIN block b ON b.block_id = s.block_id"
+                            + " WHERE b.page_id = ? AND instr(lower(s.text_raw), ?) > 0 LIMIT 1")) {
+                ps.setLong(1, pageId);
+                ps.setString(2, citation.verbatim().toLowerCase(Locale.ROOT));
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return new QuoteHit(true, pageId, rs.getLong("block_id"),
+                                rs.getLong("span_id"), null, citation);
+                    }
+                }
+            }
+            // table_cell containment
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT tc.table_cell_id, tg.block_id FROM table_cell tc"
+                            + " JOIN table_grid tg ON tg.table_grid_id = tc.table_grid_id"
+                            + " JOIN block b ON b.block_id = tg.block_id"
+                            + " WHERE b.page_id = ? AND instr(lower(tc.text_raw), ?) > 0 LIMIT 1")) {
+                ps.setLong(1, pageId);
+                ps.setString(2, citation.verbatim().toLowerCase(Locale.ROOT));
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return new QuoteHit(true, pageId, rs.getLong("block_id"), null,
+                                rs.getLong("table_cell_id"), citation);
+                    }
+                }
+            }
+            // block containment
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT block_id FROM block WHERE page_id = ? AND instr(lower(text_raw), ?) > 0 LIMIT 1")) {
+                ps.setLong(1, pageId);
+                ps.setString(2, citation.verbatim().toLowerCase(Locale.ROOT));
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return new QuoteHit(true, pageId, rs.getLong("block_id"), null, null,
+                                citation);
                     }
                 }
             }
@@ -794,7 +882,7 @@ public final class FactRepository {
             return;
         }
         StringBuilder sql = new StringBuilder(
-                "SELECT e.fact_id, e.role, e.provenance_id, e.source_text, e.resolution,"
+                "SELECT e.fact_id, e.role, e.provenance_id, e.source_text, e.resolution, e.normalized_value,"
                         + " p.verbatim, p.bbox_x0, p.bbox_y0, p.bbox_x1, p.bbox_y1,"
                         + " pg.page_index"
                         + " FROM fact_evidence e"
@@ -831,7 +919,8 @@ public final class FactRepository {
                             asDouble(rs.getObject("bbox_x1")),
                             asDouble(rs.getObject("bbox_y1")),
                             provenanceId,
-                            rs.getString("resolution")));
+                            rs.getString("resolution"),
+                            rs.getString("normalized_value")));
                 }
             }
         }

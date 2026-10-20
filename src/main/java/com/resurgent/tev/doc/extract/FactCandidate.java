@@ -30,6 +30,7 @@ public final class FactCandidate {
     private String extractionMethod = "llm_field";
     private final List<Citation> citations = new ArrayList<>();
     private final List<String> derivedFromKeys = new ArrayList<>();
+    private final List<BasisEvidenceWrite> basisEvidence = new ArrayList<>();
 
     /**
      * Creates a candidate for a pack field key.
@@ -188,5 +189,19 @@ public final class FactCandidate {
     public FactCandidate addDerivedFromKey(String fieldKey) {
         derivedFromKeys.add(Objects.requireNonNull(fieldKey, "fieldKey"));
         return this;
+    }
+
+    public List<BasisEvidenceWrite> basisEvidence() {
+        return List.copyOf(basisEvidence);
+    }
+
+    public FactCandidate addBasisEvidence(BasisEvidenceWrite evidence) {
+        basisEvidence.add(Objects.requireNonNull(evidence, "evidence"));
+        return this;
+    }
+
+    public FactCandidate addBasisEvidence(
+            String role, String sourceText, String normalizedValue, Citation citation) {
+        return addBasisEvidence(new BasisEvidenceWrite(role, sourceText, normalizedValue, citation, null));
     }
 }

@@ -69,6 +69,9 @@ public final class FactJson {
                     en.put("provenance_id", e.provenanceId());
                 }
                 en.put("resolution", e.resolution());
+                if (e.normalizedValue() != null) {
+                    en.put("normalized_value", e.normalizedValue());
+                }
             }
         }
         try {

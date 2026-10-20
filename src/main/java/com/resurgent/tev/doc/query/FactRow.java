@@ -74,6 +74,20 @@ public record FactRow(
             Double bboxX1,
             Double bboxY1,
             Long provenanceId,
-            String resolution) {
+            String resolution,
+            String normalizedValue) {
+
+        public EvidenceRow(
+                String role,
+                String verbatim,
+                Integer pageIndex,
+                Double bboxX0,
+                Double bboxY0,
+                Double bboxX1,
+                Double bboxY1,
+                Long provenanceId,
+                String resolution) {
+            this(role, verbatim, pageIndex, bboxX0, bboxY0, bboxX1, bboxY1, provenanceId, resolution, null);
+        }
     }
 }

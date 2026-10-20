@@ -1,6 +1,8 @@
 package com.resurgent.tev.doc.extract;
 
 import com.resurgent.tev.parser.classify.KindTokens;
+import java.util.List;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -11,6 +13,14 @@ public final class CandidateNormalizer {
 
     private static final Pattern SCIENTIFIC = Pattern.compile(
             "(?i)^\\s*[+-]?\\d+(\\.\\d+)?E[+-]?\\d+\\s*$");
+
+    private static final Pattern INR_MARKER = Pattern.compile("(?i)(₹|\\brs\\.?|\\binr\\b|\\brupees?\\b)");
+    private static final Pattern USD_MARKER = Pattern.compile("(?i)(\\busd\\b|\\bdollars?\\b|\\$)");
+    private static final Pattern EUR_MARKER = Pattern.compile("(?i)(€|\\beur\\b|\\beuros?\\b)");
+    private static final Pattern GBP_MARKER = Pattern.compile("(?i)(£|\\bgbp\\b|\\bpounds?\\b)");
+
+    private static final Pattern SCALE_MARKER = Pattern.compile(
+            "(?i)\\b(lakhs?|lacs?|crores?|millions?|billions?|thousands?|000s?|mn|cr)\\b");
 
     private CandidateNormalizer() {}
 
@@ -76,12 +86,25 @@ public final class CandidateNormalizer {
         if (scale != null) {
             c.scale(scale.wireName());
             c.absoluteAmount(MoneyNormalizer.absoluteAmount(r.amount(), scale));
+            if (r.scale() != null) {
+                String token = findMatching(SCALE_MARKER, raw, scale.wireName());
+                c.addBasisEvidence("scale", token, scale.wireName(), tokenCitation(c, token));
+            } else if (ctx.scaleStatement() != null) {
+                c.addBasisEvidence("scale", ctx.scaleStatement().sourceText(), scale.wireName(),
+                        ctx.scaleStatement().citation());
+            }
         }
         if (r.currency() != null) {
             c.currency(r.currency());
+            String token = findCurrencyMarker(raw, r.currency());
+            c.addBasisEvidence("currency", token, r.currency(), tokenCitation(c, token));
         }
         if ((c.currency() == null || c.currency().isBlank()) && ctx.currency() != null) {
             c.currency(ctx.currency());
+            if (ctx.currencyStatement() != null) {
+                c.addBasisEvidence("currency", ctx.currencyStatement().sourceText(), ctx.currency(),
+                        ctx.currencyStatement().citation());
+            }
         }
         if (c.valueText() == null || c.valueText().isBlank()) {
             c.valueText(r.valueText() != null ? r.valueText() : raw);
@@ -107,6 +130,7 @@ public final class CandidateNormalizer {
         c.valueNumber(r.valueNumber());
         if (r.unit() != null) {
             c.unit(r.unit());
+            c.addBasisEvidence("unit", r.unit(), r.unit(), tokenCitation(c, r.unit()));
         }
         // Excel types durations as quantity at unit scale
         c.scale(MoneyNormalizer.Scale.UNIT.wireName());
@@ -131,7 +155,9 @@ public final class CandidateNormalizer {
             c.valueNumber(r.valueNumber());
             // never invent a unit
             if (r.unitStated() && r.unit() != null) {
-                c.unit(KindTokens.normalizeUnit(r.unit()));
+                String norm = KindTokens.normalizeUnit(r.unit());
+                c.unit(norm);
+                c.addBasisEvidence("unit", r.unit(), norm, tokenCitation(c, r.unit()));
             }
         }
         // Excel forces scale 'unit' on every non-money reading (InputReading)
@@ -145,12 +171,48 @@ public final class CandidateNormalizer {
         if (q.valueNumber() != null) {
             c.valueNumber(q.valueNumber());
         }
+        String verbatimUnit = null;
         if (q.unit() != null) {
+            verbatimUnit = q.verbatimUnit() != null ? q.verbatimUnit() : q.unit();
             c.unit(q.unit());
         } else if (c.unit() != null && !c.unit().isBlank()) {
+            verbatimUnit = c.unit();
             // schema-declared units arrive mixed case; store the canonical key
             c.unit(KindTokens.normalizeUnit(c.unit()));
         }
+        if (c.unit() != null && !c.unit().isBlank()) {
+            String token = verbatimUnit != null ? verbatimUnit : c.unit();
+            c.addBasisEvidence("unit", token, c.unit(), tokenCitation(c, token));
+        }
         c.scale(MoneyNormalizer.Scale.UNIT.wireName());
+    }
+
+    private static Citation tokenCitation(FactCandidate c, String token) {
+        if (!c.citations().isEmpty()) {
+            Citation primary = c.citations().get(0);
+            return Citation.of(primary.pageIndex(), token);
+        }
+        return null;
+    }
+
+    private static String findMatching(Pattern pattern, String text, String fallback) {
+        if (text == null) {
+            return fallback;
+        }
+        Matcher m = pattern.matcher(text);
+        return m.find() ? m.group(1) : fallback;
+    }
+
+    private static String findCurrencyMarker(String text, String fallback) {
+        if (text == null) {
+            return fallback;
+        }
+        for (Pattern p : List.of(INR_MARKER, USD_MARKER, EUR_MARKER, GBP_MARKER)) {
+            Matcher m = p.matcher(text);
+            if (m.find()) {
+                return m.group(1);
+            }
+        }
+        return fallback;
     }
 }
