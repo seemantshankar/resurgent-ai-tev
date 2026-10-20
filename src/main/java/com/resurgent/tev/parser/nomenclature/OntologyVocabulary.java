@@ -35,6 +35,30 @@ public final class OntologyVocabulary {
 
     private static final Pattern CATEGORY = Pattern.compile("^[A-Za-z][A-Za-z0-9 /&'\\-]{0,48}$");
 
+    /** ADR 0022 §2: a {@code Less: …} / {@code Add: …} row qualifier, never a category. */
+    private static final Pattern QUALIFIER = Pattern.compile("^(LESS|ADD)\\b");
+
+    /** ADR 0022 §2: the count column of a line item — "No. of", "Quantity", "Units". */
+    private static final Pattern COUNT = Pattern.compile(
+            "^(NO|NOS|NO OF|NUMBER OF|QUANTITY|QTY|UNIT|UNITS|WEIGHT|SIZE|DIMENSION)\\b");
+
+    /** Who supplied or made the line, stated as a word or as a trailing proper name. */
+    private static final Pattern ATTRIBUTION = Pattern.compile(
+            "\\b(SUPPLIER|SUPPLIERS|VENDOR|VENDORS|MANUFACTURER|M/S|M S|O/S|W/E|MAKE|BRAND"
+                    + "|TRADER|DEALER|AGENT|AGENCY|FIRM)\\b");
+
+    /** An attribution that names itself: a spaced dash, then a two-word proper name. */
+    private static final Pattern NAMED_ATTRIBUTION = Pattern.compile(
+            "\\s[-–]\\s+[A-Z][a-z]+(\\s+[A-Z][a-z]+)+");
+
+    /** A measurement left in the leaf: a rate, a quantity, a specification. */
+    private static final Pattern MEASUREMENT = Pattern.compile("[0-9@%]");
+
+    /** ADR 0022 §2: formula errors that leak from an Excel cell into a label. */
+    private static final Pattern FORMULA_ERROR = Pattern.compile(
+            "#(REF!|VALUE!|DIV/0!|NAME\\?|NUM!|NULL!|N/A|CALC!|SPILL!)",
+            Pattern.CASE_INSENSITIVE);
+
     private OntologyVocabulary() {}
 
     /** Normalized label — upper case, apostrophes dropped, punctuation becomes space. */
@@ -120,6 +144,74 @@ public final class OntologyVocabulary {
             }
         }
         return List.copyOf(paths.keySet());
+    }
+
+    /**
+     * Whether a proposed soft leaf copies its row instead of naming a category
+     * (ADR 0022 §2): a formula error, a supplier or make, a tax rate, a quantity or
+     * "No. of", a specification, or a {@code Less:}/{@code Add:} qualifier. Such a leaf can
+     * never be matched again — supplier names differ per mandate — so a binder refuses it
+     * rather than staging it into the one shared nomenclature.
+     *
+     * <p>This is a refusal list, not a whitelist: a short category name still mints
+     * (ADR 0022 §3), and a leaf that is really a known catalogue item resolves through the
+     * alias index before this rule is ever consulted.
+     *
+     * @param leaf the proposed leaf segment, as the model wrote it
+     * @return true when the leaf is a transcription of the row, not a category
+     */
+    public static boolean transcribedLeaf(String leaf) {
+        if (leaf == null || leaf.isBlank()) {
+            return false;
+        }
+        String raw = leaf.trim();
+        String text = norm(raw);
+        return QUALIFIER.matcher(text).find()
+                || COUNT.matcher(text).find()
+                || ATTRIBUTION.matcher(text).find()
+                || NAMED_ATTRIBUTION.matcher(raw).find()
+                || MEASUREMENT.matcher(raw).find()
+                || FORMULA_ERROR.matcher(raw).find();
+    }
+
+    /**
+     * ADR 0022 §2's escape hatch, consulted before a transcribed leaf is refused: the one
+     * catalogue path a label names. A label the alias index marks ambiguous names no path,
+     * so a transcription that could mean two heads is refused rather than guessed.
+     *
+     * @param label the proposed leaf or row label, as the model wrote it
+     * @param hardAliases the hard-catalogue alias index (seed, spine, and industry; excluding mandate_soft)
+     * @return the catalogue path this label uniquely names, or null
+     */
+    private static String catalogueHit(String label, Map<String, String> hardAliases) {
+        if (label == null || label.isBlank() || hardAliases == null) {
+            return null;
+        }
+        String hit = hardAliases.get(norm(label));
+        return hit == null || hit.isBlank() ? null : hit;
+    }
+
+    /**
+     * ADR 0022 §2 applied to a leaf the ontology does not carry yet, in one place so both
+     * binders answer the same way: the path to bind {@code path} to — itself when the leaf
+     * names a category, or the catalogue leaf it uniquely aliases when the leaf is a
+     * transcription — and null when the leaf copies its row and nothing names it.
+     *
+     * @param path the proposed {@code parent > leaf} path
+     * @param hardAliases the hard-catalogue alias index (seed, spine, and industry; excluding mandate_soft)
+     * @return the path the binder may use, or null to refuse
+     */
+    public static String bindablePath(String path, Map<String, String> hardAliases) {
+        if (path == null || path.isBlank()) {
+            return path;
+        }
+        String trimmed = path.trim();
+        int sep = trimmed.lastIndexOf(" > ");
+        String leaf = sep < 0 ? trimmed : trimmed.substring(sep + 3);
+        if (!transcribedLeaf(leaf)) {
+            return trimmed;
+        }
+        return catalogueHit(leaf, hardAliases);
     }
 
     /**

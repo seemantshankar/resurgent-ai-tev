@@ -74,6 +74,12 @@ final class LayerBBinder {
 
     static List<Draft> bind(
             List<BindCellRow> cells, List<LayerBAssignment> fromLlm, Map<String, String> aliases) {
+        return bind(cells, fromLlm, aliases, aliases);
+    }
+
+    static List<Draft> bind(
+            List<BindCellRow> cells, List<LayerBAssignment> fromLlm,
+            Map<String, String> aliases, Map<String, String> hardAliases) {
         Map<String, BindCellRow> byCoord = new LinkedHashMap<>();
         for (BindCellRow cell : cells) {
             byCoord.put(cell.coord().toUpperCase(Locale.ROOT), cell);
@@ -81,7 +87,7 @@ final class LayerBBinder {
         Map<String, Draft> out = new LinkedHashMap<>();
         prove(cells, aliases, out);
         inheritMerges(cells, byCoord, out);
-        applyLlm(cells, fromLlm, out);
+        applyLlm(cells, fromLlm, hardAliases, out);
         placeFirmNameInsideAddress(cells, out);
         inheritMerges(cells, byCoord, out);
         continueIdentity(cells, aliases, out);
@@ -406,7 +412,8 @@ final class LayerBBinder {
     }
 
     private static void applyLlm(
-            List<BindCellRow> cells, List<LayerBAssignment> fromLlm, Map<String, Draft> out) {
+            List<BindCellRow> cells, List<LayerBAssignment> fromLlm,
+            Map<String, String> aliases, Map<String, Draft> out) {
         if (fromLlm == null || fromLlm.isEmpty()) {
             return;
         }
@@ -415,17 +422,26 @@ final class LayerBBinder {
             if (!allowed(assignment.pathRoot(), assignment.path())) {
                 continue;
             }
+            // ADR 0022 §2: a leaf that copies its row binds nowhere. Only a label the
+            // catalogue uniquely names replaces it — and a row whose own label is such a
+            // label never reaches here, because prove() bound it before the model was asked.
+            String path = OntologyVocabulary.bindablePath(assignment.path(), aliases);
+            if (path == null) {
+                continue;
+            }
+            String root = path.equals(assignment.path())
+                    ? assignment.pathRoot() : OntologyVocabulary.rootFor(path);
             if (assignment.coord() != null) {
                 for (BindCellRow cell : cells) {
                     if (cell.coord().equalsIgnoreCase(assignment.coord()) && !cell.error()
                             && !bound(out, cell) && accepts(cell, assignment)) {
-                        put(out, cell, assignment.pathRoot(), assignment.path());
+                        put(out, cell, root, path);
                     }
                 }
             } else if (assignment.row() != null) {
                 for (BindCellRow cell : rows.getOrDefault(assignment.row(), List.of())) {
                     if (!cell.error() && !bound(out, cell) && accepts(cell, assignment)) {
-                        put(out, cell, assignment.pathRoot(), assignment.path());
+                        put(out, cell, root, path);
                     }
                 }
             }

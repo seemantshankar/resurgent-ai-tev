@@ -17,6 +17,7 @@ import com.resurgent.tev.parser.discover.PacketCell;
 import com.resurgent.tev.parser.nomenclature.LivingOntology;
 import com.resurgent.tev.parser.nomenclature.NomenclatureCatalog;
 import com.resurgent.tev.parser.nomenclature.OntologySlice;
+import com.resurgent.tev.parser.nomenclature.OntologyVocabulary;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
@@ -24,6 +25,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -1387,6 +1389,9 @@ public final class ClassifyService {
         // Binding runs in two rounds of concurrent model calls; see bindAll.
         BindRound round = bindAll(jobs, living, catalog, mandateId, runContext::inline);
         living = round.living();
+        // ADR 0022 §2: a run that mints transcribed leaves is a defect, so the count is kept.
+        repo.recordRunStat(parseRunId, "layer-b", "transcribed_leaves_refused",
+                (double) round.transcribedRefused().size(), null);
         for (int i = 0; i < jobs.size(); i++) {
             BindJob job = jobs.get(i);
             CandidateRow candidate = job.candidate();
@@ -1477,6 +1482,7 @@ public final class ClassifyService {
         List<List<LayerBAssignment>> firstAnswers = askFirstRound(jobs, living, contextOf);
         List<List<LayerBAssignment>> assignments = new ArrayList<>();
         List<List<BindCellRow>> open = new ArrayList<>();
+        Set<String> transcribedRefused = new LinkedHashSet<>();
         for (int i = 0; i < jobs.size(); i++) {
             BindJob job = jobs.get(i);
             List<LayerBAssignment> mine = new ArrayList<>();
@@ -1487,9 +1493,12 @@ public final class ClassifyService {
                         ? firstAnswers.get(i)
                         : askLayerB(job.sheetName(), job.family(), job.about(), job.cells(), missing,
                                 living.paths(), false, contextOf);
-                living = absorbNewLeaves(living, catalog, mandateId, first);
+                Growth grown = absorbNewLeaves(living, catalog, mandateId, first);
+                living = grown.living();
+                transcribedRefused.addAll(grown.transcribedRefused());
                 mine.addAll(first);
-                missing = LayerBBinder.unbound(job.cells(), LayerBBinder.bind(job.cells(), mine, living.aliases()));
+                missing = LayerBBinder.unbound(job.cells(),
+                        LayerBBinder.bind(job.cells(), mine, living.aliases(), living.hardAliases()));
             }
             assignments.add(mine);
             open.add(missing);
@@ -1516,26 +1525,31 @@ public final class ClassifyService {
                 System.err.flush();
                 continue;
             }
-            living = absorbNewLeaves(living, catalog, mandateId, outcomes.get(k).value());
+            Growth grown = absorbNewLeaves(living, catalog, mandateId, outcomes.get(k).value());
+            living = grown.living();
+            transcribedRefused.addAll(grown.transcribedRefused());
             assignments.get(i).addAll(outcomes.get(k).value());
         }
         List<BindResult> results = new ArrayList<>();
         for (int i = 0; i < jobs.size(); i++) {
             BindJob job = jobs.get(i);
-            List<LayerBBinder.Draft> proved = LayerBBinder.bind(job.cells(), assignments.get(i), living.aliases());
+            List<LayerBBinder.Draft> proved = LayerBBinder.bind(
+                    job.cells(), assignments.get(i), living.aliases(), living.hardAliases());
             results.add(new BindResult(proved, LayerBBinder.unbound(job.cells(), proved).size(), living));
         }
-        return new BindRound(results, living);
+        return new BindRound(results, living, transcribedRefused);
     }
 
-    private record BindRound(List<BindResult> results, LivingOntology living) {}
+    private record BindRound(
+            List<BindResult> results, LivingOntology living, Set<String> transcribedRefused) {}
 
-    private LivingOntology absorbNewLeaves(
+    private Growth absorbNewLeaves(
             LivingOntology living,
             NomenclatureCatalog catalog,
             long mandateId,
             List<LayerBAssignment> assignments) {
         LivingOntology next = living;
+        Set<String> transcribed = new LinkedHashSet<>();
         for (LayerBAssignment assignment : assignments) {
             if (assignment == null || assignment.path() == null || assignment.pathRoot() == null) {
                 continue;
@@ -1545,6 +1559,16 @@ public final class ClassifyService {
             }
             String path = assignment.path();
             if (next.contains(path) || !LayerBBinder.allowed(assignment.pathRoot(), path)) {
+                continue;
+            }
+            // ADR 0022 §2: a leaf that copies its row is never staged into the master set,
+            // and a transcription the catalogue already names has nothing left to grow.
+            String bindable = OntologyVocabulary.bindablePath(path, next.hardAliases());
+            if (bindable == null) {
+                transcribed.add(path);
+                continue;
+            }
+            if (!bindable.equals(path)) {
                 continue;
             }
             int sep = path.lastIndexOf(" > ");
@@ -1562,8 +1586,11 @@ public final class ClassifyService {
                 // growing the master set.
             }
         }
-        return next;
+        return new Growth(next, transcribed);
     }
+
+    /** The ontology after one round's leaves were staged, and how many transcriptions it refused. */
+    private record Growth(LivingOntology living, Set<String> transcribedRefused) {}
 
     private int applyCrossSheetHelpers(
             WorkspaceRepository repo,

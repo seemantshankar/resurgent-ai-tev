@@ -1,5 +1,6 @@
 package com.resurgent.tev.doc.db;
 
+import com.resurgent.tev.doc.assess.StageStatus;
 import com.resurgent.tev.doc.query.MandateQa;
 import com.resurgent.tev.parser.db.Timestamps;
 import java.sql.Connection;
@@ -266,6 +267,55 @@ public final class AssessmentRepository {
         }
     }
 
+    /** Bundles the parameters for recording one assessment stage execution. */
+    public record AssessmentRunRecord(
+            long mandateId,
+            String stage,
+            String status,
+            long llmFailures,
+            Long parseRunId,
+            String startedAt,
+            String finishedAt,
+            String metricsJson
+    ) {
+        public AssessmentRunRecord(
+                long mandateId,
+                String stage,
+                StageStatus status,
+                long llmFailures,
+                Long parseRunId,
+                String startedAt,
+                String finishedAt,
+                String metricsJson) {
+            this(mandateId, stage, status.dbValue(), llmFailures, parseRunId, startedAt, finishedAt, metricsJson);
+        }
+    }
+
+    /**
+     * Inserts (or replaces) the run record of one stage for a mandate via bundled record.
+     */
+    public long upsertAssessmentRun(AssessmentRunRecord record) throws SQLException {
+        return upsertAssessmentRun(
+                record.mandateId(),
+                record.stage(),
+                record.status(),
+                record.llmFailures(),
+                record.parseRunId(),
+                record.startedAt(),
+                record.finishedAt(),
+                record.metricsJson());
+    }
+
+    /**
+     * Inserts (or replaces) the run record with typed {@link StageStatus}.
+     */
+    public long upsertAssessmentRun(long mandateId, String stage, StageStatus status,
+            long llmFailures, Long parseRunId, String startedAt, String finishedAt,
+            String metricsJson) throws SQLException {
+        return upsertAssessmentRun(mandateId, stage, status.dbValue(), llmFailures, parseRunId,
+                startedAt, finishedAt, metricsJson);
+    }
+
     /**
      * Inserts (or replaces) the run record of one stage for a mandate. One row per
      * {@code (mandate, stage)}: a re-run replaces the previous run — history is M4.
@@ -274,28 +324,30 @@ public final class AssessmentRepository {
      * @throws SQLException if the upsert fails
      */
     public long upsertAssessmentRun(long mandateId, String stage, String status,
-            Long parseRunId, String startedAt, String finishedAt, String metricsJson)
-            throws SQLException {
+            long llmFailures, Long parseRunId, String startedAt, String finishedAt,
+            String metricsJson) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO assessment_run (mandate_id, stage, status, parse_run_id,"
-                        + " started_at, finished_at, metrics_json)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?)"
+                "INSERT INTO assessment_run (mandate_id, stage, status, llm_failures,"
+                        + " parse_run_id, started_at, finished_at, metrics_json)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
                         + " ON CONFLICT (mandate_id, stage) DO UPDATE SET"
-                        + " status = excluded.status, parse_run_id = excluded.parse_run_id,"
+                        + " status = excluded.status, llm_failures = excluded.llm_failures,"
+                        + " parse_run_id = excluded.parse_run_id,"
                         + " started_at = excluded.started_at, finished_at = excluded.finished_at,"
                         + " metrics_json = excluded.metrics_json",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, mandateId);
             ps.setString(2, stage);
             ps.setString(3, status);
+            ps.setLong(4, llmFailures);
             if (parseRunId == null) {
-                ps.setNull(4, Types.INTEGER);
+                ps.setNull(5, Types.INTEGER);
             } else {
-                ps.setLong(4, parseRunId);
+                ps.setLong(5, parseRunId);
             }
-            ps.setString(5, startedAt);
-            ps.setString(6, finishedAt);
-            ps.setString(7, metricsJson);
+            ps.setString(6, startedAt);
+            ps.setString(7, finishedAt);
+            ps.setString(8, metricsJson);
             ps.executeUpdate();
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 if (keys.next()) {
@@ -335,13 +387,15 @@ public final class AssessmentRepository {
     }
 
     /**
-     * The run record of each stage executed for the mandate, oldest stage first.
+     * The run record of each stage executed for the mandate, oldest stage first. The
+     * failed-call count rides beside the status, so a {@code partial} or {@code failed}
+     * stage also shows how many document-LLM calls were lost (#151).
      *
      * @throws SQLException if the query fails
      */
     public List<MandateQa.AssessmentRunRow> assessmentRuns(long mandateId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT stage, status, started_at, finished_at, parse_run_id"
+                "SELECT stage, status, llm_failures, started_at, finished_at, parse_run_id"
                         + " FROM assessment_run WHERE mandate_id = ? ORDER BY assessment_run_id")) {
             ps.setLong(1, mandateId);
             try (ResultSet rs = ps.executeQuery()) {
@@ -351,6 +405,7 @@ public final class AssessmentRepository {
                     rows.add(new MandateQa.AssessmentRunRow(
                             rs.getString("stage"),
                             rs.getString("status"),
+                            rs.getLong("llm_failures"),
                             rs.getString("started_at"),
                             rs.getString("finished_at"),
                             rs.wasNull() ? null : parseRunRaw));

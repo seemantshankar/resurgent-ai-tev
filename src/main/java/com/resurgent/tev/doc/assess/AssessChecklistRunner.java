@@ -111,12 +111,13 @@ public final class AssessChecklistRunner implements AssessStage {
         }
 
         // The results cite this assessment run; record it as running now so the ids
-        // exist, then flip it to completed with metrics when the run succeeds (a
+        // exist, then flip it to its outcome status with metrics when the run finishes (a
         // failed run rolls back, leaving the previous run record untouched). The id
         // is read back — on a re-run the upsert updates the existing row and the
         // driver's generated keys are not trustworthy outside the insert branch.
-        assessment.upsertAssessmentRun(mandateId, STAGE, "running", parseRunId,
-                startedAt, null, null);
+        assessment.upsertAssessmentRun(new AssessmentRepository.AssessmentRunRecord(
+                mandateId, STAGE, StageStatus.RUNNING, 0L, parseRunId,
+                startedAt, null, null));
         Long runId = assessment.findAssessmentRunId(mandateId, STAGE);
         if (runId == null) {
             throw new SQLException("assessment_run row missing after upsert for stage " + STAGE);
@@ -208,16 +209,18 @@ public final class AssessChecklistRunner implements AssessStage {
 
         recordStats(repo, parseRunId, itemIds.size(), plan.size(), provided, unclear,
                 notProvided, notApplicable, conflicting, flags, usage);
-        assessment.upsertAssessmentRun(mandateId, STAGE, "completed", parseRunId, startedAt,
-                Timestamps.now(), metricsJson(itemIds.size(), plan.size(), provided, unclear,
-                        notProvided, notApplicable, conflicting, flags, usage));
+        StageOutcome.Evaluation evaluation = StageOutcome.evaluate(usage, plan.size());
+        assessment.upsertAssessmentRun(new AssessmentRepository.AssessmentRunRecord(
+                mandateId, STAGE, evaluation.status(), evaluation.failures(), parseRunId,
+                startedAt, Timestamps.now(), metricsJson(itemIds.size(), plan.size(), provided,
+                        unclear, notProvided, notApplicable, conflicting, flags, usage)));
 
         String detail = String.format(Locale.ROOT,
                 "%d items, %d results (%d provided, %d unclear, %d not provided,"
                         + " %d not applicable, %d conflicting), %d flags",
                 itemIds.size(), plan.size(), provided, unclear, notProvided, notApplicable,
                 conflicting, flags[0] + flags[1]);
-        return new StageResult(STAGE, plan.size(), detail);
+        return new StageResult(STAGE, plan.size(), detail, evaluation.statusDb(), evaluation.failures());
     }
 
     /** The provenance row of a Provided result — the cite behind the status. */

@@ -31,6 +31,9 @@ public interface AssessStage {
      * @param stage stage name ({@code assess_profile}/…)
      * @param items primary item count the stage processed (e.g. document versions)
      * @param detail one-line human detail
+     * @param status what the run record says — see {@link StageOutcome} ({@code completed} only
+     *     when the stage counted no hard document-LLM failure)
+     * @param llmFailures hard document-LLM calls this stage counted (#151; zero on a clean run)
      */
-    record StageResult(String stage, int items, String detail) {}
+    record StageResult(String stage, int items, String detail, String status, long llmFailures) {}
 }

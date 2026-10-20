@@ -186,16 +186,19 @@ public final class AssessPassagesRunner implements AssessStage {
             }
         }
 
+        StageOutcome.Evaluation evaluation = StageOutcome.evaluate(usage, passagesTotal);
+
         recordStats(repo, parseRunId, usage, versions.size(), passagesTotal, topicMatched,
                 summarised, summarisedLlm, chapterFacts);
-        assessment.upsertAssessmentRun(mandateId, STAGE, "completed", parseRunId,
+        assessment.upsertAssessmentRun(new AssessmentRepository.AssessmentRunRecord(
+                mandateId, STAGE, evaluation.status(), evaluation.failures(), parseRunId,
                 startedAt, Timestamps.now(), metricsJson(versions.size(), passagesTotal,
-                        topicMatched, summarised, summarisedLlm, chapterFacts, usage));
+                        topicMatched, summarised, summarisedLlm, chapterFacts, usage)));
 
         String detail = String.format(Locale.ROOT,
                 "%d documents (%d passages, %d topic-matched, %d chapter facts)",
                 versions.size(), passagesTotal, topicMatched, chapterFacts);
-        return new StageResult(STAGE, passagesTotal, detail);
+        return new StageResult(STAGE, passagesTotal, detail, evaluation.statusDb(), evaluation.failures());
     }
 
     /**

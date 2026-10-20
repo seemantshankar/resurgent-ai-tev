@@ -159,6 +159,57 @@ class NomenclatureBindTest {
     }
 
     @Test
+    void aLeafThatCopiesItsRowIsRefusedAndNeverStagedIntoTheOntology() throws Exception {
+        // ADR 0022 §2: "Supplier - Kone Brothers" is the row, not a category. The name
+        // differs per mandate, so a leaf of it could never match again — it must not
+        // enter the one shared nomenclature.
+        FakeDocLlmClient llm = new FakeDocLlmClient("""
+                {"assignments": [
+                  {"key": "assets_total", "path": "Project Cost > Supplier - Kone Brothers",
+                   "reasoning": "the line names the supplier of the lift"}]}
+                """);
+
+        PackPathBinder.BindOutcome outcome =
+                new PackPathBinder().bind(dbPath, parseRunId, MANDATE, pack, llm);
+
+        FactRow assets = fact("assets_total");
+        assertThat(assets.nomenclatureStatus()).isEqualTo("unbound");
+        assertThat(assets.unboundReason()).isEqualTo("transcribed_label");
+        assertThat(assets.ontologyPath()).isEqualTo("economic > Promoter Net Worth > Assets");
+        assertThat(outcome.bound()).isEqualTo(2);
+        assertThat(stat("transcribed_leaves_refused")).isEqualTo(1.0);
+        assertThat(stat("soft_leaves_added")).isZero();
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            assertThat(new NomenclatureCatalog(new WorkspaceRepository(db.connection()))
+                    .sliceForMandate(MANDATE)
+                    .node("Project Cost > Supplier - Kone Brothers")).isEmpty();
+        }
+    }
+
+    @Test
+    void aTranscribedLabelTheCatalogueUniquelyNamesBindsToTheCataloguePath() throws Exception {
+        // The same §2 escape hatch: "Less AC as per Quotation included Below" is a
+        // transcription by shape, but the hard catalogue names exactly one leaf for it,
+        // so the amount lands on Air Conditioning instead of being refused.
+        FakeDocLlmClient llm = new FakeDocLlmClient("""
+                {"assignments": [
+                  {"key": "assets_total",
+                   "path": "Project Cost > Plant & Machinery > Less AC as per Quotation included Below",
+                   "reasoning": "the quotation's less line for the AC package"}]}
+                """);
+
+        new PackPathBinder().bind(dbPath, parseRunId, MANDATE, pack, llm);
+
+        FactRow assets = fact("assets_total");
+        assertThat(assets.nomenclatureStatus()).isEqualTo("bound");
+        assertThat(assets.ontologyPath())
+                .isEqualTo("economic > Project Cost > Plant & Machinery > Air Conditioning");
+        assertThat(assets.nomenclatureReason()).contains("alias");
+        assertThat(stat("transcribed_leaves_refused")).isZero();
+        assertThat(stat("soft_leaves_added")).isZero();
+    }
+
+    @Test
     void anAliasCollisionIsRefusedAndRecordedWithoutFailingTheRun() throws Exception {
         // "Sales" is already an alias of Profit & Loss > Revenue, so a new leaf of
         // that name under Project Cost would make the label mean two heads.

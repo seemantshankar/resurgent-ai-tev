@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.db;
 
+import com.resurgent.tev.parser.nomenclature.NomenclaturePruner;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -19,6 +20,14 @@ import java.util.Objects;
  * versioned migration scripts bundled in the JAR under {@code db/migration}.
  */
 public final class WorkspaceDatabase implements AutoCloseable {
+
+    /**
+     * The migration that prunes the transcribed soft leaves both binders now refuse
+     * (ADR 0022 §2, issue #154). Retired migration numbers make a file's V-number differ
+     * from the version it records, so its data step is matched on the resource, not a number.
+     */
+    private static final String V68_PRUNE_TRANSCRIBED_LEAVES =
+            "db/migration/V68__prune_transcribed_soft_leaves.sql";
 
     /** Bundled migration scripts in apply order; version = index + 1. */
     private static final String[] MIGRATIONS = {
@@ -85,7 +94,9 @@ public final class WorkspaceDatabase implements AutoCloseable {
             "db/migration/V63__doc_nomenclature_reason.sql",
             "db/migration/V64__conflict_skip_nullable_fm_source.sql",
             "db/migration/V65__conflict_skip_nullable_ontology_path.sql",
-            "db/migration/V66__llm_usage_cost_unit.sql"
+            "db/migration/V66__llm_usage_cost_unit.sql",
+            "db/migration/V67__assessment_run_partial_status.sql",
+            V68_PRUNE_TRANSCRIBED_LEAVES
     };
 
     /** Number of bundled migrations, i.e. the schema version a fully migrated database reports. */
@@ -246,6 +257,10 @@ public final class WorkspaceDatabase implements AutoCloseable {
                     if (!trimmed.isEmpty()) {
                         s.execute(trimmed);
                     }
+                }
+                if (V68_PRUNE_TRANSCRIBED_LEAVES.equals(resource)) {
+                    // ADR 0022 §2 as data: the rule lives in the vocabulary, not in SQL.
+                    NomenclaturePruner.pruneTranscribedLeaves(connection);
                 }
                 try (PreparedStatement ps = connection.prepareStatement(
                         "INSERT INTO schema_migration (version, applied_at) VALUES (?, ?)")) {

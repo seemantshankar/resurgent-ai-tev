@@ -161,6 +161,7 @@ public final class PackPathBinder {
         int refused = 0;
         int softLeaves = 0;
         int collisions = 0;
+        int transcribed = 0;
         Map<String, LlmLeafAssignment.Assignment> placements = Map.of();
         if (!unresolved.isEmpty() && client != null) {
             llmCalls = 1;
@@ -204,6 +205,23 @@ public final class PackPathBinder {
                 // keeps this path for the run, exactly as Layer B leaves it.
                 int sep = placement.path().lastIndexOf(OntologySlice.SEPARATOR);
                 String leaf = placement.path().substring(sep + OntologySlice.SEPARATOR.length());
+                String bindable = OntologyVocabulary.bindablePath(placement.path(), living.hardAliases());
+                if (bindable == null) {
+                    // ADR 0022 §2: the leaf copies its row, so it could never match again.
+                    unbind(facts, row.factId(), open.candidate(), open.candidateRoot(),
+                            "transcribed_label");
+                    unbound++;
+                    transcribed++;
+                    continue;
+                }
+                if (!bindable.equals(placement.path())) {
+                    // §2's escape hatch: the catalogue names one leaf for this transcription.
+                    Resolved rescued = canonical(bindable, "alias: " + leaf);
+                    facts.updateFactBinding(row.factId(), rescued.canonicalPath(),
+                            rescued.pathRoot(), "bound", null, rescued.reason());
+                    bound++;
+                    continue;
+                }
                 try {
                     catalog.putSoftLeaf(mandateId,
                             placement.path().substring(0, sep), leaf, List.of(leaf));
@@ -236,6 +254,8 @@ public final class PackPathBinder {
                 null);
         facts.recordRunStat(parseRunId, "doc-bind", "alias_collisions", (double) collisions,
                 null);
+        facts.recordRunStat(parseRunId, "doc-bind", "transcribed_leaves_refused",
+                (double) transcribed, null);
         if (spine > 0) {
             facts.recordRunStat(parseRunId, "doc-bind", "spine_nodes", (double) spine, null);
         }

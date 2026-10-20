@@ -17,13 +17,24 @@ import java.util.Map;
  */
 final class LlmLeafAssignment {
 
-    private static final String SYSTEM = """
+    static final String SYSTEM = """
             You place document labels on ONE shared nomenclature — the same heads the
             financial model of this mandate uses.
             A path is the full head chain without a root, e.g. "Balance Sheet > Net Worth".
             Choose the path whose meaning the label states. If the nomenclature has no head
-            for it, you may add a new leaf under an existing head; the label itself becomes
-            the leaf name.
+            for it, you may add a new leaf under an existing head. Name a reusable category,
+            not the raw line item: strip supplier / vendor / make names, tax rates, digits,
+            %, quantities or "No. of", model numbers, specifications, and leading Less: or Add:.
+            Convention: Title Case; join words with & not and; a slash only as " / " with spaces
+            on both sides; no trailing punctuation; first character a letter; at most 48 characters;
+            always the full head chain, never a bare leaf.
+            Examples:
+            - label "Solar Modules - Goldi / Renewsys / Adani" ->
+              {"assignments":[{"key":"…","path":"Project Cost > Plant & Machinery > Solar PV Modules","reasoning":"…"}]}
+            - label "Ongrid String Inverter 250 KW - Solis" ->
+              {"assignments":[{"key":"…","path":"Project Cost > Plant & Machinery > Inverters / PCU","reasoning":"…"}]}
+            - label "Module Mounting Structure - 400 sets" ->
+              {"assignments":[{"key":"…","path":"Project Cost > Plant & Machinery > Module Mounting Structures","reasoning":"…"}]}
             Reply with a single JSON object:
             {"assignments":[{"key":"<label key>","path":"<head > ... > leaf>","\
             reasoning":"<why, citing the page the label is on>"}]}
