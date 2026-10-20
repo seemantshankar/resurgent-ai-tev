@@ -219,8 +219,16 @@ Two credible sources (two documents, two sections of one document, or a document
 _Avoid_: discrepancy (alone), mismatch, error
 
 **Versions differ**:
-The same document type present on two different document dates (a revised quotation against the original). It is recorded newest first as a revision, not a conflict; choosing a winner is a later-phase decision.
+The same document type present on two different document dates (a revised quotation against the original). It is recorded newest first as a revision, not a conflict, and settled under Tier 1 version-precedence rules (ADR 0028) which mark superseded facts and preserve audit history.
 _Avoid_: superseded conflict, duplicate documents
+
+**Fact snapshot**:
+The recorded set of current facts used by a generated output (a TEV report section, an FM comparison, a CMA extract), captured at generation time with their fact IDs and values so provenance is reproducible even after later document uploads change the facts.
+_Avoid_: report copy, cached output, static export
+
+**Stale output**:
+A generated output whose fact snapshot contains at least one fact that has since been superseded or modified by a newer document version. It is flagged with its stale reason and the superseding fact, alerting the system and analyst that the output needs regeneration.
+_Avoid_: invalid output, dirty cache, expired report
 
 **Skipped comparison**:
 A source pair the system deliberately did not compare — an ambiguous financial-model path or period, an unusable cell reading, a document amount that bound to no shared nomenclature path, or a bound amount the model states no cell for — recorded with its reason so the decision is visible instead of silently absent.
