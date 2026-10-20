@@ -246,13 +246,22 @@ public final class AssessPassagesRunner implements AssessStage {
      * Never a parser — chapter facts are extracted from stored pages.
      */
     private static ExtractClient resolveExtractor(Path dbPath) {
+        Path dir = dbPath.toAbsolutePath().getParent() == null
+                ? Path.of("docfixtures")
+                : dbPath.toAbsolutePath().getParent().resolve("docfixtures");
+        if (dir != null && java.nio.file.Files.isDirectory(dir)) {
+            FixtureExtractClient fixture = new FixtureExtractClient();
+            try {
+                fixture.loadDirectory(dir);
+                return fixture;
+            } catch (Exception ignored) {
+                // fall through
+            }
+        }
         if (LlamaExtractAdapter.hasApiKey()) {
             return new LlamaExtractAdapter();
         }
         FixtureExtractClient fixture = new FixtureExtractClient();
-        Path dir = dbPath.toAbsolutePath().getParent() == null
-                ? Path.of("docfixtures")
-                : dbPath.toAbsolutePath().getParent().resolve("docfixtures");
         try {
             fixture.loadDirectory(dir);
         } catch (Exception e) {

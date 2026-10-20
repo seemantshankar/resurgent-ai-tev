@@ -138,4 +138,21 @@ class FactSnapshotPersistenceTest {
         List<SnapshotFactLink> links = repository.findLinkedFacts(snap.snapshotId());
         assertThat(links).isEmpty();
     }
+
+    @Test
+    void findSnapshotByIdAndReferencingFacts() throws Exception {
+        FactSnapshot snap1 = repository.saveSnapshot(10L, "cma_extract", "key_a",
+                List.of(new FactLinkWrite(101L, "v1")));
+        FactSnapshot snap2 = repository.saveSnapshot(10L, "cma_extract", "key_b",
+                List.of(new FactLinkWrite(101L, "v2")));
+
+        assertThat(repository.findSnapshotById(snap1.snapshotId()))
+                .isPresent()
+                .get()
+                .extracting(FactSnapshot::outputKey)
+                .isEqualTo("key_a");
+
+        List<Long> referencing = repository.findSnapshotIdsReferencingFact(101L);
+        assertThat(referencing).containsExactlyInAnyOrder(snap1.snapshotId(), snap2.snapshotId());
+    }
 }
