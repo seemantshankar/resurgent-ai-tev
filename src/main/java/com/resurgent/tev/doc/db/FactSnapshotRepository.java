@@ -5,6 +5,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Savepoint;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
@@ -60,50 +61,78 @@ public final class FactSnapshotRepository {
             String outputType,
             String outputKey,
             List<FactLinkWrite> links) throws SQLException {
-        // If a snapshot already exists for this (mandate, outputType, outputKey), replace it
-        Optional<FactSnapshot> existing = findSnapshot(mandateId, outputType, outputKey);
-        if (existing.isPresent()) {
-            try (PreparedStatement ps = connection.prepareStatement(
-                    "DELETE FROM fact_snapshot WHERE snapshot_id = ?")) {
-                ps.setLong(1, existing.get().snapshotId());
+        boolean originalAutoCommit = connection.getAutoCommit();
+        if (originalAutoCommit) {
+            connection.setAutoCommit(false);
+        }
+        Savepoint sp = connection.setSavepoint();
+        try {
+            // If a snapshot already exists for this (mandate, outputType, outputKey), replace it
+            Optional<FactSnapshot> existing = findSnapshot(mandateId, outputType, outputKey);
+            if (existing.isPresent()) {
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "DELETE FROM fact_snapshot WHERE snapshot_id = ?")) {
+                    ps.setLong(1, existing.get().snapshotId());
+                    ps.executeUpdate();
+                }
+            }
+
+            String now = Timestamps.now();
+            long snapshotId;
+            String insertSql = "INSERT INTO fact_snapshot (mandate_id, output_type, output_key, is_stale, created_at)"
+                    + " VALUES (?, ?, ?, 0, ?)";
+            try (PreparedStatement ps = connection.prepareStatement(insertSql, Statement.RETURN_GENERATED_KEYS)) {
+                ps.setLong(1, mandateId);
+                ps.setString(2, outputType);
+                ps.setString(3, outputKey);
+                ps.setString(4, now);
                 ps.executeUpdate();
-            }
-        }
-
-        String now = Timestamps.now();
-        long snapshotId;
-        String insertSql = "INSERT INTO fact_snapshot (mandate_id, output_type, output_key, is_stale, created_at)"
-                + " VALUES (?, ?, ?, 0, ?)";
-        try (PreparedStatement ps = connection.prepareStatement(insertSql, Statement.RETURN_GENERATED_KEYS)) {
-            ps.setLong(1, mandateId);
-            ps.setString(2, outputType);
-            ps.setString(3, outputKey);
-            ps.setString(4, now);
-            ps.executeUpdate();
-            try (ResultSet rs = ps.getGeneratedKeys()) {
-                if (!rs.next()) {
-                    throw new SQLException("failed to retrieve generated snapshot_id");
+                try (ResultSet rs = ps.getGeneratedKeys()) {
+                    if (!rs.next()) {
+                        throw new SQLException("failed to retrieve generated snapshot_id");
+                    }
+                    snapshotId = rs.getLong(1);
                 }
-                snapshotId = rs.getLong(1);
             }
-        }
 
-        if (links != null && !links.isEmpty()) {
-            String linkSql = "INSERT INTO snapshot_fact_link (snapshot_id, fact_id, recorded_value, recorded_at)"
-                    + " VALUES (?, ?, ?, ?)";
-            try (PreparedStatement ps = connection.prepareStatement(linkSql)) {
-                for (FactLinkWrite link : links) {
-                    ps.setLong(1, snapshotId);
-                    ps.setLong(2, link.factId());
-                    ps.setString(3, link.recordedValue());
-                    ps.setString(4, now);
-                    ps.addBatch();
+            if (links != null && !links.isEmpty()) {
+                String linkSql = "INSERT INTO snapshot_fact_link (snapshot_id, fact_id, recorded_value, recorded_at)"
+                        + " VALUES (?, ?, ?, ?)";
+                try (PreparedStatement ps = connection.prepareStatement(linkSql)) {
+                    for (FactLinkWrite link : links) {
+                        ps.setLong(1, snapshotId);
+                        ps.setLong(2, link.factId());
+                        ps.setString(3, link.recordedValue());
+                        ps.setString(4, now);
+                        ps.addBatch();
+                    }
+                    ps.executeBatch();
                 }
-                ps.executeBatch();
+            }
+
+            connection.releaseSavepoint(sp);
+            if (originalAutoCommit) {
+                connection.commit();
+            }
+
+            return new FactSnapshot(snapshotId, mandateId, outputType, outputKey, false, null, null, now);
+        } catch (SQLException | RuntimeException e) {
+            try {
+                connection.rollback(sp);
+            } catch (SQLException ignore) {
+            }
+            if (originalAutoCommit) {
+                try {
+                    connection.rollback();
+                } catch (SQLException ignore) {
+                }
+            }
+            throw e;
+        } finally {
+            if (originalAutoCommit) {
+                connection.setAutoCommit(true);
             }
         }
-
-        return new FactSnapshot(snapshotId, mandateId, outputType, outputKey, false, null, null, now);
     }
 
     /**

@@ -14,10 +14,6 @@ public final class CandidateNormalizer {
     private static final Pattern SCIENTIFIC = Pattern.compile(
             "(?i)^\\s*[+-]?\\d+(\\.\\d+)?E[+-]?\\d+\\s*$");
 
-    private static final Pattern INR_MARKER = Pattern.compile("(?i)(₹|\\brs\\.?|\\binr\\b|\\brupees?\\b)");
-    private static final Pattern USD_MARKER = Pattern.compile("(?i)(\\busd\\b|\\bdollars?\\b|\\$)");
-    private static final Pattern EUR_MARKER = Pattern.compile("(?i)(€|\\beur\\b|\\beuros?\\b)");
-    private static final Pattern GBP_MARKER = Pattern.compile("(?i)(£|\\bgbp\\b|\\bpounds?\\b)");
 
     private static final Pattern SCALE_MARKER = Pattern.compile(
             "(?i)\\b(lakhs?|lacs?|crores?|millions?|billions?|thousands?|000s?|mn|cr)\\b");
@@ -96,7 +92,7 @@ public final class CandidateNormalizer {
         }
         if (r.currency() != null) {
             c.currency(r.currency());
-            String token = findCurrencyMarker(raw, r.currency());
+            String token = DocMoneyContext.findCurrencyToken(raw, r.currency());
             c.addBasisEvidence("currency", token, r.currency(), tokenCitation(c, token));
         }
         if ((c.currency() == null || c.currency().isBlank()) && ctx.currency() != null) {
@@ -203,16 +199,4 @@ public final class CandidateNormalizer {
         return m.find() ? m.group(1) : fallback;
     }
 
-    private static String findCurrencyMarker(String text, String fallback) {
-        if (text == null) {
-            return fallback;
-        }
-        for (Pattern p : List.of(INR_MARKER, USD_MARKER, EUR_MARKER, GBP_MARKER)) {
-            Matcher m = p.matcher(text);
-            if (m.find()) {
-                return m.group(1);
-            }
-        }
-        return fallback;
-    }
 }

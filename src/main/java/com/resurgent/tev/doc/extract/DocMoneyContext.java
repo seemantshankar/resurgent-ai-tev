@@ -111,7 +111,7 @@ public record DocMoneyContext(
                 resolvedCurrency != null ? currencyStatements.get(resolvedCurrency) : null);
     }
 
-    private static String findCurrencyToken(String text, String currency) {
+    static String findCurrencyToken(String text, String currency) {
         if (text == null) {
             return currency;
         }
