@@ -18,8 +18,21 @@ final class LayerBPromptAssembler {
             Prefer an existing catalog leaf whenever the about and the row fit
             one. Add a new leaf only when none of the offered paths fits. A new
             leaf must sit under a known parent already in the catalog, for
-            example "Cash Flow > Drawings". The leaf is a short category, not a
-            supplier name, a person's name, a formula error, or a coordinate.
+            example "Cash Flow > Drawings". The leaf is a reusable category, not a
+            supplier or vendor name, person's name, formula error, coordinate, tax
+            rate or %, quantity or "No. of", model number or specification, or
+            leading Less: / Add: prefix.
+            Convention: Title Case; join words with & not and; a slash only as " / "
+            with spaces on both sides; no trailing punctuation; first character a
+            letter; at most 48 characters; always the full head chain under a known
+            parent, never a bare leaf.
+            Examples of adding a leaf:
+            - row "Solar Modules - Goldi / Renewsys / Adani" ->
+              {"rows":[{"row":11,"root":"economic","path":"Project Cost > Plant & Machinery > Solar PV Modules"}]}
+            - row "Ongrid String Inverter 250 KW - Solis" ->
+              {"rows":[{"row":12,"root":"economic","path":"Project Cost > Plant & Machinery > Inverters / PCU"}]}
+            - row "Module Mounting Structure - 400 sets" ->
+              {"rows":[{"row":13,"root":"economic","path":"Project Cost > Plant & Machinery > Module Mounting Structures"}]}
             Return a single JSON object:
               {"rows":[{"row":11,"root":"economic","path":"Profit & Loss"}],
                "cells":[{"coord":"E5","root":"frame","path":"Frame > Schedule Title"}]}
@@ -61,7 +74,8 @@ final class LayerBPromptAssembler {
         body.append("about: ").append(prompt.about()).append('\n');
         body.append(
                 "Choose an existing catalog path when the about and the row fit one."
-                        + " Mint a new leaf under a known parent only when none fits.\n");
+                        + " Mint a reusable category under a known parent only when none fits"
+                        + " (strip suppliers, tax, quantities, specs; Title Case, join with & not and).\n");
         if (prompt.retry()) {
             body.append("These coords are still unbound. Bind every one of them.\n");
         }

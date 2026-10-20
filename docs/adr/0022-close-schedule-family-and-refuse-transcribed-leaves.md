@@ -1,5 +1,8 @@
 # Close schedule family and refuse transcribed soft leaves
 
+_Extended by [ADR 0027](0027-ask-the-model-for-a-category-never-roll-up-to-the-parent.md): both
+pipelines instruct the model to name a reusable category; roll-up to the parent is rejected._
+
 A Mercury/Gemini A/B on the same 220 Om Arham candidates showed two defects that
 a model swap will not fix. Both models minted the same supplier lines, tax rates,
 and quantities as soft leaves, and Gemini invented `depreciation` /
@@ -37,10 +40,11 @@ not whether a leaf was a category.
    Opening Stock / Closing Stock / Dividend(Drawings) are not added to the
    frozen spine by this decision.
 
-4. **The harness treats transcribed soft leaves as RED.**
-   `scripts/validate-classify-run.py` fails the run when any soft leaf looks like
-   a raw line item. Outside-catalogue soft categories that are real categories
-   remain INFO.
+4. **Offline database assertions treat transcribed soft leaves as RED.**
+   `LivingOntologyBindTest` and `NomenclaturePruningTest` assert that no
+   transcribed soft leaf remains in the mandate overlay. These assertions replace
+   `scripts/validate-classify-run.py` as the gate. Outside-catalogue soft
+   categories that are real categories remain INFO.
 
 **Consequences.** Coverage of bound cells will drop for rows whose only name was
 a transcribed leaf; those cells carry `transcribed_label` until a real category
