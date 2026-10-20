@@ -321,30 +321,29 @@ public final class ExtractService {
         if ((subject == null || subject.isBlank()) && c.period() != null) {
             subject = documentSubject;
         }
-        return new FactRepository.FactWrite(
-                c.key(),
-                path,
-                pathRoot,
-                subject,
-                c.valueKind().wireName(),
-                c.valueText(),
-                c.valueNumber(),
-                c.valueDate(),
-                c.unit(),
-                c.currency(),
-                c.scale(),
-                c.absoluteAmount(),
-                null,
-                c.extractionMethod(),
-                extractorId,
-                c.confidence(),
-                c.statedOrDerived(),
-                c.lineKey(),
-                null,
-                c.citations(),
-                c.derivedFromKeys(),
-                c.period(),
-                c.basisEvidence());
+        return FactRepository.FactWrite.builder()
+                .fieldKey(c.key())
+                .ontologyPath(path)
+                .pathRoot(pathRoot)
+                .subjectEntity(subject)
+                .valueKind(c.valueKind().wireName())
+                .valueText(c.valueText())
+                .valueNumber(c.valueNumber())
+                .valueDate(c.valueDate())
+                .unit(c.unit())
+                .currency(c.currency())
+                .scale(c.scale())
+                .absoluteAmount(c.absoluteAmount())
+                .extractionMethod(c.extractionMethod())
+                .extractorId(extractorId)
+                .confidence(c.confidence())
+                .statedOrDerived(c.statedOrDerived())
+                .lineKey(c.lineKey())
+                .citations(c.citations())
+                .derivedFromKeys(c.derivedFromKeys())
+                .period(c.period())
+                .basisEvidence(c.basisEvidence())
+                .build();
     }
 
     private static String findSubject(DocTypePack pack, List<FactCandidate> stated) {
@@ -410,30 +409,27 @@ public final class ExtractService {
             line.scale(c.scale());
             line.absoluteAmount(c.absoluteAmount());
             CandidateNormalizer.normalize(line, moneyContext);
-            lines.add(new FactRepository.FactWrite(
-                    "line_items",
-                    path,
-                    rootWire,
-                    line.subjectEntity(),
-                    line.valueKind().wireName(),
-                    line.valueText(),
-                    line.valueNumber(),
-                    line.valueDate(),
-                    line.unit(),
-                    line.currency(),
-                    line.scale(),
-                    line.absoluteAmount(),
-                    null,
-                    line.extractionMethod(),
-                    extractorId,
-                    line.confidence(),
-                    line.statedOrDerived(),
-                    description,
-                    null,
-                    c.citations(),
-                    List.of(),
-                    null,
-                    line.basisEvidence()));
+            lines.add(FactRepository.FactWrite.builder()
+                    .fieldKey("line_items")
+                    .ontologyPath(path)
+                    .pathRoot(rootWire)
+                    .subjectEntity(line.subjectEntity())
+                    .valueKind(line.valueKind().wireName())
+                    .valueText(line.valueText())
+                    .valueNumber(line.valueNumber())
+                    .valueDate(line.valueDate())
+                    .unit(line.unit())
+                    .currency(line.currency())
+                    .scale(line.scale())
+                    .absoluteAmount(line.absoluteAmount())
+                    .extractionMethod(line.extractionMethod())
+                    .extractorId(extractorId)
+                    .confidence(line.confidence())
+                    .statedOrDerived(line.statedOrDerived())
+                    .lineKey(description)
+                    .citations(c.citations())
+                    .basisEvidence(line.basisEvidence())
+                    .build());
         }
 
         if (result == null || result.payload() == null) {
@@ -463,30 +459,26 @@ public final class ExtractService {
                 line.valueText(description);
             }
             CandidateNormalizer.normalize(line, moneyContext);
-            lines.add(new FactRepository.FactWrite(
-                    "line_items",
-                    path,
-                    rootWire,
-                    vendor,
-                    line.valueKind().wireName(),
-                    line.valueText(),
-                    line.valueNumber(),
-                    line.valueDate(),
-                    line.unit(),
-                    line.currency(),
-                    line.scale(),
-                    line.absoluteAmount(),
-                    null,
-                    "llm_field",
-                    extractorId,
-                    line.confidence(),
-                    "stated",
-                    description,
-                    null,
-                    List.of(),
-                    List.of(),
-                    null,
-                    line.basisEvidence()));
+            lines.add(FactRepository.FactWrite.builder()
+                    .fieldKey("line_items")
+                    .ontologyPath(path)
+                    .pathRoot(rootWire)
+                    .subjectEntity(vendor)
+                    .valueKind(line.valueKind().wireName())
+                    .valueText(line.valueText())
+                    .valueNumber(line.valueNumber())
+                    .valueDate(line.valueDate())
+                    .unit(line.unit())
+                    .currency(line.currency())
+                    .scale(line.scale())
+                    .absoluteAmount(line.absoluteAmount())
+                    .extractionMethod("llm_field")
+                    .extractorId(extractorId)
+                    .confidence(line.confidence())
+                    .statedOrDerived("stated")
+                    .lineKey(description)
+                    .basisEvidence(line.basisEvidence())
+                    .build());
         }
         return lines;
     }
@@ -541,28 +533,27 @@ public final class ExtractService {
         derived.addDerivedFromKey("assets_total");
         derived.addDerivedFromKey("liabilities_total");
         PackField netWorth = pack.field("net_worth").orElseThrow();
-        return new FactRepository.FactWrite(
-                derived.key(),
-                netWorth.path(),
-                netWorth.pathRootWire(),
-                derived.subjectEntity(),
-                derived.valueKind().wireName(),
-                derived.valueText(),
-                derived.valueNumber(),
-                derived.valueDate(),
-                derived.unit(),
-                derived.currency(),
-                derived.scale(),
-                derived.absoluteAmount(),
-                null,
-                derived.extractionMethod(),
-                extractorId,
-                derived.confidence(),
-                derived.statedOrDerived(),
-                derived.lineKey(),
-                null,
-                List.of(),
-                derived.derivedFromKeys());
+        return FactRepository.FactWrite.builder()
+                .fieldKey(derived.key())
+                .ontologyPath(netWorth.path())
+                .pathRoot(netWorth.pathRootWire())
+                .subjectEntity(derived.subjectEntity())
+                .valueKind(derived.valueKind().wireName())
+                .valueText(derived.valueText())
+                .valueNumber(derived.valueNumber())
+                .valueDate(derived.valueDate())
+                .unit(derived.unit())
+                .currency(derived.currency())
+                .scale(derived.scale())
+                .absoluteAmount(derived.absoluteAmount())
+                .extractionMethod(derived.extractionMethod())
+                .extractorId(extractorId)
+                .confidence(derived.confidence())
+                .statedOrDerived(derived.statedOrDerived())
+                .lineKey(derived.lineKey())
+                .derivedFromKeys(derived.derivedFromKeys())
+                .basisEvidence(derived.basisEvidence())
+                .build();
     }
 
     private static boolean hasValue(FactCandidate c) {

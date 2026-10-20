@@ -113,6 +113,98 @@ public final class FactRepository {
                     extractionMethod, extractorId, confidence, statedOrDerived, lineKey,
                     groupKeysJson, citations, derivedFromKeys, null, List.of());
         }
+
+        public static Builder builder() {
+            return new Builder();
+        }
+
+        public Builder toBuilder() {
+            return new Builder()
+                    .fieldKey(fieldKey)
+                    .ontologyPath(ontologyPath)
+                    .pathRoot(pathRoot)
+                    .subjectEntity(subjectEntity)
+                    .valueKind(valueKind)
+                    .valueText(valueText)
+                    .valueNumber(valueNumber)
+                    .valueDate(valueDate)
+                    .unit(unit)
+                    .currency(currency)
+                    .scale(scale)
+                    .absoluteAmount(absoluteAmount)
+                    .langSource(langSource)
+                    .extractionMethod(extractionMethod)
+                    .extractorId(extractorId)
+                    .confidence(confidence)
+                    .statedOrDerived(statedOrDerived)
+                    .lineKey(lineKey)
+                    .groupKeysJson(groupKeysJson)
+                    .citations(citations)
+                    .derivedFromKeys(derivedFromKeys)
+                    .period(period)
+                    .basisEvidence(basisEvidence);
+        }
+
+        public static final class Builder {
+            private String fieldKey;
+            private String ontologyPath;
+            private String pathRoot;
+            private String subjectEntity;
+            private String valueKind;
+            private String valueText;
+            private Double valueNumber;
+            private String valueDate;
+            private String unit;
+            private String currency;
+            private String scale;
+            private String absoluteAmount;
+            private String langSource;
+            private String extractionMethod;
+            private String extractorId;
+            private Double confidence;
+            private String statedOrDerived;
+            private String lineKey;
+            private String groupKeysJson;
+            private List<Citation> citations = new ArrayList<>();
+            private List<String> derivedFromKeys = new ArrayList<>();
+            private String period;
+            private List<BasisEvidenceWrite> basisEvidence = new ArrayList<>();
+
+            public Builder fieldKey(String fieldKey) { this.fieldKey = fieldKey; return this; }
+            public Builder ontologyPath(String ontologyPath) { this.ontologyPath = ontologyPath; return this; }
+            public Builder pathRoot(String pathRoot) { this.pathRoot = pathRoot; return this; }
+            public Builder subjectEntity(String subjectEntity) { this.subjectEntity = subjectEntity; return this; }
+            public Builder valueKind(String valueKind) { this.valueKind = valueKind; return this; }
+            public Builder valueText(String valueText) { this.valueText = valueText; return this; }
+            public Builder valueNumber(Double valueNumber) { this.valueNumber = valueNumber; return this; }
+            public Builder valueDate(String valueDate) { this.valueDate = valueDate; return this; }
+            public Builder unit(String unit) { this.unit = unit; return this; }
+            public Builder currency(String currency) { this.currency = currency; return this; }
+            public Builder scale(String scale) { this.scale = scale; return this; }
+            public Builder absoluteAmount(String absoluteAmount) { this.absoluteAmount = absoluteAmount; return this; }
+            public Builder langSource(String langSource) { this.langSource = langSource; return this; }
+            public Builder extractionMethod(String extractionMethod) { this.extractionMethod = extractionMethod; return this; }
+            public Builder extractorId(String extractorId) { this.extractorId = extractorId; return this; }
+            public Builder confidence(Double confidence) { this.confidence = confidence; return this; }
+            public Builder statedOrDerived(String statedOrDerived) { this.statedOrDerived = statedOrDerived; return this; }
+            public Builder lineKey(String lineKey) { this.lineKey = lineKey; return this; }
+            public Builder groupKeysJson(String groupKeysJson) { this.groupKeysJson = groupKeysJson; return this; }
+            public Builder citations(List<Citation> citations) { this.citations = citations != null ? new ArrayList<>(citations) : new ArrayList<>(); return this; }
+            public Builder addCitation(Citation citation) { if (citation != null) this.citations.add(citation); return this; }
+            public Builder derivedFromKeys(List<String> derivedFromKeys) { this.derivedFromKeys = derivedFromKeys != null ? new ArrayList<>(derivedFromKeys) : new ArrayList<>(); return this; }
+            public Builder addDerivedFromKey(String key) { if (key != null) this.derivedFromKeys.add(key); return this; }
+            public Builder period(String period) { this.period = period; return this; }
+            public Builder basisEvidence(List<BasisEvidenceWrite> basisEvidence) { this.basisEvidence = basisEvidence != null ? new ArrayList<>(basisEvidence) : new ArrayList<>(); return this; }
+            public Builder addBasisEvidence(BasisEvidenceWrite evidence) { if (evidence != null) this.basisEvidence.add(evidence); return this; }
+
+            public FactWrite build() {
+                return new FactWrite(
+                        fieldKey, ontologyPath, pathRoot, subjectEntity, valueKind, valueText,
+                        valueNumber, valueDate, unit, currency, scale, absoluteAmount, langSource,
+                        extractionMethod, extractorId, confidence, statedOrDerived, lineKey,
+                        groupKeysJson, citations, derivedFromKeys, period, basisEvidence);
+            }
+        }
     }
 
     /**

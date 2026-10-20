@@ -339,28 +339,27 @@ public final class AssessPassagesRunner implements AssessStage {
                 pathRoot = field.get().pathRootWire();
             }
         }
-        return new FactRepository.FactWrite(
-                candidate.key(),
-                path,
-                pathRoot,
-                candidate.subjectEntity(),
-                candidate.valueKind().wireName(),
-                candidate.valueText(),
-                candidate.valueNumber(),
-                candidate.valueDate(),
-                candidate.unit(),
-                candidate.currency(),
-                candidate.scale(),
-                candidate.absoluteAmount(),
-                null,
-                candidate.extractionMethod(),
-                extractorId,
-                candidate.confidence(),
-                candidate.statedOrDerived(),
-                candidate.lineKey(),
-                null,
-                candidate.citations(),
-                List.of());
+        return FactRepository.FactWrite.builder()
+                .fieldKey(candidate.key())
+                .ontologyPath(path)
+                .pathRoot(pathRoot)
+                .subjectEntity(candidate.subjectEntity())
+                .valueKind(candidate.valueKind().wireName())
+                .valueText(candidate.valueText())
+                .valueNumber(candidate.valueNumber())
+                .valueDate(candidate.valueDate())
+                .unit(candidate.unit())
+                .currency(candidate.currency())
+                .scale(candidate.scale())
+                .absoluteAmount(candidate.absoluteAmount())
+                .extractionMethod(candidate.extractionMethod())
+                .extractorId(extractorId)
+                .confidence(candidate.confidence())
+                .statedOrDerived(candidate.statedOrDerived())
+                .lineKey(candidate.lineKey())
+                .citations(candidate.citations())
+                .basisEvidence(candidate.basisEvidence())
+                .build();
     }
 
     /**
