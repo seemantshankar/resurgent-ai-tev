@@ -1,5 +1,8 @@
 # Close schedule family and refuse transcribed soft leaves
 
+_Extended by [ADR 0027](0027-ask-the-model-for-a-category-never-roll-up-to-the-parent.md): both
+pipelines instruct the model to name a reusable category; roll-up to the parent is rejected._
+
 A Mercury/Gemini A/B on the same 220 Om Arham candidates showed two defects that
 a model swap will not fix. Both models minted the same supplier lines, tax rates,
 and quantities as soft leaves, and Gemini invented `depreciation` /

@@ -43,6 +43,12 @@ class LivingOntologyBindTest {
         assertThat(user).contains("Choose an existing catalog path");
         assertThat(LayerBPromptAssembler.SYSTEM).contains("Prefer an existing catalog leaf");
         assertThat(LayerBPromptAssembler.SYSTEM).contains("Read the about paragraph");
+        assertThat(LayerBPromptAssembler.SYSTEM)
+                .contains("The leaf is a reusable category, not a")
+                .contains("supplier or vendor name")
+                .contains("join words with & not and")
+                .contains("slash only as \" / \"")
+                .contains("Project Cost > Plant & Machinery > Solar PV Modules");
     }
 
     @Test
