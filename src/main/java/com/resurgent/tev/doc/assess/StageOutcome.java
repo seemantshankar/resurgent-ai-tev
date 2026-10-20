@@ -8,16 +8,23 @@ import java.util.List;
  * reports itself into the stage's usage list, so a stage knows — without the stderr it has always
  * printed — whether the model was answering it at all.
  */
-final class StageOutcome {
+public final class StageOutcome {
 
-    static final String COMPLETED = "completed";
-    static final String PARTIAL = "partial";
-    static final String FAILED = "failed";
+    public static final String COMPLETED = StageStatus.COMPLETED.dbValue();
+    public static final String PARTIAL = StageStatus.PARTIAL.dbValue();
+    public static final String FAILED = StageStatus.FAILED.dbValue();
 
     private StageOutcome() {}
 
+    /** Result of evaluating hard failures and recorded output for a stage. */
+    public record Evaluation(StageStatus status, long failures) {
+        public String statusDb() {
+            return status.dbValue();
+        }
+    }
+
     /** Hard document-LLM failures among the calls this stage made. */
-    static long failures(List<DocLlmClient.Usage> usage) {
+    public static long failures(List<DocLlmClient.Usage> usage) {
         return usage.stream().mapToLong(DocLlmClient.Usage::failedCalls).sum();
     }
 
@@ -28,10 +35,16 @@ final class StageOutcome {
      * @param recordedResults results the stage did store, so a reader can tell a run that produced
      *     something from one the model was down for
      */
-    static String status(long llmFailures, long recordedResults) {
+    public static StageStatus status(long llmFailures, long recordedResults) {
         if (llmFailures == 0) {
-            return COMPLETED;
+            return StageStatus.COMPLETED;
         }
-        return recordedResults > 0 ? PARTIAL : FAILED;
+        return recordedResults > 0 ? StageStatus.PARTIAL : StageStatus.FAILED;
+    }
+
+    /** Evaluates usage and output counts in one call, reducing runner duplication. */
+    public static Evaluation evaluate(List<DocLlmClient.Usage> usage, long recordedResults) {
+        long failures = failures(usage);
+        return new Evaluation(status(failures, recordedResults), failures);
     }
 }
