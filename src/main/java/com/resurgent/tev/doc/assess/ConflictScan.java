@@ -10,6 +10,7 @@ import com.resurgent.tev.doc.db.FmConflictSources;
 import com.resurgent.tev.doc.extract.MoneyNormalizer;
 import com.resurgent.tev.doc.extract.RateNormalizer;
 import com.resurgent.tev.doc.llm.DocLlmClient;
+import com.resurgent.tev.parser.classify.KindTokens;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -143,8 +144,11 @@ public final class ConflictScan {
             return;
         }
         for (ConflictFactRow fact : facts) {
-            if ("money".equals(fact.valueKind()) && !"bound".equals(fact.nomenclatureStatus())) {
-                // A money fact the bind stage never settled has no shared path a model
+            if (!isFmComparableKind(fact.valueKind())) {
+                continue;
+            }
+            if (!"bound".equals(fact.nomenclatureStatus())) {
+                // A fact the bind stage never settled has no shared path a model
                 // cell could meet it on. Plain "unbound" with no reason is the insert
                 // default rather than a bind decision, so the reason says which of the
                 // two this was. The fact stays retrievable; it is never compared silently.
@@ -165,10 +169,8 @@ public final class ConflictScan {
                 // A bound amount the model says nothing about is a comparison that was
                 // possible and refused, not one that agreed. Silent here is the green-but-
                 // blind read #147 forbids, so the model's silence is recorded per amount.
-                if ("money".equals(fact.valueKind())) {
-                    repository.insertConflictSkip(mandateId, runId, fact, null,
-                            "financial model has no cell bound to " + fact.ontologyPath());
-                }
+                repository.insertConflictSkip(mandateId, runId, fact, null,
+                        "financial model has no cell bound to " + fact.ontologyPath());
                 continue;
             }
             // Layer B also binds row labels. They identify the amount, not a second value.
@@ -197,17 +199,60 @@ public final class ConflictScan {
                 continue;
             }
             var reading = cell.reading();
-            if (reading == null || reading.refusal() != null
-                    || !"money".equals(reading.kind()) || reading.absoluteAmount() == null) {
+            if (reading == null || reading.refusal() != null) {
                 repository.insertConflictSkip(mandateId, runId, fact, cell.source(),
-                        "no usable reading for document money comparison"
+                        "no usable reading for document comparison"
                                 + (reading != null && reading.refusal() != null
                                         ? ": " + reading.refusal() : ""));
                 continue;
             }
-            String modelValue = (reading.currency() == null ? "" : reading.currency() + " ")
-                    + reading.absoluteAmount();
-            Comparison compared = Comparisons.money(valueOf(fact), modelValue);
+            if (!isKindCompatible(fact.valueKind(), reading.kind())) {
+                repository.insertConflictSkip(mandateId, runId, fact, cell.source(),
+                        "kind mismatch: document states " + fact.valueKind() + ", FM cell reading states " + reading.kind());
+                continue;
+            }
+
+            Comparison compared;
+            String modelValue;
+            if ("money".equals(fact.valueKind())) {
+                if (reading.absoluteAmount() == null) {
+                    repository.insertConflictSkip(mandateId, runId, fact, cell.source(),
+                            "no usable reading for document money comparison: missing absolute amount");
+                    continue;
+                }
+                modelValue = (reading.currency() == null ? "" : reading.currency() + " ")
+                        + reading.absoluteAmount();
+                compared = Comparisons.money(valueOf(fact), modelValue);
+            } else {
+                Double fmNum = parseCellNumeric(cell);
+                if (fmNum == null) {
+                    repository.insertConflictSkip(mandateId, runId, fact, cell.source(),
+                            "financial model cell carries no numeric value for " + fact.valueKind() + " comparison");
+                    continue;
+                }
+                Double docNum = fact.valueNumber();
+                if (docNum == null) {
+                    repository.insertConflictSkip(mandateId, runId, fact, cell.source(),
+                            "document fact carries no numeric value for " + fact.valueKind() + " comparison");
+                    continue;
+                }
+                String docNormUnit = normalizeUnitToken(fact.unit());
+                String fmNormUnit = normalizeUnitToken(reading.unit());
+
+                if (!Objects.equals(docNormUnit, fmNormUnit)) {
+                    repository.insertConflictSkip(mandateId, runId, fact, cell.source(),
+                            "unit_mismatch_no_conversion: document states "
+                                    + (docNormUnit == null ? "unstated" : docNormUnit)
+                                    + ", FM states "
+                                    + (fmNormUnit == null ? "unstated" : fmNormUnit));
+                    continue;
+                }
+                String unitSuffix = reading.unit() != null && !reading.unit().isBlank() ? " " + reading.unit() : "";
+                modelValue = MoneyNormalizer.plain(fmNum) + unitSuffix;
+                String cmpUnit = docNormUnit != null ? docNormUnit : "unit";
+                compared = Comparisons.quantity(docNum, cmpUnit, fmNum, cmpUnit);
+            }
+
             if (!compared.differs()) {
                 continue;
             }
@@ -241,6 +286,51 @@ public final class ConflictScan {
                     chosen, ruleId, rulesVersion, reasoning);
             written.add(new Written(repository.insertConflict(mandateId, runId, write), write));
         }
+    }
+
+    private static boolean isFmComparableKind(String kind) {
+        return "money".equals(kind) || "quantity".equals(kind) || "rate".equals(kind) || "percent".equals(kind);
+    }
+
+    private static boolean isKindCompatible(String factKind, String readingKind) {
+        if (factKind == null || readingKind == null) {
+            return false;
+        }
+        return switch (factKind) {
+            case "money" -> "money".equalsIgnoreCase(readingKind);
+            case "quantity" -> "quantity".equalsIgnoreCase(readingKind) || "count".equalsIgnoreCase(readingKind);
+            case "rate" -> "rate".equalsIgnoreCase(readingKind) || "ratio".equalsIgnoreCase(readingKind);
+            case "percent" -> "percent".equalsIgnoreCase(readingKind) || "ratio".equalsIgnoreCase(readingKind);
+            default -> false;
+        };
+    }
+
+    private static String normalizeUnitToken(String unit) {
+        if (unit == null || unit.isBlank()) {
+            return null;
+        }
+        return KindTokens.normalizeUnit(unit.trim());
+    }
+
+    private static Double parseCellNumeric(FmConflictSources.Cell cell) {
+        if (cell.reading() != null && cell.reading().absoluteAmount() != null) {
+            try {
+                return Double.parseDouble(cell.reading().absoluteAmount().trim());
+            } catch (NumberFormatException ignored) {}
+        }
+        if (cell.value() != null) {
+            if (cell.value().numericValue() != null) {
+                try {
+                    return Double.parseDouble(cell.value().numericValue().trim());
+                } catch (NumberFormatException ignored) {}
+            }
+            if (cell.value().textValue() != null) {
+                try {
+                    return Double.parseDouble(cell.value().textValue().trim());
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+        return null;
     }
 
     /** Never infer a calendar period from upload dates or from the document's value. */
