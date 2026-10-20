@@ -1,5 +1,6 @@
 package com.resurgent.tev.doc.db;
 
+import com.resurgent.tev.doc.assess.StageStatus;
 import com.resurgent.tev.doc.query.MandateQa;
 import com.resurgent.tev.parser.db.Timestamps;
 import java.sql.Connection;
@@ -264,6 +265,55 @@ public final class AssessmentRepository {
             ps.setLong(6, documentVersionId);
             ps.executeUpdate();
         }
+    }
+
+    /** Bundles the parameters for recording one assessment stage execution. */
+    public record AssessmentRunRecord(
+            long mandateId,
+            String stage,
+            String status,
+            long llmFailures,
+            Long parseRunId,
+            String startedAt,
+            String finishedAt,
+            String metricsJson
+    ) {
+        public AssessmentRunRecord(
+                long mandateId,
+                String stage,
+                StageStatus status,
+                long llmFailures,
+                Long parseRunId,
+                String startedAt,
+                String finishedAt,
+                String metricsJson) {
+            this(mandateId, stage, status.dbValue(), llmFailures, parseRunId, startedAt, finishedAt, metricsJson);
+        }
+    }
+
+    /**
+     * Inserts (or replaces) the run record of one stage for a mandate via bundled record.
+     */
+    public long upsertAssessmentRun(AssessmentRunRecord record) throws SQLException {
+        return upsertAssessmentRun(
+                record.mandateId(),
+                record.stage(),
+                record.status(),
+                record.llmFailures(),
+                record.parseRunId(),
+                record.startedAt(),
+                record.finishedAt(),
+                record.metricsJson());
+    }
+
+    /**
+     * Inserts (or replaces) the run record with typed {@link StageStatus}.
+     */
+    public long upsertAssessmentRun(long mandateId, String stage, StageStatus status,
+            long llmFailures, Long parseRunId, String startedAt, String finishedAt,
+            String metricsJson) throws SQLException {
+        return upsertAssessmentRun(mandateId, stage, status.dbValue(), llmFailures, parseRunId,
+                startedAt, finishedAt, metricsJson);
     }
 
     /**

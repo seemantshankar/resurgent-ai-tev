@@ -172,18 +172,18 @@ public final class AssessClausesRunner implements AssessStage {
             }
         }
 
-        long llmFailures = StageOutcome.failures(usage);
-        String status = StageOutcome.status(llmFailures, total);
+        StageOutcome.Evaluation evaluation = StageOutcome.evaluate(usage, total);
 
         recordStats(repo, parseRunId, usage, total, bound, open, documentsWithClauses, versions.size());
-        assessment.upsertAssessmentRun(mandateId, STAGE, status, llmFailures, parseRunId,
+        assessment.upsertAssessmentRun(new AssessmentRepository.AssessmentRunRecord(
+                mandateId, STAGE, evaluation.status(), evaluation.failures(), parseRunId,
                 startedAt, Timestamps.now(),
-                metricsJson(total, bound, open, documentsWithClauses, usage));
+                metricsJson(total, bound, open, documentsWithClauses, usage)));
 
         String detail = String.format(Locale.ROOT,
                 "%d clauses (%d bound, %d open) from %d of %d documents",
                 total, bound, open, documentsWithClauses, versions.size());
-        return new StageResult(STAGE, versions.size(), detail, status, llmFailures);
+        return new StageResult(STAGE, versions.size(), detail, evaluation.statusDb(), evaluation.failures());
     }
 
     /**

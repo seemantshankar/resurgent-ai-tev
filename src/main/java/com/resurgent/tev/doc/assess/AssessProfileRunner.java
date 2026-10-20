@@ -151,17 +151,17 @@ public final class AssessProfileRunner implements AssessStage {
         CountryScan.Counts country = CountryScan.scan(mandateId, assessment, docs,
                 versions, client, usage::add);
 
-        long llmFailures = StageOutcome.failures(usage);
-        String status = StageOutcome.status(llmFailures, statedCount + metadataCount
+        StageOutcome.Evaluation evaluation = StageOutcome.evaluate(usage, statedCount + metadataCount
                 + siteResult.sites() + entityStats.entitiesTotal() + industries.recorded()
                 + (country.country() == null ? 0 : 1));
 
         recordStats(repo, parseRunId, usage, versions.size(), statedCount, metadataCount,
                 noneCount, entityStats, siteResult, industries, country);
-        assessment.upsertAssessmentRun(mandateId, STAGE, status, llmFailures, parseRunId,
+        assessment.upsertAssessmentRun(new AssessmentRepository.AssessmentRunRecord(
+                mandateId, STAGE, evaluation.status(), evaluation.failures(), parseRunId,
                 startedAt, Timestamps.now(),
                 metricsJson(versions.size(), statedCount, metadataCount, noneCount,
-                        entityStats, siteResult, usage, industries, country));
+                        entityStats, siteResult, usage, industries, country)));
 
         String detail = String.format(Locale.ROOT,
                 "%d documents (%d stated, %d file_metadata, %d none); %d sites (%d aliases),"
@@ -173,7 +173,7 @@ public final class AssessProfileRunner implements AssessStage {
                         + entityStats.factsUntagged(), entityStats.factsTagged(),
                 industries.recorded(), industries.newIndustries(),
                 country.country() == null ? "none" : country.country());
-        return new StageResult(STAGE, versions.size(), detail, status, llmFailures);
+        return new StageResult(STAGE, versions.size(), detail, evaluation.statusDb(), evaluation.failures());
     }
 
     private static String kindFor(VersionRow version, Map<String, String> kindsByPack) {

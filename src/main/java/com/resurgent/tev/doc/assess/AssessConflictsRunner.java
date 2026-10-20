@@ -95,8 +95,9 @@ public final class AssessConflictsRunner implements AssessStage {
 
         // The rows cite this assessment run; record it as running now so the id exists,
         // then flip it to its outcome status with metrics when the run finishes.
-        assessment.upsertAssessmentRun(mandateId, STAGE, "running", 0L, parseRunId,
-                startedAt, null, null);
+        assessment.upsertAssessmentRun(new AssessmentRepository.AssessmentRunRecord(
+                mandateId, STAGE, StageStatus.RUNNING, 0L, parseRunId,
+                startedAt, null, null));
         Long runId = assessment.findAssessmentRunId(mandateId, STAGE);
         if (runId == null) {
             throw new SQLException("assessment_run row missing after upsert for stage " + STAGE);
@@ -136,17 +137,17 @@ public final class AssessConflictsRunner implements AssessStage {
         insertFlags(repo, parseRunId, written);
         recordStats(repo, parseRunId, usage, docDoc + docFm, docFm, versionsDiffer, settledRule,
                 settledAi, open);
-        long llmFailures = StageOutcome.failures(usage);
-        String status = StageOutcome.status(llmFailures, written.size());
-        assessment.upsertAssessmentRun(mandateId, STAGE, status, llmFailures, parseRunId,
+        StageOutcome.Evaluation evaluation = StageOutcome.evaluate(usage, written.size());
+        assessment.upsertAssessmentRun(new AssessmentRepository.AssessmentRunRecord(
+                mandateId, STAGE, evaluation.status(), evaluation.failures(), parseRunId,
                 startedAt, Timestamps.now(), metricsJson(docDoc + docFm, docFm, versionsDiffer,
-                        settledRule, settledAi, open, usage));
+                        settledRule, settledAi, open, usage)));
 
         String detail = String.format(Locale.ROOT,
                 "%d conflicts (%d document-vs-document, %d document-vs-model,"
                         + " %d rule, %d ai, %d open), %d versions differ",
                 docDoc + docFm, docDoc, docFm, settledRule, settledAi, open, versionsDiffer);
-        return new StageResult(STAGE, written.size(), detail, status, llmFailures);
+        return new StageResult(STAGE, written.size(), detail, evaluation.statusDb(), evaluation.failures());
     }
 
     /**
