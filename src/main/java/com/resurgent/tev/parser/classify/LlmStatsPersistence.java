@@ -1,5 +1,6 @@
 package com.resurgent.tev.parser.classify;
 
+import com.resurgent.tev.parser.db.CostUnit;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import java.sql.SQLException;
 
@@ -23,7 +24,7 @@ public final class LlmStatsPersistence {
         }
         for (LlmStats.UsageRow row : stats.usageRows()) {
             repo.recordLlmUsage(parseRunId, row.stage(), row.modelId(), row.calls(), row.failedCalls(),
-                    row.failovers(), row.promptTokens(), row.completionTokens(), row.costUsd(),
+                    row.failovers(), row.promptTokens(), row.completionTokens(), row.costUsd(), CostUnit.USD,
                     row.costMissing(), row.latencyMsTotal());
         }
         for (LlmStats.Stat stat : stats.stats()) {

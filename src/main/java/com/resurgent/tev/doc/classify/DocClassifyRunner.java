@@ -9,6 +9,7 @@ import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
+import com.resurgent.tev.parser.db.CostUnit;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -160,7 +161,7 @@ public final class DocClassifyRunner {
             repo.recordLlmUsage(parseRunId, "doc-classify", total.modelId(),
                     total.calls(), total.failedCalls(), 0,
                     total.promptTokens(), total.completionTokens(),
-                    total.costUsd(), total.costUsd() == null ? 1 : 0,
+                    total.costUsd(), CostUnit.USD, total.costUsd() == null ? 1 : 0,
                     total.latencyMsTotal());
         }
         repo.recordRunStat(parseRunId, "doc-classify", "llm_calls",

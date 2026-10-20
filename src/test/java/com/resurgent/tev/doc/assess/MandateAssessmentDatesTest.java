@@ -202,7 +202,7 @@ class MandateAssessmentDatesTest {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
             Connection c = db.connection();
             try (var rs = c.createStatement().executeQuery(
-                    "SELECT model_id, calls, failed_calls, prompt_tokens, completion_tokens"
+                    "SELECT model_id, calls, failed_calls, prompt_tokens, completion_tokens, cost_unit"
                             + " FROM llm_usage WHERE stage = 'assess_profile'")) {
                 assertThat(rs.next()).isTrue();
                 assertThat(rs.getString("model_id")).isEqualTo("fake-model");
@@ -210,6 +210,8 @@ class MandateAssessmentDatesTest {
                 assertThat(rs.getLong("failed_calls")).isZero();
                 assertThat(rs.getLong("prompt_tokens")).isEqualTo(100);
                 assertThat(rs.getLong("completion_tokens")).isEqualTo(50);
+                // a chat-model row says what it counts in (#152); only LlamaCloud bills credits
+                assertThat(rs.getString("cost_unit")).isEqualTo("usd");
                 assertThat(rs.next()).isFalse();
             }
             Map<String, Double> stats = new HashMap<>();

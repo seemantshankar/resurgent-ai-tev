@@ -13,6 +13,7 @@ import com.resurgent.tev.doc.llm.DocLlmClient;
 import com.resurgent.tev.doc.query.MandateQa;
 import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
+import com.resurgent.tev.parser.db.CostUnit;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -259,7 +260,7 @@ public final class DocInduceChecklistsRunner {
         for (DocLlmClient.Usage total : totals) {
             repo.recordLlmUsage(parseRunId, STAGE, total.modelId(), total.calls(),
                     total.failedCalls(), 0, total.promptTokens(), total.completionTokens(),
-                    total.costUsd(), total.costUsd() == null ? 1 : 0, total.latencyMsTotal());
+                    total.costUsd(), CostUnit.USD, total.costUsd() == null ? 1 : 0, total.latencyMsTotal());
         }
         int added = 0;
         int madeOptional = 0;

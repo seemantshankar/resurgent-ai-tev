@@ -46,11 +46,11 @@ stage statuses, country/industries, entities by role, sites with their document
 evidence, passages and clause counts, checklist results grouped by status,
 conflicts grouped by settlement tier (`rule`/`ai`/`open`), versions-differ rows,
 recorded comparison skips, and the LLM cost rollup from `llm_usage` (calls,
-tokens and cost per stage plus a total). LlamaCloud bills credits, not USD, and
-`LlamaExtractAdapter` stores that credit total in the `llm_usage.cost_usd` slot,
-so `llama*` rows are reported as credits and converted to USD at
-`llama.credits_usd_rate` (default 1,000 credits = $1.20); other rows already hold
-USD. The total is USD either way.
+tokens and cost per stage plus a total). LlamaCloud bills credits, not USD, so
+every `llm_usage` row carries a `cost_unit` (`credits` or `usd`) telling a reader
+what its `cost_usd` value counts. The rollup goes through `LlmUsageCosts`, which
+prices `credits` rows at `llama.credits_usd_rate` (default 1,000 credits = $1.20)
+and passes `usd` rows through, so the total is USD by construction (#152).
 
 ## Bhagyanager expectations (issue #149 AC2)
 

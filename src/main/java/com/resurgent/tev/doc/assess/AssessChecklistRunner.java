@@ -15,6 +15,7 @@ import com.resurgent.tev.doc.llm.DocLlmClient;
 import com.resurgent.tev.doc.query.MandateQa;
 import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
+import com.resurgent.tev.parser.db.CostUnit;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -399,7 +400,7 @@ public final class AssessChecklistRunner implements AssessStage {
         for (DocLlmClient.Usage modelTotal : totals.values()) {
             repo.recordLlmUsage(parseRunId, STAGE, modelTotal.modelId(), modelTotal.calls(),
                     modelTotal.failedCalls(), 0, modelTotal.promptTokens(),
-                    modelTotal.completionTokens(), modelTotal.costUsd(),
+                    modelTotal.completionTokens(), modelTotal.costUsd(), CostUnit.USD,
                     modelTotal.costUsd() == null ? 1 : 0, modelTotal.latencyMsTotal());
         }
         repo.updateParseRunResult(parseRunId, Timestamps.now(), "success", null);
