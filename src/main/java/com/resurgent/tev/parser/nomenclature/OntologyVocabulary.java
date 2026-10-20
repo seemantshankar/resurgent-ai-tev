@@ -54,6 +54,11 @@ public final class OntologyVocabulary {
     /** A measurement left in the leaf: a rate, a quantity, a specification. */
     private static final Pattern MEASUREMENT = Pattern.compile("[0-9@%]");
 
+    /** ADR 0022 §2: formula errors that leak from an Excel cell into a label. */
+    private static final Pattern FORMULA_ERROR = Pattern.compile(
+            "#(REF!|VALUE!|DIV/0!|NAME\\?|NUM!|NULL!|N/A|CALC!|SPILL!)",
+            Pattern.CASE_INSENSITIVE);
+
     private OntologyVocabulary() {}
 
     /** Normalized label — upper case, apostrophes dropped, punctuation becomes space. */
@@ -165,7 +170,8 @@ public final class OntologyVocabulary {
                 || COUNT.matcher(text).find()
                 || ATTRIBUTION.matcher(text).find()
                 || NAMED_ATTRIBUTION.matcher(raw).find()
-                || MEASUREMENT.matcher(raw).find();
+                || MEASUREMENT.matcher(raw).find()
+                || FORMULA_ERROR.matcher(raw).find();
     }
 
     /**

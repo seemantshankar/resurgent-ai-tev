@@ -27,6 +27,12 @@ class OntologyVocabularyTest {
         assertThat(OntologyVocabulary.transcribedLeaf("Less: Input tax credit")).isTrue();
         assertThat(OntologyVocabulary.transcribedLeaf("Add: Customs duty")).isTrue();
         assertThat(OntologyVocabulary.transcribedLeaf("#REF! in row 12")).isTrue();
+        assertThat(OntologyVocabulary.transcribedLeaf("#REF!")).isTrue();
+        assertThat(OntologyVocabulary.transcribedLeaf("#VALUE!")).isTrue();
+        assertThat(OntologyVocabulary.transcribedLeaf("#NAME?")).isTrue();
+        assertThat(OntologyVocabulary.transcribedLeaf("#N/A")).isTrue();
+        assertThat(OntologyVocabulary.transcribedLeaf("#DIV/0!")).isTrue();
+        assertThat(OntologyVocabulary.transcribedLeaf("#NULL!")).isTrue();
     }
 
     @Test
