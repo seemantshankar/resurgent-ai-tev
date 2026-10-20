@@ -814,6 +814,38 @@ class PersistenceSeamTest {
         }
     }
 
+    @Test
+    void migrationV69AdmitsM4FreshnessAndSnapshotStorage() throws Exception {
+        try (WorkspaceDatabase db = openDb("m4-snapshots.db")) {
+            java.sql.Connection c = db.connection();
+            try (java.sql.Statement s = c.createStatement()) {
+                // assessment_run admits assess_freshness
+                s.execute("INSERT INTO assessment_run (mandate_id, stage, status, started_at)"
+                        + " VALUES (1, 'assess_freshness', 'completed', 'now')");
+
+                // run_stat admits assess_freshness and doc-drift
+                s.execute("INSERT INTO source_file (mandate_id, file_name, file_hash, file_type, ingested_at, parser_version) VALUES (1, 'a.xlsx', 'hash', 'fm_xlsx', 'now', 'v1')");
+                s.execute("INSERT INTO parse_run (source_file_id, mandate_id, parser_version, config_hash, started_at, status) VALUES (1, 1, 'v1', 'cfg', 'now', 'success')");
+                s.execute("INSERT INTO run_stat (parse_run_id, stage, name, value_num)"
+                        + " VALUES (1, 'assess_freshness', 'freshness_checked', 1.0)");
+                s.execute("INSERT INTO run_stat (parse_run_id, stage, name, value_num)"
+                        + " VALUES (1, 'doc-drift', 'drift_ratio', 0.05)");
+
+                // llm_usage admits assess_freshness and doc-drift
+                s.execute("INSERT INTO llm_usage (parse_run_id, stage, model_id, calls, prompt_tokens, completion_tokens)"
+                        + " VALUES (1, 'assess_freshness', 'gpt-4o', 1, 100, 50)");
+                s.execute("INSERT INTO llm_usage (parse_run_id, stage, model_id, calls, prompt_tokens, completion_tokens)"
+                        + " VALUES (1, 'doc-drift', 'gpt-4o', 1, 100, 50)");
+
+                // fact_snapshot and snapshot_fact_link exist
+                assertThat(columnNames(c, "fact_snapshot")).contains(
+                        "snapshot_id", "mandate_id", "output_type", "output_key", "is_stale", "stale_at", "stale_reason", "created_at");
+                assertThat(columnNames(c, "snapshot_fact_link")).contains(
+                        "snapshot_id", "fact_id", "recorded_value", "recorded_at");
+            }
+        }
+    }
+
     private static java.util.Set<String> columnNames(java.sql.Connection c, String table) throws Exception {
         java.util.Set<String> columns = new java.util.HashSet<>();
         try (ResultSet rs = c.createStatement().executeQuery("PRAGMA table_info(" + table + ")")) {
@@ -825,3 +857,4 @@ class PersistenceSeamTest {
     }
 
 }
+
