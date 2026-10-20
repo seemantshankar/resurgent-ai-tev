@@ -36,6 +36,8 @@ class OntologyVocabularyTest {
         assertThat(OntologyVocabulary.transcribedLeaf("Net Worth")).isFalse();
         assertThat(OntologyVocabulary.transcribedLeaf("Insurance Premium")).isFalse();
         assertThat(OntologyVocabulary.transcribedLeaf("Elevator / Lift")).isFalse();
+        assertThat(OntologyVocabulary.transcribedLeaf("Land / Site Development")).isFalse();
+        assertThat(OntologyVocabulary.transcribedLeaf("Pre-Operative Expenses")).isFalse();
     }
 
     /**

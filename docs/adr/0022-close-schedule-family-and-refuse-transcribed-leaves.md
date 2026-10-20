@@ -40,10 +40,11 @@ not whether a leaf was a category.
    Opening Stock / Closing Stock / Dividend(Drawings) are not added to the
    frozen spine by this decision.
 
-4. **The harness treats transcribed soft leaves as RED.**
-   `scripts/validate-classify-run.py` fails the run when any soft leaf looks like
-   a raw line item. Outside-catalogue soft categories that are real categories
-   remain INFO.
+4. **Offline database assertions treat transcribed soft leaves as RED.**
+   `LivingOntologyBindTest` and `NomenclaturePruningTest` assert that no
+   transcribed soft leaf remains in the mandate overlay. These assertions replace
+   `scripts/validate-classify-run.py` as the gate. Outside-catalogue soft
+   categories that are real categories remain INFO.
 
 **Consequences.** Coverage of bound cells will drop for rows whose only name was
 a transcribed leaf; those cells carry `transcribed_label` until a real category

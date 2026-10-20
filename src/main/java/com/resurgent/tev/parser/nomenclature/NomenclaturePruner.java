@@ -39,11 +39,26 @@ public final class NomenclaturePruner {
         if (doomed.isEmpty()) {
             return 0;
         }
-        try (PreparedStatement node = connection.prepareStatement(
-                "DELETE FROM nomenclature_node WHERE layer = ? AND path = ?");
+        try (PreparedStatement cleanBindings = connection.prepareStatement(
+                "DELETE FROM nomenclature_binding WHERE path = ?");
+                PreparedStatement cleanInterpretations = connection.prepareStatement(
+                        "UPDATE cell_interpretation SET nomenclature_status = 'unbound', unbound_reason = 'transcribed_label' WHERE nomenclature_path = ?");
+                PreparedStatement cleanFacts = connection.prepareStatement(
+                        "UPDATE fact SET nomenclature_status = 'unbound', unbound_reason = 'transcribed_label' WHERE ontology_path = ?");
+                PreparedStatement node = connection.prepareStatement(
+                        "DELETE FROM nomenclature_node WHERE layer = ? AND path = ?");
                 PreparedStatement alias = connection.prepareStatement(
                         "DELETE FROM nomenclature_alias WHERE leaf_path = ?")) {
             for (String path : doomed) {
+                cleanBindings.setString(1, path);
+                cleanBindings.executeUpdate();
+
+                cleanInterpretations.setString(1, path);
+                cleanInterpretations.executeUpdate();
+
+                cleanFacts.setString(1, path);
+                cleanFacts.executeUpdate();
+
                 node.setString(1, NomenclatureNode.LAYER_MANDATE_SOFT);
                 node.setString(2, path);
                 node.executeUpdate();

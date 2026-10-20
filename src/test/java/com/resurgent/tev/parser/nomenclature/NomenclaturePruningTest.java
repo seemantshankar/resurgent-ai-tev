@@ -62,4 +62,49 @@ class NomenclaturePruningTest {
             }
         }
     }
+
+    @Test
+    void pruneReconcilesBindingsInterpretationsAndFacts() throws Exception {
+        Path dbPath = tempDir.resolve("reconcile.db");
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            java.sql.Connection c = db.connection();
+            try (Statement s = c.createStatement()) {
+                s.execute("PRAGMA foreign_keys = OFF");
+                s.execute("INSERT INTO nomenclature_node (path, name, layer, parent_path, frozen, leaf, created_at) "
+                        + "VALUES ('Project Cost > Civil Works > Supplier - Kone Brothers', 'Supplier - Kone Brothers', 'mandate_soft', 'Project Cost > Civil Works', 0, 1, '2026-01-01')");
+                s.execute("INSERT INTO nomenclature_alias (alias_text, leaf_path, layer, created_at) "
+                        + "VALUES ('Supplier - Kone Brothers', 'Project Cost > Civil Works > Supplier - Kone Brothers', 'mandate_soft', '2026-01-01')");
+
+                s.execute("INSERT INTO nomenclature_binding (parse_run_id, candidate_id, cell_id, path_root, path, created_at) "
+                        + "VALUES (1, 1, 1, 'economic', 'Project Cost > Civil Works > Supplier - Kone Brothers', '2026-01-01')");
+                s.execute("INSERT INTO cell_interpretation (parse_run_id, cell_id, value_origin, result_source, nomenclature_path, nomenclature_status, created_at) "
+                        + "VALUES (1, 1, 'literal', 'literal', 'Project Cost > Civil Works > Supplier - Kone Brothers', 'bound', '2026-01-01')");
+                s.execute("INSERT INTO fact (fact_id, parse_run_id, document_version_id, ontology_path, path_root, value_kind, extraction_method, nomenclature_status, created_at) "
+                        + "VALUES (1, 1, 1, 'Project Cost > Civil Works > Supplier - Kone Brothers', 'economic', 'money', 'llm_field', 'bound', '2026-01-01')");
+            }
+
+            int pruned = NomenclaturePruner.pruneTranscribedLeaves(c);
+            assertThat(pruned).isEqualTo(1);
+
+            try (Statement s = c.createStatement()) {
+                try (java.sql.ResultSet rs = s.executeQuery(
+                        "SELECT count(*) FROM nomenclature_binding WHERE path = 'Project Cost > Civil Works > Supplier - Kone Brothers'")) {
+                    assertThat(rs.next() && rs.getInt(1) == 0).isTrue();
+                }
+                try (java.sql.ResultSet rs = s.executeQuery(
+                        "SELECT nomenclature_status, unbound_reason FROM cell_interpretation WHERE cell_id = 1")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("nomenclature_status")).isEqualTo("unbound");
+                    assertThat(rs.getString("unbound_reason")).isEqualTo("transcribed_label");
+                }
+                try (java.sql.ResultSet rs = s.executeQuery(
+                        "SELECT nomenclature_status, unbound_reason, ontology_path FROM fact WHERE fact_id = 1")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("nomenclature_status")).isEqualTo("unbound");
+                    assertThat(rs.getString("unbound_reason")).isEqualTo("transcribed_label");
+                    assertThat(rs.getString("ontology_path")).isEqualTo("Project Cost > Civil Works > Supplier - Kone Brothers");
+                }
+            }
+        }
+    }
 }

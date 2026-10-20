@@ -47,9 +47,9 @@ public final class OntologyVocabulary {
             "\\b(SUPPLIER|SUPPLIERS|VENDOR|VENDORS|MANUFACTURER|M/S|M S|O/S|W/E|MAKE|BRAND"
                     + "|TRADER|DEALER|AGENT|AGENCY|FIRM)\\b");
 
-    /** An attribution that names itself: a dash or bracket, then a two-word proper name. */
+    /** An attribution that names itself: a spaced dash, then a two-word proper name. */
     private static final Pattern NAMED_ATTRIBUTION = Pattern.compile(
-            "[-/(]\\s*[A-Z][a-z]+(\\s+[A-Z][a-z]+)+");
+            "\\s[-–]\\s+[A-Z][a-z]+(\\s+[A-Z][a-z]+)+");
 
     /** A measurement left in the leaf: a rate, a quantity, a specification. */
     private static final Pattern MEASUREMENT = Pattern.compile("[0-9@%]");
@@ -174,14 +174,14 @@ public final class OntologyVocabulary {
      * so a transcription that could mean two heads is refused rather than guessed.
      *
      * @param label the proposed leaf or row label, as the model wrote it
-     * @param aliases the living ontology's label index
+     * @param hardAliases the hard-catalogue alias index (seed, spine, and industry; excluding mandate_soft)
      * @return the catalogue path this label uniquely names, or null
      */
-    private static String catalogueHit(String label, Map<String, String> aliases) {
-        if (label == null || label.isBlank() || aliases == null) {
+    private static String catalogueHit(String label, Map<String, String> hardAliases) {
+        if (label == null || label.isBlank() || hardAliases == null) {
             return null;
         }
-        String hit = aliases.get(norm(label));
+        String hit = hardAliases.get(norm(label));
         return hit == null || hit.isBlank() ? null : hit;
     }
 
@@ -192,10 +192,10 @@ public final class OntologyVocabulary {
      * transcription — and null when the leaf copies its row and nothing names it.
      *
      * @param path the proposed {@code parent > leaf} path
-     * @param aliases the living ontology's label index
+     * @param hardAliases the hard-catalogue alias index (seed, spine, and industry; excluding mandate_soft)
      * @return the path the binder may use, or null to refuse
      */
-    public static String bindablePath(String path, Map<String, String> aliases) {
+    public static String bindablePath(String path, Map<String, String> hardAliases) {
         if (path == null || path.isBlank()) {
             return path;
         }
@@ -205,7 +205,7 @@ public final class OntologyVocabulary {
         if (!transcribedLeaf(leaf)) {
             return trimmed;
         }
-        return catalogueHit(leaf, aliases);
+        return catalogueHit(leaf, hardAliases);
     }
 
     /**

@@ -1497,7 +1497,8 @@ public final class ClassifyService {
                 living = grown.living();
                 transcribedRefused.addAll(grown.transcribedRefused());
                 mine.addAll(first);
-                missing = LayerBBinder.unbound(job.cells(), LayerBBinder.bind(job.cells(), mine, living.aliases()));
+                missing = LayerBBinder.unbound(job.cells(),
+                        LayerBBinder.bind(job.cells(), mine, living.aliases(), living.hardAliases()));
             }
             assignments.add(mine);
             open.add(missing);
@@ -1532,7 +1533,8 @@ public final class ClassifyService {
         List<BindResult> results = new ArrayList<>();
         for (int i = 0; i < jobs.size(); i++) {
             BindJob job = jobs.get(i);
-            List<LayerBBinder.Draft> proved = LayerBBinder.bind(job.cells(), assignments.get(i), living.aliases());
+            List<LayerBBinder.Draft> proved = LayerBBinder.bind(
+                    job.cells(), assignments.get(i), living.aliases(), living.hardAliases());
             results.add(new BindResult(proved, LayerBBinder.unbound(job.cells(), proved).size(), living));
         }
         return new BindRound(results, living, transcribedRefused);
@@ -1561,7 +1563,7 @@ public final class ClassifyService {
             }
             // ADR 0022 §2: a leaf that copies its row is never staged into the master set,
             // and a transcription the catalogue already names has nothing left to grow.
-            String bindable = OntologyVocabulary.bindablePath(path, next.aliases());
+            String bindable = OntologyVocabulary.bindablePath(path, next.hardAliases());
             if (bindable == null) {
                 transcribed.add(path);
                 continue;

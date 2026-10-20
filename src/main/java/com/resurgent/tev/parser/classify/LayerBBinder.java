@@ -74,6 +74,12 @@ final class LayerBBinder {
 
     static List<Draft> bind(
             List<BindCellRow> cells, List<LayerBAssignment> fromLlm, Map<String, String> aliases) {
+        return bind(cells, fromLlm, aliases, aliases);
+    }
+
+    static List<Draft> bind(
+            List<BindCellRow> cells, List<LayerBAssignment> fromLlm,
+            Map<String, String> aliases, Map<String, String> hardAliases) {
         Map<String, BindCellRow> byCoord = new LinkedHashMap<>();
         for (BindCellRow cell : cells) {
             byCoord.put(cell.coord().toUpperCase(Locale.ROOT), cell);
@@ -81,7 +87,7 @@ final class LayerBBinder {
         Map<String, Draft> out = new LinkedHashMap<>();
         prove(cells, aliases, out);
         inheritMerges(cells, byCoord, out);
-        applyLlm(cells, fromLlm, aliases, out);
+        applyLlm(cells, fromLlm, hardAliases, out);
         placeFirmNameInsideAddress(cells, out);
         inheritMerges(cells, byCoord, out);
         continueIdentity(cells, aliases, out);

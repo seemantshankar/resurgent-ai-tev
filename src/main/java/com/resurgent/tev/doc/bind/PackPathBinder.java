@@ -205,7 +205,7 @@ public final class PackPathBinder {
                 // keeps this path for the run, exactly as Layer B leaves it.
                 int sep = placement.path().lastIndexOf(OntologySlice.SEPARATOR);
                 String leaf = placement.path().substring(sep + OntologySlice.SEPARATOR.length());
-                String bindable = OntologyVocabulary.bindablePath(placement.path(), living.aliases());
+                String bindable = OntologyVocabulary.bindablePath(placement.path(), living.hardAliases());
                 if (bindable == null) {
                     // ADR 0022 §2: the leaf copies its row, so it could never match again.
                     unbind(facts, row.factId(), open.candidate(), open.candidateRoot(),
