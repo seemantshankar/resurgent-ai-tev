@@ -106,12 +106,26 @@ public final class ConflictScan {
                             client, usageSink);
                     long conflictId = repository.insertConflict(mandateId, assessmentRunId, write);
                     written.add(new Written(conflictId, write));
+                    if (ConflictRepository.KIND_VERSIONS_DIFFER.equals(write.kind())
+                            && write.leftFactId() != null && write.rightFactId() != null) {
+                        markFactSuperseded(connection, write.rightFactId(), write.leftFactId());
+                    }
                 }
             }
         }
         scanFm(connection, mandateId, assessmentRunId, facts, periodsByVersion,
                 client, usageSink, repository, written);
         return written;
+    }
+
+    private static void markFactSuperseded(Connection connection, long supersededFactId,
+            long winningFactId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE fact SET is_current = 0, superseded_by_fact_id = ? WHERE fact_id = ?")) {
+            ps.setLong(1, winningFactId);
+            ps.setLong(2, supersededFactId);
+            ps.executeUpdate();
+        }
     }
 
     /**
@@ -514,10 +528,11 @@ public final class ConflictScan {
             ConflictFactRow older = newest == left ? right : left;
             String reasoning = String.format(Locale.ROOT,
                     "same document type (%s) on different document dates (%s vs %s):"
-                            + " versions differ, not a conflict — M4 chooses the winner",
+                            + " newer version supersedes older version under version precedence ladder",
                     newest.docTypeCode(), newerDate(left, right), olderDate(left, right));
             return write(ConflictRepository.KIND_VERSIONS_DIFFER, newest, older, comparison,
-                    periodsByVersion, null, null, null, null, reasoning);
+                    periodsByVersion, ConflictRepository.SETTLEMENT_RULE, "left",
+                    "version_precedence_v1", "1.0", reasoning);
         }
 
         // Two sections of one document are the same document type by definition, so a
