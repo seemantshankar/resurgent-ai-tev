@@ -245,6 +245,92 @@ public final class FactSnapshotRepository {
         return result;
     }
 
+    /**
+     * Total number of snapshots for a mandate.
+     */
+    public int countSnapshots(long mandateId) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM fact_snapshot WHERE mandate_id = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
+        }
+    }
+
+    /**
+     * Total number of stale snapshots for a mandate.
+     */
+    public int countStaleSnapshots(long mandateId) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM fact_snapshot WHERE mandate_id = ? AND is_stale = 1";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
+        }
+    }
+
+    /**
+     * Performs a freshness evaluation pass: finds snapshots referencing superseded facts
+     * (is_current = 0), marks them is_stale = 1, and records an explanatory stale_reason.
+     *
+     * @param mandateId mandate scope
+     * @return number of newly invalidated snapshots
+     */
+    public int evaluateFreshness(long mandateId) throws SQLException {
+        String sql = """
+            SELECT fs.snapshot_id,
+                   sfl.fact_id AS superseded_fact_id,
+                   dv.document_id AS superseded_doc_id,
+                   f.superseded_by_fact_id,
+                   sdv.document_id AS superseding_doc_id
+            FROM fact_snapshot fs
+            JOIN snapshot_fact_link sfl ON fs.snapshot_id = sfl.snapshot_id
+            JOIN fact f ON sfl.fact_id = f.fact_id
+            LEFT JOIN document_version dv ON f.document_version_id = dv.document_version_id
+            LEFT JOIN fact sf ON f.superseded_by_fact_id = sf.fact_id
+            LEFT JOIN document_version sdv ON sf.document_version_id = sdv.document_version_id
+            WHERE fs.mandate_id = ? AND f.is_current = 0 AND fs.is_stale = 0
+            ORDER BY fs.snapshot_id ASC, sfl.fact_id ASC
+            """;
+        java.util.Map<Long, List<String>> reasonsBySnapshot = new java.util.LinkedHashMap<>();
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    long snapshotId = rs.getLong("snapshot_id");
+                    long supersededFactId = rs.getLong("superseded_fact_id");
+                    Object supersededDocObj = rs.getObject("superseded_doc_id");
+                    Long supersededDocId = supersededDocObj != null ? ((Number) supersededDocObj).longValue() : null;
+                    Object supersedingFactObj = rs.getObject("superseded_by_fact_id");
+                    Long supersedingFactId = supersedingFactObj != null ? ((Number) supersedingFactObj).longValue() : null;
+                    Object supersedingDocObj = rs.getObject("superseding_doc_id");
+                    Long supersedingDocId = supersedingDocObj != null ? ((Number) supersedingDocObj).longValue() : null;
+
+                    String reason;
+                    if (supersedingFactId != null) {
+                        if (supersedingDocId != null) {
+                            reason = String.format("fact #%d was superseded by fact #%d (doc #%d)",
+                                    supersededFactId, supersedingFactId, supersedingDocId);
+                        } else {
+                            reason = String.format("fact #%d was superseded by fact #%d",
+                                    supersededFactId, supersedingFactId);
+                        }
+                    } else {
+                        reason = String.format("fact #%d is no longer current", supersededFactId);
+                    }
+                    reasonsBySnapshot.computeIfAbsent(snapshotId, k -> new ArrayList<>()).add(reason);
+                }
+            }
+        }
+
+        for (java.util.Map.Entry<Long, List<String>> entry : reasonsBySnapshot.entrySet()) {
+            markStale(entry.getKey(), String.join("; ", entry.getValue()));
+        }
+        return reasonsBySnapshot.size();
+    }
+
     private static FactSnapshot mapSnapshot(ResultSet rs) throws SQLException {
         return new FactSnapshot(
                 rs.getLong("snapshot_id"),

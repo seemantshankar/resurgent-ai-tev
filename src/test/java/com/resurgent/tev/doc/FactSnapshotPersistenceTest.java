@@ -155,4 +155,40 @@ class FactSnapshotPersistenceTest {
         List<Long> referencing = repository.findSnapshotIdsReferencingFact(101L);
         assertThat(referencing).containsExactlyInAnyOrder(snap1.snapshotId(), snap2.snapshotId());
     }
+
+    @Test
+    void evaluateFreshnessMarksSnapshotsWithSupersededFactsAsStale() throws Exception {
+        FactSnapshot snap1 = repository.saveSnapshot(10L, "tev_summary", "key1",
+                List.of(new FactLinkWrite(101L, "1200 kWp"), new FactLinkWrite(102L, "5000000")));
+        FactSnapshot snap2 = repository.saveSnapshot(10L, "tev_summary", "key2",
+                List.of(new FactLinkWrite(102L, "5000000")));
+
+        assertThat(repository.countSnapshots(10L)).isEqualTo(2);
+        assertThat(repository.countStaleSnapshots(10L)).isEqualTo(0);
+
+        // Simulate fact 101 being superseded by fact 103 (doc 2)
+        try (Statement s = db.connection().createStatement()) {
+            s.execute("INSERT INTO document (document_id, mandate_id, logical_name, doc_family, created_at, updated_at)"
+                    + " VALUES (2, 10, 'Revised Quote', 'quotation', '2026-10-21T10:00:00Z', '2026-10-21T10:00:00Z')");
+            s.execute("INSERT INTO document_version (document_version_id, document_id, version_label, file_name, file_hash, file_ext, file_role, ingested_at)"
+                    + " VALUES (2, 2, 'v2', 'quote_v2.pdf', 'hash2', 'pdf', 'quotation', '2026-10-21T10:00:00Z')");
+            s.execute("INSERT INTO fact (fact_id, parse_run_id, document_version_id, field_key, value_kind, value_text, value_number, extraction_method, created_at, is_current)"
+                    + " VALUES (103, 1, 2, 'solar_capacity', 'quantity', '1400 kWp', 1400.0, 'deterministic', '2026-10-21T10:00:00Z', 1)");
+            s.execute("UPDATE fact SET is_current = 0, superseded_by_fact_id = 103 WHERE fact_id = 101");
+        }
+
+        int invalidated = repository.evaluateFreshness(10L);
+        assertThat(invalidated).isEqualTo(1);
+        assertThat(repository.countStaleSnapshots(10L)).isEqualTo(1);
+
+        Optional<FactSnapshot> staleSnap1 = repository.findSnapshot(10L, "tev_summary", "key1");
+        assertThat(staleSnap1).isPresent();
+        assertThat(staleSnap1.get().isStale()).isTrue();
+        assertThat(staleSnap1.get().staleReason()).contains("fact #101").contains("superseded by fact #103").contains("doc #2");
+        assertThat(staleSnap1.get().staleAt()).isNotBlank();
+
+        Optional<FactSnapshot> freshSnap2 = repository.findSnapshot(10L, "tev_summary", "key2");
+        assertThat(freshSnap2).isPresent();
+        assertThat(freshSnap2.get().isStale()).isFalse();
+    }
 }

@@ -133,7 +133,7 @@ class MandateDocVsFmTest {
         DocAssessRunner.run(MANDATE, dbPath, null);
 
         MandateQa qa = qa();
-        assertThat(qa.stages()).hasSize(5).allSatisfy(stage ->
+        assertThat(qa.stages()).hasSize(6).allSatisfy(stage ->
                 assertThat(stage.status()).isEqualTo("completed"));
         assertThat(qa.conflicts()).hasSize(1);
         MandateQa.ConflictRow conflict = qa.conflicts().get(0);

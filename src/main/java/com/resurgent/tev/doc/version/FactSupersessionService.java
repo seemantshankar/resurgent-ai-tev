@@ -198,12 +198,14 @@ public final class FactSupersessionService {
     private static List<RawFactRow> loadMandateFacts(Connection connection, long mandateId)
             throws SQLException {
         String sql = "SELECT f.fact_id, f.document_version_id, f.ontology_path, f.field_key,"
-                + " f.subject_entity, f.site_id, f.line_key, f.is_current, f.superseded_by_fact_id,"
+                + " COALESCE(f.subject_entity, ent.name, '') AS subject_entity,"
+                + " f.site_id, f.line_key, f.is_current, f.superseded_by_fact_id,"
                 + " d.doc_type_code,"
                 + " (SELECT e.source_text FROM fact_evidence e WHERE e.fact_id = f.fact_id AND e.role = 'period' LIMIT 1) AS period"
                 + " FROM fact f"
                 + " JOIN document_version v ON v.document_version_id = f.document_version_id"
                 + " JOIN document d ON d.document_id = v.document_id"
+                + " LEFT JOIN entity ent ON ent.entity_id = f.entity_id"
                 + " WHERE d.mandate_id = ?"
                 + " ORDER BY f.fact_id";
 

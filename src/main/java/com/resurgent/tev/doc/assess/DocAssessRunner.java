@@ -19,10 +19,10 @@ public final class DocAssessRunner {
     /** Parser version stamped on the assess {@code parse_run}s carrying stage usage. */
     public static final String PARSER_VERSION = "0.1.0-doc-assess";
 
-    /** Pipeline contract: later M3 tickets append their stage runners here, in order. */
+    /** Pipeline contract: later M3/M4 tickets append their stage runners here, in order. */
     private static final List<AssessStage> STAGES = List.of(
             new AssessProfileRunner(), new AssessClausesRunner(), new AssessPassagesRunner(),
-            new AssessConflictsRunner(), new AssessChecklistRunner());
+            new AssessConflictsRunner(), new AssessChecklistRunner(), new AssessFreshnessRunner());
 
     private DocAssessRunner() {}
 

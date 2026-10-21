@@ -49,7 +49,7 @@ class ChecklistLearningTest {
         for (var workspace : workspaces) {
             DocAssessRunner.run(1L, workspace.dbPath(), new FakeDocLlmClient("{}"));
             MandateQa qa = qa(workspace);
-            assertThat(qa.stages()).hasSize(5).allSatisfy(s ->
+            assertThat(qa.stages()).hasSize(6).allSatisfy(s ->
                     assertThat(s.status()).isEqualTo("completed"));
             assertThat(qa.checklist()).filteredOn(r -> r.itemKey().equals("approval_evacuation"))
                     .singleElement().satisfies(row -> {
