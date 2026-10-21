@@ -313,24 +313,31 @@ public final class ConflictScan {
     }
 
     private static Double parseCellNumeric(FmConflictSources.Cell cell) {
-        if (cell.reading() != null && cell.reading().absoluteAmount() != null) {
-            try {
-                return Double.parseDouble(cell.reading().absoluteAmount().trim());
-            } catch (NumberFormatException ignored) {}
+        if (cell.reading() != null) {
+            Double amount = parseDoubleOrNull(cell.reading().absoluteAmount());
+            if (amount != null) {
+                return amount;
+            }
         }
         if (cell.value() != null) {
-            if (cell.value().numericValue() != null) {
-                try {
-                    return Double.parseDouble(cell.value().numericValue().trim());
-                } catch (NumberFormatException ignored) {}
+            Double num = parseDoubleOrNull(cell.value().numericValue());
+            if (num != null) {
+                return num;
             }
-            if (cell.value().textValue() != null) {
-                try {
-                    return Double.parseDouble(cell.value().textValue().trim());
-                } catch (NumberFormatException ignored) {}
-            }
+            return parseDoubleOrNull(cell.value().textValue());
         }
         return null;
+    }
+
+    private static Double parseDoubleOrNull(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(raw.trim());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     /** Never infer a calendar period from upload dates or from the document's value. */
