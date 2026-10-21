@@ -45,7 +45,44 @@ public record FactRow(
         Long siteId,
         String siteName,
         Long entityId,
-        String entityReason) {
+        String entityReason,
+        boolean isCurrent,
+        Long supersededByFactId) {
+
+    public FactRow(
+            long factId,
+            String ontologyPath,
+            String pathRoot,
+            String nomenclatureStatus,
+            String nomenclatureReason,
+            String unboundReason,
+            String fieldKey,
+            String valueKind,
+            String valueText,
+            Double valueNumber,
+            String valueDate,
+            String unit,
+            String currency,
+            String scale,
+            String absoluteAmount,
+            String subjectEntity,
+            String lineKey,
+            long documentVersionId,
+            String fileName,
+            String extractionMethod,
+            Double confidence,
+            String statedOrDerived,
+            List<EvidenceRow> evidence,
+            Long siteId,
+            String siteName,
+            Long entityId,
+            String entityReason) {
+        this(factId, ontologyPath, pathRoot, nomenclatureStatus, nomenclatureReason, unboundReason,
+                fieldKey, valueKind, valueText, valueNumber, valueDate, unit, currency, scale,
+                absoluteAmount, subjectEntity, lineKey, documentVersionId, fileName,
+                extractionMethod, confidence, statedOrDerived, evidence, siteId, siteName,
+                entityId, entityReason, true, null);
+    }
 
     public FactRow {
         Objects.requireNonNull(evidence, "evidence");

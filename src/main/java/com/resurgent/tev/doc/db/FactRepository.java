@@ -17,6 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Persistence for extracted facts, evidence, and provenance (Architecture §6.5, S2.5).
@@ -634,7 +635,8 @@ public final class FactRepository {
                         + " f.absolute_amount, f.subject_entity, f.line_key, f.document_version_id,"
                         + " dv.file_name, f.extraction_method, f.confidence, f.stated_or_derived,"
                         + " f.site_id, s.site_name, f.entity_id, f.entity_reason,"
-                        + " f.nomenclature_status, f.nomenclature_reason, f.unbound_reason"
+                        + " f.nomenclature_status, f.nomenclature_reason, f.unbound_reason,"
+                        + " f.is_current, f.superseded_by_fact_id"
                         + " FROM fact f"
                         + " JOIN document_version dv ON dv.document_version_id = f.document_version_id"
                         + " JOIN document d ON d.document_id = dv.document_id"
@@ -660,6 +662,10 @@ public final class FactRepository {
         if (query.valueKind() != null && !query.valueKind().isBlank()) {
             sql.append(" AND f.value_kind = ?");
             params.add(query.valueKind().trim().toLowerCase(Locale.ROOT));
+        }
+        if (query.factId() != null) {
+            sql.append(" AND f.fact_id = ?");
+            params.add(query.factId());
         }
         if (query.currentOnly()) {
             sql.append(" AND f.is_current = 1");
@@ -711,7 +717,9 @@ public final class FactRepository {
                             asLong(rs.getObject("site_id")),
                             rs.getString("site_name"),
                             asLong(rs.getObject("entity_id")),
-                            rs.getString("entity_reason"));
+                            rs.getString("entity_reason"),
+                            rs.getInt("is_current") == 1,
+                            asLong(rs.getObject("superseded_by_fact_id")));
                     builders.put(factId, b);
                     order.add(factId);
                 }
@@ -726,6 +734,39 @@ public final class FactRepository {
             rows.add(builders.get(id).build());
         }
         return rows;
+    }
+
+    /**
+     * Looks up one fact by its unique ID, including historical facts.
+     */
+    public Optional<FactRow> findFact(long factId) throws SQLException {
+        List<FactRow> list = query(new FactQuery(null, null, null, null, false, null, factId));
+        return list.isEmpty() ? Optional.empty() : Optional.of(list.get(0));
+    }
+
+    /**
+     * Traverses the supersession chain backwards from a fact ID, returning all
+     * previous versions of this fact ordered from newest predecessor to oldest ancestor.
+     */
+    public List<FactRow> findSupersessionHistory(long currentFactId) throws SQLException {
+        List<FactRow> history = new ArrayList<>();
+        long targetId = currentFactId;
+        String sql = "SELECT fact_id FROM fact WHERE superseded_by_fact_id = ? ORDER BY fact_id DESC";
+        while (true) {
+            try (PreparedStatement ps = connection.prepareStatement(sql)) {
+                ps.setLong(1, targetId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        long priorId = rs.getLong(1);
+                        findFact(priorId).ifPresent(history::add);
+                        targetId = priorId;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        return history;
     }
 
     /** Facts of a parse_run for bind (id, field_key, method, current path, stated flag). */
@@ -922,6 +963,8 @@ public final class FactRepository {
         final String siteName;
         final Long entityId;
         final String entityReason;
+        final boolean isCurrent;
+        final Long supersededByFactId;
         final List<FactRow.EvidenceRow> evidence = new ArrayList<>();
 
         FactRowBuilder(long factId, String ontologyPath, String pathRoot,
@@ -931,7 +974,8 @@ public final class FactRepository {
                 String unit, String currency, String scale, String absoluteAmount,
                 String subjectEntity, String lineKey, long documentVersionId, String fileName,
                 String extractionMethod, Double confidence, String statedOrDerived,
-                Long siteId, String siteName, Long entityId, String entityReason) {
+                Long siteId, String siteName, Long entityId, String entityReason,
+                boolean isCurrent, Long supersededByFactId) {
             this.factId = factId;
             this.ontologyPath = ontologyPath;
             this.pathRoot = pathRoot;
@@ -958,6 +1002,8 @@ public final class FactRepository {
             this.siteName = siteName;
             this.entityId = entityId;
             this.entityReason = entityReason;
+            this.isCurrent = isCurrent;
+            this.supersededByFactId = supersededByFactId;
         }
 
         FactRow build() {
@@ -965,7 +1011,8 @@ public final class FactRepository {
                     nomenclatureReason, unboundReason, fieldKey, valueKind, valueText,
                     valueNumber, valueDate, unit, currency, scale, absoluteAmount, subjectEntity,
                     lineKey, documentVersionId, fileName, extractionMethod, confidence,
-                    statedOrDerived, evidence, siteId, siteName, entityId, entityReason);
+                    statedOrDerived, evidence, siteId, siteName, entityId, entityReason,
+                    isCurrent, supersededByFactId);
         }
     }
 
