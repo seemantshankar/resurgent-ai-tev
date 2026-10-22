@@ -12,8 +12,10 @@ import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
 import picocli.CommandLine.Command;
@@ -60,15 +62,23 @@ public final class DocSnapshotCommand implements Callable<Integer> {
 
             List<FactLinkWrite> links = new ArrayList<>();
             if (factIds != null && !factIds.isEmpty()) {
+                Set<Long> seenIds = new LinkedHashSet<>();
                 for (Long id : factIds) {
-                    FactRow row = rowById.get(id);
-                    if (row != null) {
-                        String val = row.valueText() != null ? row.valueText()
-                                : row.valueNumber() != null ? String.valueOf(row.valueNumber())
-                                : row.valueDate() != null ? row.valueDate()
-                                : "";
-                        links.add(new FactLinkWrite(row.factId(), val));
+                    if (id == null) {
+                        continue;
                     }
+                    if (!seenIds.add(id)) {
+                        continue;
+                    }
+                    FactRow row = rowById.get(id);
+                    if (row == null) {
+                        throw new IllegalArgumentException("fact ID not found in mandate " + mandateId + ": " + id);
+                    }
+                    String val = row.valueText() != null ? row.valueText()
+                            : row.valueNumber() != null ? String.valueOf(row.valueNumber())
+                            : row.valueDate() != null ? row.valueDate()
+                            : "";
+                    links.add(new FactLinkWrite(row.factId(), val));
                 }
             } else {
                 for (FactRow row : allRows) {

@@ -249,7 +249,7 @@ public final class AssessPassagesRunner implements AssessStage {
         Path dir = dbPath.toAbsolutePath().getParent() == null
                 ? Path.of("docfixtures")
                 : dbPath.toAbsolutePath().getParent().resolve("docfixtures");
-        if (dir != null && java.nio.file.Files.isDirectory(dir)) {
+        if (dir != null && java.nio.file.Files.isDirectory(dir) && hasFixtureFiles(dir)) {
             FixtureExtractClient fixture = new FixtureExtractClient();
             try {
                 fixture.loadDirectory(dir);
@@ -268,6 +268,14 @@ public final class AssessPassagesRunner implements AssessStage {
             // No staged fixtures is a legitimate empty state: chapters yield no facts.
         }
         return fixture;
+    }
+
+    private static boolean hasFixtureFiles(Path dir) {
+        try (var stream = java.nio.file.Files.list(dir)) {
+            return stream.anyMatch(p -> p.getFileName().toString().endsWith(".expected.json"));
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /**

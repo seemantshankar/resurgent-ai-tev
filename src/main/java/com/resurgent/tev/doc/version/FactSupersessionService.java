@@ -160,37 +160,10 @@ public final class FactSupersessionService {
 
     private static Map<Long, DocumentVersionInfo> loadVersionMap(Connection connection, long mandateId)
             throws SQLException {
-        String sql = "SELECT d.document_id, d.logical_name, d.doc_family, d.doc_type_code,"
-                + " v.document_version_id, v.version_label, v.file_name, v.file_hash,"
-                + " v.ingested_at, v.raw_metadata, v.document_date, v.date_precision, v.date_source"
-                + " FROM document d"
-                + " JOIN document_version v ON d.document_id = v.document_id"
-                + " WHERE d.mandate_id = ? AND d.status != 'deleted_by_analyst'";
-
+        List<DocumentVersionInfo> list = VersionPrecedenceService.loadVersions(connection, mandateId);
         Map<Long, DocumentVersionInfo> map = new HashMap<>();
-        try (PreparedStatement ps = connection.prepareStatement(sql)) {
-            ps.setLong(1, mandateId);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    long vId = rs.getLong("document_version_id");
-                    map.put(vId, new DocumentVersionInfo(
-                            rs.getLong("document_id"),
-                            rs.getString("logical_name"),
-                            rs.getString("doc_family"),
-                            rs.getString("doc_type_code"),
-                            vId,
-                            rs.getString("version_label"),
-                            rs.getString("file_name"),
-                            rs.getString("file_hash"),
-                            rs.getString("ingested_at"),
-                            rs.getString("raw_metadata"),
-                            rs.getString("document_date"),
-                            rs.getString("date_precision"),
-                            rs.getString("date_source"),
-                            ""
-                    ));
-                }
-            }
+        for (DocumentVersionInfo v : list) {
+            map.put(v.documentVersionId(), v);
         }
         return map;
     }
@@ -206,7 +179,7 @@ public final class FactSupersessionService {
                 + " JOIN document_version v ON v.document_version_id = f.document_version_id"
                 + " JOIN document d ON d.document_id = v.document_id"
                 + " LEFT JOIN entity ent ON ent.entity_id = f.entity_id"
-                + " WHERE d.mandate_id = ?"
+                + " WHERE d.mandate_id = ? AND d.status != 'deleted_by_analyst'"
                 + " ORDER BY f.fact_id";
 
         List<RawFactRow> list = new ArrayList<>();

@@ -387,7 +387,7 @@ public final class VersionPrecedenceService {
         }
     }
 
-    private static List<DocumentVersionInfo> loadVersions(Connection connection, long mandateId)
+    static List<DocumentVersionInfo> loadVersions(Connection connection, long mandateId)
             throws SQLException {
         String sql = "SELECT d.document_id, d.logical_name, d.doc_family, d.doc_type_code,"
                 + " v.document_version_id, v.version_label, v.file_name, v.file_hash,"

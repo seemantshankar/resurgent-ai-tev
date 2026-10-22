@@ -13,11 +13,13 @@ import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Persistence for extracted facts, evidence, and provenance (Architecture §6.5, S2.5).
@@ -452,6 +454,24 @@ public final class FactRepository {
      * @throws SQLException if any delete fails
      */
     public void deleteFactsForParseRun(long parseRunId) throws SQLException {
+        // Mark affected snapshots as stale and remove their links before deleting facts
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE fact_snapshot SET is_stale = 1, stale_reason = 'referenced facts were deleted during re-extraction' "
+                        + "WHERE snapshot_id IN ("
+                        + "    SELECT sfl.snapshot_id FROM snapshot_fact_link sfl "
+                        + "    JOIN fact f ON f.fact_id = sfl.fact_id "
+                        + "    WHERE f.parse_run_id = ?"
+                        + ")")) {
+            ps.setLong(1, parseRunId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM snapshot_fact_link WHERE fact_id IN ("
+                        + "    SELECT fact_id FROM fact WHERE parse_run_id = ?"
+                        + ")")) {
+            ps.setLong(1, parseRunId);
+            ps.executeUpdate();
+        }
         try (PreparedStatement ps = connection.prepareStatement(
                 "DELETE FROM fact_value WHERE fact_id IN"
                         + " (SELECT fact_id FROM fact WHERE parse_run_id = ?)")) {
@@ -529,43 +549,45 @@ public final class FactRepository {
                 }
             }
             // span containment
-            try (PreparedStatement ps = connection.prepareStatement(
-                    "SELECT s.span_id, s.block_id FROM span s"
-                            + " JOIN block b ON b.block_id = s.block_id"
-                            + " WHERE b.page_id = ? AND instr(lower(s.text_raw), ?) > 0 LIMIT 1")) {
-                ps.setLong(1, pageId);
-                ps.setString(2, citation.verbatim().toLowerCase(Locale.ROOT));
-                try (ResultSet rs = ps.executeQuery()) {
-                    if (rs.next()) {
-                        return new QuoteHit(true, pageId, rs.getLong("block_id"),
-                                rs.getLong("span_id"), null, citation);
+            if (!citation.verbatim().isBlank()) {
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "SELECT s.span_id, s.block_id FROM span s"
+                                + " JOIN block b ON b.block_id = s.block_id"
+                                + " WHERE b.page_id = ? AND instr(lower(s.text_raw), ?) > 0 LIMIT 1")) {
+                    ps.setLong(1, pageId);
+                    ps.setString(2, citation.verbatim().toLowerCase(Locale.ROOT));
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) {
+                            return new QuoteHit(true, pageId, rs.getLong("block_id"),
+                                    rs.getLong("span_id"), null, citation);
+                        }
                     }
                 }
-            }
-            // table_cell containment
-            try (PreparedStatement ps = connection.prepareStatement(
-                    "SELECT tc.table_cell_id, tg.block_id FROM table_cell tc"
-                            + " JOIN table_grid tg ON tg.table_grid_id = tc.table_grid_id"
-                            + " JOIN block b ON b.block_id = tg.block_id"
-                            + " WHERE b.page_id = ? AND instr(lower(tc.text_raw), ?) > 0 LIMIT 1")) {
-                ps.setLong(1, pageId);
-                ps.setString(2, citation.verbatim().toLowerCase(Locale.ROOT));
-                try (ResultSet rs = ps.executeQuery()) {
-                    if (rs.next()) {
-                        return new QuoteHit(true, pageId, rs.getLong("block_id"), null,
-                                rs.getLong("table_cell_id"), citation);
+                // table_cell containment
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "SELECT tc.table_cell_id, tg.block_id FROM table_cell tc"
+                                + " JOIN table_grid tg ON tg.table_grid_id = tc.table_grid_id"
+                                + " JOIN block b ON b.block_id = tg.block_id"
+                                + " WHERE b.page_id = ? AND instr(lower(tc.text_raw), ?) > 0 LIMIT 1")) {
+                    ps.setLong(1, pageId);
+                    ps.setString(2, citation.verbatim().toLowerCase(Locale.ROOT));
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) {
+                            return new QuoteHit(true, pageId, rs.getLong("block_id"), null,
+                                    rs.getLong("table_cell_id"), citation);
+                        }
                     }
                 }
-            }
-            // block containment
-            try (PreparedStatement ps = connection.prepareStatement(
-                    "SELECT block_id FROM block WHERE page_id = ? AND instr(lower(text_raw), ?) > 0 LIMIT 1")) {
-                ps.setLong(1, pageId);
-                ps.setString(2, citation.verbatim().toLowerCase(Locale.ROOT));
-                try (ResultSet rs = ps.executeQuery()) {
-                    if (rs.next()) {
-                        return new QuoteHit(true, pageId, rs.getLong("block_id"), null, null,
-                                citation);
+                // block containment
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "SELECT block_id FROM block WHERE page_id = ? AND instr(lower(text_raw), ?) > 0 LIMIT 1")) {
+                    ps.setLong(1, pageId);
+                    ps.setString(2, citation.verbatim().toLowerCase(Locale.ROOT));
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) {
+                            return new QuoteHit(true, pageId, rs.getLong("block_id"), null, null,
+                                    citation);
+                        }
                     }
                 }
             }
@@ -750,6 +772,8 @@ public final class FactRepository {
      */
     public List<FactRow> findSupersessionHistory(long currentFactId) throws SQLException {
         List<FactRow> history = new ArrayList<>();
+        Set<Long> visited = new HashSet<>();
+        visited.add(currentFactId);
         long targetId = currentFactId;
         String sql = "SELECT fact_id FROM fact WHERE superseded_by_fact_id = ? ORDER BY fact_id DESC";
         while (true) {
@@ -758,6 +782,9 @@ public final class FactRepository {
                 try (ResultSet rs = ps.executeQuery()) {
                     if (rs.next()) {
                         long priorId = rs.getLong(1);
+                        if (!visited.add(priorId)) {
+                            break; // Cycle detected, abort loop
+                        }
                         findFact(priorId).ifPresent(history::add);
                         targetId = priorId;
                     } else {

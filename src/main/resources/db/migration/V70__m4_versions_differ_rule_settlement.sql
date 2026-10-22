@@ -16,9 +16,12 @@ SET is_current = 0,
     superseded_by_fact_id = (
         SELECT c.left_fact_id FROM conflict c
         WHERE c.right_fact_id = fact.fact_id AND c.kind = 'versions-differ'
+          AND c.left_fact_id IS NOT NULL
+          AND EXISTS (SELECT 1 FROM fact lf WHERE lf.fact_id = c.left_fact_id)
         ORDER BY c.conflict_id DESC LIMIT 1
     )
 WHERE fact_id IN (
     SELECT c.right_fact_id FROM conflict c
     WHERE c.kind = 'versions-differ' AND c.left_fact_id IS NOT NULL
+      AND EXISTS (SELECT 1 FROM fact lf WHERE lf.fact_id = c.left_fact_id)
 );
