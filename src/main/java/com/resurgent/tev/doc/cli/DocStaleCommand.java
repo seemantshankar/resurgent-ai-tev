@@ -35,6 +35,9 @@ public final class DocStaleCommand implements Callable<Integer> {
     CommandSpec spec;
 
     @Override
+    /**
+     * Queries and reports stale fact snapshots for the mandate.
+     */
     public Integer call() {
         var out = spec.commandLine().getOut();
         var err = spec.commandLine().getErr();

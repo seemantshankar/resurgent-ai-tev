@@ -191,10 +191,16 @@ public final class FactCandidate {
         return this;
     }
 
+    /**
+     * Returns the recorded basis evidence items (unit, currency, scale).
+     */
     public List<BasisEvidenceWrite> basisEvidence() {
         return List.copyOf(basisEvidence);
     }
 
+    /**
+     * Adds a basis evidence item to this candidate.
+     */
     public FactCandidate addBasisEvidence(BasisEvidenceWrite evidence) {
         basisEvidence.add(Objects.requireNonNull(evidence, "evidence"));
         return this;

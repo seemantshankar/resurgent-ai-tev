@@ -117,10 +117,16 @@ public final class FactRepository {
                     groupKeysJson, citations, derivedFromKeys, null, List.of());
         }
 
+        /**
+         * Creates a new FactWrite builder.
+         */
         public static Builder builder() {
             return new Builder();
         }
 
+        /**
+         * Creates a builder initialized with this FactWrite instance values.
+         */
         public Builder toBuilder() {
             return new Builder()
                     .fieldKey(fieldKey)
@@ -173,33 +179,68 @@ public final class FactRepository {
             private String period;
             private List<BasisEvidenceWrite> basisEvidence = new ArrayList<>();
 
+            /** Sets field key. */
             public Builder fieldKey(String fieldKey) { this.fieldKey = fieldKey; return this; }
+            /** Sets ontology path. */
             public Builder ontologyPath(String ontologyPath) { this.ontologyPath = ontologyPath; return this; }
+            /** Sets path root. */
             public Builder pathRoot(String pathRoot) { this.pathRoot = pathRoot; return this; }
+            /** Sets subject entity. */
             public Builder subjectEntity(String subjectEntity) { this.subjectEntity = subjectEntity; return this; }
+            /** Sets value kind. */
             public Builder valueKind(String valueKind) { this.valueKind = valueKind; return this; }
+            /** Sets value text. */
             public Builder valueText(String valueText) { this.valueText = valueText; return this; }
+            /** Sets value number. */
             public Builder valueNumber(Double valueNumber) { this.valueNumber = valueNumber; return this; }
+            /** Sets value date. */
             public Builder valueDate(String valueDate) { this.valueDate = valueDate; return this; }
+            /** Sets unit of measurement. */
             public Builder unit(String unit) { this.unit = unit; return this; }
+            /** Sets currency identifier. */
             public Builder currency(String currency) { this.currency = currency; return this; }
+            /** Sets scale factor. */
             public Builder scale(String scale) { this.scale = scale; return this; }
+            /** Sets absolute numeric amount string. */
             public Builder absoluteAmount(String absoluteAmount) { this.absoluteAmount = absoluteAmount; return this; }
+            /** Sets language source. */
             public Builder langSource(String langSource) { this.langSource = langSource; return this; }
+            /** Sets extraction method. */
             public Builder extractionMethod(String extractionMethod) { this.extractionMethod = extractionMethod; return this; }
+            /** Sets extractor identifier. */
             public Builder extractorId(String extractorId) { this.extractorId = extractorId; return this; }
+            /** Sets confidence score. */
             public Builder confidence(Double confidence) { this.confidence = confidence; return this; }
+            /** Sets stated or derived flag. */
             public Builder statedOrDerived(String statedOrDerived) { this.statedOrDerived = statedOrDerived; return this; }
+            /** Sets line item key. */
             public Builder lineKey(String lineKey) { this.lineKey = lineKey; return this; }
+            /** Sets group keys JSON string. */
             public Builder groupKeysJson(String groupKeysJson) { this.groupKeysJson = groupKeysJson; return this; }
+            /** Sets list of citations. */
             public Builder citations(List<Citation> citations) { this.citations = citations != null ? new ArrayList<>(citations) : new ArrayList<>(); return this; }
+            /**
+             * Adds a citation to this builder.
+             */
             public Builder addCitation(Citation citation) { if (citation != null) this.citations.add(citation); return this; }
+            /** Sets keys of facts this was derived from. */
             public Builder derivedFromKeys(List<String> derivedFromKeys) { this.derivedFromKeys = derivedFromKeys != null ? new ArrayList<>(derivedFromKeys) : new ArrayList<>(); return this; }
+            /**
+             * Adds a derived from key to this builder.
+             */
             public Builder addDerivedFromKey(String key) { if (key != null) this.derivedFromKeys.add(key); return this; }
+            /** Sets calendar period string. */
             public Builder period(String period) { this.period = period; return this; }
+            /** Sets basis evidence list. */
             public Builder basisEvidence(List<BasisEvidenceWrite> basisEvidence) { this.basisEvidence = basisEvidence != null ? new ArrayList<>(basisEvidence) : new ArrayList<>(); return this; }
+            /**
+             * Adds basis evidence to this builder.
+             */
             public Builder addBasisEvidence(BasisEvidenceWrite evidence) { if (evidence != null) this.basisEvidence.add(evidence); return this; }
 
+            /**
+             * Builds the FactWrite instance.
+             */
             public FactWrite build() {
                 return new FactWrite(
                         fieldKey, ontologyPath, pathRoot, subjectEntity, valueKind, valueText,

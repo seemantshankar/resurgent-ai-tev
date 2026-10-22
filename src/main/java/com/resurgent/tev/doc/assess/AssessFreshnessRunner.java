@@ -27,11 +27,17 @@ public final class AssessFreshnessRunner implements AssessStage {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Override
+    /**
+     * Returns the unique stage identifier for freshness assessment.
+     */
     public String name() {
         return STAGE;
     }
 
     @Override
+    /**
+     * Executes the freshness assessment stage for the specified mandate.
+     */
     public StageResult run(long mandateId, Path dbPath, DocLlmClient client) throws Exception {
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(dbPath)) {
             Connection connection = workspace.connection();
@@ -55,6 +61,9 @@ public final class AssessFreshnessRunner implements AssessStage {
         }
     }
 
+    /**
+     * Evaluates fact supersession and marks affected fact snapshots as stale.
+     */
     private StageResult assess(Connection connection, long mandateId) throws Exception {
         AssessmentRepository assessment = new AssessmentRepository(connection);
         FactSnapshotRepository snapshots = new FactSnapshotRepository(connection);

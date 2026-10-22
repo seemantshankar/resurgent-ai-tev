@@ -45,10 +45,16 @@ public final class FactSnapshotRepository {
 
     private final Connection connection;
 
+    /**
+     * Constructs a repository using the provided database connection.
+     */
     public FactSnapshotRepository(Connection connection) {
         this.connection = connection;
     }
 
+    /**
+     * Returns the underlying database connection.
+     */
     public Connection connection() {
         return connection;
     }
@@ -331,6 +337,9 @@ public final class FactSnapshotRepository {
         return reasonsBySnapshot.size();
     }
 
+    /**
+     * Maps the current row of a ResultSet to a FactSnapshot record.
+     */
     private static FactSnapshot mapSnapshot(ResultSet rs) throws SQLException {
         return new FactSnapshot(
                 rs.getLong("snapshot_id"),

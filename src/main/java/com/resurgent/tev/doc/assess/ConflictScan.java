@@ -302,10 +302,16 @@ public final class ConflictScan {
         }
     }
 
+    /**
+     * Returns whether the fact kind is eligible for comparison against the financial model.
+     */
     private static boolean isFmComparableKind(String kind) {
         return "money".equals(kind) || "quantity".equals(kind) || "rate".equals(kind) || "percent".equals(kind);
     }
 
+    /**
+     * Checks compatibility between fact kind and financial model reading kind.
+     */
     private static boolean isKindCompatible(String factKind, String readingKind) {
         if (factKind == null || readingKind == null) {
             return false;
@@ -319,6 +325,9 @@ public final class ConflictScan {
         };
     }
 
+    /**
+     * Normalizes a unit token to standard canonical form (e.g., % or kWp).
+     */
     private static String normalizeUnitToken(String unit) {
         if (unit == null || unit.isBlank()) {
             return null;
@@ -326,6 +335,9 @@ public final class ConflictScan {
         return KindTokens.normalizeUnit(unit.trim());
     }
 
+    /**
+     * Parses numeric value from a financial model cell.
+     */
     private static Double parseCellNumeric(FmConflictSources.Cell cell) {
         if (cell.reading() != null) {
             Double amount = parseDoubleOrNull(cell.reading().absoluteAmount());
@@ -343,6 +355,9 @@ public final class ConflictScan {
         return null;
     }
 
+    /**
+     * Safely parses a double from a string, returning null if invalid or blank.
+     */
     private static Double parseDoubleOrNull(String raw) {
         if (raw == null || raw.isBlank()) {
             return null;
@@ -589,10 +604,16 @@ public final class ConflictScan {
         return left.documentDate().compareTo(right.documentDate()) >= 0 ? left : right;
     }
 
+    /**
+     * Returns the newer document date between left and right rows.
+     */
     private static String newerDate(ConflictFactRow left, ConflictFactRow right) {
         return newer(left, right).documentDate();
     }
 
+    /**
+     * Returns the older document date between left and right rows.
+     */
     private static String olderDate(ConflictFactRow left, ConflictFactRow right) {
         return newer(left, right) == left ? right.documentDate() : left.documentDate();
     }

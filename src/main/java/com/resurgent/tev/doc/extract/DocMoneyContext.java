@@ -40,6 +40,9 @@ public record DocMoneyContext(
     public record CurrencyStatement(
             String currency, String sourceText, int pageIndex, Citation citation) {}
 
+    /**
+     * Constructs money context with detected currency and scale.
+     */
     public DocMoneyContext(String currency, MoneyNormalizer.Scale scale) {
         this(currency, scale, null, null);
     }
@@ -66,6 +69,9 @@ public record DocMoneyContext(
     private static final Pattern PAN = Pattern.compile(
             "(?<![A-Z])[A-Z]{5}[0-9]{4}[A-Z](?![A-Z])");
 
+    /**
+     * Detects currency and scale from page text representations.
+     */
     public static DocMoneyContext from(List<String> pageTexts) {
         Map<String, CurrencyStatement> currencyStatements = new LinkedHashMap<>();
         Map<MoneyNormalizer.Scale, ScaleStatement> scaleStatements = new LinkedHashMap<>();
@@ -111,6 +117,9 @@ public record DocMoneyContext(
                 resolvedCurrency != null ? currencyStatements.get(resolvedCurrency) : null);
     }
 
+    /**
+     * Finds specific currency token representation within text.
+     */
     static String findCurrencyToken(String text, String currency) {
         if (text == null) {
             return currency;
@@ -131,6 +140,9 @@ public record DocMoneyContext(
         return currency;
     }
 
+    /**
+     * Detects currency and scale from layout blocks of document version.
+     */
     public static DocMoneyContext fromBlocks(Connection conn, long documentVersionId) {
         if (conn == null) {
             return EMPTY;

@@ -60,10 +60,16 @@ public final class QuantityNormalizer {
      */
     public record Result(Double valueNumber, String unit, String verbatimUnit) {
 
+        /**
+         * Constructs normalized quantity result.
+         */
         public Result(Double valueNumber, String unit) {
             this(valueNumber, unit, unit);
         }
 
+        /**
+         * Returns an empty normalization result.
+         */
         public static Result empty() {
             return new Result(null, null, null);
         }

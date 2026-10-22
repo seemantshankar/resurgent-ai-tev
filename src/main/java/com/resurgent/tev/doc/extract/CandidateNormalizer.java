@@ -18,6 +18,9 @@ public final class CandidateNormalizer {
     private static final Pattern SCALE_MARKER = Pattern.compile(
             "(?i)\\b(lakhs?|lacs?|crores?|millions?|billions?|thousands?|000s?|mn|cr)\\b");
 
+    /**
+     * Private constructor for utility class.
+     */
     private CandidateNormalizer() {}
 
     /**
@@ -183,6 +186,9 @@ public final class CandidateNormalizer {
         c.scale(MoneyNormalizer.Scale.UNIT.wireName());
     }
 
+    /**
+     * Creates citation for extracted basis token from candidate citations.
+     */
     private static Citation tokenCitation(FactCandidate c, String token) {
         if (!c.citations().isEmpty()) {
             Citation primary = c.citations().get(0);
@@ -191,6 +197,9 @@ public final class CandidateNormalizer {
         return null;
     }
 
+    /**
+     * Finds first regex pattern match in text or returns fallback.
+     */
     private static String findMatching(Pattern pattern, String text, String fallback) {
         if (text == null) {
             return fallback;

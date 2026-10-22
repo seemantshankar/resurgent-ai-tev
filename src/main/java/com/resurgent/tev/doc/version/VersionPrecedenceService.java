@@ -39,6 +39,9 @@ public final class VersionPrecedenceService {
     private static final Pattern REVISION_GENERIC_PATTERN = Pattern.compile(
             "(?i)\\b(?:revised|revision|supersedes)\\b");
 
+    /**
+     * Private constructor for utility class.
+     */
     private VersionPrecedenceService() {}
 
     public record DocumentVersionInfo(
@@ -272,6 +275,9 @@ public final class VersionPrecedenceService {
         }
     }
 
+    /**
+     * Checks whether two documents form a revised replacement pair.
+     */
     private static boolean isRevisedReplacementPair(DocumentVersionInfo a, DocumentVersionInfo b) {
         // Must share doc family or doc type code
         boolean sameFamily = a.docFamily() != null && a.docFamily().equalsIgnoreCase(b.docFamily());
@@ -300,12 +306,18 @@ public final class VersionPrecedenceService {
         return false;
     }
 
+    /**
+     * Strips revision keywords from filename or label.
+     */
     private static String stripRevisionWord(String name) {
         return name.replaceAll("(?i)\\b(?:revised|revision|main|rev)\\b", "")
                 .replaceAll("[-–—_\\s]+", " ")
                 .trim();
     }
 
+    /**
+     * Returns whether the document version declares itself as an amendment.
+     */
     private static boolean isAmendment(DocumentVersionInfo v) {
         String label = v.versionLabel() == null ? "" : v.versionLabel();
         String name = v.logicalName() == null ? "" : v.logicalName();
@@ -315,6 +327,9 @@ public final class VersionPrecedenceService {
                 || AMENDMENT_GENERIC_PATTERN.matcher(snippet).find();
     }
 
+    /**
+     * Strips amendment suffix from filename or title.
+     */
     private static String stripAmendmentSuffix(String name) {
         if (name == null) {
             return "";
@@ -322,6 +337,9 @@ public final class VersionPrecedenceService {
         return name.replaceAll("(?i)\\s*[-–—:]*\\s*(?:amendment|addendum)\\b.*$", "").trim();
     }
 
+    /**
+     * Extracts integer amendment level from document version metadata and snippet.
+     */
     private static int getAmendmentLevel(DocumentVersionInfo info) {
         String text = (info.versionLabel() + " " + info.logicalName() + " " + (info.textSnippet() == null ? "" : info.textSnippet()));
         Matcher numMatcher = AMENDMENT_NUM_PATTERN.matcher(text);
@@ -339,6 +357,9 @@ public final class VersionPrecedenceService {
         return -1;
     }
 
+    /**
+     * Extracts integer revision level from document version metadata and snippet.
+     */
     private static int getRevisionLevel(DocumentVersionInfo info) {
         String text = (info.versionLabel() + " " + info.logicalName() + " " + (info.textSnippet() == null ? "" : info.textSnippet()));
         Matcher numMatcher = REVISION_NUM_PATTERN.matcher(text);
@@ -356,6 +377,9 @@ public final class VersionPrecedenceService {
         return -1;
     }
 
+    /**
+     * Extracts file modification timestamp from metadata JSON.
+     */
     private static String extractModifiedAt(String rawMetadata) {
         if (rawMetadata == null || rawMetadata.isBlank()) {
             return null;
@@ -426,6 +450,9 @@ public final class VersionPrecedenceService {
         return list;
     }
 
+    /**
+     * Loads text snippet from the first few blocks of a document version.
+     */
     private static String loadTextSnippet(Connection connection, long documentVersionId) {
         String sql = "SELECT b.text_norm FROM block b"
                 + " JOIN page p ON p.page_id = b.page_id"

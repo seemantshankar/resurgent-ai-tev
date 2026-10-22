@@ -270,6 +270,9 @@ public final class AssessPassagesRunner implements AssessStage {
         return fixture;
     }
 
+    /**
+     * Checks whether the directory contains any *.expected.json fixture files.
+     */
     private static boolean hasFixtureFiles(Path dir) {
         try (var stream = java.nio.file.Files.list(dir)) {
             return stream.anyMatch(p -> p.getFileName().toString().endsWith(".expected.json"));

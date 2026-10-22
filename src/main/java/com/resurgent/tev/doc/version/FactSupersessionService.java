@@ -23,6 +23,9 @@ import java.util.Objects;
  */
 public final class FactSupersessionService {
 
+    /**
+     * Private constructor for utility class.
+     */
     private FactSupersessionService() {}
 
     public record FactIdentityKey(

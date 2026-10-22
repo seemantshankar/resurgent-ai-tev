@@ -53,6 +53,9 @@ public final class DocSnapshotCommand implements Callable<Integer> {
     CommandSpec spec;
 
     @Override
+    /**
+     * Captures an immutable snapshot of facts consumed by an output.
+     */
     public Integer call() {
         var out = spec.commandLine().getOut();
         var err = spec.commandLine().getErr();
