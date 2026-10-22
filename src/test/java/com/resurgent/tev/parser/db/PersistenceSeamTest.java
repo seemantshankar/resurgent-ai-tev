@@ -848,10 +848,10 @@ class PersistenceSeamTest {
 
     @Test
     void migrationV70TransitionsVersionsDifferToRuleSettlement() throws Exception {
-        try (WorkspaceDatabase db = openDb("m4-v70.db")) {
+        Path dbPath = tempDir.resolve("m4-v70.db");
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
             java.sql.Connection c = db.connection();
             try (java.sql.Statement s = c.createStatement()) {
-                // Ensure schema is fully migrated to V70
                 s.execute("INSERT INTO document (mandate_id, logical_name, doc_family, status, created_at, updated_at)"
                         + " VALUES (1, 'Quote', 'quotation', 'active', 'now', 'now')");
                 s.execute("INSERT INTO document_version (document_id, version_label, file_name, file_hash, file_ext, file_role, ingest_status, ingested_at)"
@@ -860,27 +860,32 @@ class PersistenceSeamTest {
                         + " VALUES (1, 'b.xlsx', 'hashb', 'fm_xlsx', 'now', 'v1')");
                 s.execute("INSERT INTO parse_run (source_file_id, mandate_id, parser_version, config_hash, started_at, status)"
                         + " VALUES (1, 1, 'v1', 'cfg', 'now', 'success')");
-                s.execute("INSERT INTO fact (parse_run_id, document_version_id, field_key, value_kind, extraction_method, created_at)"
-                        + " VALUES (1, 1, 'gross_total', 'money', 'deterministic', 'now')");
-                s.execute("INSERT INTO fact (parse_run_id, document_version_id, field_key, value_kind, extraction_method, created_at)"
-                        + " VALUES (1, 1, 'gross_total', 'money', 'deterministic', 'now')");
-                // Test backfill query directly against schema
+                s.execute("INSERT INTO fact (fact_id, parse_run_id, document_version_id, field_key, value_kind, extraction_method, created_at)"
+                        + " VALUES (1, 1, 1, 'gross_total', 'money', 'deterministic', 'now')");
+                s.execute("INSERT INTO fact (fact_id, parse_run_id, document_version_id, field_key, value_kind, extraction_method, created_at)"
+                        + " VALUES (2, 1, 1, 'gross_total', 'money', 'deterministic', 'now')");
+                // Pre-V70 state: versions-differ row with settlement IS NULL and right fact is_current = 1
                 s.execute("INSERT INTO conflict (mandate_id, kind, data_point, verdict, left_fact_id, right_fact_id, left_value, right_value, left_document_version_id, right_document_version_id, reasoning, created_at)"
                         + " VALUES (1, 'versions-differ', 'gross_total', 'differs', 2, 1, 'Rs. 50', 'Rs. 40', 1, 1, 'initial reasoning', 'now')");
-                s.execute("UPDATE conflict SET settlement = 'rule', chosen_side = 'left', rule_id = 'version_precedence_v1', rules_version = '1.0' WHERE kind = 'versions-differ' AND settlement IS NULL");
-                s.execute("UPDATE fact SET is_current = 0, superseded_by_fact_id = 2 WHERE fact_id = 1");
+            }
+        }
 
-                try (ResultSet rs = s.executeQuery("SELECT settlement, chosen_side, rule_id FROM conflict WHERE conflict_id = 1")) {
-                    assertThat(rs.next()).isTrue();
-                    assertThat(rs.getString("settlement")).isEqualTo("rule");
-                    assertThat(rs.getString("chosen_side")).isEqualTo("left");
-                    assertThat(rs.getString("rule_id")).isEqualTo("version_precedence_v1");
-                }
-                try (ResultSet rs = s.executeQuery("SELECT is_current, superseded_by_fact_id FROM fact WHERE fact_id = 1")) {
-                    assertThat(rs.next()).isTrue();
-                    assertThat(rs.getInt("is_current")).isZero();
-                    assertThat(rs.getLong("superseded_by_fact_id")).isEqualTo(2L);
-                }
+        try (java.sql.Connection c = java.sql.DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+                java.sql.Statement s = c.createStatement()) {
+            for (String statement : migrationStatements("V70__m4_versions_differ_rule_settlement.sql")) {
+                s.execute(statement);
+            }
+
+            try (ResultSet rs = s.executeQuery("SELECT settlement, chosen_side, rule_id FROM conflict WHERE conflict_id = 1")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("settlement")).isEqualTo("rule");
+                assertThat(rs.getString("chosen_side")).isEqualTo("left");
+                assertThat(rs.getString("rule_id")).isEqualTo("version_precedence_v1");
+            }
+            try (ResultSet rs = s.executeQuery("SELECT is_current, superseded_by_fact_id FROM fact WHERE fact_id = 1")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getInt("is_current")).isZero();
+                assertThat(rs.getLong("superseded_by_fact_id")).isEqualTo(2L);
             }
         }
     }
