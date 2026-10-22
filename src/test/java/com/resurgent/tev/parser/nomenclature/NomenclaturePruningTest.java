@@ -32,11 +32,10 @@ class NomenclaturePruningTest {
             catalog.putSoftLeaf(7L, "Project Cost > Civil Works", "GST @ 18%",
                     List.of("GST @ 18%"));
             catalog.putSoftLeaf(7L, "Profit & Loss", "Closing Stock", List.of("Closing Stock"));
-            // stand where this workspace sat before the rule existed: V68 — the newest
-            // migration, recorded by its position in WorkspaceDatabase.MIGRATIONS — un-applied
+            // stand where this workspace sat before the rule existed: V68 — un-applied
             try (Statement s = db.connection().createStatement()) {
-                s.execute("DELETE FROM schema_migration WHERE version >= "
-                        + WorkspaceDatabase.latestVersion());
+                s.execute("DELETE FROM schema_migration WHERE version = "
+                        + WorkspaceDatabase.versionOf(WorkspaceDatabase.V68_PRUNE_TRANSCRIBED_LEAVES));
             }
         }
 

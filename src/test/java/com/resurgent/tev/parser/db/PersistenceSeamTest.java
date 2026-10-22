@@ -814,6 +814,82 @@ class PersistenceSeamTest {
         }
     }
 
+    @Test
+    void migrationV69AdmitsM4FreshnessAndSnapshotStorage() throws Exception {
+        try (WorkspaceDatabase db = openDb("m4-snapshots.db")) {
+            java.sql.Connection c = db.connection();
+            try (java.sql.Statement s = c.createStatement()) {
+                // assessment_run admits assess_freshness
+                s.execute("INSERT INTO assessment_run (mandate_id, stage, status, started_at)"
+                        + " VALUES (1, 'assess_freshness', 'completed', 'now')");
+
+                // run_stat admits assess_freshness and doc-drift
+                s.execute("INSERT INTO source_file (mandate_id, file_name, file_hash, file_type, ingested_at, parser_version) VALUES (1, 'a.xlsx', 'hash', 'fm_xlsx', 'now', 'v1')");
+                s.execute("INSERT INTO parse_run (source_file_id, mandate_id, parser_version, config_hash, started_at, status) VALUES (1, 1, 'v1', 'cfg', 'now', 'success')");
+                s.execute("INSERT INTO run_stat (parse_run_id, stage, name, value_num)"
+                        + " VALUES (1, 'assess_freshness', 'freshness_checked', 1.0)");
+                s.execute("INSERT INTO run_stat (parse_run_id, stage, name, value_num)"
+                        + " VALUES (1, 'doc-drift', 'drift_ratio', 0.05)");
+
+                // llm_usage admits assess_freshness and doc-drift
+                s.execute("INSERT INTO llm_usage (parse_run_id, stage, model_id, calls, prompt_tokens, completion_tokens)"
+                        + " VALUES (1, 'assess_freshness', 'gpt-4o', 1, 100, 50)");
+                s.execute("INSERT INTO llm_usage (parse_run_id, stage, model_id, calls, prompt_tokens, completion_tokens)"
+                        + " VALUES (1, 'doc-drift', 'gpt-4o', 1, 100, 50)");
+
+                // fact_snapshot and snapshot_fact_link exist
+                assertThat(columnNames(c, "fact_snapshot")).contains(
+                        "snapshot_id", "mandate_id", "output_type", "output_key", "is_stale", "stale_at", "stale_reason", "created_at");
+                assertThat(columnNames(c, "snapshot_fact_link")).contains(
+                        "snapshot_id", "fact_id", "recorded_value", "recorded_at");
+            }
+        }
+    }
+
+    @Test
+    void migrationV70TransitionsVersionsDifferToRuleSettlement() throws Exception {
+        Path dbPath = tempDir.resolve("m4-v70.db");
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            java.sql.Connection c = db.connection();
+            try (java.sql.Statement s = c.createStatement()) {
+                s.execute("INSERT INTO document (mandate_id, logical_name, doc_family, status, created_at, updated_at)"
+                        + " VALUES (1, 'Quote', 'quotation', 'active', 'now', 'now')");
+                s.execute("INSERT INTO document_version (document_id, version_label, file_name, file_hash, file_ext, file_role, ingest_status, ingested_at)"
+                        + " VALUES (1, 'v1', 'q.pdf', 'hash1', '.pdf', 'quotation', 'ingested', 'now')");
+                s.execute("INSERT INTO source_file (mandate_id, file_name, file_hash, file_type, ingested_at, parser_version)"
+                        + " VALUES (1, 'b.xlsx', 'hashb', 'fm_xlsx', 'now', 'v1')");
+                s.execute("INSERT INTO parse_run (source_file_id, mandate_id, parser_version, config_hash, started_at, status)"
+                        + " VALUES (1, 1, 'v1', 'cfg', 'now', 'success')");
+                s.execute("INSERT INTO fact (fact_id, parse_run_id, document_version_id, field_key, value_kind, extraction_method, created_at)"
+                        + " VALUES (1, 1, 1, 'gross_total', 'money', 'deterministic', 'now')");
+                s.execute("INSERT INTO fact (fact_id, parse_run_id, document_version_id, field_key, value_kind, extraction_method, created_at)"
+                        + " VALUES (2, 1, 1, 'gross_total', 'money', 'deterministic', 'now')");
+                // Pre-V70 state: versions-differ row with settlement IS NULL and right fact is_current = 1
+                s.execute("INSERT INTO conflict (mandate_id, kind, data_point, verdict, left_fact_id, right_fact_id, left_value, right_value, left_document_version_id, right_document_version_id, reasoning, created_at)"
+                        + " VALUES (1, 'versions-differ', 'gross_total', 'differs', 2, 1, 'Rs. 50', 'Rs. 40', 1, 1, 'initial reasoning', 'now')");
+            }
+        }
+
+        try (java.sql.Connection c = java.sql.DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+                java.sql.Statement s = c.createStatement()) {
+            for (String statement : migrationStatements("V70__m4_versions_differ_rule_settlement.sql")) {
+                s.execute(statement);
+            }
+
+            try (ResultSet rs = s.executeQuery("SELECT settlement, chosen_side, rule_id FROM conflict WHERE conflict_id = 1")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("settlement")).isEqualTo("rule");
+                assertThat(rs.getString("chosen_side")).isEqualTo("left");
+                assertThat(rs.getString("rule_id")).isEqualTo("version_precedence_v1");
+            }
+            try (ResultSet rs = s.executeQuery("SELECT is_current, superseded_by_fact_id FROM fact WHERE fact_id = 1")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getInt("is_current")).isZero();
+                assertThat(rs.getLong("superseded_by_fact_id")).isEqualTo(2L);
+            }
+        }
+    }
+
     private static java.util.Set<String> columnNames(java.sql.Connection c, String table) throws Exception {
         java.util.Set<String> columns = new java.util.HashSet<>();
         try (ResultSet rs = c.createStatement().executeQuery("PRAGMA table_info(" + table + ")")) {
@@ -825,3 +901,4 @@ class PersistenceSeamTest {
     }
 
 }
+

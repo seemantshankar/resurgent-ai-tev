@@ -246,19 +246,39 @@ public final class AssessPassagesRunner implements AssessStage {
      * Never a parser — chapter facts are extracted from stored pages.
      */
     private static ExtractClient resolveExtractor(Path dbPath) {
+        Path dir = dbPath.toAbsolutePath().getParent() == null
+                ? Path.of("docfixtures")
+                : dbPath.toAbsolutePath().getParent().resolve("docfixtures");
+        if (dir != null && java.nio.file.Files.isDirectory(dir) && hasFixtureFiles(dir)) {
+            FixtureExtractClient fixture = new FixtureExtractClient();
+            try {
+                fixture.loadDirectory(dir);
+                return fixture;
+            } catch (Exception ignored) {
+                // fall through
+            }
+        }
         if (LlamaExtractAdapter.hasApiKey()) {
             return new LlamaExtractAdapter();
         }
         FixtureExtractClient fixture = new FixtureExtractClient();
-        Path dir = dbPath.toAbsolutePath().getParent() == null
-                ? Path.of("docfixtures")
-                : dbPath.toAbsolutePath().getParent().resolve("docfixtures");
         try {
             fixture.loadDirectory(dir);
         } catch (Exception e) {
             // No staged fixtures is a legitimate empty state: chapters yield no facts.
         }
         return fixture;
+    }
+
+    /**
+     * Checks whether the directory contains any *.expected.json fixture files.
+     */
+    private static boolean hasFixtureFiles(Path dir) {
+        try (var stream = java.nio.file.Files.list(dir)) {
+            return stream.anyMatch(p -> p.getFileName().toString().endsWith(".expected.json"));
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /**
@@ -330,28 +350,27 @@ public final class AssessPassagesRunner implements AssessStage {
                 pathRoot = field.get().pathRootWire();
             }
         }
-        return new FactRepository.FactWrite(
-                candidate.key(),
-                path,
-                pathRoot,
-                candidate.subjectEntity(),
-                candidate.valueKind().wireName(),
-                candidate.valueText(),
-                candidate.valueNumber(),
-                candidate.valueDate(),
-                candidate.unit(),
-                candidate.currency(),
-                candidate.scale(),
-                candidate.absoluteAmount(),
-                null,
-                candidate.extractionMethod(),
-                extractorId,
-                candidate.confidence(),
-                candidate.statedOrDerived(),
-                candidate.lineKey(),
-                null,
-                candidate.citations(),
-                List.of());
+        return FactRepository.FactWrite.builder()
+                .fieldKey(candidate.key())
+                .ontologyPath(path)
+                .pathRoot(pathRoot)
+                .subjectEntity(candidate.subjectEntity())
+                .valueKind(candidate.valueKind().wireName())
+                .valueText(candidate.valueText())
+                .valueNumber(candidate.valueNumber())
+                .valueDate(candidate.valueDate())
+                .unit(candidate.unit())
+                .currency(candidate.currency())
+                .scale(candidate.scale())
+                .absoluteAmount(candidate.absoluteAmount())
+                .extractionMethod(candidate.extractionMethod())
+                .extractorId(extractorId)
+                .confidence(candidate.confidence())
+                .statedOrDerived(candidate.statedOrDerived())
+                .lineKey(candidate.lineKey())
+                .citations(candidate.citations())
+                .basisEvidence(candidate.basisEvidence())
+                .build();
     }
 
     /**

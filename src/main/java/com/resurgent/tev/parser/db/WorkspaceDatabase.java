@@ -26,7 +26,7 @@ public final class WorkspaceDatabase implements AutoCloseable {
      * (ADR 0022 §2, issue #154). Retired migration numbers make a file's V-number differ
      * from the version it records, so its data step is matched on the resource, not a number.
      */
-    private static final String V68_PRUNE_TRANSCRIBED_LEAVES =
+    public static final String V68_PRUNE_TRANSCRIBED_LEAVES =
             "db/migration/V68__prune_transcribed_soft_leaves.sql";
 
     /** Bundled migration scripts in apply order; version = index + 1. */
@@ -96,12 +96,24 @@ public final class WorkspaceDatabase implements AutoCloseable {
             "db/migration/V65__conflict_skip_nullable_ontology_path.sql",
             "db/migration/V66__llm_usage_cost_unit.sql",
             "db/migration/V67__assessment_run_partial_status.sql",
-            V68_PRUNE_TRANSCRIBED_LEAVES
+            V68_PRUNE_TRANSCRIBED_LEAVES,
+            "db/migration/V69__m4_snapshots_freshness.sql",
+            "db/migration/V70__m4_versions_differ_rule_settlement.sql"
     };
 
     /** Number of bundled migrations, i.e. the schema version a fully migrated database reports. */
     public static int latestVersion() {
         return MIGRATIONS.length;
+    }
+
+    /** Returns the 1-based version number of the specified migration resource. */
+    public static int versionOf(String resource) {
+        for (int i = 0; i < MIGRATIONS.length; i++) {
+            if (MIGRATIONS[i].equals(resource)) {
+                return i + 1;
+            }
+        }
+        throw new IllegalArgumentException("unknown migration: " + resource);
     }
 
     private final Connection connection;

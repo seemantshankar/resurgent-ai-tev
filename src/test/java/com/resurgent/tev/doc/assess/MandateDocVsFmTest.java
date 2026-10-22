@@ -46,6 +46,7 @@ import java.io.StringWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
@@ -132,7 +133,7 @@ class MandateDocVsFmTest {
         DocAssessRunner.run(MANDATE, dbPath, null);
 
         MandateQa qa = qa();
-        assertThat(qa.stages()).hasSize(5).allSatisfy(stage ->
+        assertThat(qa.stages()).hasSize(6).allSatisfy(stage ->
                 assertThat(stage.status()).isEqualTo("completed"));
         assertThat(qa.conflicts()).hasSize(1);
         MandateQa.ConflictRow conflict = qa.conflicts().get(0);
@@ -602,6 +603,232 @@ class MandateDocVsFmTest {
                         .contains("1 document-vs-model"));
     }
 
+    // --- M4-03: non-money (quantity / rate / percent) joins and unit skips ---------
+
+    @Test
+    void fmQuantityWithinOnePercentCreatesNoConflict() throws Exception {
+        Path xlsx = modelWorkbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lakhs)");
+            sheet.createRow(2).createCell(0).setCellValue("Project cost");
+            sheet.getRow(2).createCell(1).setCellValue(6000);
+            sheet.createRow(3).createCell(0).setCellValue("Capacity");
+            sheet.getRow(3).createCell(1).setCellValue(1200);
+        });
+        long fmRun = ingestFm(xlsx, List.of(
+                new LayerBAssignment(null, "B3", "economic", "Project Cost"),
+                new LayerBAssignment(null, "B4", "economic", "Project > Installed Capacity")));
+        setCellReading(fmRun, "B4", "quantity", "unit", "kWp");
+        // 1205 kWp vs 1200 kWp is ~0.4% apart — within 1% tolerance
+        ingestDpr("Rs. 60,00,00,000", null, "1205 kWp");
+
+        DocAssessRunner.run(MANDATE, dbPath, null);
+
+        MandateQa qa = qa();
+        assertThat(qa.conflicts()).isEmpty();
+        assertThat(qa.conflictSkips()).isEmpty();
+    }
+
+    @Test
+    void fmQuantityDisagreementCreatesDocFmConflict() throws Exception {
+        Path xlsx = modelWorkbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lakhs)");
+            sheet.createRow(2).createCell(0).setCellValue("Project cost");
+            sheet.getRow(2).createCell(1).setCellValue(6000);
+            sheet.createRow(3).createCell(0).setCellValue("Capacity");
+            sheet.getRow(3).createCell(1).setCellValue(1000);
+        });
+        long fmRun = ingestFm(xlsx, List.of(
+                new LayerBAssignment(null, "B3", "economic", "Project Cost"),
+                new LayerBAssignment(null, "B4", "economic", "Project > Installed Capacity")));
+        setCellReading(fmRun, "B4", "quantity", "unit", "kWp");
+        // 1200 kWp vs 1000 kWp differs by 20%
+        ingestDpr("Rs. 60,00,00,000", null, "1200 kWp");
+
+        DocAssessRunner.run(MANDATE, dbPath, null);
+
+        MandateQa qa = qa();
+        assertThat(qa.conflicts()).hasSize(1);
+        MandateQa.ConflictRow conflict = qa.conflicts().get(0);
+        assertThat(conflict.kind()).isEqualTo("doc-fm");
+        assertThat(conflict.ontologyPath()).isEqualTo("economic > Project > Installed Capacity");
+        assertThat(conflict.left().value()).contains("1200 kWp");
+        assertThat(conflict.right().value()).contains("1000");
+    }
+
+    @Test
+    void fmQuantityWithIncompatibleUnitCreatesConflictSkip() throws Exception {
+        Path xlsx = modelWorkbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lakhs)");
+            sheet.createRow(2).createCell(0).setCellValue("Project cost");
+            sheet.getRow(2).createCell(1).setCellValue(6000);
+            sheet.createRow(3).createCell(0).setCellValue("Capacity");
+            sheet.getRow(3).createCell(1).setCellValue(1.2);
+        });
+        long fmRun = ingestFm(xlsx, List.of(
+                new LayerBAssignment(null, "B3", "economic", "Project Cost"),
+                new LayerBAssignment(null, "B4", "economic", "Project > Installed Capacity")));
+        // Model states MWp, doc states kWp — incompatible units must not be converted or marked conflict
+        setCellReading(fmRun, "B4", "quantity", "unit", "MWp");
+        ingestDpr("Rs. 60,00,00,000", null, "1200 kWp");
+
+        DocAssessRunner.run(MANDATE, dbPath, null);
+
+        MandateQa qa = qa();
+        assertThat(qa.conflicts()).isEmpty();
+        assertThat(qa.conflictSkips()).hasSize(1);
+        MandateQa.ConflictSkipRow skip = qa.conflictSkips().get(0);
+        assertThat(skip.ontologyPath()).isEqualTo("economic > Project > Installed Capacity");
+        assertThat(skip.reason()).contains("unit_mismatch_no_conversion");
+    }
+
+    @Test
+    void fmRateWithinToleranceProducesNoConflict() throws Exception {
+        Path xlsx = modelWorkbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lakhs)");
+            sheet.createRow(2).createCell(0).setCellValue("Project cost");
+            sheet.getRow(2).createCell(1).setCellValue(6000);
+            sheet.createRow(3).createCell(0).setCellValue("Gross Margin");
+            sheet.getRow(3).createCell(1).setCellValue(0.105);
+        });
+        long fmRun = ingestFm(xlsx, List.of(
+            new LayerBAssignment(null, "B3", "economic", "Project Cost"),
+            new LayerBAssignment(null, "B4", "economic", "Key Ratios > Profitability > Gross Margin")));
+        setCellReading(fmRun, "B4", "rate", "unit", "percent");
+
+        long dprVersion = ingestDpr("Rs. 60,00,00,000");
+        // 10.5% against model 0.105 percent agrees
+        insertBoundFact(dprVersion, "gross_margin", "economic > Key Ratios > Profitability > Gross Margin", "rate", "10.5%", 0.105, "percent");
+
+        DocAssessRunner.run(MANDATE, dbPath, null);
+
+        MandateQa qa = qa();
+        assertThat(qa.conflicts()).isEmpty();
+        assertThat(qa.conflictSkips()).isEmpty();
+    }
+
+    @Test
+    void fmRateDisagreementProducesDocFmConflict() throws Exception {
+        Path xlsx = modelWorkbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lakhs)");
+            sheet.createRow(2).createCell(0).setCellValue("Project cost");
+            sheet.getRow(2).createCell(1).setCellValue(6000);
+            sheet.createRow(3).createCell(0).setCellValue("Gross Margin");
+            sheet.getRow(3).createCell(1).setCellValue(0.09);
+        });
+        long fmRun = ingestFm(xlsx, List.of(
+            new LayerBAssignment(null, "B3", "economic", "Project Cost"),
+            new LayerBAssignment(null, "B4", "economic", "Key Ratios > Profitability > Gross Margin")));
+        setCellReading(fmRun, "B4", "rate", "unit", "percent");
+
+        long dprVersion = ingestDpr("Rs. 60,00,00,000");
+        // 10.5% vs 9% disagrees beyond 1%
+        insertBoundFact(dprVersion, "gross_margin", "economic > Key Ratios > Profitability > Gross Margin", "rate", "10.5%", 0.105, "percent");
+
+        DocAssessRunner.run(MANDATE, dbPath, null);
+
+        MandateQa qa = qa();
+        assertThat(qa.conflicts()).hasSize(1);
+        MandateQa.ConflictRow conflict = qa.conflicts().get(0);
+        assertThat(conflict.kind()).isEqualTo("doc-fm");
+        assertThat(conflict.ontologyPath()).isEqualTo("economic > Key Ratios > Profitability > Gross Margin");
+        assertThat(conflict.left().value()).contains("10.5%");
+        assertThat(conflict.right().value()).contains("0.09");
+    }
+
+    @Test
+    void fmRateWithIncompatibleUnitProducesConflictSkip() throws Exception {
+        Path xlsx = modelWorkbook(sheet -> {
+            sheet.createRow(0).createCell(0).setCellValue("Project cost (Rs. In Lakhs)");
+            sheet.createRow(2).createCell(0).setCellValue("Project cost");
+            sheet.getRow(2).createCell(1).setCellValue(6000);
+            sheet.createRow(3).createCell(0).setCellValue("Gross Margin");
+            sheet.getRow(3).createCell(1).setCellValue(0.105);
+        });
+        long fmRun = ingestFm(xlsx, List.of(
+            new LayerBAssignment(null, "B3", "economic", "Project Cost"),
+            new LayerBAssignment(null, "B4", "economic", "Key Ratios > Profitability > Gross Margin")));
+        // Model states percent, doc states percent_pa — differing units must produce skip with unit_mismatch_no_conversion
+        setCellReading(fmRun, "B4", "rate", "unit", "percent");
+
+        long dprVersion = ingestDpr("Rs. 60,00,00,000");
+        insertBoundFact(dprVersion, "gross_margin", "economic > Key Ratios > Profitability > Gross Margin", "rate", "10.5% p.a.", 0.105, "percent_pa");
+
+        DocAssessRunner.run(MANDATE, dbPath, null);
+
+        MandateQa qa = qa();
+        assertThat(qa.conflicts()).isEmpty();
+        assertThat(qa.conflictSkips()).hasSize(1);
+        MandateQa.ConflictSkipRow skip = qa.conflictSkips().get(0);
+        assertThat(skip.ontologyPath()).isEqualTo("economic > Key Ratios > Profitability > Gross Margin");
+        assertThat(skip.reason()).contains("unit_mismatch_no_conversion");
+    }
+
+    private void insertBoundFact(long versionId, String fieldKey, String ontologyPath,
+            String valueKind, String valueText, Double valueNumber, String unit) throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            long sourceFileId = repo.insertSourceFile(MANDATE, "fact_" + fieldKey + ".pdf", "hash-" + fieldKey,
+                    "pdf", "2026-01-01T00:00:00Z", "0.1.0", null);
+            long runId = repo.insertParseRun(sourceFileId, MANDATE, "0.1.0", "assess_passages",
+                    "2026-01-01T00:00:00Z", "2026-01-01T00:00:01Z", "success", null);
+            new FactRepository(db.connection()).replaceFacts(runId, versionId, List.of(
+                    FactRepository.FactWrite.builder()
+                            .fieldKey(fieldKey)
+                            .ontologyPath(ontologyPath)
+                            .pathRoot(ontologyPath.contains(" > ") ? ontologyPath.split(" > ")[0] : null)
+                            .valueKind(valueKind)
+                            .valueText(valueText)
+                            .valueNumber(valueNumber)
+                            .unit(unit)
+                            .extractionMethod("llm_field")
+                            .extractorId("fixture")
+                            .confidence(0.9)
+                            .statedOrDerived("stated")
+                            .build()));
+            try (var ps = db.connection().prepareStatement("UPDATE fact SET nomenclature_status = 'bound' WHERE parse_run_id = ?")) {
+                ps.setLong(1, runId);
+                ps.executeUpdate();
+            }
+        }
+    }
+
+    private void setCellReading(long parseRunId, String coord, String kind, String scale, String unit) throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            Long cellId = null;
+            for (InterpretationCellView cell : repo.selectInterpretationCellsForParseRun(parseRunId)) {
+                if (coord.equalsIgnoreCase(cell.coord())) {
+                    cellId = cell.cellId();
+                    break;
+                }
+            }
+            assertThat(cellId).isNotNull();
+            String updateSql = "money".equals(kind)
+                    ? "UPDATE cell_reading SET kind = ?, scale = ?, unit = ?, type_source = 'input', refusal = NULL WHERE parse_run_id = ? AND cell_id = ?"
+                    : "UPDATE cell_reading SET kind = ?, scale = ?, unit = ?, absolute_amount = NULL, scale_basis = NULL, type_source = 'input', refusal = NULL WHERE parse_run_id = ? AND cell_id = ?";
+            try (var ps = db.connection().prepareStatement(updateSql)) {
+                ps.setString(1, kind);
+                ps.setString(2, scale);
+                ps.setString(3, unit);
+                ps.setLong(4, parseRunId);
+                ps.setLong(5, cellId);
+                int updated = ps.executeUpdate();
+                if (updated == 0) {
+                    try (var ins = db.connection().prepareStatement(
+                            "INSERT INTO cell_reading (parse_run_id, cell_id, kind, scale, unit, currency, absolute_amount, type_source, refusal, scale_basis)"
+                                    + " VALUES (?, ?, ?, ?, ?, '', NULL, 'input', NULL, NULL)")) {
+                        ins.setLong(1, parseRunId);
+                        ins.setLong(2, cellId);
+                        ins.setString(3, kind);
+                        ins.setString(4, scale);
+                        ins.setString(5, unit);
+                        ins.executeUpdate();
+                    }
+                }
+            }
+        }
+    }
+
     // --- FM seams: the unchanged pipeline over a synthetic workbook ------------
 
     /**
@@ -661,16 +888,26 @@ class MandateDocVsFmTest {
 
     /** Ingests one DPR PDF, lays it out, classifies it and extracts the fixture facts. */
     private long ingestDpr(String total) throws Exception {
-        return ingestDpr(total, null);
+        return ingestDpr(total, null, null);
     }
 
     private long ingestDpr(String total, String period) throws Exception {
-        Path pdf = writePdf("dpr_sunbeam.pdf", List.of(
+        return ingestDpr(total, period, null);
+    }
+
+    private long ingestDpr(String total, String period, String capacity) throws Exception {
+        List<String> lines = new ArrayList<>(List.of(
                 "Detailed Project Report",
                 "Project: Sunbeam Solar Park",
                 "Total project cost: " + total,
-                "Report Date: 10 June 2026",
-                period == null ? "" : "Period: " + period));
+                "Report Date: 10 June 2026"));
+        if (period != null) {
+            lines.add("Period: " + period);
+        }
+        if (capacity != null) {
+            lines.add("Capacity: " + capacity);
+        }
+        Path pdf = writePdf("dpr_sunbeam.pdf", lines);
         DocumentIngestService.IngestResult ingested = new DocumentIngestService().ingest(
                 new DocumentIngestService.IngestRequest(
                         pdf, MANDATE, "DPR - Sunbeam Solar Park", "v1", "dpr", "dpr"),
@@ -678,7 +915,7 @@ class MandateDocVsFmTest {
         new DocumentLayoutService().layout(ingested.documentVersionId(), dbPath, blobs);
         classify(ingested.documentVersionId());
         FixtureExtractClient extractClient = new FixtureExtractClient();
-        JsonNode fixture = dprFixture(total);
+        JsonNode fixture = dprFixture(total, capacity);
         if (period != null) {
             ((com.fasterxml.jackson.databind.node.ObjectNode) fixture.get("fields"))
                     .putObject("period").put("value", period)
@@ -786,16 +1023,23 @@ class MandateDocVsFmTest {
     }
 
     private static JsonNode dprFixture(String total) throws Exception {
-        return MAPPER.readTree("""
-                {
-                  "doc_type_code": "report.dpr",
-                  "fields": {
-                    "project_name": {"value": "Sunbeam Solar Park",
-                      "quote": "Project: Sunbeam Solar Park", "page": 1},
-                    "project_cost": {"value": "%s",
-                      "quote": "Total project cost: %s", "page": 1}
-                  }
-                }""".formatted(total, total));
+        return dprFixture(total, null);
+    }
+
+    private static JsonNode dprFixture(String total, String capacity) throws Exception {
+        com.fasterxml.jackson.databind.node.ObjectNode fields = MAPPER.createObjectNode();
+        fields.putObject("project_name").put("value", "Sunbeam Solar Park")
+                .put("quote", "Project: Sunbeam Solar Park").put("page", 1);
+        fields.putObject("project_cost").put("value", total)
+                .put("quote", "Total project cost: " + total).put("page", 1);
+        if (capacity != null) {
+            fields.putObject("capacity_mw").put("value", capacity)
+                    .put("quote", "Capacity: " + capacity).put("page", 1);
+        }
+        com.fasterxml.jackson.databind.node.ObjectNode root = MAPPER.createObjectNode();
+        root.put("doc_type_code", "report.dpr");
+        root.set("fields", fields);
+        return root;
     }
 
     private Path writePdf(String name, List<String> lines) throws Exception {

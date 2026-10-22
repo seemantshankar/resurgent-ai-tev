@@ -256,7 +256,7 @@ class PassagesAndChapterFactsTest {
         // checklist stage after it (merged pipeline).
         assertThat(result.stages()).extracting(AssessStage.StageResult::stage)
                 .containsExactly("assess_profile", "assess_clauses", "assess_passages",
-                        "assess_conflicts", "assess_checklist");
+                        "assess_conflicts", "assess_checklist", "assess_freshness");
 
         // The only new parse runs are the assess stage's own: passages never trigger a
         // parser, and the stored parse output is not rewritten (same parse job, tier

@@ -99,6 +99,9 @@ public final class SchemaCompiler {
     private static Set<String> tableOwnedKeys(DocTypePack pack) {
         Set<String> keys = new HashSet<>();
         for (Map<String, Object> table : pack.tables()) {
+            if (table.get("period_key") == null) {
+                continue;
+            }
             Object fieldsObj = table.get("fields");
             if (fieldsObj instanceof java.util.List<?> list) {
                 for (Object raw : list) {

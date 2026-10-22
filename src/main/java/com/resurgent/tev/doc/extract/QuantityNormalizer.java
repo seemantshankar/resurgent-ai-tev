@@ -45,7 +45,7 @@ public final class QuantityNormalizer {
         }
         try {
             double value = new BigDecimal(m.group(1).replace(",", "")).doubleValue();
-            return new Result(value, unit == null ? null : KindTokens.normalizeUnit(unit));
+            return new Result(value, unit == null ? null : KindTokens.normalizeUnit(unit), unit);
         } catch (NumberFormatException e) {
             return Result.empty();
         }
@@ -56,11 +56,22 @@ public final class QuantityNormalizer {
      *
      * @param valueNumber the figure
      * @param unit canonical unit key, null when the text states none
+     * @param verbatimUnit the exact verbatim token from the source text
      */
-    public record Result(Double valueNumber, String unit) {
+    public record Result(Double valueNumber, String unit, String verbatimUnit) {
 
+        /**
+         * Constructs normalized quantity result.
+         */
+        public Result(Double valueNumber, String unit) {
+            this(valueNumber, unit, unit);
+        }
+
+        /**
+         * Returns an empty normalization result.
+         */
         public static Result empty() {
-            return new Result(null, null);
+            return new Result(null, null, null);
         }
     }
 }

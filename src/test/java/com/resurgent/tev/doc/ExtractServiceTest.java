@@ -600,4 +600,71 @@ class ExtractServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("out of range");
     }
+
+    @Test
+    void extractedFactsRecordBasisEvidenceForScaleUnitAndCurrency() throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            new CloudParsePageRepository(db.connection())
+                    .replacePages(documentVersionId, "pjb-basis", "agentic",
+                            List.of("Project Cost (Rs. In Lakhs)\nDC Capacity 1200 kWp\nTotal Capex 45.00"),
+                            List.of("Project Cost (Rs. In Lakhs)\nDC Capacity 1200 kWp\nTotal Capex 45.00"));
+            new DocumentRepository(db.connection())
+                    .insertPage(documentVersionId, 1, 600, 800, "pages/p1.png");
+        }
+
+        DocTypePack pack = new DocTypePack(
+                "technical.dpr", "1.0.0", "dpr", "dpr",
+                List.of("general"), List.of(),
+                List.of(
+                        PackField.required("capacity", "technical > Capacity",
+                                "technical", ValueKind.QUANTITY),
+                        PackField.required("capex", "economic > Capex",
+                                "economic", ValueKind.MONEY)),
+                List.of(), List.of(), List.of());
+
+        client.facts.add(new FactCandidate("capacity", ValueKind.QUANTITY)
+                .valueText("1200 kWp")
+                .confidence(0.9)
+                .extractionMethod("llm_field")
+                .addCitation(Citation.of(1, "DC Capacity 1200 kWp")));
+        client.facts.add(new FactCandidate("capex", ValueKind.MONEY)
+                .valueText("45.00")
+                .confidence(0.9)
+                .extractionMethod("llm_field")
+                .addCitation(Citation.of(1, "Total Capex 45.00")));
+
+        ExtractService.ExtractOutcome outcome = new ExtractService().extract(
+                dbPath, documentVersionId, mandateId, pack, client, "1");
+        assertThat(outcome.status()).isEqualTo("success");
+
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            FactRepository facts = new FactRepository(db.connection());
+            List<FactRow> rows = facts.query(FactQuery.forMandate(mandateId).withVersion(documentVersionId));
+            FactRow cap = rows.stream().filter(r -> "capacity".equals(r.fieldKey())).findFirst().orElseThrow();
+            assertThat(cap.unit()).isEqualTo("kwp");
+            assertThat(cap.evidence()).anySatisfy(e -> {
+                assertThat(e.role()).isEqualTo("unit");
+                assertThat(e.verbatim()).isEqualTo("kWp");
+                assertThat(e.normalizedValue()).isEqualTo("kwp");
+                assertThat(e.resolution()).isEqualTo("resolved");
+                assertThat(e.pageIndex()).isEqualTo(1);
+            });
+
+            FactRow capex = rows.stream().filter(r -> "capex".equals(r.fieldKey())).findFirst().orElseThrow();
+            assertThat(capex.currency()).isEqualTo("INR");
+            assertThat(capex.scale()).isEqualTo("lakh");
+            assertThat(capex.absoluteAmount()).isEqualTo("4500000");
+            assertThat(capex.evidence()).anySatisfy(e -> {
+                assertThat(e.role()).isEqualTo("currency");
+                assertThat(e.normalizedValue()).isEqualTo("INR");
+                assertThat(e.resolution()).isEqualTo("resolved");
+            });
+            assertThat(capex.evidence()).anySatisfy(e -> {
+                assertThat(e.role()).isEqualTo("scale");
+                assertThat(e.normalizedValue()).isEqualTo("lakh");
+                assertThat(e.resolution()).isEqualTo("resolved");
+                assertThat(e.verbatim()).containsIgnoringCase("Lakhs");
+            });
+        }
+    }
 }

@@ -1,5 +1,6 @@
 package com.resurgent.tev.doc.db;
 
+import com.resurgent.tev.doc.extract.BasisEvidenceWrite;
 import com.resurgent.tev.doc.extract.Citation;
 import com.resurgent.tev.doc.query.FactQuery;
 import com.resurgent.tev.doc.query.FactRow;
@@ -12,10 +13,13 @@ import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 /**
  * Persistence for extracted facts, evidence, and provenance (Architecture §6.5, S2.5).
@@ -76,11 +80,27 @@ public final class FactRepository {
             String groupKeysJson,
             List<Citation> citations,
             List<String> derivedFromKeys,
-            String period) {
+            String period,
+            List<BasisEvidenceWrite> basisEvidence) {
 
         public FactWrite {
             citations = citations == null ? List.of() : List.copyOf(citations);
             derivedFromKeys = derivedFromKeys == null ? List.of() : List.copyOf(derivedFromKeys);
+            basisEvidence = basisEvidence == null ? List.of() : List.copyOf(basisEvidence);
+        }
+
+        /** Full fact write with all parameters except basis evidence. */
+        public FactWrite(String fieldKey, String ontologyPath, String pathRoot,
+                String subjectEntity, String valueKind, String valueText, Double valueNumber,
+                String valueDate, String unit, String currency, String scale,
+                String absoluteAmount, String langSource, String extractionMethod,
+                String extractorId, Double confidence, String statedOrDerived, String lineKey,
+                String groupKeysJson, List<Citation> citations,
+                List<String> derivedFromKeys, String period) {
+            this(fieldKey, ontologyPath, pathRoot, subjectEntity, valueKind, valueText,
+                    valueNumber, valueDate, unit, currency, scale, absoluteAmount, langSource,
+                    extractionMethod, extractorId, confidence, statedOrDerived, lineKey,
+                    groupKeysJson, citations, derivedFromKeys, period, List.of());
         }
 
         /** Fact write with no period (presence fields, line items, derived values). */
@@ -94,7 +114,140 @@ public final class FactRepository {
             this(fieldKey, ontologyPath, pathRoot, subjectEntity, valueKind, valueText,
                     valueNumber, valueDate, unit, currency, scale, absoluteAmount, langSource,
                     extractionMethod, extractorId, confidence, statedOrDerived, lineKey,
-                    groupKeysJson, citations, derivedFromKeys, null);
+                    groupKeysJson, citations, derivedFromKeys, null, List.of());
+        }
+
+        /**
+         * Creates a new FactWrite builder.
+         */
+        public static Builder builder() {
+            return new Builder();
+        }
+
+        /**
+         * Creates a builder initialized with this FactWrite instance values.
+         */
+        public Builder toBuilder() {
+            return new Builder()
+                    .fieldKey(fieldKey)
+                    .ontologyPath(ontologyPath)
+                    .pathRoot(pathRoot)
+                    .subjectEntity(subjectEntity)
+                    .valueKind(valueKind)
+                    .valueText(valueText)
+                    .valueNumber(valueNumber)
+                    .valueDate(valueDate)
+                    .unit(unit)
+                    .currency(currency)
+                    .scale(scale)
+                    .absoluteAmount(absoluteAmount)
+                    .langSource(langSource)
+                    .extractionMethod(extractionMethod)
+                    .extractorId(extractorId)
+                    .confidence(confidence)
+                    .statedOrDerived(statedOrDerived)
+                    .lineKey(lineKey)
+                    .groupKeysJson(groupKeysJson)
+                    .citations(citations)
+                    .derivedFromKeys(derivedFromKeys)
+                    .period(period)
+                    .basisEvidence(basisEvidence);
+        }
+
+        public static final class Builder {
+            private String fieldKey;
+            private String ontologyPath;
+            private String pathRoot;
+            private String subjectEntity;
+            private String valueKind;
+            private String valueText;
+            private Double valueNumber;
+            private String valueDate;
+            private String unit;
+            private String currency;
+            private String scale;
+            private String absoluteAmount;
+            private String langSource;
+            private String extractionMethod;
+            private String extractorId;
+            private Double confidence;
+            private String statedOrDerived;
+            private String lineKey;
+            private String groupKeysJson;
+            private List<Citation> citations = new ArrayList<>();
+            private List<String> derivedFromKeys = new ArrayList<>();
+            private String period;
+            private List<BasisEvidenceWrite> basisEvidence = new ArrayList<>();
+
+            /** Sets field key. */
+            public Builder fieldKey(String fieldKey) { this.fieldKey = fieldKey; return this; }
+            /** Sets ontology path. */
+            public Builder ontologyPath(String ontologyPath) { this.ontologyPath = ontologyPath; return this; }
+            /** Sets path root. */
+            public Builder pathRoot(String pathRoot) { this.pathRoot = pathRoot; return this; }
+            /** Sets subject entity. */
+            public Builder subjectEntity(String subjectEntity) { this.subjectEntity = subjectEntity; return this; }
+            /** Sets value kind. */
+            public Builder valueKind(String valueKind) { this.valueKind = valueKind; return this; }
+            /** Sets value text. */
+            public Builder valueText(String valueText) { this.valueText = valueText; return this; }
+            /** Sets value number. */
+            public Builder valueNumber(Double valueNumber) { this.valueNumber = valueNumber; return this; }
+            /** Sets value date. */
+            public Builder valueDate(String valueDate) { this.valueDate = valueDate; return this; }
+            /** Sets unit of measurement. */
+            public Builder unit(String unit) { this.unit = unit; return this; }
+            /** Sets currency identifier. */
+            public Builder currency(String currency) { this.currency = currency; return this; }
+            /** Sets scale factor. */
+            public Builder scale(String scale) { this.scale = scale; return this; }
+            /** Sets absolute numeric amount string. */
+            public Builder absoluteAmount(String absoluteAmount) { this.absoluteAmount = absoluteAmount; return this; }
+            /** Sets language source. */
+            public Builder langSource(String langSource) { this.langSource = langSource; return this; }
+            /** Sets extraction method. */
+            public Builder extractionMethod(String extractionMethod) { this.extractionMethod = extractionMethod; return this; }
+            /** Sets extractor identifier. */
+            public Builder extractorId(String extractorId) { this.extractorId = extractorId; return this; }
+            /** Sets confidence score. */
+            public Builder confidence(Double confidence) { this.confidence = confidence; return this; }
+            /** Sets stated or derived flag. */
+            public Builder statedOrDerived(String statedOrDerived) { this.statedOrDerived = statedOrDerived; return this; }
+            /** Sets line item key. */
+            public Builder lineKey(String lineKey) { this.lineKey = lineKey; return this; }
+            /** Sets group keys JSON string. */
+            public Builder groupKeysJson(String groupKeysJson) { this.groupKeysJson = groupKeysJson; return this; }
+            /** Sets list of citations. */
+            public Builder citations(List<Citation> citations) { this.citations = citations != null ? new ArrayList<>(citations) : new ArrayList<>(); return this; }
+            /**
+             * Adds a citation to this builder.
+             */
+            public Builder addCitation(Citation citation) { if (citation != null) this.citations.add(citation); return this; }
+            /** Sets keys of facts this was derived from. */
+            public Builder derivedFromKeys(List<String> derivedFromKeys) { this.derivedFromKeys = derivedFromKeys != null ? new ArrayList<>(derivedFromKeys) : new ArrayList<>(); return this; }
+            /**
+             * Adds a derived from key to this builder.
+             */
+            public Builder addDerivedFromKey(String key) { if (key != null) this.derivedFromKeys.add(key); return this; }
+            /** Sets calendar period string. */
+            public Builder period(String period) { this.period = period; return this; }
+            /** Sets basis evidence list. */
+            public Builder basisEvidence(List<BasisEvidenceWrite> basisEvidence) { this.basisEvidence = basisEvidence != null ? new ArrayList<>(basisEvidence) : new ArrayList<>(); return this; }
+            /**
+             * Adds basis evidence to this builder.
+             */
+            public Builder addBasisEvidence(BasisEvidenceWrite evidence) { if (evidence != null) this.basisEvidence.add(evidence); return this; }
+
+            /**
+             * Builds the FactWrite instance.
+             */
+            public FactWrite build() {
+                return new FactWrite(
+                        fieldKey, ontologyPath, pathRoot, subjectEntity, valueKind, valueText,
+                        valueNumber, valueDate, unit, currency, scale, absoluteAmount, langSource,
+                        extractionMethod, extractorId, confidence, statedOrDerived, lineKey,
+                        groupKeysJson, citations, derivedFromKeys, period, basisEvidence);
+            }
         }
     }
 
@@ -206,6 +359,25 @@ public final class FactRepository {
                         citation.verbatim(), resolution, null, null);
                 evidenceInserted++;
             }
+            for (BasisEvidenceWrite bev : f.basisEvidence()) {
+                Long provenanceId = null;
+                String resolution = "missing";
+                if (bev.citation() != null) {
+                    QuoteHit hit = resolveQuote(documentVersionId, bev.citation());
+                    provenanceId = insertProvenance(factId, documentVersionId, bev.citation(), hit);
+                    provenanceInserted++;
+                    if (hit.resolved()) {
+                        quotesResolved++;
+                        resolution = "resolved";
+                    } else {
+                        quotesMissing++;
+                        resolution = "missing";
+                    }
+                }
+                insertFactEvidence(factId, ordinal++, bev.role(), provenanceId,
+                        bev.sourceText(), resolution, bev.normalizedValue(), bev.ruleId());
+                evidenceInserted++;
+            }
             if ("derived".equals(f.extractionMethod()) && !f.derivedFromKeys().isEmpty()) {
                 for (String parentKey : f.derivedFromKeys()) {
                     List<Long> parentIds = idsByFieldKey.get(parentKey);
@@ -303,6 +475,17 @@ public final class FactRepository {
             insertFactEvidence(factId, ordinal++, "verbatim_quote", provenanceId,
                     citation.verbatim(), hit.resolved() ? "resolved" : "missing", null, null);
         }
+        for (BasisEvidenceWrite bev : f.basisEvidence()) {
+            Long provenanceId = null;
+            String resolution = "missing";
+            if (bev.citation() != null) {
+                QuoteHit hit = resolveQuote(documentVersionId, bev.citation());
+                provenanceId = insertProvenance(factId, documentVersionId, bev.citation(), hit);
+                resolution = hit.resolved() ? "resolved" : "missing";
+            }
+            insertFactEvidence(factId, ordinal++, bev.role(), provenanceId,
+                    bev.sourceText(), resolution, bev.normalizedValue(), bev.ruleId());
+        }
         return factId;
     }
 
@@ -312,6 +495,24 @@ public final class FactRepository {
      * @throws SQLException if any delete fails
      */
     public void deleteFactsForParseRun(long parseRunId) throws SQLException {
+        // Mark affected snapshots as stale and remove their links before deleting facts
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE fact_snapshot SET is_stale = 1, stale_reason = 'referenced facts were deleted during re-extraction' "
+                        + "WHERE snapshot_id IN ("
+                        + "    SELECT sfl.snapshot_id FROM snapshot_fact_link sfl "
+                        + "    JOIN fact f ON f.fact_id = sfl.fact_id "
+                        + "    WHERE f.parse_run_id = ?"
+                        + ")")) {
+            ps.setLong(1, parseRunId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM snapshot_fact_link WHERE fact_id IN ("
+                        + "    SELECT fact_id FROM fact WHERE parse_run_id = ?"
+                        + ")")) {
+            ps.setLong(1, parseRunId);
+            ps.executeUpdate();
+        }
         try (PreparedStatement ps = connection.prepareStatement(
                 "DELETE FROM fact_value WHERE fact_id IN"
                         + " (SELECT fact_id FROM fact WHERE parse_run_id = ?)")) {
@@ -388,6 +589,49 @@ public final class FactRepository {
                     }
                 }
             }
+            // span containment
+            if (!citation.verbatim().isBlank()) {
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "SELECT s.span_id, s.block_id FROM span s"
+                                + " JOIN block b ON b.block_id = s.block_id"
+                                + " WHERE b.page_id = ? AND instr(lower(s.text_raw), ?) > 0 LIMIT 1")) {
+                    ps.setLong(1, pageId);
+                    ps.setString(2, citation.verbatim().toLowerCase(Locale.ROOT));
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) {
+                            return new QuoteHit(true, pageId, rs.getLong("block_id"),
+                                    rs.getLong("span_id"), null, citation);
+                        }
+                    }
+                }
+                // table_cell containment
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "SELECT tc.table_cell_id, tg.block_id FROM table_cell tc"
+                                + " JOIN table_grid tg ON tg.table_grid_id = tc.table_grid_id"
+                                + " JOIN block b ON b.block_id = tg.block_id"
+                                + " WHERE b.page_id = ? AND instr(lower(tc.text_raw), ?) > 0 LIMIT 1")) {
+                    ps.setLong(1, pageId);
+                    ps.setString(2, citation.verbatim().toLowerCase(Locale.ROOT));
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) {
+                            return new QuoteHit(true, pageId, rs.getLong("block_id"), null,
+                                    rs.getLong("table_cell_id"), citation);
+                        }
+                    }
+                }
+                // block containment
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "SELECT block_id FROM block WHERE page_id = ? AND instr(lower(text_raw), ?) > 0 LIMIT 1")) {
+                    ps.setLong(1, pageId);
+                    ps.setString(2, citation.verbatim().toLowerCase(Locale.ROOT));
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) {
+                            return new QuoteHit(true, pageId, rs.getLong("block_id"), null, null,
+                                    citation);
+                        }
+                    }
+                }
+            }
         }
         QuoteHit pageHit = resolveQuoteInParsedPages(documentVersionId, citation, pageId);
         if (pageHit != null) {
@@ -454,7 +698,8 @@ public final class FactRepository {
                         + " f.absolute_amount, f.subject_entity, f.line_key, f.document_version_id,"
                         + " dv.file_name, f.extraction_method, f.confidence, f.stated_or_derived,"
                         + " f.site_id, s.site_name, f.entity_id, f.entity_reason,"
-                        + " f.nomenclature_status, f.nomenclature_reason, f.unbound_reason"
+                        + " f.nomenclature_status, f.nomenclature_reason, f.unbound_reason,"
+                        + " f.is_current, f.superseded_by_fact_id"
                         + " FROM fact f"
                         + " JOIN document_version dv ON dv.document_version_id = f.document_version_id"
                         + " JOIN document d ON d.document_id = dv.document_id"
@@ -480,6 +725,10 @@ public final class FactRepository {
         if (query.valueKind() != null && !query.valueKind().isBlank()) {
             sql.append(" AND f.value_kind = ?");
             params.add(query.valueKind().trim().toLowerCase(Locale.ROOT));
+        }
+        if (query.factId() != null) {
+            sql.append(" AND f.fact_id = ?");
+            params.add(query.factId());
         }
         if (query.currentOnly()) {
             sql.append(" AND f.is_current = 1");
@@ -531,7 +780,9 @@ public final class FactRepository {
                             asLong(rs.getObject("site_id")),
                             rs.getString("site_name"),
                             asLong(rs.getObject("entity_id")),
-                            rs.getString("entity_reason"));
+                            rs.getString("entity_reason"),
+                            rs.getInt("is_current") == 1,
+                            asLong(rs.getObject("superseded_by_fact_id")));
                     builders.put(factId, b);
                     order.add(factId);
                 }
@@ -546,6 +797,44 @@ public final class FactRepository {
             rows.add(builders.get(id).build());
         }
         return rows;
+    }
+
+    /**
+     * Looks up one fact by its unique ID, including historical facts.
+     */
+    public Optional<FactRow> findFact(long factId) throws SQLException {
+        List<FactRow> list = query(new FactQuery(null, null, null, null, false, null, factId));
+        return list.isEmpty() ? Optional.empty() : Optional.of(list.get(0));
+    }
+
+    /**
+     * Traverses the supersession chain backwards from a fact ID, returning all
+     * previous versions of this fact ordered from newest predecessor to oldest ancestor.
+     */
+    public List<FactRow> findSupersessionHistory(long currentFactId) throws SQLException {
+        List<FactRow> history = new ArrayList<>();
+        Set<Long> visited = new HashSet<>();
+        visited.add(currentFactId);
+        long targetId = currentFactId;
+        String sql = "SELECT fact_id FROM fact WHERE superseded_by_fact_id = ? ORDER BY fact_id DESC";
+        while (true) {
+            try (PreparedStatement ps = connection.prepareStatement(sql)) {
+                ps.setLong(1, targetId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        long priorId = rs.getLong(1);
+                        if (!visited.add(priorId)) {
+                            break; // Cycle detected, abort loop
+                        }
+                        findFact(priorId).ifPresent(history::add);
+                        targetId = priorId;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        return history;
     }
 
     /** Facts of a parse_run for bind (id, field_key, method, current path, stated flag). */
@@ -742,6 +1031,8 @@ public final class FactRepository {
         final String siteName;
         final Long entityId;
         final String entityReason;
+        final boolean isCurrent;
+        final Long supersededByFactId;
         final List<FactRow.EvidenceRow> evidence = new ArrayList<>();
 
         FactRowBuilder(long factId, String ontologyPath, String pathRoot,
@@ -751,7 +1042,8 @@ public final class FactRepository {
                 String unit, String currency, String scale, String absoluteAmount,
                 String subjectEntity, String lineKey, long documentVersionId, String fileName,
                 String extractionMethod, Double confidence, String statedOrDerived,
-                Long siteId, String siteName, Long entityId, String entityReason) {
+                Long siteId, String siteName, Long entityId, String entityReason,
+                boolean isCurrent, Long supersededByFactId) {
             this.factId = factId;
             this.ontologyPath = ontologyPath;
             this.pathRoot = pathRoot;
@@ -778,6 +1070,8 @@ public final class FactRepository {
             this.siteName = siteName;
             this.entityId = entityId;
             this.entityReason = entityReason;
+            this.isCurrent = isCurrent;
+            this.supersededByFactId = supersededByFactId;
         }
 
         FactRow build() {
@@ -785,7 +1079,8 @@ public final class FactRepository {
                     nomenclatureReason, unboundReason, fieldKey, valueKind, valueText,
                     valueNumber, valueDate, unit, currency, scale, absoluteAmount, subjectEntity,
                     lineKey, documentVersionId, fileName, extractionMethod, confidence,
-                    statedOrDerived, evidence, siteId, siteName, entityId, entityReason);
+                    statedOrDerived, evidence, siteId, siteName, entityId, entityReason,
+                    isCurrent, supersededByFactId);
         }
     }
 
@@ -794,7 +1089,7 @@ public final class FactRepository {
             return;
         }
         StringBuilder sql = new StringBuilder(
-                "SELECT e.fact_id, e.role, e.provenance_id, e.source_text, e.resolution,"
+                "SELECT e.fact_id, e.role, e.provenance_id, e.source_text, e.resolution, e.normalized_value,"
                         + " p.verbatim, p.bbox_x0, p.bbox_y0, p.bbox_x1, p.bbox_y1,"
                         + " pg.page_index"
                         + " FROM fact_evidence e"
@@ -831,7 +1126,8 @@ public final class FactRepository {
                             asDouble(rs.getObject("bbox_x1")),
                             asDouble(rs.getObject("bbox_y1")),
                             provenanceId,
-                            rs.getString("resolution")));
+                            rs.getString("resolution"),
+                            rs.getString("normalized_value")));
                 }
             }
         }

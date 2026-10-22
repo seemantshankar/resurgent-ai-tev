@@ -91,7 +91,7 @@ class MandateIntraDocumentTest {
         DocAssessRunner.Result result = DocAssessRunner.run(MANDATE, dbPath, new CostLlm(declined));
         assertThat(result.stages()).extracting(AssessStage.StageResult::stage)
                 .containsExactly("assess_profile", "assess_clauses", "assess_passages",
-                        "assess_conflicts", "assess_checklist");
+                        "assess_conflicts", "assess_checklist", "assess_freshness");
 
         MandateQa qa = qa();
         assertThat(qa.conflicts()).hasSize(1);
@@ -281,7 +281,7 @@ class MandateIntraDocumentTest {
         for (int run = 0; run < 2; run++) {
             DocAssessRunner.run(MANDATE, dbPath, null);
             MandateQa qa = qa();
-            assertThat(qa.stages()).hasSize(5).allSatisfy(stage ->
+            assertThat(qa.stages()).hasSize(6).allSatisfy(stage ->
                     assertThat(stage.status()).isEqualTo("completed"));
             assertThat(qa.conflicts()).singleElement().satisfies(conflict -> {
                 assertThat(conflict.kind()).isEqualTo("intra-doc");

@@ -10,6 +10,7 @@ import com.resurgent.tev.doc.classify.ClassifyResult;
 import com.resurgent.tev.doc.classify.DocTypeClassifier;
 import com.resurgent.tev.doc.cli.DocQaCommand;
 import com.resurgent.tev.doc.db.DocumentRepository;
+import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.db.MandateQaQueryRunner;
 import com.resurgent.tev.doc.extract.ExtractService;
 import com.resurgent.tev.doc.extract.FixtureExtractClient;
@@ -19,6 +20,8 @@ import com.resurgent.tev.doc.layout.DocumentLayoutService;
 import com.resurgent.tev.doc.llm.DocLlmClient;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackLoader;
+import com.resurgent.tev.doc.query.FactQuery;
+import com.resurgent.tev.doc.query.FactRow;
 import com.resurgent.tev.doc.query.MandateQa;
 import com.resurgent.tev.doc.query.MandateQaQuery;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
@@ -298,15 +301,34 @@ class MandateConflictsTest {
         MandateQa.ConflictRow row = qa.versionsDiffer().get(0);
         assertThat(row.kind()).isEqualTo("versions-differ");
         assertThat(row.dataPoint()).isEqualTo("gross_total");
-        assertThat(row.settlement()).isNull();
-        assertThat(row.chosenSide()).isNull();
+        assertThat(row.settlement()).isEqualTo("rule");
+        assertThat(row.chosenSide()).isEqualTo("left");
+        assertThat(row.ruleId()).isEqualTo("version_precedence_v1");
         // Newest first: the later document date is the left side; the older
         // statement is kept on the right, not overwritten.
         assertThat(row.left().fileName()).isEqualTo("quotation_qt5.pdf");
         assertThat(row.left().value()).isEqualTo("Rs. 52,60,00,000");
         assertThat(row.right().fileName()).isEqualTo("quotation_qt1.pdf");
         assertThat(row.right().value()).isEqualTo("Rs. 48,20,00,000");
-        assertThat(row.reasoning()).contains("M4");
+        assertThat(row.reasoning()).contains("version precedence");
+
+        // Losing right-side fact is flipped to is_current = 0 and points to winning left fact
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            FactRepository factsRepo = new FactRepository(db.connection());
+            List<FactRow> olderFacts = factsRepo.query(FactQuery.forMandate(MANDATE).withVersion(olderVersion).includingHistory());
+            FactRow losingFact = olderFacts.stream()
+                    .filter(f -> "gross_total".equals(f.fieldKey()))
+                    .findFirst().orElseThrow();
+            assertThat(losingFact.isCurrent()).isFalse();
+
+            List<FactRow> newerFacts = factsRepo.query(FactQuery.forMandate(MANDATE).withVersion(newerVersion));
+            FactRow winningFact = newerFacts.stream()
+                    .filter(f -> "gross_total".equals(f.fieldKey()))
+                    .findFirst().orElseThrow();
+            assertThat(winningFact.isCurrent()).isTrue();
+
+            assertThat(losingFact.supersededByFactId()).isEqualTo(winningFact.factId());
+        }
 
         // The document dates (#134) that make it a revision are persisted.
         assertThat(documentDate(qa, newerVersion)).isEqualTo("2026-05-20");

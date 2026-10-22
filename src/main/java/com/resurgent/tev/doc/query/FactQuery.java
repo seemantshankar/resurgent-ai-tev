@@ -11,7 +11,13 @@ public record FactQuery(
         Long documentVersionId,
         String valueKind,
         boolean currentOnly,
-        Long mandateId) {
+        Long mandateId,
+        Long factId) {
+
+    public FactQuery(String pathPrefix, Long documentId, Long documentVersionId,
+            String valueKind, boolean currentOnly, Long mandateId) {
+        this(pathPrefix, documentId, documentVersionId, valueKind, currentOnly, mandateId, null);
+    }
 
     /** Unfiltered query (current facts only). */
     public static FactQuery current() {
@@ -33,7 +39,7 @@ public record FactQuery(
      * @param pathPrefix ontology path prefix (e.g. {@code Commercial > Offtake})
      */
     public FactQuery withPathPrefix(String pathPrefix) {
-        return new FactQuery(pathPrefix, documentId, documentVersionId, valueKind, currentOnly, mandateId);
+        return new FactQuery(pathPrefix, documentId, documentVersionId, valueKind, currentOnly, mandateId, factId);
     }
 
     /**
@@ -42,7 +48,7 @@ public record FactQuery(
      * @param valueKind money | quantity | rate | percent | date | duration | text | enum | boolean | list
      */
     public FactQuery withValueKind(String valueKind) {
-        return new FactQuery(pathPrefix, documentId, documentVersionId, valueKind, currentOnly, mandateId);
+        return new FactQuery(pathPrefix, documentId, documentVersionId, valueKind, currentOnly, mandateId, factId);
     }
 
     /**
@@ -51,7 +57,7 @@ public record FactQuery(
      * @param documentVersionId version id
      */
     public FactQuery withVersion(long documentVersionId) {
-        return new FactQuery(pathPrefix, documentId, documentVersionId, valueKind, currentOnly, mandateId);
+        return new FactQuery(pathPrefix, documentId, documentVersionId, valueKind, currentOnly, mandateId, factId);
     }
 
     /**
@@ -60,7 +66,7 @@ public record FactQuery(
      * @param documentId logical document id
      */
     public FactQuery withDocument(long documentId) {
-        return new FactQuery(pathPrefix, documentId, documentVersionId, valueKind, currentOnly, mandateId);
+        return new FactQuery(pathPrefix, documentId, documentVersionId, valueKind, currentOnly, mandateId, factId);
     }
 
     /**
@@ -69,13 +75,20 @@ public record FactQuery(
      * @param mandateId mandate id
      */
     public FactQuery withMandate(long mandateId) {
-        return new FactQuery(pathPrefix, documentId, documentVersionId, valueKind, currentOnly, mandateId);
+        return new FactQuery(pathPrefix, documentId, documentVersionId, valueKind, currentOnly, mandateId, factId);
     }
 
     /**
      * Builder-style copy including historical facts.
      */
     public FactQuery includingHistory() {
-        return new FactQuery(pathPrefix, documentId, documentVersionId, valueKind, false, mandateId);
+        return new FactQuery(pathPrefix, documentId, documentVersionId, valueKind, false, mandateId, factId);
+    }
+
+    /**
+     * Builder-style copy limited to one fact ID.
+     */
+    public FactQuery withFactId(long factId) {
+        return new FactQuery(pathPrefix, documentId, documentVersionId, valueKind, currentOnly, mandateId, factId);
     }
 }
