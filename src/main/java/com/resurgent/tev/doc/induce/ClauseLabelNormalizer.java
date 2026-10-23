@@ -4,9 +4,10 @@ import java.util.List;
 
 /**
  * Groups proposed clause-type labels into canonical types (M3-09, spec "Auto-promotion").
- * The live implementation normalises with the LLM — no embeddings in M3; the offline
- * implementation groups only literally identical labels. The promoter never invents
- * types: it may only group labels the model actually proposed.
+ * The live implementation normalises with the LLM. The offline implementation groups
+ * only literally identical labels; {@code induce-clauses} then merges groups whose
+ * stored clause embeddings are cosine-similar. The promoter never invents types: it
+ * may only group labels the model actually proposed.
  */
 public interface ClauseLabelNormalizer {
 
