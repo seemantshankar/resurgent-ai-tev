@@ -480,6 +480,16 @@ public final class LlamaExtractAdapter implements ExtractClient {
                 mapLineItems(value, meta, facts, citations);
                 continue;
             }
+            if (value.isArray() && ScheduleCells.isSchedule(props.path(key).path("items")
+                    .path("properties"))) {
+                JsonNode itemProps = props.path(key).path("items").path("properties");
+                for (JsonNode row : value) {
+                    if (row.isObject()) {
+                        ScheduleCells.expand(key, itemProps, row, facts, citations);
+                    }
+                }
+                continue;
+            }
             if (value.isArray()) {
                 int index = 0;
                 for (JsonNode element : value) {

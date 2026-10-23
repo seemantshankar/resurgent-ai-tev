@@ -46,6 +46,7 @@ public final class CandidateNormalizer {
      */
     public static FactCandidate normalize(FactCandidate candidate, DocMoneyContext context) {
         DocMoneyContext ctx = context == null ? DocMoneyContext.EMPTY : context;
+        ScriptNormalizer.apply(candidate);
         switch (candidate.valueKind()) {
             case MONEY -> normalizeMoney(candidate, ctx);
             case DATE -> normalizeDate(candidate);

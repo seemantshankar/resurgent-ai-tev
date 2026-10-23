@@ -46,6 +46,10 @@ public final class RateNormalizer {
             String unit = rate.group(2).toLowerCase(Locale.ROOT);
             return new Result(Double.parseDouble(rate.group(1)), unit, text, true);
         }
+        QuantityNormalizer.Result technical = QuantityNormalizer.parse(text);
+        if (technical.valueNumber() != null && isTechnicalUnit(technical.unit())) {
+            return new Result(technical.valueNumber(), technical.unit(), text, true);
+        }
         // bare number with no unit → value yes, unit never invented
         try {
             double v = Double.parseDouble(text.replace(",", ""));
@@ -53,6 +57,13 @@ public final class RateNormalizer {
         } catch (NumberFormatException e) {
             return Result.empty();
         }
+    }
+
+    private static boolean isTechnicalUnit(String unit) {
+        return switch (unit == null ? "" : unit) {
+            case "kwp", "mwp", "kwh_m2", "kwh_kwp", "mwh_yr", "tpd", "klpd", "mva", "kv" -> true;
+            default -> false;
+        };
     }
 
     /**
