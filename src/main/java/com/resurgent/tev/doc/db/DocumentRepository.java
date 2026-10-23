@@ -351,6 +351,23 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Records which engine read a page. {@code none} means PDFBox digital text;
+     * a local engine id means OCR. Confidence is in {@code [0, 1]} or null.
+     */
+    public void updatePageOcr(long pageId, String ocrEngine, Double ocrConfidence,
+            String langDetected) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE page SET ocr_engine = ?, ocr_confidence = ?, lang_detected = ?"
+                        + " WHERE page_id = ?")) {
+            ps.setString(1, ocrEngine);
+            setDouble(ps, 2, ocrConfidence);
+            ps.setString(3, langDetected);
+            ps.setLong(4, pageId);
+            ps.executeUpdate();
+        }
+    }
+
     public Optional<Long> findPageId(long documentVersionId, int pageIndex) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT page_id FROM page WHERE document_version_id = ? AND page_index = ?")) {
@@ -431,11 +448,25 @@ public final class DocumentRepository {
     public long insertBlock(long pageId, int blockIndex, String blockKind,
             Double x0, Double y0, Double x1, Double y1, String textRaw, String textNorm,
             Integer readingOrder, String extractor) throws SQLException {
+        return insertBlock(pageId, blockIndex, blockKind, x0, y0, x1, y1, textRaw, textNorm,
+                readingOrder, extractor, false, null);
+    }
+
+    /**
+     * Inserts a block, including handwriting and the block's OCR confidence.
+     *
+     * @param handwritten {@code true} only for a handwriting block ({@code is_handwritten = 1})
+     * @param ocrConfidence mean confidence in {@code [0, 1]}, or null for digital text
+     */
+    public long insertBlock(long pageId, int blockIndex, String blockKind,
+            Double x0, Double y0, Double x1, Double y1, String textRaw, String textNorm,
+            Integer readingOrder, String extractor, boolean handwritten, Double ocrConfidence)
+            throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO block (page_id, block_index, block_kind, bbox_x0, bbox_y0,"
                         + " bbox_x1, bbox_y1, text_raw, text_norm, reading_order,"
-                        + " is_handwritten, extractor)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+                        + " is_handwritten, ocr_confidence, extractor)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, pageId);
             ps.setInt(2, blockIndex);
@@ -451,7 +482,9 @@ public final class DocumentRepository {
             } else {
                 ps.setInt(10, readingOrder);
             }
-            ps.setString(11, extractor);
+            ps.setInt(11, handwritten ? 1 : 0);
+            setDouble(ps, 12, ocrConfidence);
+            ps.setString(13, extractor);
             ps.executeUpdate();
             return generatedId(ps);
         }
@@ -641,6 +674,96 @@ public final class DocumentRepository {
     }
 
     /**
+     * A finished layout that is still a raster placeholder: {@code layout_ok},
+     * {@code ocr_required = 1}, and at least one page with no OCR engine.
+     * Re-layout upgrades those pages in place instead of returning the cache.
+     */
+    public boolean needsLocalOcrUpgrade(long documentVersionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT 1 FROM document_version v"
+                        + " WHERE v.document_version_id = ?"
+                        + " AND v.ingest_status = 'layout_ok'"
+                        + " AND v.ocr_required = 1"
+                        + " AND EXISTS (SELECT 1 FROM page p"
+                        + "  WHERE p.document_version_id = v.document_version_id"
+                        + "  AND p.ocr_engine IS NULL)")) {
+            ps.setLong(1, documentVersionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    /**
+     * Drops blocks, spans, tables, and provenance hanging off one page.
+     * The page row itself stays so a placeholder can be upgraded in place.
+     */
+    public void clearPageGraph(long pageId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM fact_evidence WHERE provenance_id IN ("
+                        + " SELECT provenance_id FROM provenance_doc"
+                        + " WHERE page_id = ? OR block_id IN"
+                        + " (SELECT block_id FROM block WHERE page_id = ?))")) {
+            ps.setLong(1, pageId);
+            ps.setLong(2, pageId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM provenance_doc WHERE page_id = ? OR block_id IN"
+                        + " (SELECT block_id FROM block WHERE page_id = ?)")) {
+            ps.setLong(1, pageId);
+            ps.setLong(2, pageId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM table_cell WHERE table_grid_id IN ("
+                        + " SELECT tg.table_grid_id FROM table_grid tg"
+                        + " JOIN block b ON b.block_id = tg.block_id"
+                        + " WHERE b.page_id = ?)")) {
+            ps.setLong(1, pageId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM table_grid WHERE block_id IN"
+                        + " (SELECT block_id FROM block WHERE page_id = ?)")) {
+            ps.setLong(1, pageId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM span WHERE block_id IN"
+                        + " (SELECT block_id FROM block WHERE page_id = ?)")) {
+            ps.setLong(1, pageId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM block WHERE page_id = ?")) {
+            ps.setLong(1, pageId);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Updates stored pixel size and the relative page-image path. */
+    public void updatePageRaster(long pageId, Integer widthPx, Integer heightPx, String imagePath)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE page SET width_px = ?, height_px = ?, image_path = ? WHERE page_id = ?")) {
+            if (widthPx == null) {
+                ps.setObject(1, null);
+            } else {
+                ps.setInt(1, widthPx);
+            }
+            if (heightPx == null) {
+                ps.setObject(2, null);
+            } else {
+                ps.setInt(2, heightPx);
+            }
+            ps.setString(3, imagePath);
+            ps.setLong(4, pageId);
+            ps.executeUpdate();
+        }
+    }
+
+    /**
      * Returns true when the version is marked layout_ok and has at least one
      * page row. Text blocks and image files are not checked.
      */
@@ -704,8 +827,10 @@ public final class DocumentRepository {
         int pages = 0;
         // pages
         try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO page (document_version_id, page_index, width_px, height_px, image_path)"
-                        + " SELECT ?, page_index, width_px, height_px, image_path"
+                "INSERT INTO page (document_version_id, page_index, width_px, height_px,"
+                        + " image_path, ocr_engine, ocr_confidence, lang_detected)"
+                        + " SELECT ?, page_index, width_px, height_px, image_path,"
+                        + " ocr_engine, ocr_confidence, lang_detected"
                         + " FROM page WHERE document_version_id = ?")) {
             ps.setLong(1, toVersionId);
             ps.setLong(2, fromVersionId);

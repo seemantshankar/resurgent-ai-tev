@@ -32,6 +32,9 @@ import java.util.List;
  * @param versionsDiffer conflicts that are really a revision: the same document type
  *     on two different document dates, newest first, settlement left to M4 (M3-12;
  *     appended)
+ * @param conflictSkips source pairs the system deliberately did not compare
+ * @param similar top-K nearest clauses or passages when the query asked for them;
+ *     empty on the plain mandate read (M5-6)
  */
 public record MandateQa(
         long mandateId,
@@ -47,7 +50,44 @@ public record MandateQa(
         List<ChecklistSummaryRow> checklistSummary,
         List<ConflictRow> conflicts,
         List<ConflictRow> versionsDiffer,
-        List<ConflictSkipRow> conflictSkips) {
+        List<ConflictSkipRow> conflictSkips,
+        List<SimilarHit> similar) {
+
+    public MandateQa {
+        similar = similar == null ? List.of() : List.copyOf(similar);
+    }
+
+    /**
+     * One nearest clause or passage, with the document, page, and verbatim snippet
+     * a reader needs to open the source.
+     *
+     * @param kind {@code clause} or {@code passage}
+     * @param id clause id or passage id
+     * @param documentId logical document id
+     * @param documentVersionId version the hit was read from
+     * @param logicalName document logical name
+     * @param fileName stored file name
+     * @param page page of the clause or passage
+     * @param snippet verbatim text
+     * @param score cosine similarity in [-1, 1]
+     */
+    public record SimilarHit(
+            String kind,
+            long id,
+            long documentId,
+            long documentVersionId,
+            String logicalName,
+            String fileName,
+            Integer page,
+            String snippet,
+            double score) {}
+
+    /** The same read with similarity hits attached. */
+    public MandateQa withSimilar(List<SimilarHit> hits) {
+        return new MandateQa(mandateId, documents, stages, entities, clauses, sites, passages,
+                industries, country, checklist, checklistSummary, conflicts, versionsDiffer,
+                conflictSkips, hits);
+    }
 
     /** A document/model pair not compared; ambiguity is visible, never a conflict. */
     public record ConflictSkipRow(

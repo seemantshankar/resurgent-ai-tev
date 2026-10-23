@@ -7,6 +7,7 @@ import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.db.SiteRepository;
 import com.resurgent.tev.doc.ingest.BlobStore;
+import com.resurgent.tev.doc.layout.ocr.MarkEvidenceLinker;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackField;
 import com.resurgent.tev.parser.db.CostUnit;
@@ -164,6 +165,7 @@ public final class ExtractService {
                 repo.deleteStageStats(parseRunId, "doc-extract");
                 FactRepository.ReplaceStats stats =
                         facts.replaceFacts(parseRunId, documentVersionId, writes);
+                MarkEvidenceLinker.attach(db.connection(), documentVersionId);
                 int fieldsMissing = countMissing(pack, writes);
                 int fieldsAmbiguous = countAmbiguous(writes);
 

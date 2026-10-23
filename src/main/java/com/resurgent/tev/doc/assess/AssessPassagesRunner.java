@@ -10,6 +10,9 @@ import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.db.PassageRepository;
 import com.resurgent.tev.doc.db.PassageRepository.ParsePage;
+import com.resurgent.tev.doc.embed.EmbeddingClient;
+import com.resurgent.tev.doc.embed.EmbeddingClients;
+import com.resurgent.tev.doc.embed.EmbeddingRepository;
 import com.resurgent.tev.doc.extract.CandidateNormalizer;
 import com.resurgent.tev.doc.extract.ExtractClient;
 import com.resurgent.tev.doc.extract.ExtractException;
@@ -98,6 +101,8 @@ public final class AssessPassagesRunner implements AssessStage {
         DocumentRepository docs = new DocumentRepository(connection);
         FactRepository facts = new FactRepository(connection);
         PassageRepository passages = new PassageRepository(connection);
+        EmbeddingRepository embeddings = new EmbeddingRepository(connection);
+        EmbeddingClient embedder = EmbeddingClients.forAssessment();
         WorkspaceRepository repo = new WorkspaceRepository(connection);
         Map<String, DocTypePack> packsByCode = loadPacks(dbPath);
         List<VersionRow> versions = assessment.versionsForMandate(mandateId);
@@ -172,6 +177,10 @@ public final class AssessPassagesRunner implements AssessStage {
                 }
                 long passageId = passages.insertPassage(version.documentVersionId(), index,
                         chapter.heading(), topic, chapter.pageFrom(), chapter.pageTo(), summary);
+                String embedded = chapter.text() == null || chapter.text().isBlank()
+                        ? chapter.heading() : chapter.text();
+                embeddings.upsertPassage(passageId, embedder.model(), embedder.embed(
+                        embedded == null ? "" : embedded));
                 Long provenanceId = insertPassageProvenance(assessment, docs, version,
                         passageId, chapter.heading(), chapter.text());
                 if (provenanceId != null) {

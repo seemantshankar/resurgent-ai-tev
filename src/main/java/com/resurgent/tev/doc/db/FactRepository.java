@@ -1235,6 +1235,25 @@ public final class FactRepository {
         }
     }
 
+    /**
+     * Appends one evidence row after the fact's current last ordinal.
+     * A second call with the same role does not replace earlier rows; callers
+     * that must be idempotent check for an existing row first.
+     */
+    public void appendEvidence(long factId, String role, Long provenanceId, String sourceText,
+            String resolution) throws SQLException {
+        int ordinal;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COALESCE(MAX(ordinal), -1) + 1 FROM fact_evidence WHERE fact_id = ?")) {
+            ps.setLong(1, factId);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                ordinal = rs.getInt(1);
+            }
+        }
+        insertFactEvidence(factId, ordinal, role, provenanceId, sourceText, resolution, null, null);
+    }
+
     private void insertFactEvidence(long factId, int ordinal, String role, Long provenanceId,
             String sourceText, String resolution, String normalizedValue, String ruleId)
             throws SQLException {

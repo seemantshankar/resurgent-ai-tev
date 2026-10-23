@@ -2,17 +2,21 @@ package com.resurgent.tev.doc.layout;
 
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.ingest.BlobStore;
-import com.resurgent.tev.doc.ingest.DocumentFileKind;
+import com.resurgent.tev.doc.layout.ocr.ImageRasterDecoder;
+import com.resurgent.tev.doc.layout.ocr.LocalOcrClient;
+import com.resurgent.tev.doc.layout.ocr.OcrGraphWriter;
+import com.resurgent.tev.doc.layout.ocr.OcrScript;
+import com.resurgent.tev.doc.layout.ocr.TesseractOcrClient;
 import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -23,6 +27,25 @@ public final class DocumentLayoutService {
 
     public static final String PARSER_VERSION = "0.1.0-doc-m1";
     public static final String CONFIG_HASH = "m1-digital-text";
+
+    /** Page engine id when PDFBox supplied the text and local OCR was not called. */
+    public static final String OCR_ENGINE_NONE = "none";
+
+    private final LocalOcrClient ocrClient;
+
+    /** Layout with the local Tesseract adapter (no network). */
+    public DocumentLayoutService() {
+        this(new TesseractOcrClient());
+    }
+
+    /**
+     * @param ocrClient local OCR boundary; not invoked for pages with a usable
+     *         digital text layer ({@value PdfLayoutExtractor#MIN_CHARS_FOR_TEXT_PAGE}
+     *         or more non-whitespace characters)
+     */
+    public DocumentLayoutService(LocalOcrClient ocrClient) {
+        this.ocrClient = Objects.requireNonNull(ocrClient, "ocrClient");
+    }
 
     public record LayoutResult(
             long documentVersionId,
@@ -40,9 +63,10 @@ public final class DocumentLayoutService {
      * layout from matching bytes is cloned when available, sharing image paths.
      *
      * <p>When extraction is needed, existing layout and provenance rows are deleted.
-     * PDFs produce text layout and selected page rasters; other files produce a
-     * single image placeholder requiring OCR. Writes are not wrapped in a transaction,
-     * so failed extraction or persistence can leave partial database or blob changes.
+     * PDFs produce text layout and selected page rasters; standalone images are
+     * decoded and read by local OCR. Extraction runs in one transaction;
+     * a failure rolls the layout rows back. Page image files already written
+     * can remain.
      *
      * @throws IllegalArgumentException if the version does not exist
      * @throws IOException if a required original blob is missing or reading,
@@ -59,8 +83,10 @@ public final class DocumentLayoutService {
                             () -> new IllegalArgumentException(
                                     "unknown document_version " + documentVersionId));
 
-            // Already laid out — do not pay parse/raster cost again (no waste).
-            if (docs.hasLayout(documentVersionId)) {
+            // A finished digital layout is reused. A raster placeholder
+            // (ocr_required and no ocr_engine) is upgraded in place.
+            boolean upgrade = docs.needsLocalOcrUpgrade(documentVersionId);
+            if (docs.hasLayout(documentVersionId) && !upgrade) {
                 return existingResult(docs, version);
             }
 
@@ -75,23 +101,24 @@ public final class DocumentLayoutService {
             var conn = db.connection();
             conn.setAutoCommit(false);
             try {
-                Optional<Long> sibling = docs.findLayoutedSibling(documentVersionId,
-                        version.fileHash());
-                if (sibling.isPresent()) {
-                    docs.deleteLayoutForVersion(documentVersionId);
-                    docs.cloneLayout(sibling.get(), documentVersionId);
-                    docs.updateVersionPageCount(documentVersionId, version.pageCount() == null
-                            ? docs.countPages(documentVersionId) : version.pageCount(),
-                            version.ocrRequired());
-                    docs.updateVersionIngestStatus(documentVersionId, "layout_ok");
-                    conn.commit();
-                    return existingResult(docs, version);
+                if (!upgrade) {
+                    Optional<Long> sibling = docs.findLayoutedSibling(documentVersionId,
+                            version.fileHash());
+                    if (sibling.isPresent() && !docs.needsLocalOcrUpgrade(sibling.get())) {
+                        docs.deleteLayoutForVersion(documentVersionId);
+                        docs.cloneLayout(sibling.get(), documentVersionId);
+                        docs.updateVersionPageCount(documentVersionId, version.pageCount() == null
+                                ? docs.countPages(documentVersionId) : version.pageCount(),
+                                version.ocrRequired());
+                        docs.updateVersionIngestStatus(documentVersionId, "layout_ok");
+                        conn.commit();
+                        return existingResult(docs, version);
+                    }
+                    docs.deleteLayoutForVersion(version.documentVersionId());
                 }
-
-                docs.deleteLayoutForVersion(version.documentVersionId());
                 LayoutResult result = isPdf(version)
                         ? layoutPdf(version, original, docs, repo, blobStore)
-                        : layoutImagePlaceholder(version, original, docs, repo, blobStore);
+                        : layoutImage(version, original, docs, repo, blobStore);
                 conn.commit();
                 return result;
             } catch (Exception e) {
@@ -165,6 +192,7 @@ public final class DocumentLayoutService {
         int blocks = 0;
         int spans = 0;
         int tables = 0;
+        boolean anyPageNeedsOcr = false;
 
         java.util.Set<Integer> rastered = new java.util.HashSet<>();
         for (PdfLayoutExtractor.PdfPageImage image : extraction.images()) {
@@ -176,38 +204,37 @@ public final class DocumentLayoutService {
             String imagePath = rastered.contains(page.pageIndex())
                     ? blobStore.pageRelativePath(version.fileHash(), page.pageIndex())
                     : null;
-            long pageId = docs.insertPage(versionId, page.pageIndex(), page.widthPx(),
+            long pageId = ensurePage(docs, versionId, page.pageIndex(), page.widthPx(),
                     page.heightPx(), imagePath);
-            int blockIndex = 0;
-            for (LayoutBlock block : page.blocks()) {
-                long blockId = docs.insertBlock(pageId, blockIndex, block.blockKind(),
-                        block.bbox().x0(), block.bbox().y0(), block.bbox().x1(), block.bbox().y1(),
-                        block.textRaw(), block.textNorm(), blockIndex,
-                        PdfLayoutExtractor.EXTRACTOR_ID);
-                blocks++;
-                int spanIndex = 0;
-                for (LayoutLine line : block.lines()) {
-                    for (LayoutSpan span : line.spans()) {
-                        docs.insertSpan(blockId, spanIndex, span.text(),
-                                span.bbox().x0(), span.bbox().y0(),
-                                span.bbox().x1(), span.bbox().y1(), 1.0);
-                        spanIndex++;
-                        spans++;
-                    }
-                }
-                if (block.isTable()) {
-                    tables += writeTable(docs, blockId, block);
-                }
-                blockIndex++;
+            int nonWhitespace = nonWhitespace(page);
+            if (nonWhitespace >= PdfLayoutExtractor.MIN_CHARS_FOR_TEXT_PAGE) {
+                docs.updatePageOcr(pageId, OCR_ENGINE_NONE, null, null);
+                int[] written = writeDigitalBlocks(docs, pageId, page);
+                blocks += written[0];
+                spans += written[1];
+                tables += written[2];
+            } else {
+                anyPageNeedsOcr = true;
+                int width = page.widthPx() == null ? 0 : page.widthPx();
+                int height = page.heightPx() == null ? 0 : page.heightPx();
+                Path raster = blobStore.pagePath(version.fileHash(), page.pageIndex());
+                LocalOcrClient.OcrPage recognized = ocrClient.recognize(raster, width, height);
+                Double confidence = recognized.words().isEmpty() ? null : recognized.confidence();
+                docs.updatePageOcr(pageId, ocrClient.engineId(), confidence,
+                        OcrScript.detect(recognized.words()));
+                OcrGraphWriter.Counts ocrCounts = OcrGraphWriter.write(docs, pageId, recognized);
+                blocks += ocrCounts.blocks();
+                spans += ocrCounts.spans();
+                tables += ocrCounts.tables();
             }
         }
 
-        // Scanned PDFs have page rasters but no embedded text: keep ocr_required and
-        // do not pretend digital layout succeeded.
-        boolean ocrRequired = !extraction.anyText() || version.ocrRequired();
-        String extractorId = extraction.anyText()
+        // A page with fewer than 40 non-whitespace characters still needs local OCR.
+        // Usable digital pages do not, even if ingest flagged the file.
+        boolean ocrRequired = anyPageNeedsOcr;
+        String extractorId = !anyPageNeedsOcr
                 ? PdfLayoutExtractor.EXTRACTOR_ID
-                : "pdf-scan-page-raster";
+                : (extraction.anyText() ? PdfLayoutExtractor.EXTRACTOR_ID : OcrGraphWriter.EXTRACTOR_ID);
         docs.updateVersionPageCount(versionId, extraction.pageCount(), ocrRequired);
         docs.updateVersionIngestStatus(versionId, "layout_ok");
         recordLayoutRun(docs, repo, version, extraction.pageCount(), blocks, spans, tables,
@@ -215,6 +242,71 @@ public final class DocumentLayoutService {
 
         return new LayoutResult(versionId, extraction.pageCount(), blocks, spans, tables,
                 ocrRequired, extractorId);
+    }
+
+    private static int[] writeDigitalBlocks(DocumentRepository docs, long pageId, PageLayout page)
+            throws Exception {
+        int blocks = 0;
+        int spans = 0;
+        int tables = 0;
+        int blockIndex = 0;
+        for (LayoutBlock block : page.blocks()) {
+            long blockId = docs.insertBlock(pageId, blockIndex, block.blockKind(),
+                    block.bbox().x0(), block.bbox().y0(), block.bbox().x1(), block.bbox().y1(),
+                    block.textRaw(), block.textNorm(), blockIndex,
+                    PdfLayoutExtractor.EXTRACTOR_ID);
+            blocks++;
+            int spanIndex = 0;
+            for (LayoutLine line : block.lines()) {
+                for (LayoutSpan span : line.spans()) {
+                    docs.insertSpan(blockId, spanIndex, span.text(),
+                            span.bbox().x0(), span.bbox().y0(),
+                            span.bbox().x1(), span.bbox().y1(), 1.0);
+                    spanIndex++;
+                    spans++;
+                }
+            }
+            if (block.isTable()) {
+                tables += writeTable(docs, blockId, block);
+            }
+            blockIndex++;
+        }
+        return new int[] {blocks, spans, tables};
+    }
+
+    /**
+     * Reuses a page row when one already exists for this index (placeholder
+     * upgrade) and otherwise inserts a new row.
+     */
+    private static long ensurePage(DocumentRepository docs, long versionId, int pageIndex,
+            Integer widthPx, Integer heightPx, String imagePath) throws SQLException {
+        Optional<Long> existing = docs.findPageId(versionId, pageIndex);
+        if (existing.isPresent()) {
+            long pageId = existing.get();
+            docs.clearPageGraph(pageId);
+            docs.updatePageRaster(pageId, widthPx, heightPx, imagePath);
+            return pageId;
+        }
+        return docs.insertPage(versionId, pageIndex, widthPx, heightPx, imagePath);
+    }
+
+    /** Characters that are not Unicode whitespace, across every block on the page. */
+    static int nonWhitespace(PageLayout page) {
+        int count = 0;
+        for (LayoutBlock block : page.blocks()) {
+            String text = block.textRaw();
+            if (text == null) {
+                continue;
+            }
+            for (int i = 0; i < text.length();) {
+                int cp = text.codePointAt(i);
+                if (!Character.isWhitespace(cp)) {
+                    count++;
+                }
+                i += Character.charCount(cp);
+            }
+        }
+        return count;
     }
 
     /**
@@ -273,30 +365,48 @@ public final class DocumentLayoutService {
     }
 
     /**
-     * Stores one page requiring OCR, with no text blocks. If the page image is
-     * absent, copies the original bytes to the page's PNG path without transcoding.
-     *
-     * @throws IOException if preparing or copying the page image fails
-     * @throws java.sql.SQLException if persisting the page, version, or run fails
+     * Decodes a standalone screenshot, normalizes each frame to a page PNG, and
+     * runs local OCR. Pixel dimensions are the decoded frame size.
      */
-    private LayoutResult layoutImagePlaceholder(DocumentRepository.DocumentVersionRow version,
+    private LayoutResult layoutImage(DocumentRepository.DocumentVersionRow version,
             Path original, DocumentRepository docs, WorkspaceRepository repo, BlobStore blobStore)
             throws Exception {
+        List<ImageRasterDecoder.Frame> frames = ImageRasterDecoder.decode(original);
         long versionId = version.documentVersionId();
-        String rel = blobStore.pageRelativePath(version.fileHash(), 1);
-        Path pagePng = blobStore.pagePath(version.fileHash(), 1);
-        if (!Files.exists(pagePng)) {
-            // Treat the original raster as the single page image until OCR (M5).
-            Files.createDirectories(pagePng.getParent());
-            Files.copy(original, pagePng, StandardCopyOption.REPLACE_EXISTING);
+        int blocks = 0;
+        int spans = 0;
+        int tables = 0;
+        int pageIndex = 1;
+        for (ImageRasterDecoder.Frame frame : frames) {
+            blobStore.storePagePng(version.fileHash(), pageIndex, encodePng(frame.image()));
+            String rel = blobStore.pageRelativePath(version.fileHash(), pageIndex);
+            long pageId = ensurePage(docs, versionId, pageIndex, frame.widthPx(), frame.heightPx(), rel);
+            LocalOcrClient.OcrPage recognized = ocrClient.recognize(
+                    blobStore.pagePath(version.fileHash(), pageIndex),
+                    frame.widthPx(), frame.heightPx());
+            Double confidence = recognized.words().isEmpty() ? null : recognized.confidence();
+            docs.updatePageOcr(pageId, ocrClient.engineId(), confidence,
+                    OcrScript.detect(recognized.words()));
+            OcrGraphWriter.Counts counts = OcrGraphWriter.write(docs, pageId, recognized);
+            blocks += counts.blocks();
+            spans += counts.spans();
+            tables += counts.tables();
+            pageIndex++;
         }
-        Optional<Long> pageId = docs.findPageId(versionId, 1);
-        if (pageId.isEmpty()) {
-            docs.insertPage(versionId, 1, null, null, rel);
-        }
-        docs.updateVersionPageCount(versionId, 1, true);
+        int pageCount = frames.size();
+        docs.updateVersionPageCount(versionId, pageCount, true);
         docs.updateVersionIngestStatus(versionId, "layout_ok");
-        recordLayoutRun(docs, repo, version, 1, 0, 0, 0, "image-placeholder");
-        return new LayoutResult(versionId, 1, 0, 0, 0, true, "image-placeholder");
+        recordLayoutRun(docs, repo, version, pageCount, blocks, spans, tables,
+                OcrGraphWriter.EXTRACTOR_ID);
+        return new LayoutResult(versionId, pageCount, blocks, spans, tables, true,
+                OcrGraphWriter.EXTRACTOR_ID);
+    }
+
+    private static byte[] encodePng(java.awt.image.BufferedImage image) throws java.io.IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        if (!javax.imageio.ImageIO.write(image, "PNG", out)) {
+            throw new java.io.IOException("PNG writer unavailable");
+        }
+        return out.toByteArray();
     }
 }
