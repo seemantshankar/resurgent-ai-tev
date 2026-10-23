@@ -1,6 +1,7 @@
 package com.resurgent.tev.parser.classify;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.resurgent.tev.doc.residency.DataResidency;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.net.URI;
@@ -72,6 +73,10 @@ final class OpenRouterDecisionClient implements CellDecisionClient {
 
     @Override
     public Decision decide(String state, boolean askScale) throws Exception {
+        if (DataResidency.locked()) {
+            throw new IllegalStateException(
+                    "OpenRouterDecisionClient blocked: data residency is local_only");
+        }
         calls.increment();
         long start = System.nanoTime();
         long activityId = LlmActivity.GLOBAL.begin(model); // so the heartbeat sees decision calls in flight

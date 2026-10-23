@@ -1,9 +1,10 @@
 package com.resurgent.tev.doc.extract;
 
-import com.resurgent.tev.doc.db.FactRepository;
+import com.resurgent.tev.doc.db.MandatePolicyRepository;
 import com.resurgent.tev.doc.ingest.BlobStore;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackLoader;
+import com.resurgent.tev.doc.residency.DataResidency;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -56,14 +57,22 @@ public final class DocExtractRunner {
         List<Integer> pageIndices = pageSelection == null ? null : pageSelection.indices();
 
         ParseTier override = tier == null || tier.isBlank() ? null : ParseTier.fromWire(tier);
+        boolean localOnly = localOnly(db, mandateId);
+        if (localOnly && client instanceof LlamaExtractAdapter) {
+            throw new ExtractException(
+                    "LlamaExtractAdapter blocked: data residency is local_only");
+        }
         ParseTier effectiveTier;
         Map<String, String> options = null;
-        if (!noParse && client instanceof LlamaExtractAdapter && LlamaParseClient.hasApiKey()) {
+        if (!noParse && !localOnly && client instanceof LlamaExtractAdapter
+                && LlamaParseClient.hasApiKey()) {
             ParseService.ParseOutcome parsed = ParseService.parse(
                     db, documentVersionId, override, new LlamaParseClient(), blobs);
             effectiveTier = parsed.tier();
             options = new LinkedHashMap<>();
-            options.put(LlamaExtractAdapter.KEY_PARSE_JOB_ID, parsed.jobId());
+            if (parsed.jobId() != null && parsed.fullCloudJob()) {
+                options.put(LlamaExtractAdapter.KEY_PARSE_JOB_ID, parsed.jobId());
+            }
             options.put(LlamaExtractAdapter.KEY_PARSE_TIER, parsed.tier().wireName());
             if (parsed.credits() != null) {
                 options.put(LlamaExtractAdapter.KEY_PARSE_CREDITS, String.valueOf(parsed.credits()));
@@ -101,6 +110,15 @@ public final class DocExtractRunner {
      * classified pack. Searches seed packs and every pack published under
      * {@code {db-parent}/packs}, so an induced pack is usable right after classify.
      */
+    private static boolean localOnly(Path db, long mandateId) throws Exception {
+        try (com.resurgent.tev.parser.db.WorkspaceDatabase workspace =
+                com.resurgent.tev.parser.db.WorkspaceDatabase.open(db)) {
+            String row = new MandatePolicyRepository(workspace.connection()).dataResidency(mandateId);
+            return DataResidency.isLocalOnly(
+                    DataResidency.effective(System.getenv(DataResidency.ENV), row));
+        }
+    }
+
     private static DocTypePack resolvePack(Path db, long documentVersionId, String packCode)
             throws Exception {
         List<DocTypePack> packs = loadAllPacks(db);

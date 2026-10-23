@@ -5,8 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resurgent.tev.doc.db.CloudParsePageRepository;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.FactRepository;
+import com.resurgent.tev.doc.db.MandatePolicyRepository;
 import com.resurgent.tev.doc.db.SiteRepository;
 import com.resurgent.tev.doc.ingest.BlobStore;
+import com.resurgent.tev.doc.residency.DataResidency;
 import com.resurgent.tev.doc.layout.ocr.MarkEvidenceLinker;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackField;
@@ -118,9 +120,20 @@ public final class ExtractService {
 
             long parseRunId = ensureExtractRun(repo, version.sourceFileId(), mandateId, configHash);
 
+            String residency = DataResidency.effective(System.getenv(DataResidency.ENV),
+                    new MandatePolicyRepository(db.connection()).dataResidency(mandateId));
+            boolean localOnly = DataResidency.isLocalOnly(residency);
+            PageTriage.applyIfUnrouted(db.connection(), documentVersionId,
+                    BlobStore.besideDatabase(dbPath), localOnly);
+            Map<String, String> requestOptions = new LinkedHashMap<>();
+            if (options != null) {
+                requestOptions.putAll(options);
+            }
+            requestOptions.put(DataResidency.OPTION, residency);
+
             JsonNode schema = pack.toExtractSchema();
             ExtractRequest request =
-                    buildRequest(dbPath, version, pack, instructions, options, pages);
+                    buildRequest(dbPath, version, pack, instructions, requestOptions, pages);
 
             ExtractResult result;
             try {
@@ -166,6 +179,9 @@ public final class ExtractService {
                 FactRepository.ReplaceStats stats =
                         facts.replaceFacts(parseRunId, documentVersionId, writes);
                 MarkEvidenceLinker.attach(db.connection(), documentVersionId);
+                if (localOnly) {
+                    OcrAmbiguity.apply(db.connection(), documentVersionId, parseRunId);
+                }
                 int fieldsMissing = countMissing(pack, writes);
                 int fieldsAmbiguous = countAmbiguous(writes);
 

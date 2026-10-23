@@ -11,6 +11,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
@@ -107,6 +108,14 @@ class LlamaParseClientTest {
         assertThat(lastConfig.get()).contains("cost_effective");
         assertThat(lastConfig.get()).doesNotContain("agentic");
         assertThat(lastConfig.get()).contains("latest");
+    }
+
+    @Test
+    void targetPagesAreSentOnlyForTheRequestedIndexes() throws Exception {
+        Path pdf = temp.resolve("doc.pdf");
+        Files.writeString(pdf, "%PDF-1.4");
+        client().parse(pdf, ParseTier.FAST, List.of(2, 3, 5));
+        assertThat(lastConfig.get()).contains("\"target_pages\":\"2-3,5\"");
     }
 
     @Test

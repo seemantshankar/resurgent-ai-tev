@@ -35,7 +35,7 @@ public final class DocAssessRunner {
      * @throws Exception on runtime failure
      */
     public static Result run(long mandateId, Path db) throws Exception {
-        return run(mandateId, db, DocLlmEnvironment.clientOrNull());
+        return run(mandateId, db, DocLlmEnvironment.clientOrNull(db, mandateId));
     }
 
     /**

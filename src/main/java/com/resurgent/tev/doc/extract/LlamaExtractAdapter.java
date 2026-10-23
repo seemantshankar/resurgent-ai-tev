@@ -1,6 +1,7 @@
 package com.resurgent.tev.doc.extract;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.resurgent.tev.doc.residency.DataResidency;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -100,6 +101,7 @@ public final class LlamaExtractAdapter implements ExtractClient {
     private static final String EXTRACT_PATH = "/api/v2/extract";
 
     private final String apiKey;
+    private final String residency;
     private final String baseUrl;
     private final String model;
     private final String projectId;
@@ -126,6 +128,7 @@ public final class LlamaExtractAdapter implements ExtractClient {
     public LlamaExtractAdapter(Map<String, String> env) {
         Objects.requireNonNull(env, "env");
         this.apiKey = resolveApiKey(env);
+        this.residency = env.get(DataResidency.ENV);
         String base = env.get("LLAMA_EXTRACT_BASE_URL");
         this.baseUrl = (base == null || base.isBlank()) ? DEFAULT_BASE_URL : trimSlash(base);
         String m = env.get("LLAMA_EXTRACT_MODEL");
@@ -217,6 +220,11 @@ public final class LlamaExtractAdapter implements ExtractClient {
             throws ExtractException {
         Objects.requireNonNull(req, "req");
         Objects.requireNonNull(schema, "schema");
+        String requested = req.options() == null ? null : req.options().get(DataResidency.OPTION);
+        if (DataResidency.locked(residency, requested)) {
+            throw new ExtractException(
+                    "LlamaExtractAdapter blocked: data residency is local_only");
+        }
         if (apiKey == null || apiKey.isBlank()) {
             throw new ExtractException(
                     "LlamaParse/LlamaCloud API key is not set; cannot call LlamaExtract"

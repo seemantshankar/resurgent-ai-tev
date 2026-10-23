@@ -83,6 +83,16 @@ class EmbeddingClientTest {
         EmbeddingClient unset = EmbeddingClients.select(Map.of("DOC_EMBEDDING_API_KEY", "secret"), stub);
         unset.embed("debt service coverage");
         assertThat(stub.calls).isZero();
+
+        stub.calls = 0;
+        EmbeddingClient mandateLocked = EmbeddingClients.select(configured, stub, "local_only");
+        mandateLocked.embed("debt service coverage");
+        assertThat(stub.calls).isZero();
+        assertThat(mandateLocked.model()).isEqualTo(LocalHashEmbeddingClient.MODEL);
+
+        EmbeddingClient mandateOpen = EmbeddingClients.select(configured, stub, "cloud_allowed");
+        mandateOpen.embed("debt service coverage");
+        assertThat(stub.calls).isEqualTo(1);
     }
 
     private static double norm(float[] vector) {

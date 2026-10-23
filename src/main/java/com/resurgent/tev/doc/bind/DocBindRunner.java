@@ -33,7 +33,7 @@ public final class DocBindRunner {
         DocTypePack pack = resolvePack(db, packCode);
         PackPathBinder binder = new PackPathBinder();
         PackPathBinder.BindOutcome outcome = binder.bind(db, parseRunId, mandateId, pack,
-                DocLlmEnvironment.clientOrNull());
+                DocLlmEnvironment.clientOrNull(db, mandateId));
         List<String> paths = new ArrayList<>();
         for (PackField path : pack.fields()) {
             paths.add(path.path());

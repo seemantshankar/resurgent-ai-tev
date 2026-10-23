@@ -1,6 +1,7 @@
 package com.resurgent.tev.parser.classify;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.resurgent.tev.doc.residency.DataResidency;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.net.URI;
@@ -48,6 +49,10 @@ final class OpenRouterRegionTriageClient implements RegionTriageClient {
 
     @Override
     public Opinion decide(String stateJson) throws Exception {
+        if (DataResidency.locked()) {
+            throw new IllegalStateException(
+                    "OpenRouterRegionTriageClient blocked: data residency is local_only");
+        }
         long start = System.nanoTime();
         long activityId = LlmActivity.GLOBAL.begin(model);
         boolean succeeded = false;

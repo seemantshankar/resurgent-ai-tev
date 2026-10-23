@@ -102,7 +102,7 @@ public final class AssessPassagesRunner implements AssessStage {
         FactRepository facts = new FactRepository(connection);
         PassageRepository passages = new PassageRepository(connection);
         EmbeddingRepository embeddings = new EmbeddingRepository(connection);
-        EmbeddingClient embedder = EmbeddingClients.forAssessment();
+        EmbeddingClient embedder = EmbeddingClients.forAssessment(connection, mandateId);
         WorkspaceRepository repo = new WorkspaceRepository(connection);
         Map<String, DocTypePack> packsByCode = loadPacks(dbPath);
         List<VersionRow> versions = assessment.versionsForMandate(mandateId);

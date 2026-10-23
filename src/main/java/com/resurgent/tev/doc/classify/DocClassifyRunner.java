@@ -49,7 +49,7 @@ public final class DocClassifyRunner {
         String industryTag = industry == null || "auto".equalsIgnoreCase(industry)
                 ? null
                 : industry;
-        DocLlmClient client = DocLlmEnvironment.clientOrNull();
+        DocLlmClient client = DocLlmEnvironment.clientOrNull(db, mandateId);
         List<DocLlmClient.Usage> usage = new ArrayList<>();
         ClassifyTieBreak tieBreak = client == null
                 ? ClassifyTieBreak.offline()
