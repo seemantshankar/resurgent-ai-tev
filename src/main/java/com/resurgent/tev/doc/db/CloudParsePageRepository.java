@@ -101,6 +101,55 @@ public final class CloudParsePageRepository {
         return List.copyOf(pages);
     }
 
+    /**
+     * Replaces every stored page for the version. Each row keeps its own job id so a
+     * selective cloud escalation can sit beside locally parsed pages.
+     */
+    public void writeAll(long documentVersionId, List<StoredPage> pages) throws SQLException {
+        if (pages == null || pages.isEmpty()) {
+            throw new IllegalArgumentException("parse job contains no pages");
+        }
+        Savepoint savepoint = connection.getAutoCommit() ? null : connection.setSavepoint();
+        try {
+            try (PreparedStatement delete = connection.prepareStatement(
+                    "DELETE FROM cloud_parse_page WHERE document_version_id = ?")) {
+                delete.setLong(1, documentVersionId);
+                delete.executeUpdate();
+            }
+            String parsedAt = Timestamps.now();
+            try (PreparedStatement insert = connection.prepareStatement(
+                    "INSERT INTO cloud_parse_page (document_version_id, page_index, parse_job_id,"
+                            + " parse_tier, page_markdown, page_text, parsed_at)"
+                            + " VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                for (StoredPage page : pages) {
+                    if (page.jobId() == null || page.jobId().isBlank()) {
+                        throw new IllegalArgumentException("parseJobId is required");
+                    }
+                    insert.setLong(1, documentVersionId);
+                    insert.setInt(2, page.pageIndex());
+                    insert.setString(3, page.jobId());
+                    insert.setString(4, page.tier());
+                    insert.setString(5, page.markdown() == null ? "" : page.markdown());
+                    insert.setString(6, page.text() == null ? "" : page.text());
+                    insert.setString(7, parsedAt);
+                    insert.addBatch();
+                }
+                insert.executeBatch();
+            }
+            if (savepoint != null) {
+                connection.releaseSavepoint(savepoint);
+            }
+        } catch (SQLException e) {
+            if (savepoint != null) {
+                connection.rollback(savepoint);
+            }
+            throw e;
+        }
+    }
+
+    /** One persisted parse page. {@code jobId} is {@code local} when the page was not escalated. */
+    public record StoredPage(int pageIndex, String jobId, String tier, String markdown, String text) {}
+
     private static String pageAt(List<String> pages, int index) {
         return index < pages.size() && pages.get(index) != null ? pages.get(index) : "";
     }

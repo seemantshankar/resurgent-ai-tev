@@ -88,7 +88,7 @@ public final class AssessClausesRunner implements AssessStage {
         AssessmentRepository assessment = new AssessmentRepository(connection);
         ClauseRepository clauses = new ClauseRepository(connection);
         EmbeddingRepository embeddings = new EmbeddingRepository(connection);
-        EmbeddingClient embedder = EmbeddingClients.forAssessment();
+        EmbeddingClient embedder = EmbeddingClients.forAssessment(connection, mandateId);
         DocumentRepository docs = new DocumentRepository(connection);
         WorkspaceRepository repo = new WorkspaceRepository(connection);
         Map<String, DocTypePack> packsByCode = loadPacks(dbPath);

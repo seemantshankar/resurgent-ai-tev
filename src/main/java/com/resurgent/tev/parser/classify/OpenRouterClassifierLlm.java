@@ -1,6 +1,7 @@
 package com.resurgent.tev.parser.classify;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.resurgent.tev.doc.residency.DataResidency;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -489,6 +490,10 @@ public final class OpenRouterClassifierLlm implements ClassifierLlm {
                     .connectTimeout(Duration.ofSeconds(20))
                     .build();
             this.exchange = (body, deadline) -> {
+                if (DataResidency.locked()) {
+                    throw new IllegalStateException(
+                            "HttpCompletionsClient blocked: data residency is local_only");
+                }
                 HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
                         .timeout(deadline)
                         .header("Authorization", "Bearer " + apiKey)

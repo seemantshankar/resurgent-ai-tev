@@ -69,7 +69,7 @@ public final class DocInduceRunner {
                             + (fileRole == null ? " (unknown/unclassified only)" : ""));
         }
 
-        DocLlmClient live = DocLlmEnvironment.clientOrNull();
+        DocLlmClient live = DocLlmEnvironment.clientOrNull(db, mandateId);
         List<List<PackInducer.InduceDocument>> clusters;
         if (docType != null && !docType.isBlank()) {
             clusters = List.of(documents);

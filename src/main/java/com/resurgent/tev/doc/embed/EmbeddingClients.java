@@ -1,12 +1,16 @@
 package com.resurgent.tev.doc.embed;
 
+import com.resurgent.tev.doc.db.MandatePolicyRepository;
+import com.resurgent.tev.doc.residency.DataResidency;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.Map;
 
 /**
  * Chooses the embedding client. The local vectoriser is the default. The HTTP
- * adapter is used only when {@code DOC_EMBEDDING_BASE_URL} is set and the caller
- * is not {@code local_only} ({@code TEV_DATA_RESIDENCY}). There is no
- * {@code mandate_policy} table here; that gate belongs to a later ticket.
+ * adapter is used only when {@code DOC_EMBEDDING_BASE_URL} is set and neither
+ * the process floor ({@code TEV_DATA_RESIDENCY}) nor the mandate's
+ * {@code mandate_policy.data_residency} is {@code local_only}.
  */
 public final class EmbeddingClients {
 
@@ -36,6 +40,16 @@ public final class EmbeddingClients {
     }
 
     /**
+     * Same as {@link #forAssessment()} but a mandate stored as {@code local_only}
+     * forces the local vectoriser even when the process floor is unset.
+     */
+    public static EmbeddingClient forAssessment(Connection connection, long mandateId)
+            throws SQLException {
+        String row = new MandatePolicyRepository(connection).dataResidency(mandateId);
+        return select(System.getenv(), null, row);
+    }
+
+    /**
      * Resolves a client from an explicit environment map.
      *
      * @param env process or test environment; null is treated as empty
@@ -43,9 +57,17 @@ public final class EmbeddingClients {
      * @return local vectoriser unless an endpoint is configured and residency allows it
      */
     public static EmbeddingClient select(Map<String, String> env, EmbeddingTransport transport) {
+        return select(env, transport, null);
+    }
+
+    /**
+     * @param mandateResidency {@code mandate_policy.data_residency}, or null when unset
+     */
+    public static EmbeddingClient select(Map<String, String> env, EmbeddingTransport transport,
+            String mandateResidency) {
         Map<String, String> values = env == null ? Map.of() : env;
         String endpoint = blankToNull(values.get(ENDPOINT));
-        if (endpoint == null || localOnly(values)) {
+        if (endpoint == null || localOnly(values) || DataResidency.isLocalOnly(mandateResidency)) {
             return new LocalHashEmbeddingClient();
         }
         String model = blankToNull(values.get(MODEL));

@@ -36,7 +36,7 @@ public final class MandateQaQueryRunner {
             List<MandateQa.SimilarHit> hits = SimilaritySearch.topK(
                     workspace.connection(), query.mandateId(), query.similarKind(),
                     query.similarText(), query.similarId(), query.topK(),
-                    EmbeddingClients.forAssessment());
+                    EmbeddingClients.forAssessment(workspace.connection(), query.mandateId()));
             return qa.withSimilar(hits);
         }
     }
