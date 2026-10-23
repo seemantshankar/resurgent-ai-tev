@@ -68,6 +68,7 @@ tables:
   - name: plant_and_machinery
     path: technical > Plant and machinery > Item
     path_root: technical
+    key_column: description
     fields:
       - key: description
         value_kind: text

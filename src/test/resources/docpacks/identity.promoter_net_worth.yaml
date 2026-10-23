@@ -60,7 +60,37 @@ fields:
     value_kind: text
     required: false
     prompt_hint: "Membership number of the certifying CA"
-tables: []
+tables:
+  - name: assets
+    path: economic > Promoter Net Worth > Asset
+    path_root: economic
+    key_column: asset
+    entity_key: holder
+    fields:
+      - key: asset
+        value_kind: text
+        prompt_hint: "Asset line, kept distinct from the assets total"
+      - key: holder
+        value_kind: text
+        prompt_hint: "Person or entity that holds this asset"
+      - key: amount
+        value_kind: money
+        prompt_hint: "Amount of this asset line"
+  - name: liabilities
+    path: economic > Promoter Net Worth > Liability
+    path_root: economic
+    key_column: liability
+    entity_key: holder
+    fields:
+      - key: liability
+        value_kind: text
+        prompt_hint: "Liability line, kept distinct from the liabilities total"
+      - key: holder
+        value_kind: text
+        prompt_hint: "Person or entity that owes this liability"
+      - key: amount
+        value_kind: money
+        prompt_hint: "Amount of this liability line"
 checklist: []
 document_date:
   kind: issue

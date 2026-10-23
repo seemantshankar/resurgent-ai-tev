@@ -147,7 +147,7 @@ class CandidateNormalizerTest {
                 .valueText("4.5 acres");
         CandidateNormalizer.normalize(c);
         assertThat(c.valueNumber()).isEqualTo(4.5);
-        assertThat(c.unit()).isEqualTo("acres");
+        assertThat(c.unit()).isEqualTo("acre");
         assertThat(c.scale()).isEqualTo("unit");
     }
 

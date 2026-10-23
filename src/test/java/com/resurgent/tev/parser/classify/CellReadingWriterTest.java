@@ -60,7 +60,7 @@ class CellReadingWriterTest {
 
         CellReading rate = readings.get("B1");
         assertThat(rate.kind()).isEqualTo("rate");
-        assertThat(rate.unit()).isEqualTo("sqm");
+        assertThat(rate.unit()).isEqualTo("sq_m");
         assertThat(rate.currency()).isEqualTo("INR");
         assertThat(rate.scale()).isEqualTo("unit");
         assertThat(rate.absoluteAmount()).isNull();
@@ -399,7 +399,7 @@ class CellReadingWriterTest {
         CellReading area = readings.get("Calc!B1");
         assertThat(area.refusal()).isNull();
         assertThat(area.kind()).isEqualTo("quantity");
-        assertThat(area.unit()).isEqualTo("sqm");
+        assertThat(area.unit()).isEqualTo("sq_m");
         assertThat(area.typeSource()).isEqualTo("derived");
     }
 

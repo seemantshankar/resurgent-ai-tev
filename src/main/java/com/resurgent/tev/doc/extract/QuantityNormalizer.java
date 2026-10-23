@@ -2,6 +2,7 @@ package com.resurgent.tev.doc.extract;
 
 import com.resurgent.tev.parser.classify.KindTokens;
 import java.math.BigDecimal;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -14,9 +15,10 @@ import java.util.regex.Pattern;
 public final class QuantityNormalizer {
 
     private static final Pattern NUMBER_UNIT = Pattern.compile(
-            "^\\s*([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*"
-                    + "([A-Za-zµ][A-Za-z0-9µ/²³°-]{0,23})?\\s*$");
+            "^\\s*([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*(.*?)\\s*$");
     private static final Pattern SCIENTIFIC_TAIL = Pattern.compile("[Ee][+-]?[0-9]+");
+    private static final Pattern SCIENTIFIC = Pattern.compile(
+            "(?i)^\\s*[+-]?\\d+(\\.\\d+)?E[+-]?\\d+\\s*$");
 
     private QuantityNormalizer() {}
 
@@ -30,25 +32,42 @@ public final class QuantityNormalizer {
         if (raw == null || raw.isBlank()) {
             return Result.empty();
         }
-        Matcher m = NUMBER_UNIT.matcher(raw);
-        if (!m.matches()) {
-            return Result.empty();
-        }
-        String unit = m.group(2);
-        if (unit != null && SCIENTIFIC_TAIL.matcher(unit).matches()) {
-            // "5.71E8": the tail is exponent notation, not a unit
+        String text = ScriptNormalizer.transliterate(raw);
+        if (text != null && SCIENTIFIC.matcher(text.trim()).matches()) {
             try {
-                return new Result(Double.parseDouble(raw.trim().replace(",", "")), null);
+                return new Result(Double.parseDouble(text.trim().replace(",", "")), null);
             } catch (NumberFormatException e) {
                 return Result.empty();
             }
         }
+        Matcher m = NUMBER_UNIT.matcher(text == null ? "" : text);
+        if (!m.matches()) {
+            return Result.empty();
+        }
+        String rest = m.group(2) == null ? "" : m.group(2).trim();
+        if (!rest.isEmpty() && SCIENTIFIC_TAIL.matcher(rest).matches()) {
+            try {
+                return new Result(Double.parseDouble(text.trim().replace(",", "")), null);
+            } catch (NumberFormatException e) {
+                return Result.empty();
+            }
+        }
+        double value;
         try {
-            double value = new BigDecimal(m.group(1).replace(",", "")).doubleValue();
-            return new Result(value, unit == null ? null : KindTokens.normalizeUnit(unit), unit);
+            value = new BigDecimal(m.group(1).replace(",", "")).doubleValue();
         } catch (NumberFormatException e) {
             return Result.empty();
         }
+        if (rest.isEmpty()) {
+            return new Result(value, null, null);
+        }
+        String unit = KindTokens.normalizeUnit(rest);
+        if (rest.indexOf(' ') >= 0 && unit.equals(rest.toLowerCase(Locale.ROOT)
+                .replace(".", "").replace(" ", "").replace("/", ""))) {
+            // A trailing phrase that is not a known multi-word unit is prose.
+            return Result.empty();
+        }
+        return new Result(value, unit, rest);
     }
 
     /**

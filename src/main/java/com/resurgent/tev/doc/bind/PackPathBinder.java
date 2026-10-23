@@ -1,6 +1,7 @@
 package com.resurgent.tev.doc.bind;
 
 import com.resurgent.tev.doc.db.FactRepository;
+import com.resurgent.tev.doc.extract.ScheduleCells;
 import com.resurgent.tev.doc.llm.DocLlmClient;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackField;
@@ -115,6 +116,14 @@ public final class PackPathBinder {
         List<FactRepository.FactBindRow> rows = facts.selectFactsForParseRun(parseRunId);
         List<Unresolved> unresolved = new ArrayList<>();
         for (FactRepository.FactBindRow row : rows) {
+            ScheduleCells.TableRef schedule = ScheduleCells.owner(pack, row.fieldKey());
+            if (schedule != null && row.lineKey() != null && !row.lineKey().isBlank()
+                    && schedule.path() != null && !"null".equals(schedule.path())) {
+                // A schedule line is not the table itself. Binding it to the parent
+                // would roll every row up into one total (ADR 0027).
+                unresolved.add(new Unresolved(row, schedule.path(), schedule.pathRoot()));
+                continue;
+            }
             String candidate = null;
             String candidateRoot = row.pathRoot();
             PackField field = row.fieldKey() == null ? null : fieldByKey.get(row.fieldKey());
@@ -168,9 +177,12 @@ public final class PackPathBinder {
             List<String> prompt = new ArrayList<>();
             Set<String> prompted = new HashSet<>();
             for (Unresolved open : unresolved) {
-                if (prompted.add(open.row().fieldKey())) {
-                    prompt.add(LlmLeafAssignment.describe(open.row().fieldKey(),
-                            stripPackRoot(open.candidate()), open.row().valueText(),
+                String key = promptKey(open.row());
+                if (prompted.add(key)) {
+                    String shown = open.row().lineKey() != null && key.contains("|")
+                            ? open.row().lineKey() : open.row().valueText();
+                    prompt.add(LlmLeafAssignment.describe(key,
+                            stripPackRoot(open.candidate()), shown,
                             open.row().pageIndex(), open.row().verbatim()));
                 }
             }
@@ -182,7 +194,23 @@ public final class PackPathBinder {
 
         for (Unresolved open : unresolved) {
             FactRepository.FactBindRow row = open.row();
-            LlmLeafAssignment.Assignment placement = placements.get(row.fieldKey());
+            String key = promptKey(row);
+            LlmLeafAssignment.Assignment placement = placements.get(key);
+            if (key.contains("|")) {
+                String reason = bindScheduleLine(facts, open, placement, client == null);
+                if (reason == null) {
+                    bound++;
+                } else {
+                    unbound++;
+                    if ("model_path_refused".equals(reason)) {
+                        refused++;
+                    }
+                    if ("transcribed_label".equals(reason)) {
+                        transcribed++;
+                    }
+                }
+                continue;
+            }
             if (placement == null) {
                 unbind(facts, row.factId(), open.candidate(), open.candidateRoot(),
                         client == null ? "no_model" : "model_declined");
@@ -275,6 +303,67 @@ public final class PackPathBinder {
     /** One fact whose pack label names no leaf of the shared nomenclature. */
     private record Unresolved(FactRepository.FactBindRow row, String candidate,
             String candidateRoot) {}
+
+    /**
+     * Binds one schedule line under its table parent. The same
+     * {@code (field_key, line)} group shares the placement. A path that is only
+     * the parent is a roll-up and is refused (ADR 0027).
+     *
+     * @return the unbound reason, or null when the fact was bound
+     */
+    private static String bindScheduleLine(FactRepository facts, Unresolved open,
+            LlmLeafAssignment.Assignment placement, boolean offline) throws SQLException {
+        FactRepository.FactBindRow row = open.row();
+        if (placement == null) {
+            String reason = offline ? "no_model" : "model_declined";
+            unbind(facts, row.factId(), open.candidate(), open.candidateRoot(), reason);
+            return reason;
+        }
+        String parent = stripPackRoot(open.candidate());
+        String placed = placement.path().trim();
+        String leaf;
+        if (placed.equals(parent) || placed.equals(open.candidate())) {
+            unbind(facts, row.factId(), open.candidate(), open.candidateRoot(),
+                    "model_path_refused");
+            return "model_path_refused";
+        }
+        String childPrefix = parent + " > ";
+        if (placed.startsWith(childPrefix)) {
+            leaf = placed.substring(childPrefix.length()).trim();
+        } else if (!placed.contains(">")) {
+            leaf = placed;
+        } else {
+            unbind(facts, row.factId(), open.candidate(), open.candidateRoot(),
+                    "model_path_refused");
+            return "model_path_refused";
+        }
+        if (leaf.isBlank() || leaf.contains(" > ")
+                || OntologyVocabulary.transcribedLeaf(leaf)) {
+            String reason = leaf.isBlank() || leaf.contains(" > ")
+                    ? "model_path_refused" : "transcribed_label";
+            unbind(facts, row.factId(), open.candidate(), open.candidateRoot(), reason);
+            return reason;
+        }
+        String stored = open.candidate() + " > " + leaf;
+        String reason = "model" + onPage(row.pageIndex()) + ": " + placement.reasoning();
+        facts.updateFactBinding(row.factId(), stored, open.candidateRoot(),
+                "bound", null, reason);
+        return null;
+    }
+
+    /** Prompt identity: one schedule line, or one scalar field. */
+    private static String promptKey(FactRepository.FactBindRow row) {
+        if (row.fieldKey() != null && row.fieldKey().indexOf('.') > 0
+                && row.lineKey() != null && !row.lineKey().isBlank()) {
+            return row.fieldKey() + "|" + normalizeLineKey(row.lineKey());
+        }
+        return row.fieldKey();
+    }
+
+    /** Line identity used to group periods of one schedule row. */
+    private static String normalizeLineKey(String lineKey) {
+        return com.resurgent.tev.doc.extract.ScriptNormalizer.matchKey(lineKey);
+    }
 
     /** An unbound fact keeps the path it came in with: retrievable, never compared. */
     private static void unbind(FactRepository facts, long factId, String path, String root,

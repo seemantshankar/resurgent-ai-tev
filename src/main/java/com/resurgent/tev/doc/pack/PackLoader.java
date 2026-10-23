@@ -175,8 +175,12 @@ public final class PackLoader {
         List<Map<String, Object>> tables = new ArrayList<>();
         JsonNode tablesNode = root.get("tables");
         if (tablesNode != null && tablesNode.isArray()) {
+            int tableIndex = 0;
             for (JsonNode t : tablesNode) {
-                tables.add(jsonToMap(t));
+                tableIndex++;
+                Map<String, Object> table = jsonToMap(t);
+                validateTableRoles(table, source + ": tables[" + tableIndex + "]");
+                tables.add(table);
             }
         }
         List<String> checklist = textList(root.get("checklist"));
@@ -353,14 +357,16 @@ public final class PackLoader {
         return packs;
     }
 
-    /** Loads the five seed goldens from {@code docpacks/} on the classpath. */
+    /** Loads the seed goldens from {@code docpacks/} on the classpath. */
     public static List<DocTypePack> loadSeedPacks() throws PackValidationException {
         return List.of(
                 loadClasspath("docpacks/identity.promoter_net_worth.yaml"),
                 loadClasspath("docpacks/quotation.vendor.yaml"),
                 loadClasspath("docpacks/agreement.ppa.yaml"),
                 loadClasspath("docpacks/financials.audited_summary.yaml"),
-                loadClasspath("docpacks/report.dpr.yaml"));
+                loadClasspath("docpacks/report.dpr.yaml"),
+                loadClasspath("docpacks/technical.pvsyst_report.yaml"),
+                loadClasspath("docpacks/legal.land_deed.yaml"));
     }
 
     private static String requireText(JsonNode node, String field, String where)
@@ -415,6 +421,38 @@ public final class PackLoader {
             return textList(node.get("any_of"));
         }
         throw new PackValidationException(source + ": identity_signals must be a list or {any_of: [...]}");
+    }
+
+    /**
+     * A record schedule or period matrix names its row key, and optionally the
+     * entity, site, and period columns, from the columns it declares. A role that
+     * names no column fails the pack at load.
+     */
+    private static void validateTableRoles(Map<String, Object> table, String where)
+            throws PackValidationException {
+        java.util.Set<String> columns = new java.util.HashSet<>();
+        Object fieldsObj = table.get("fields");
+        if (fieldsObj instanceof List<?> list) {
+            for (Object raw : list) {
+                if (raw instanceof Map<?, ?> column && column.get("key") != null) {
+                    columns.add(String.valueOf(column.get("key")));
+                }
+            }
+        }
+        for (String role : List.of("key_column", "entity_key", "site_key", "period_key")) {
+            Object named = table.get(role);
+            if (named == null) {
+                continue;
+            }
+            String column = String.valueOf(named).trim();
+            if (column.isEmpty()) {
+                continue;
+            }
+            if (!columns.contains(column)) {
+                throw new PackValidationException(where + ": " + role + " '" + column
+                        + "' is not a column of the table");
+            }
+        }
     }
 
     @SuppressWarnings("unchecked")
