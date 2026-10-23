@@ -136,6 +136,26 @@ public final class SiteRepository {
     }
 
     /**
+     * The mandate site with this name, ignoring case, or a newly inserted one.
+     *
+     * @return the {@code site_id}
+     * @throws SQLException if the lookup or insert fails
+     */
+    public long findOrCreate(long mandateId, String siteName) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT site_id FROM site WHERE mandate_id = ? AND lower(site_name) = lower(?)")) {
+            ps.setLong(1, mandateId);
+            ps.setString(2, siteName);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+            }
+        }
+        return insertSite(mandateId, siteName, com.resurgent.tev.parser.db.Timestamps.now());
+    }
+
+    /**
      * Records one spelling mention of a site against the document it was seen in.
      *
      * @throws SQLException if the insert fails

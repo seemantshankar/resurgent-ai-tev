@@ -81,7 +81,9 @@ public final class FactRepository {
             List<Citation> citations,
             List<String> derivedFromKeys,
             String period,
-            List<BasisEvidenceWrite> basisEvidence) {
+            List<BasisEvidenceWrite> basisEvidence,
+            String siteName,
+            Long siteId) {
 
         public FactWrite {
             citations = citations == null ? List.of() : List.copyOf(citations);
@@ -100,7 +102,22 @@ public final class FactRepository {
             this(fieldKey, ontologyPath, pathRoot, subjectEntity, valueKind, valueText,
                     valueNumber, valueDate, unit, currency, scale, absoluteAmount, langSource,
                     extractionMethod, extractorId, confidence, statedOrDerived, lineKey,
-                    groupKeysJson, citations, derivedFromKeys, period, List.of());
+                    groupKeysJson, citations, derivedFromKeys, period, List.of(), null, null);
+        }
+
+        /** Fact write that carries basis evidence and no resolved site. */
+        public FactWrite(String fieldKey, String ontologyPath, String pathRoot,
+                String subjectEntity, String valueKind, String valueText, Double valueNumber,
+                String valueDate, String unit, String currency, String scale,
+                String absoluteAmount, String langSource, String extractionMethod,
+                String extractorId, Double confidence, String statedOrDerived, String lineKey,
+                String groupKeysJson, List<Citation> citations,
+                List<String> derivedFromKeys, String period,
+                List<BasisEvidenceWrite> basisEvidence) {
+            this(fieldKey, ontologyPath, pathRoot, subjectEntity, valueKind, valueText,
+                    valueNumber, valueDate, unit, currency, scale, absoluteAmount, langSource,
+                    extractionMethod, extractorId, confidence, statedOrDerived, lineKey,
+                    groupKeysJson, citations, derivedFromKeys, period, basisEvidence, null, null);
         }
 
         /** Fact write with no period (presence fields, line items, derived values). */
@@ -114,7 +131,7 @@ public final class FactRepository {
             this(fieldKey, ontologyPath, pathRoot, subjectEntity, valueKind, valueText,
                     valueNumber, valueDate, unit, currency, scale, absoluteAmount, langSource,
                     extractionMethod, extractorId, confidence, statedOrDerived, lineKey,
-                    groupKeysJson, citations, derivedFromKeys, null, List.of());
+                    groupKeysJson, citations, derivedFromKeys, null, List.of(), null, null);
         }
 
         /**
@@ -151,7 +168,9 @@ public final class FactRepository {
                     .citations(citations)
                     .derivedFromKeys(derivedFromKeys)
                     .period(period)
-                    .basisEvidence(basisEvidence);
+                    .basisEvidence(basisEvidence)
+                    .siteName(siteName)
+                    .siteId(siteId);
         }
 
         public static final class Builder {
@@ -178,6 +197,8 @@ public final class FactRepository {
             private List<String> derivedFromKeys = new ArrayList<>();
             private String period;
             private List<BasisEvidenceWrite> basisEvidence = new ArrayList<>();
+            private String siteName;
+            private Long siteId;
 
             /** Sets field key. */
             public Builder fieldKey(String fieldKey) { this.fieldKey = fieldKey; return this; }
@@ -231,6 +252,10 @@ public final class FactRepository {
             public Builder addDerivedFromKey(String key) { if (key != null) this.derivedFromKeys.add(key); return this; }
             /** Sets calendar period string. */
             public Builder period(String period) { this.period = period; return this; }
+            /** Sets the row site name before it is resolved to {@code site_id}. */
+            public Builder siteName(String siteName) { this.siteName = siteName; return this; }
+            /** Sets the mandate site this fact is about. */
+            public Builder siteId(Long siteId) { this.siteId = siteId; return this; }
             /** Sets basis evidence list. */
             public Builder basisEvidence(List<BasisEvidenceWrite> basisEvidence) { this.basisEvidence = basisEvidence != null ? new ArrayList<>(basisEvidence) : new ArrayList<>(); return this; }
             /**
@@ -246,7 +271,8 @@ public final class FactRepository {
                         fieldKey, ontologyPath, pathRoot, subjectEntity, valueKind, valueText,
                         valueNumber, valueDate, unit, currency, scale, absoluteAmount, langSource,
                         extractionMethod, extractorId, confidence, statedOrDerived, lineKey,
-                        groupKeysJson, citations, derivedFromKeys, period, basisEvidence);
+                        groupKeysJson, citations, derivedFromKeys, period, basisEvidence,
+                        siteName, siteId);
             }
         }
     }
@@ -264,7 +290,8 @@ public final class FactRepository {
             String statedOrDerived,
             String valueText,
             Long pageIndex,
-            String verbatim) {}
+            String verbatim,
+            String lineKey) {}
 
     /** Outcome of a replace: counts for run_stat / tests. */
     public record ReplaceStats(
@@ -301,9 +328,9 @@ public final class FactRepository {
                         + " value_number, value_date, unit, currency, scale, absolute_amount,"
                         + " lang_source, extraction_method, extractor_id, confidence,"
                         + " nomenclature_status, unbound_reason, stated_or_derived, line_key,"
-                        + " group_keys_json, valid_from, valid_to, is_current, created_at)"
+                        + " group_keys_json, valid_from, valid_to, is_current, created_at, site_id)"
                         + " VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-                        + " 'unbound', NULL, ?, ?, ?, NULL, NULL, 1, ?)",
+                        + " 'unbound', NULL, ?, ?, ?, NULL, NULL, 1, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             for (FactWrite f : facts) {
                 ps.setLong(1, parseRunId);
@@ -328,6 +355,11 @@ public final class FactRepository {
                 setNullableString(ps, 20, f.lineKey());
                 setNullableString(ps, 21, f.groupKeysJson());
                 ps.setString(22, now);
+                if (f.siteId() == null) {
+                    ps.setNull(23, java.sql.Types.INTEGER);
+                } else {
+                    ps.setLong(23, f.siteId());
+                }
                 ps.executeUpdate();
                 long factId = generatedId(ps);
                 factIds.add(factId);
@@ -848,7 +880,8 @@ public final class FactRepository {
                         + "   WHERE e.fact_id = f.fact_id ORDER BY e.ordinal LIMIT 1) AS page_index,"
                         + " (SELECT COALESCE(p.verbatim, e.source_text) FROM fact_evidence e"
                         + "   LEFT JOIN provenance_doc p ON p.provenance_id = e.provenance_id"
-                        + "   WHERE e.fact_id = f.fact_id ORDER BY e.ordinal LIMIT 1) AS verbatim"
+                        + "   WHERE e.fact_id = f.fact_id ORDER BY e.ordinal LIMIT 1) AS verbatim,"
+                        + " f.line_key"
                         + " FROM fact f WHERE f.parse_run_id = ? ORDER BY f.fact_id")) {
             ps.setLong(1, parseRunId);
             try (ResultSet rs = ps.executeQuery()) {
@@ -864,7 +897,8 @@ public final class FactRepository {
                             rs.getString("value_text"),
                             rs.getObject("page_index") == null
                                     ? null : rs.getLong("page_index"),
-                            rs.getString("verbatim")));
+                            rs.getString("verbatim"),
+                            rs.getString("line_key")));
                 }
                 return rows;
             }
