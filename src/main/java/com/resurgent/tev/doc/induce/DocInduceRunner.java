@@ -84,9 +84,11 @@ public final class DocInduceRunner {
                 continue;
             }
             List<DocLlmClient.Usage> clusterUsage = new ArrayList<>();
-            PackMiningClient mining = live == null
-                    ? new FixturePackMiningClient()
-                    : new LlmPackMiningClient(live, clusterUsage::add);
+            java.util.Map<String, String> env = System.getenv();
+            WebSearchClient web = PackMiningClients.webSearchAllowed(env)
+                    ? new HttpWebSearchClient(env.get(PackMiningClients.WEB_SEARCH_URL))
+                    : null;
+            PackMiningClient mining = PackMiningClients.select(env, live, web, clusterUsage::add);
             PackInducer.InduceRequest request = new PackInducer.InduceRequest(
                     cluster, industryTag, fileRole, docType, null,
                     mining, store,
@@ -220,6 +222,8 @@ public final class DocInduceRunner {
                             result.published() ? "success" : "partial",
                             "{\"pack\":\"" + code + "\",\"live_model\":" + liveModel
                                     + ",\"published\":" + result.published() + "}");
+                    InductionDecisionLog.recordPack(
+                            connection, mandateId, parseRunId, code, result.decisions());
                     repo.insertAuditLog(parseRunId, "induce_completed", Timestamps.now(),
                             "{\"pack\":\"" + code + "\",\"published\":" + result.published()
                                     + ",\"gates_passed\":" + result.allGatesPassed()
@@ -343,17 +347,7 @@ public final class DocInduceRunner {
      * every PAN/CIN/GSTIN/amount token seen in the layout.
      */
     private static Set<String> entityTokens(String title, String fileName, List<String> layout) {
-        Set<String> tokens = new LinkedHashSet<>();
-        if (title != null && !title.isBlank()) {
-            tokens.add(title.trim());
-        }
-        if (fileName != null && !fileName.isBlank()) {
-            tokens.add(fileName.trim());
-        }
-        for (String line : layout) {
-            tokens.addAll(EntityTokenFilter.extractValueTokens(line));
-        }
-        return tokens;
+        return EntityTokenFilter.sampleTokens(title, fileName, layout);
     }
 
     private static List<String> loadLayoutText(Connection connection, long documentVersionId)

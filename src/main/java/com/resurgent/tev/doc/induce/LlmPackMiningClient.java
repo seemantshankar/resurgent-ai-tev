@@ -7,7 +7,7 @@ import com.resurgent.tev.doc.llm.DocLlmJson;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -49,24 +49,58 @@ public final class LlmPackMiningClient implements PackMiningClient {
             - path_root must be one of: identity, economic, technical, commercial, legal, \
             regulatory, frame. Use an industry leaf under a known root only when no spine \
             leaf fits.
+            - Also return schedule tables (record schedules with key_column, and period \
+            matrices with key_column and period_key), clauses, passages, and \
+            document_date.kind (execution, signing, issue, report, offer, or date).
+            - A table column key is a label, never a name or amount. Mark \
+            domain_standard true when analysts always extract that item from this \
+            document type.
             - Return at most 12 fields. Keep prompt_hint under 12 words. No prose.
             Reply with JSON only, no prose:
             {"suggested_code":"family.name","family":"<root-ish family>",
              "identity_signals":["<printed phrases that identify this document type>"],
+             "document_date":{"kind":"issue"},
              "fields":[{"key":"snake_case","path":"root > ... > Leaf","path_root":"root",
                         "value_kind":"money","required":true,"prompt_hint":"what to read",
-                        "labels":["printed label variant","alias"],"sample_values":["<value seen>"]}]}""";
+                        "labels":["printed label variant","alias"],"sample_values":["<value seen>"],
+                        "domain_standard":false}],
+             "tables":[{"name":"snake_name","path":"root > Leaf","path_root":"root",
+                        "key_column":"line","entity_key":"borrower","site_key":"site",
+                        "period_key":"month","domain_standard":true,
+                        "columns":[{"key":"line","value_kind":"text"}]}],
+             "clauses":[{"key":"snake_name","label":"Label","parent_family":"family",
+                         "aliases":["printed heading"],"domain_standard":true}],
+             "passages":[{"topic":"snake_name","heading_terms":["heading"],
+                          "fields":["field_or_table_key"],"domain_standard":true}]}""";
 
     private final DocLlmClient client;
     private final Consumer<DocLlmClient.Usage> usageSink;
+    private final WebSearchClient web;
+    private final Map<String, String> env;
 
     /**
      * @param client    live client (required)
      * @param usageSink receives this call's usage for {@code llm_usage} (may be null)
      */
     public LlmPackMiningClient(DocLlmClient client, Consumer<DocLlmClient.Usage> usageSink) {
+        this(client, usageSink, null, Map.of());
+    }
+
+    /**
+     * @param client    live client (required)
+     * @param usageSink receives this call's usage for {@code llm_usage} (may be null)
+     * @param web       search adapter; called only when {@code env} allows web search
+     * @param env       residency and endpoint configuration (may be empty)
+     */
+    public LlmPackMiningClient(
+            DocLlmClient client,
+            Consumer<DocLlmClient.Usage> usageSink,
+            WebSearchClient web,
+            Map<String, String> env) {
         this.client = Objects.requireNonNull(client, "client");
         this.usageSink = usageSink;
+        this.web = web;
+        this.env = env == null ? Map.of() : Map.copyOf(env);
     }
 
     @Override
@@ -77,10 +111,27 @@ public final class LlmPackMiningClient implements PackMiningClient {
     @Override
     public MiningResult mine(MiningRequest request) throws PackMiningException {
         try {
+            String query = StructuralFingerprint.webQuery(request.documents(), request.industryTag());
+            String snippets = "";
+            if (web != null && PackMiningClients.webSearchAllowed(env)) {
+                snippets = web.search(query);
+                if (snippets == null) {
+                    snippets = "";
+                }
+                snippets = new EntityTokenFilter(sampleTokens(request)).redact(snippets);
+            }
+            String rationale = snippets.isBlank()
+                    ? "Offline structural fingerprint; web search was not used."
+                    : snippets;
             DocLlmClient.Completion completion =
-                    client.complete(systemPrompt(), userPrompt(request), MAX_COMPLETION_TOKENS);
+                    client.complete(systemPrompt(), userPrompt(request, snippets), MAX_COMPLETION_TOKENS);
             report(completion.usage());
-            return interpret(completion.content(), request);
+            MiningResult parsed = interpret(completion.content(), request);
+            if (parsed.domainRationale() != null && !parsed.domainRationale().isBlank()
+                    && snippets.isBlank()) {
+                rationale = parsed.domainRationale();
+            }
+            return parsed.withResearch(query, rationale);
         } catch (DocLlmException e) {
             report(DocLlmClient.Usage.failed(client.id(), 0));
             throw new PackMiningException("pack mining LLM failed: " + e.getMessage(), e);
@@ -94,18 +145,22 @@ public final class LlmPackMiningClient implements PackMiningClient {
         return String.format(SYSTEM, String.join("; ", SpineCatalog.paths()));
     }
 
-    private static String userPrompt(MiningRequest request) {
+    private static String userPrompt(MiningRequest request, String snippets) {
+        EntityTokenFilter filter = new EntityTokenFilter(sampleTokens(request));
         StringBuilder sb = new StringBuilder();
         sb.append("Industry: ")
                 .append(request.industryTag() == null || request.industryTag().isBlank()
-                        ? "general" : request.industryTag())
+                        ? "general" : filter.redact(request.industryTag()))
                 .append('\n');
         sb.append("File role: ")
                 .append(request.fileRole() == null || request.fileRole().isBlank()
-                        ? "(unknown)" : request.fileRole())
+                        ? "(unknown)" : filter.redact(request.fileRole()))
                 .append('\n');
         if (request.docTypeHint() != null && !request.docTypeHint().isBlank()) {
-            sb.append("Type hint: ").append(request.docTypeHint()).append('\n');
+            sb.append("Type hint: ").append(filter.redact(request.docTypeHint())).append('\n');
+        }
+        if (snippets != null && !snippets.isBlank()) {
+            sb.append("Domain research:\n").append(snippets).append('\n');
         }
         List<MiningDocument> docs = request.documents();
         int limit = Math.min(docs.size(), MAX_DOCS);
@@ -114,8 +169,9 @@ public final class LlmPackMiningClient implements PackMiningClient {
         for (int i = 0; i < limit; i++) {
             MiningDocument doc = docs.get(i);
             sb.append("\n=== DOC ").append(doc.id()).append(" ===\n");
-            sb.append("title: ").append(doc.title() == null ? "" : doc.title()).append('\n');
-            String text = layoutText(doc);
+            sb.append("title: ").append(filter.redact(doc.title() == null ? "" : doc.title()))
+                    .append('\n');
+            String text = StructuralFingerprint.promptText(List.of(doc));
             if (text.length() > MAX_DOC_CHARS) {
                 text = text.substring(0, MAX_DOC_CHARS);
             }
@@ -123,9 +179,20 @@ public final class LlmPackMiningClient implements PackMiningClient {
                 text = text.substring(0, Math.max(0, budget));
             }
             budget -= text.length();
-            sb.append("layout:\n").append(text).append('\n');
+            sb.append("structure:\n").append(text).append('\n');
         }
         return sb.toString();
+    }
+
+    private static Set<String> sampleTokens(MiningRequest request) {
+        Set<String> tokens = new LinkedHashSet<>();
+        if (request.documents() == null) {
+            return tokens;
+        }
+        for (MiningDocument document : request.documents()) {
+            tokens.addAll(document.sampleEntityTokens());
+        }
+        return tokens;
     }
 
     private static String layoutText(MiningDocument doc) {
@@ -174,10 +241,113 @@ public final class LlmPackMiningClient implements PackMiningClient {
                         synonyms,
                         labels,
                         docIds,
-                        stringArray(f.get("sample_values"))));
+                        stringArray(f.get("sample_values")),
+                        flag(f, "domain_standard")));
             }
         }
-        return new MiningResult(suggestedCode, family, identitySignals, fields);
+        List<MinedTable> tables = tables(root.get("tables"), docs);
+        List<MinedClause> clauses = clauses(root.get("clauses"), docs);
+        List<MinedPassage> passages = passages(root.get("passages"), docs);
+        String dateKind = documentDateKind(root.get("document_date"));
+        return new MiningResult(suggestedCode, family, identitySignals, fields, tables, clauses,
+                passages, dateKind, null, text(root, "domain_rationale"));
+    }
+
+    private static List<MinedTable> tables(JsonNode node, List<MiningDocument> docs) {
+        if (node == null || !node.isArray()) {
+            return List.of();
+        }
+        List<MinedTable> tables = new ArrayList<>();
+        for (JsonNode table : node) {
+            String name = text(table, "name");
+            if (name == null) {
+                continue;
+            }
+            List<MinedColumn> columns = new ArrayList<>();
+            JsonNode cols = table.get("columns");
+            if (cols == null) {
+                cols = table.get("fields");
+            }
+            if (cols != null && cols.isArray()) {
+                for (JsonNode column : cols) {
+                    String key = text(column, "key");
+                    if (key != null) {
+                        columns.add(new MinedColumn(key, text(column, "value_kind")));
+                    }
+                }
+            }
+            List<String> phrases = detectionPhrases(name, stringArray(table.get("labels")),
+                    List.of(), text(table, "path"));
+            tables.add(new MinedTable(
+                    name,
+                    text(table, "path"),
+                    text(table, "path_root"),
+                    text(table, "key_column"),
+                    text(table, "entity_key"),
+                    text(table, "site_key"),
+                    text(table, "period_key"),
+                    columns,
+                    attributeDocs(phrases, docs),
+                    flag(table, "domain_standard")));
+        }
+        return tables;
+    }
+
+    private static List<MinedClause> clauses(JsonNode node, List<MiningDocument> docs) {
+        if (node == null || !node.isArray()) {
+            return List.of();
+        }
+        List<MinedClause> clauses = new ArrayList<>();
+        for (JsonNode clause : node) {
+            String key = text(clause, "key");
+            if (key == null) {
+                continue;
+            }
+            List<String> aliases = stringArray(clause.get("aliases"));
+            clauses.add(new MinedClause(
+                    key,
+                    text(clause, "label"),
+                    text(clause, "parent_family"),
+                    aliases,
+                    attributeDocs(detectionPhrases(key, aliases, List.of(), text(clause, "label")), docs),
+                    flag(clause, "domain_standard")));
+        }
+        return clauses;
+    }
+
+    private static List<MinedPassage> passages(JsonNode node, List<MiningDocument> docs) {
+        if (node == null || !node.isArray()) {
+            return List.of();
+        }
+        List<MinedPassage> passages = new ArrayList<>();
+        for (JsonNode passage : node) {
+            String topic = text(passage, "topic");
+            if (topic == null) {
+                continue;
+            }
+            List<String> terms = stringArray(passage.get("heading_terms"));
+            passages.add(new MinedPassage(
+                    topic,
+                    terms,
+                    stringArray(passage.get("fields")),
+                    attributeDocs(detectionPhrases(topic, terms, List.of(), null), docs),
+                    flag(passage, "domain_standard")));
+        }
+        return passages;
+    }
+
+    private static String documentDateKind(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (node.isTextual()) {
+            return node.asText();
+        }
+        return text(node, "kind");
+    }
+
+    private static boolean flag(JsonNode node, String field) {
+        return node != null && node.hasNonNull(field) && node.get(field).asBoolean();
     }
 
     private static List<String> detectionPhrases(String key, List<String> labels,

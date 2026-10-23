@@ -139,7 +139,22 @@ public final class FixturePackMiningClient implements PackMiningClient {
         String code = request.docTypeHint() != null && !request.docTypeHint().isBlank()
                 ? request.docTypeHint().trim()
                 : family + ".induced";
-        return new MiningResult(code, family, identitySignals, fields);
+        OfflineDomainCatalog.Supplement supplement = OfflineDomainCatalog.match(request);
+        String query = supplement.webSearchQuery();
+        if (query == null || query.isBlank()) {
+            query = StructuralFingerprint.webQuery(docs, request.industryTag());
+        }
+        return new MiningResult(
+                code,
+                family,
+                identitySignals,
+                fields,
+                supplement.tables(),
+                supplement.clauses(),
+                supplement.passages(),
+                supplement.documentDateKind(),
+                query,
+                supplement.domainRationale());
     }
 
     private static String stripValue(String line) {

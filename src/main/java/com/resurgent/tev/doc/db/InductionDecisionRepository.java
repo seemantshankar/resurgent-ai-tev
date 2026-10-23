@@ -85,10 +85,25 @@ public final class InductionDecisionRepository {
     }
 
     /**
-     * Decisions for a mandate and stage, oldest first.
+     * Every induction decision for a mandate, oldest first, across pack, clause,
+     * and checklist stages.
      *
      * @throws SQLException if the query fails
      */
+    public List<Decision> forMandate(long mandateId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT decision_id, mandate_id, parse_run_id, stage, target_code,"
+                        + " candidate_key, outcome, reason_code, detail_json"
+                        + " FROM induction_decision"
+                        + " WHERE mandate_id = ?"
+                        + " ORDER BY decision_id")) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return read(rs);
+            }
+        }
+    }
+
     public List<Decision> forMandate(long mandateId, String stage) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT decision_id, mandate_id, parse_run_id, stage, target_code,"
@@ -99,24 +114,28 @@ public final class InductionDecisionRepository {
             ps.setLong(1, mandateId);
             ps.setString(2, stage);
             try (ResultSet rs = ps.executeQuery()) {
-                List<Decision> rows = new ArrayList<>();
-                while (rs.next()) {
-                    long parseRunId = rs.getLong("parse_run_id");
-                    Long parseRun = rs.wasNull() ? null : parseRunId;
-                    rows.add(new Decision(
-                            rs.getLong("decision_id"),
-                            rs.getLong("mandate_id"),
-                            parseRun,
-                            rs.getString("stage"),
-                            rs.getString("target_code"),
-                            rs.getString("candidate_key"),
-                            rs.getString("outcome"),
-                            rs.getString("reason_code"),
-                            rs.getString("detail_json")));
-                }
-                return rows;
+                return read(rs);
             }
         }
+    }
+
+    private static List<Decision> read(ResultSet rs) throws SQLException {
+        List<Decision> rows = new ArrayList<>();
+        while (rs.next()) {
+            long parseRunId = rs.getLong("parse_run_id");
+            Long parseRun = rs.wasNull() ? null : parseRunId;
+            rows.add(new Decision(
+                    rs.getLong("decision_id"),
+                    rs.getLong("mandate_id"),
+                    parseRun,
+                    rs.getString("stage"),
+                    rs.getString("target_code"),
+                    rs.getString("candidate_key"),
+                    rs.getString("outcome"),
+                    rs.getString("reason_code"),
+                    rs.getString("detail_json")));
+        }
+        return rows;
     }
 
     private static void setString(PreparedStatement ps, int index, String value) throws SQLException {

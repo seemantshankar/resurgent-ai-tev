@@ -726,7 +726,24 @@ public final class AssessmentRepository {
                 new ConflictRepository(connection).conflicts(mandateId),
                 new ConflictRepository(connection).versionsDiffer(mandateId),
                 new ConflictRepository(connection).conflictSkips(mandateId),
-                List.of());
+                List.of(),
+                inductionDecisions(mandateId));
+    }
+
+    private List<MandateQa.InductionDecisionRow> inductionDecisions(long mandateId) throws SQLException {
+        List<MandateQa.InductionDecisionRow> rows = new ArrayList<>();
+        for (InductionDecisionRepository.Decision decision
+                : new InductionDecisionRepository(connection).forMandate(mandateId)) {
+            rows.add(new MandateQa.InductionDecisionRow(
+                    decision.decisionId() == null ? 0L : decision.decisionId(),
+                    decision.stage(),
+                    decision.targetCode(),
+                    decision.candidateKey(),
+                    decision.outcome(),
+                    decision.reasonCode(),
+                    decision.detailJson()));
+        }
+        return rows;
     }
 
     /** Collapses whitespace runs to single spaces, like the layout's {@code text_norm}. */

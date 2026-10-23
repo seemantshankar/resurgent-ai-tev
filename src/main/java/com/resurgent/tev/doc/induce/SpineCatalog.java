@@ -140,7 +140,60 @@ public final class SpineCatalog {
                             "certified by", "signature", "name of the ca", "auditor name")),
             new SpineLeaf("frame > Signature Block > Membership", "frame",
                     List.of("membership", "membership no", "membership number",
-                            "issuer membership", "m. no", "m.no", "frn")));
+                            "issuer membership", "m. no", "m.no", "frn")),
+
+            // Debt syndication and credit analysis. Aliases stay specific where a
+            // shorter word is already a TEV leaf ("tenor" remains offtake tenor).
+            new SpineLeaf("identity > Promoter Qualification", "identity",
+                    List.of("promoter qualification", "educational qualification",
+                            "academic qualification", "qualification")),
+            new SpineLeaf("identity > Promoter Experience", "identity",
+                    List.of("promoter experience", "years of experience", "experience")),
+            new SpineLeaf("identity > Management Qualification", "identity",
+                    List.of("management qualification", "director qualification")),
+            new SpineLeaf("identity > Management Experience", "identity",
+                    List.of("management experience", "director experience", "career history")),
+
+            new SpineLeaf("economic > Credit Rating", "economic",
+                    List.of("credit rating", "instrument rating", "rating")),
+            new SpineLeaf("economic > Rating Outlook", "economic",
+                    List.of("rating outlook", "outlook")),
+            new SpineLeaf("economic > Rated Facility", "economic",
+                    List.of("rated facility", "rated facilities", "facility schedule")),
+            new SpineLeaf("economic > Facility Tranche", "economic",
+                    List.of("facility tranche", "debt tranche", "tranche")),
+            new SpineLeaf("economic > Facility Pricing", "economic",
+                    List.of("facility pricing", "pricing", "interest rate", "coupon")),
+            new SpineLeaf("economic > Facility Tenor", "economic",
+                    List.of("facility tenor", "loan tenor", "door to door tenor")),
+            new SpineLeaf("economic > Facility Moratorium", "economic",
+                    List.of("moratorium", "moratorium period", "principal moratorium")),
+            new SpineLeaf("economic > Facility Repayment", "economic",
+                    List.of("repayment", "repayment schedule", "repayment terms")),
+            new SpineLeaf("economic > Average Bank Balance", "economic",
+                    List.of("average bank balance", "average monthly balance", "abb")),
+            new SpineLeaf("economic > Cheque Bounce", "economic",
+                    List.of("cheque bounce", "inward bounce", "outward bounce", "bounce")),
+            new SpineLeaf("economic > Limit Utilization", "economic",
+                    List.of("limit utilization", "fund based utilization", "utilization")),
+
+            new SpineLeaf("legal > Facility Security", "legal",
+                    List.of("facility security", "primary security", "collateral security",
+                            "security package")),
+            new SpineLeaf("legal > Facility Covenant", "legal",
+                    List.of("facility covenant", "financial covenant", "covenant", "covenants")),
+
+            new SpineLeaf("regulatory > CIBIL Score", "regulatory",
+                    List.of("cibil score", "cibil", "credit score")),
+            new SpineLeaf("regulatory > CMR Rank", "regulatory",
+                    List.of("cmr rank", "commercial credit rank", "cmr")),
+            new SpineLeaf("regulatory > Days Past Due", "regulatory",
+                    List.of("days past due", "dpd")),
+            new SpineLeaf("regulatory > SMA Status", "regulatory",
+                    List.of("sma status", "special mention account", "sma")),
+            new SpineLeaf("regulatory > Wilful Defaulter", "regulatory",
+                    List.of("wilful defaulter", "willful defaulter", "wilful default",
+                            "willful default")));
 
     private static final Map<String, SpineLeaf> BY_NORMALIZED_LABEL = indexLabels();
 

@@ -340,6 +340,18 @@ public final class MandateQaJson {
             n.put("score", hit.score());
         }
 
+        ArrayNode induction = root.putArray("induction_decisions");
+        for (MandateQa.InductionDecisionRow row : qa.inductionDecisions()) {
+            ObjectNode n = induction.addObject();
+            n.put("decision_id", row.decisionId());
+            n.put("stage", row.stage());
+            n.put("target_code", row.targetCode());
+            n.put("candidate_key", row.candidateKey());
+            n.put("outcome", row.outcome());
+            n.put("reason_code", row.reasonCode());
+            n.put("detail_json", row.detailJson());
+        }
+
         try {
             return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root);
         } catch (Exception e) {
