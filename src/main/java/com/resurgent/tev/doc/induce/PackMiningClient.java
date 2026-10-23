@@ -4,7 +4,7 @@ package com.resurgent.tev.doc.induce;
  * SPI for LLM field mining over a document cluster (S2.11 induction).
  * Domain code never sees vendor types; adapters own their wire format.
  *
- * <p>The default suite is offline via {@link FixturePackMiningClient}. A real
+ * <p>The default suite is offline via {@link OfflinePackMiningClient}. A real
  * adapter (OpenAI / LlamaCloud) may be wired later behind env credentials; it
  * must still return {@link MiningResult} with per-document appearances so the
  * deterministic {@link Generalizer} can apply consensus and label-not-value.

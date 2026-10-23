@@ -80,11 +80,11 @@ public final class InductionDecisionLog {
                     case "added", "promoted" -> "promoted";
                     default -> "promoted";
                 };
-                String reason = switch (kind) {
+                String reason = InductionReasonCodes.canonical(switch (kind) {
                     case "made_optional" -> "coverage_demoted";
                     case "promoted" -> "spine_promoted";
                     default -> "observed_in_mandates";
-                };
+                });
                 repository.insert(new Decision(
                         null,
                         mandateId,

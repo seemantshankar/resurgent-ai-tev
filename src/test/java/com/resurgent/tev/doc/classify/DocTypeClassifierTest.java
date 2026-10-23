@@ -66,8 +66,8 @@ class DocTypeClassifierTest {
     void goldenNetWorthClassifiesToSeedPack() throws Exception {
         ClassifyResult result = score("certificate", "net_worth_sharma.pdf", NET_WORTH_PAGE1);
         assertThat(result.status()).isEqualTo(ClassifyResult.Status.CLASSIFIED);
-        assertThat(result.docTypeCode()).isEqualTo("identity.promoter_net_worth");
-        assertThat(result.packCode()).isEqualTo("identity.promoter_net_worth");
+        assertThat(result.docTypeCode()).isEqualTo("identity.net_worth_certificate");
+        assertThat(result.packCode()).isEqualTo("identity.net_worth_certificate");
         assertThat(result.packVersion()).isEqualTo("1.0.0");
         assertThat(result.confidence()).isGreaterThanOrEqualTo(0.5).isLessThanOrEqualTo(1.0);
         assertThat(result.reasons()).anyMatch(r -> r.contains("Net Worth"));
@@ -107,14 +107,14 @@ class DocTypeClassifierTest {
     void otherRoleStillClassifiesWhenIdentitySignalsMatch() throws Exception {
         ClassifyResult result = score("other", "net_worth_sharma.pdf", NET_WORTH_PAGE1);
         assertThat(result.status()).isEqualTo(ClassifyResult.Status.CLASSIFIED);
-        assertThat(result.docTypeCode()).isEqualTo("identity.promoter_net_worth");
+        assertThat(result.docTypeCode()).isEqualTo("identity.net_worth_certificate");
     }
 
     @Test
     void mismatchedRoleStillClassifiesWhenIdentitySignalsMatch() throws Exception {
         ClassifyResult result = score("agreement", "net_worth_sharma.pdf", NET_WORTH_PAGE1);
         assertThat(result.status()).isEqualTo(ClassifyResult.Status.CLASSIFIED);
-        assertThat(result.docTypeCode()).isEqualTo("identity.promoter_net_worth");
+        assertThat(result.docTypeCode()).isEqualTo("identity.net_worth_certificate");
     }
 
     @Test
@@ -214,9 +214,9 @@ class DocTypeClassifierTest {
             ClassifyResult forced = classifier.classify(new ClassifyRequest(
                     versionId, "certificate", "net_worth_sharma.pdf", NET_WORTH_PAGE1, null,
                     seedPacks(), true), connection);
-            assertThat(forced.docTypeCode()).isEqualTo("identity.promoter_net_worth");
+            assertThat(forced.docTypeCode()).isEqualTo("identity.net_worth_certificate");
             assertThat(readDocTypeCode(connection, versionId))
-                    .isEqualTo("identity.promoter_net_worth");
+                    .isEqualTo("identity.net_worth_certificate");
 
             // Unknown also overwrites and clears document.doc_type_code.
             ClassifyResult unknown = classifier.classify(new ClassifyRequest(
@@ -241,7 +241,7 @@ class DocTypeClassifierTest {
             ClassifyResult result = new DocTypeClassifier().classify(new ClassifyRequest(
                     versionId, "certificate", "net_worth.pdf", NET_WORTH_PAGE1, "general",
                     seedPacks(), true), connection);
-            assertThat(result.docTypeCode()).isEqualTo("identity.promoter_net_worth");
+            assertThat(result.docTypeCode()).isEqualTo("identity.net_worth_certificate");
 
             try (PreparedStatement ps = connection.prepareStatement(
                     "SELECT doc_type_code, pack_code, pack_version, confidence, reasons_json,"
@@ -251,8 +251,8 @@ class DocTypeClassifierTest {
                 try (ResultSet rs = ps.executeQuery()) {
                     assertThat(rs.next()).isTrue();
                     assertThat(rs.getString("doc_type_code"))
-                            .isEqualTo("identity.promoter_net_worth");
-                    assertThat(rs.getString("pack_code")).isEqualTo("identity.promoter_net_worth");
+                            .isEqualTo("identity.net_worth_certificate");
+                    assertThat(rs.getString("pack_code")).isEqualTo("identity.net_worth_certificate");
                     assertThat(rs.getString("pack_version")).isEqualTo("1.0.0");
                     assertThat(rs.getDouble("confidence")).isGreaterThan(0.0);
                     assertThat(rs.getString("reasons_json")).contains("Net Worth");

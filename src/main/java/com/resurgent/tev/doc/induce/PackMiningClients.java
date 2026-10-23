@@ -1,19 +1,19 @@
 package com.resurgent.tev.doc.induce;
 
-import com.resurgent.tev.doc.embed.EmbeddingClients;
 import com.resurgent.tev.doc.llm.DocLlmClient;
+import com.resurgent.tev.doc.residency.DataResidency;
 import java.util.Map;
 import java.util.function.Consumer;
 
 /**
- * Chooses the pack miner. Web search runs only when {@code TEV_DATA_RESIDENCY}
- * is {@code cloud_allowed} and {@code TEV_WEB_SEARCH_URL} is set. {@code local_only}
- * or a missing endpoint stays on the deterministic offline miner. There is no
- * {@code mandate_policy} table on this branch.
+ * Chooses the pack miner. Web search runs when {@code TEV_WEB_SEARCH_URL} is
+ * set and residency allows it. Unset {@code TEV_DATA_RESIDENCY} is not a lock:
+ * the default is {@code cloud_allowed}. {@code local_only} on the process floor
+ * or on {@code mandate_policy} keeps mining on the offline client.
  */
 public final class PackMiningClients {
 
-    /** Optional search endpoint. Absent means the offline miner. */
+    /** Optional search endpoint. Absent means no web search. */
     public static final String WEB_SEARCH_URL = "TEV_WEB_SEARCH_URL";
 
     private PackMiningClients() {}
@@ -24,15 +24,19 @@ public final class PackMiningClients {
      * @param env process or test environment; null is treated as empty
      */
     public static boolean webSearchAllowed(Map<String, String> env) {
-        if (env == null || localOnly(env)) {
+        return webSearchAllowed(env, null);
+    }
+
+    /**
+     * @param mandateResidency {@code mandate_policy.data_residency}, or null when unset
+     */
+    public static boolean webSearchAllowed(Map<String, String> env, String mandateResidency) {
+        Map<String, String> values = env == null ? Map.of() : env;
+        String url = values.get(WEB_SEARCH_URL);
+        if (url == null || url.isBlank()) {
             return false;
         }
-        String residency = env.get(EmbeddingClients.RESIDENCY);
-        if (residency == null || !residency.trim().equalsIgnoreCase("cloud_allowed")) {
-            return false;
-        }
-        String url = env.get(WEB_SEARCH_URL);
-        return url != null && !url.isBlank();
+        return !DataResidency.isLocalOnly(effective(values, mandateResidency));
     }
 
     /**
@@ -48,16 +52,27 @@ public final class PackMiningClients {
             DocLlmClient llm,
             WebSearchClient web,
             Consumer<DocLlmClient.Usage> usageSink) {
-        Map<String, String> values = env == null ? Map.of() : env;
-        if (llm != null && !localOnly(values)) {
-            WebSearchClient outbound = webSearchAllowed(values) ? web : null;
-            return new LlmPackMiningClient(llm, usageSink, outbound, values);
-        }
-        return new FixturePackMiningClient();
+        return select(env, llm, web, usageSink, null);
     }
 
-    private static boolean localOnly(Map<String, String> env) {
-        String residency = env.get(EmbeddingClients.RESIDENCY);
-        return residency != null && residency.trim().equalsIgnoreCase("local_only");
+    /**
+     * @param mandateResidency {@code mandate_policy.data_residency}, or null when unset
+     */
+    public static PackMiningClient select(
+            Map<String, String> env,
+            DocLlmClient llm,
+            WebSearchClient web,
+            Consumer<DocLlmClient.Usage> usageSink,
+            String mandateResidency) {
+        Map<String, String> values = env == null ? Map.of() : env;
+        if (llm != null && !DataResidency.isLocalOnly(effective(values, mandateResidency))) {
+            WebSearchClient outbound = webSearchAllowed(values, mandateResidency) ? web : null;
+            return new LlmPackMiningClient(llm, usageSink, outbound, values);
+        }
+        return new OfflinePackMiningClient();
+    }
+
+    private static String effective(Map<String, String> env, String mandateResidency) {
+        return DataResidency.effective(env.get(DataResidency.ENV), mandateResidency);
     }
 }

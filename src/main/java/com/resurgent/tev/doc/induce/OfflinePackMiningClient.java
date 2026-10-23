@@ -8,38 +8,33 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * Offline {@link PackMiningClient} for tests and dry runs. Never touches the network.
- *
- * <p>Two modes:
- * <ul>
- *   <li>{@link #FixturePackMiningClient(MiningResult)} — canned result (unit tests).</li>
- *   <li>{@link #FixturePackMiningClient()} — deterministic heuristic that mines
- *       spine-matching labels from layout text so the default offline CLI path
- *       can induce real packs without an LLM key.</li>
- * </ul>
+ * Production offline pack miner. Never touches the network. The no-arg miner
+ * reads spine-matching labels from layout text so induction works without an
+ * LLM key. A canned {@link MiningResult} is only for tests that already know
+ * the schema.
  */
-public final class FixturePackMiningClient implements PackMiningClient {
+public final class OfflinePackMiningClient implements PackMiningClient {
 
     private final MiningResult result;
     private final String id;
 
     /** Heuristic offline miner: derives fields from layout/title labels. */
-    public FixturePackMiningClient() {
-        this("fixture-heuristic", null);
+    public OfflinePackMiningClient() {
+        this("offline-layout", null);
     }
 
     /**
      * @param result canned mining output (required)
      */
-    public FixturePackMiningClient(MiningResult result) {
-        this("fixture", result);
+    public OfflinePackMiningClient(MiningResult result) {
+        this("offline", result);
     }
 
     /**
      * @param id     adapter id (required)
      * @param result canned mining output, or {@code null} to use the heuristic
      */
-    public FixturePackMiningClient(String id, MiningResult result) {
+    public OfflinePackMiningClient(String id, MiningResult result) {
         this.id = Objects.requireNonNull(id, "id");
         this.result = result;
     }

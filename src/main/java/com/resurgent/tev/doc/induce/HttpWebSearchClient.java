@@ -1,5 +1,6 @@
 package com.resurgent.tev.doc.induce;
 
+import com.resurgent.tev.doc.residency.DataResidency;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -16,14 +17,30 @@ import java.time.Duration;
 public final class HttpWebSearchClient implements WebSearchClient {
 
     private final String endpoint;
+    private final String residency;
     private final HttpClient http;
+    private final java.util.function.UnaryOperator<String> transport;
 
     /**
      * @param endpoint search origin; the sanitized query is sent as {@code q}
      */
     public HttpWebSearchClient(String endpoint) {
+        this(endpoint, null, null);
+    }
+
+    /**
+     * @param endpoint search origin
+     * @param residency effective data residency; {@code local_only} does not search
+     * @param transport test double, or null for the JDK client
+     */
+    public HttpWebSearchClient(String endpoint, String residency,
+            java.util.function.UnaryOperator<String> transport) {
         this.endpoint = endpoint == null ? "" : endpoint.trim();
-        this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+        this.residency = residency;
+        this.transport = transport;
+        this.http = transport == null
+                ? HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
+                : null;
     }
 
     @Override
@@ -33,8 +50,15 @@ public final class HttpWebSearchClient implements WebSearchClient {
 
     @Override
     public String search(String sanitizedQuery) {
+        if (DataResidency.locked(residency) || DataResidency.isLocalOnly(residency)) {
+            return "";
+        }
         if (endpoint.isEmpty() || sanitizedQuery == null || sanitizedQuery.isBlank()) {
             return "";
+        }
+        if (transport != null) {
+            String body = transport.apply(sanitizedQuery);
+            return body == null ? "" : body;
         }
         String joiner = endpoint.contains("?") ? "&" : "?";
         String url = endpoint + joiner + "q="

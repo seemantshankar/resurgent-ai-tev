@@ -60,8 +60,11 @@ public final class DocInduceRunner {
         PackStore store = new PackStore(packsRoot);
 
         List<PackInducer.InduceDocument> documents;
+        String mandateResidency = null;
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             documents = loadCorpus(workspace.connection(), mandateId, fileRole, docType, versions);
+            mandateResidency = new com.resurgent.tev.doc.db.MandatePolicyRepository(
+                    workspace.connection()).dataResidency(mandateId);
         }
         if (documents.isEmpty()) {
             throw new IllegalArgumentException(
@@ -85,10 +88,13 @@ public final class DocInduceRunner {
             }
             List<DocLlmClient.Usage> clusterUsage = new ArrayList<>();
             java.util.Map<String, String> env = System.getenv();
-            WebSearchClient web = PackMiningClients.webSearchAllowed(env)
-                    ? new HttpWebSearchClient(env.get(PackMiningClients.WEB_SEARCH_URL))
+            String effective = com.resurgent.tev.doc.residency.DataResidency.effective(
+                    env.get(com.resurgent.tev.doc.residency.DataResidency.ENV), mandateResidency);
+            WebSearchClient web = PackMiningClients.webSearchAllowed(env, mandateResidency)
+                    ? new HttpWebSearchClient(env.get(PackMiningClients.WEB_SEARCH_URL), effective, null)
                     : null;
-            PackMiningClient mining = PackMiningClients.select(env, live, web, clusterUsage::add);
+            PackMiningClient mining = PackMiningClients.select(
+                    env, live, web, clusterUsage::add, mandateResidency);
             String typeHint = docType == null || docType.isBlank()
                     ? clusterCode(cluster.get(0))
                     : docType;

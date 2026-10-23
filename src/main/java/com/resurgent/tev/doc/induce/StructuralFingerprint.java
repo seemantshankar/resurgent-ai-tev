@@ -39,7 +39,7 @@ public final class StructuralFingerprint {
         if (joined.isBlank()) {
             return "document type fields tables clauses passages";
         }
-        return joined.length() > 500 ? joined.substring(0, 500).trim() : joined;
+        return joined;
     }
 
     /**

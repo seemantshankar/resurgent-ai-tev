@@ -3,6 +3,7 @@ package com.resurgent.tev.doc.extract;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.resurgent.tev.doc.db.CloudParsePageRepository;
+import com.resurgent.tev.doc.db.PassageRepository;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackField;
 import com.resurgent.tev.doc.pack.PackPassage;
@@ -11,10 +12,12 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Reads layout blocks and table cells when the fixture extractor has no sidecar.
@@ -99,10 +102,35 @@ final class LayoutExtractBridge {
         List<FactCandidate> facts = new ArrayList<>();
         List<Citation> citations = new ArrayList<>();
         List<BlockLine> blocks = loadBlocks(connection, documentVersionId);
+        List<Grid> grids = loadGrids(connection, documentVersionId);
+        Set<Integer> gridPages = new HashSet<>();
+        Set<Integer> blockPages = new HashSet<>();
+        for (Grid grid : grids) {
+            gridPages.add(grid.page());
+        }
+        for (BlockLine line : blocks) {
+            blockPages.add(line.page());
+        }
+        readTextLines(blocks, gridPages, tables, labels, pack, facts, citations);
+        readCloudLines(connection, documentVersionId, blockPages, gridPages, tables, labels,
+                pack, facts, citations);
+        for (Grid grid : grids) {
+            readGrid(grid, tables, labels, pack, facts, citations);
+        }
+        if (facts.isEmpty()) {
+            return original;
+        }
+        return new ExtractResult(original.extractorId(), original.payload(), facts, citations,
+                original.stats());
+    }
+
+    private static void readTextLines(List<BlockLine> blocks, Set<Integer> gridPages,
+            List<TableSpec> tables, List<Label> labels, DocTypePack pack,
+            List<FactCandidate> facts, List<Citation> citations) {
         List<List<Cell>> pipe = new ArrayList<>();
         int pipePage = 1;
         for (BlockLine line : blocks) {
-            if (line.text().contains("|")) {
+            if (line.text().contains("|") && !gridPages.contains(line.page())) {
                 List<String> cells = splitPipe(line.text());
                 if (cells.size() >= 2) {
                     if (pipe.isEmpty()) {
@@ -118,17 +146,34 @@ final class LayoutExtractBridge {
             }
             flushPipe(pipe, pipePage, tables, labels, pack, facts, citations);
             pipe.clear();
+            if (gridPages.contains(line.page()) && line.text().contains("|")) {
+                continue;
+            }
             readScalar(line.text(), line.text(), line.page(), labels, pack, facts, citations);
         }
         flushPipe(pipe, pipePage, tables, labels, pack, facts, citations);
-        for (Grid grid : loadGrids(connection, documentVersionId)) {
-            readGrid(grid, tables, labels, pack, facts, citations);
+    }
+
+    /** Markdown for pages that have no layout blocks, such as a cloud-escalated page. */
+    private static void readCloudLines(Connection connection, long documentVersionId,
+            Set<Integer> blockPages, Set<Integer> gridPages, List<TableSpec> tables,
+            List<Label> labels, DocTypePack pack, List<FactCandidate> facts,
+            List<Citation> citations) throws SQLException {
+        List<PassageRepository.ParsePage> pages = new PassageRepository(connection)
+                .parsePages(documentVersionId);
+        List<BlockLine> lines = new ArrayList<>();
+        for (PassageRepository.ParsePage page : pages) {
+            if (blockPages.contains(page.pageIndex()) || page.text() == null) {
+                continue;
+            }
+            for (String raw : page.text().split("\\R")) {
+                String line = raw.trim();
+                if (!line.isEmpty() && !line.startsWith("#")) {
+                    lines.add(new BlockLine(page.pageIndex(), line));
+                }
+            }
         }
-        if (facts.isEmpty()) {
-            return original;
-        }
-        return new ExtractResult(original.extractorId(), original.payload(), facts, citations,
-                original.stats());
+        readTextLines(lines, gridPages, tables, labels, pack, facts, citations);
     }
 
     private static void flushPipe(List<List<Cell>> rows, int page, List<TableSpec> tables,
@@ -214,19 +259,21 @@ final class LayoutExtractBridge {
 
     private static Map<Integer, String> mapHeader(List<Cell> row, TableSpec table) {
         Map<Integer, String> mapped = new LinkedHashMap<>();
-        boolean key = false;
+        boolean anchor = false;
+        String anchorColumn = table.keyColumn() != null ? table.keyColumn() : table.periodColumn();
         for (int i = 0; i < row.size(); i++) {
             String snake = norm(row.get(i).text()).replace(' ', '_');
             for (String column : table.columns()) {
                 if (snake.equals(column)) {
                     mapped.put(i, column);
-                    if (column.equals(table.keyColumn())) {
-                        key = true;
+                    if (column.equals(anchorColumn)) {
+                        anchor = true;
                     }
                 }
             }
         }
-        if (!key || mapped.size() < Math.min(2, table.columns().size())) {
+        if (anchorColumn == null || !anchor
+                || mapped.size() < Math.min(2, table.columns().size())) {
             return null;
         }
         return mapped;
@@ -332,7 +379,8 @@ final class LayoutExtractBridge {
         for (Map<String, Object> table : pack.tables()) {
             Object name = table.get("name");
             Object key = table.get("key_column");
-            if (name == null || key == null) {
+            Object period = table.get("period_key");
+            if (name == null || (key == null && period == null)) {
                 continue;
             }
             List<String> columns = new ArrayList<>();
@@ -345,7 +393,9 @@ final class LayoutExtractBridge {
                 }
             }
             if (!columns.isEmpty()) {
-                tables.add(new TableSpec(String.valueOf(name), columns, String.valueOf(key)));
+                tables.add(new TableSpec(String.valueOf(name), columns,
+                        key == null ? null : String.valueOf(key),
+                        period == null ? null : String.valueOf(period)));
             }
         }
         return tables;
@@ -443,7 +493,8 @@ final class LayoutExtractBridge {
 
     private record Label(String norm, String key, ValueKind kind) {}
 
-    private record TableSpec(String name, List<String> columns, String keyColumn) {}
+    private record TableSpec(String name, List<String> columns, String keyColumn,
+            String periodColumn) {}
 
     private record BlockLine(int page, String text) {}
 

@@ -130,20 +130,20 @@ public final class Generalizer {
             String rawKey = f.key() == null ? "" : f.key().trim();
             if (rawKey.isEmpty()) {
                 dropped.add("(unnamed): empty key");
-                decisions.add(drop("(unnamed)", "empty_key", "Empty field key."));
+                decisions.add(note("(unnamed)", "dropped", "empty_key", "Empty field key."));
                 continue;
             }
 
             // --- 1. label-not-value ---
             if (entityFilter.isEntityToken(rawKey)) {
                 dropped.add(rawKey + ": key is an entity/value token");
-                decisions.add(drop(rawKey, "entity_token", "Key is an entity or value token."));
+                decisions.add(note(rawKey, "dropped", "entity_token", "Key is an entity or value token."));
                 continue;
             }
             String labelKey = entityFilter.rewriteKey(rawKey);
             if (labelKey.isEmpty()) {
                 dropped.add(rawKey + ": key is only entity/value tokens");
-                decisions.add(drop(rawKey, "entity_token", "Key is only entity or value tokens."));
+                decisions.add(note(rawKey, "dropped", "entity_token", "Key is only entity or value tokens."));
                 continue;
             }
             String pathCandidate = f.path() == null ? "" : f.path().trim();
@@ -153,7 +153,7 @@ public final class Generalizer {
             if (entityFilter.isEntityToken(pathCandidate)
                     && SpineCatalog.matchLabel(pathCandidate).isEmpty()) {
                 dropped.add(rawKey + ": path is an entity/value token");
-                decisions.add(drop(rawKey, "entity_token", "Path is an entity or value token."));
+                decisions.add(note(rawKey, "dropped", "entity_token", "Path is an entity or value token."));
                 continue;
             }
 
@@ -213,7 +213,7 @@ public final class Generalizer {
                     } else {
                         dropped.add(rawKey + ": cannot map to a spine leaf and root '"
                                 + proposedRoot + "' is not a known spine root");
-                        decisions.add(drop(rawKey, "unknown_root",
+                        decisions.add(note(rawKey, "dropped", "unknown_root",
                                 "Root '" + proposedRoot + "' is not one of the seven spine roots."));
                         continue;
                     }
@@ -238,14 +238,14 @@ public final class Generalizer {
             boolean evidenced = !docIds.isEmpty() || domainStandard;
             if (docs == 1 && !spineLeaf && !evidenced) {
                 dropped.add(rawKey + ": single-doc cluster and label is not a spine leaf (one-off)");
-                decisions.add(drop(rawKey, "not_evidenced",
+                decisions.add(note(rawKey, "dropped", "not_evidenced",
                         "Single-document field is not a spine leaf and is not evidenced."));
                 continue;
             }
             if (docs > 1 && docCount < threshold) {
                 dropped.add(rawKey + ": one-off (appeared in " + docCount + "/" + docs
                         + " docs; need ≥ " + threshold + ")");
-                decisions.add(drop(rawKey, "below_consensus",
+                decisions.add(note(rawKey, "dropped", "below_consensus",
                         "Appeared in " + docCount + " of " + docs + " documents."));
                 continue;
             }
@@ -315,14 +315,15 @@ public final class Generalizer {
             }
             boolean keyRewritten = !cleanKey.equals(rawKey) && !cleanKey.equalsIgnoreCase(rawKey);
             if (keyRewritten) {
-                decisions.add(new DecisionNote(cleanKey, "rewritten", "label_not_value",
+                decisions.add(note(cleanKey, "rewritten", "label_not_value",
                         "Key rewritten from '" + rawKey + "'."));
             }
             if (demoteOptional) {
-                decisions.add(new DecisionNote(cleanKey, "demoted_optional", "single_document_industry_leaf",
+                decisions.add(note(cleanKey, "demoted_optional",
+                        domainStandard ? "domain_standard" : "single_document_industry_leaf",
                         "Non-spine leaf on a single document is optional."));
             } else if (!keyRewritten) {
-                decisions.add(new DecisionNote(cleanKey, "promoted",
+                decisions.add(note(cleanKey, "promoted",
                         spineLeaf ? "spine_leaf" : (domainStandard ? "domain_standard" : "evidenced"),
                         spineLeaf
                                 ? "Spine leaf kept."
@@ -362,8 +363,12 @@ public final class Generalizer {
                 decisions);
     }
 
+    static DecisionNote note(String key, String outcome, String reason, String rationale) {
+        return new DecisionNote(key, outcome, InductionReasonCodes.canonical(reason), rationale);
+    }
+
     private static DecisionNote drop(String key, String reason, String rationale) {
-        return new DecisionNote(key, "dropped", reason, rationale);
+        return note(key, "dropped", reason, rationale);
     }
 
     private static List<Map<String, Object>> generalizeTables(
@@ -421,7 +426,7 @@ public final class Generalizer {
             putRole(mapped, "period_key", filter.rewriteKey(table.periodKey()), columnKeys);
             mapped.put("fields", columns);
             tables.add(mapped);
-            decisions.add(new DecisionNote(name, "promoted",
+            decisions.add(note(name, "promoted",
                     table.domainStandard() ? "domain_standard" : "evidenced",
                     "Schedule table kept under " + root + "."));
         }
@@ -471,7 +476,7 @@ public final class Generalizer {
                 family = null;
             }
             types.add(new PackClauseType(key, label, family, aliases));
-            decisions.add(new DecisionNote(key, "promoted",
+            decisions.add(note(key, "promoted",
                     clause.domainStandard() ? "domain_standard" : "evidenced",
                     "Clause type kept."));
         }
@@ -528,7 +533,7 @@ public final class Generalizer {
                 continue;
             }
             passages.add(new PackPassage(topic, terms, refs));
-            decisions.add(new DecisionNote(topic, "promoted",
+            decisions.add(note(topic, "promoted",
                     passage.domainStandard() ? "domain_standard" : "evidenced",
                     "Passage topic kept."));
         }
