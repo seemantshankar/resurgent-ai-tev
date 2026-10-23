@@ -227,8 +227,17 @@ class DocumentIngestLayoutTest {
         DocumentLayoutService.LayoutResult layout = new DocumentLayoutService().layout(
                 result.documentVersionId(), dbPath(), blobs);
         assertThat(layout.ocrRequired()).isTrue();
-        assertThat(layout.extractor()).isEqualTo("image-placeholder");
-        // Scans keep a page raster for later OCR / UI.
+        assertThat(layout.extractor()).isEqualTo("local-ocr");
         assertThat(blobs.pagePath(result.fileHash(), 1)).exists();
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(dbPath())) {
+            try (var rs = workspace.connection().createStatement().executeQuery(
+                    "SELECT width_px, height_px, ocr_engine FROM page"
+                            + " WHERE document_version_id = " + result.documentVersionId())) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getInt("width_px")).isEqualTo(8);
+                assertThat(rs.getInt("height_px")).isEqualTo(8);
+                assertThat(rs.getString("ocr_engine")).isNotNull();
+            }
+        }
     }
 }
