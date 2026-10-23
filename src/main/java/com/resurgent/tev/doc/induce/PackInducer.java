@@ -97,15 +97,21 @@ public final class PackInducer {
             List<String> rewrittenFields,
             String industryTag,
             String version,
-            String publishedPath) {
+            String publishedPath,
+            List<InductionNote> decisions) {
 
         public InduceResult {
             gates = gates == null ? List.of() : List.copyOf(gates);
             rejectReasons = rejectReasons == null ? List.of() : List.copyOf(rejectReasons);
             droppedFields = droppedFields == null ? List.of() : List.copyOf(droppedFields);
             rewrittenFields = rewrittenFields == null ? List.of() : List.copyOf(rewrittenFields);
+            decisions = decisions == null ? List.of() : List.copyOf(decisions);
         }
     }
+
+    /** One pack-induction outcome recorded in {@code induction_decision}. */
+    public record InductionNote(
+            String candidateKey, String outcome, String reasonCode, String detailJson) {}
 
     private static final int MAX_CLUSTER_SIZE_HINT = 500;
 
@@ -217,9 +223,40 @@ public final class PackInducer {
                 industryTags,
                 generalized.identitySignals(),
                 fields,
+                generalized.tables(),
                 List.of(),
                 List.of(),
-                List.of());
+                generalized.documentDateKind(),
+                generalized.clauseSection(),
+                generalized.passages());
+
+        List<Generalizer.DecisionNote> widenNotes = List.of();
+        List<String> preservedRequired = List.of();
+        if (request.store() != null) {
+            java.util.Optional<DocTypePack> previous = request.store().latest(industryTag, code);
+            if (previous.isPresent()) {
+                preservedRequired = previous.get().requiredFields().stream()
+                        .map(PackField::key).toList();
+                PackWidener.WidenResult widened = PackWidener.widen(previous.get(), candidate);
+                candidate = widened.pack();
+                widenNotes = widened.notes();
+            }
+        }
+        String webQuery = mined.webSearchQuery();
+        if (webQuery == null || webQuery.isBlank()) {
+            webQuery = StructuralFingerprint.webQuery(miningDocs, industryTag);
+        }
+        List<InductionNote> decisions = new ArrayList<>();
+        for (Generalizer.DecisionNote note : generalized.decisions()) {
+            decisions.add(new InductionNote(
+                    note.candidateKey(), note.outcome(), note.reasonCode(),
+                    InductionDecisionLog.detail(webQuery, note.rationale())));
+        }
+        for (Generalizer.DecisionNote note : widenNotes) {
+            decisions.add(new InductionNote(
+                    note.candidateKey(), note.outcome(), note.reasonCode(),
+                    InductionDecisionLog.detail(webQuery, note.rationale())));
+        }
 
         // coverage probe: mining appearances restricted to generalized keys
         Set<String> generalizedKeys = new LinkedHashSet<>();
@@ -229,6 +266,9 @@ public final class PackInducer {
         List<String> clusterDocIds = cluster.stream().map(InduceDocument::id).toList();
         PackQualityGates.CoverageProbe probe = PackQualityGates.probeFromMining(
                 mined.fields(), clusterDocIds, generalizedKeys);
+        if (!preservedRequired.isEmpty()) {
+            probe = probe.plus(preservedRequired, clusterDocIds);
+        }
 
         PackQualityGates.GateReport report = PackQualityGates.evaluate(
                 candidate,
@@ -283,7 +323,8 @@ public final class PackInducer {
                     generalized.rewritten(),
                     industryTag,
                     null,
-                    null);
+                    null,
+                    decisions);
         }
 
         if (!gatesPassed) {
@@ -301,7 +342,8 @@ public final class PackInducer {
                     generalized.rewritten(),
                     industryTag,
                     null,
-                    null);
+                    null,
+                    decisions);
         }
 
         if (request.store() == null) {
@@ -331,7 +373,8 @@ public final class PackInducer {
                 generalized.rewritten(),
                 industryTag,
                 published.version(),
-                published.yamlPath().toString());
+                published.yamlPath().toString(),
+                decisions);
     }
 
     private static List<InduceDocument> selectCluster(
@@ -458,6 +501,7 @@ public final class PackInducer {
                 List.of(),
                 request.industryTag(),
                 null,
-                null);
+                null,
+                List.of());
     }
 }

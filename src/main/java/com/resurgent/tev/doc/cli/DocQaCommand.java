@@ -298,6 +298,14 @@ public final class DocQaCommand implements Callable<Integer> {
                         row.dataPoint(), row.kind(), blankToDash(row.fmSource()), row.reason());
             }
             out.printf("conflict skips: %d%n", qa.conflictSkips().size());
+            for (MandateQa.InductionDecisionRow row : qa.inductionDecisions()) {
+                out.printf("induction %s %s %s: %s%n",
+                        row.stage(),
+                        row.outcome(),
+                        blankToDash(row.candidateKey()),
+                        blankToDash(row.reasonCode()));
+            }
+            out.printf("induction decisions: %d%n", qa.inductionDecisions().size());
             return 0;
         } catch (IllegalArgumentException e) {
             err.println("qa rejected: " + e.getMessage());

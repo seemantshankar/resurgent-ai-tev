@@ -21,9 +21,17 @@ public final class EntityTokenFilter {
 
     /** PAN: five letters, four digits, one letter. */
     public static final Pattern PAN = Pattern.compile("\\b[A-Z]{5}[0-9]{4}[A-Z]\\b");
-    /** CIN: two letters, digits, letters/digits runs — 21 chars typical. */
+    /**
+     * CIN: a 21-character Indian CIN ({@code U40100TG2010PTC071234}) or the
+     * earlier two-letter run used by older samples.
+     */
     public static final Pattern CIN = Pattern.compile(
-            "\\b[A-Z]{2}[0-9]{2}[A-Z]{3,7}[0-9]{4}[A-Z]{3,7}[0-9A-Z]{0,6}\\b");
+            "\\b(?:[A-Z][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}"
+                    + "|[A-Z]{2}[0-9]{2}[A-Z]{3,7}[0-9]{4}[A-Z]{3,7}[0-9A-Z]{0,6})\\b");
+    /** Bank account: a labeled number, or a bare 9–18 digit run. */
+    public static final Pattern ACCOUNT = Pattern.compile(
+            "(?i)\\b(?:a/c|acct|account)\\s*(?:no\\.?|number|num|#)?\\s*[:#-]?\\s*[0-9]{6,18}\\b"
+                    + "|\\b[0-9]{9,18}\\b");
     /** GSTIN: 2-digit state + 5-char PAN-like + entity + 'Z' + checksum. */
     public static final Pattern GSTIN = Pattern.compile(
             "\\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][A-Z0-9]Z[A-Z0-9]\\b");
@@ -74,7 +82,7 @@ public final class EntityTokenFilter {
         String t = token.trim();
         String upper = t.toUpperCase(Locale.ROOT);
         if (PAN.matcher(upper).matches() || CIN.matcher(upper).matches()
-                || GSTIN.matcher(upper).matches()) {
+                || GSTIN.matcher(upper).matches() || ACCOUNT.matcher(t).matches()) {
             return true;
         }
         if (NUMERIC_TOKEN.matcher(t).matches()) {
@@ -96,7 +104,8 @@ public final class EntityTokenFilter {
             return false;
         }
         String upper = text.toUpperCase(Locale.ROOT);
-        if (PAN.matcher(upper).find() || CIN.matcher(upper).find() || GSTIN.matcher(upper).find()) {
+        if (PAN.matcher(upper).find() || CIN.matcher(upper).find() || GSTIN.matcher(upper).find()
+                || ACCOUNT.matcher(text).find()) {
             return true;
         }
         if (AMOUNT.matcher(text).find()) {
@@ -129,6 +138,7 @@ public final class EntityTokenFilter {
         s = stripMatches(s, PAN);
         s = stripMatches(s, GSTIN);
         s = stripMatches(s, CIN);
+        s = stripMatches(s, ACCOUNT);
         s = stripMatches(s, AMOUNT);
         for (String entity : sampleEntities) {
             String en = SpineCatalog.normalize(entity);
@@ -191,9 +201,118 @@ public final class EntityTokenFilter {
         collect(upper, PAN, out);
         collect(upper, GSTIN, out);
         collect(upper, CIN, out);
+        collect(text, ACCOUNT, out);
         collect(text, AMOUNT, out);
         return out;
     }
+
+    /**
+     * Sample-entity tokens for label-not-value. Generic document titles and file
+     * names ({@code Credit Rating Report}, {@code Bank Statement.pdf},
+     * {@code CIBIL Report}) are omitted unless they contain a real name,
+     * identifier, or amount.
+     */
+    public static Set<String> sampleTokens(String title, String fileName, List<String> layout) {
+        Set<String> tokens = new LinkedHashSet<>();
+        addIfEntityBearing(tokens, title);
+        addIfEntityBearing(tokens, fileName);
+        if (layout != null) {
+            for (String line : layout) {
+                tokens.addAll(extractValueTokens(line));
+            }
+        }
+        return Set.copyOf(tokens);
+    }
+
+    /**
+     * Removes names, PAN/CIN/GSTIN, account numbers, and currency amounts.
+     * Remaining words keep their original case so a label such as {@code Legal Name}
+     * is still recognizable.
+     */
+    public String redact(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "";
+        }
+        String s = raw;
+        s = GSTIN.matcher(s.toUpperCase(java.util.Locale.ROOT)).find()
+                ? replaceInsensitive(s, GSTIN) : s;
+        s = replaceInsensitive(s, PAN);
+        s = replaceInsensitive(s, CIN);
+        s = ACCOUNT.matcher(s).replaceAll(" ");
+        s = AMOUNT.matcher(s).replaceAll(" ");
+        for (String entity : sampleEntities) {
+            s = erasePhrase(s, entity);
+        }
+        s = s.replaceAll("(?i)\\bbhagyanagar(?:\\s+solar)?\\b|\\bsharma\\b|\\bramesh\\b"
+                + "|\\bkumar\\b|\\bpatel\\b|\\breddy\\b", " ");
+        s = s.replaceAll("\\s+", " ").trim();
+        return s;
+    }
+
+    private static String replaceInsensitive(String input, Pattern uppercasePattern) {
+        Matcher matcher = uppercasePattern.matcher(input.toUpperCase(java.util.Locale.ROOT));
+        StringBuilder sb = new StringBuilder();
+        int last = 0;
+        while (matcher.find()) {
+            sb.append(input, last, matcher.start()).append(' ');
+            last = matcher.end();
+        }
+        sb.append(input, last, input.length());
+        return sb.toString();
+    }
+
+    private static String erasePhrase(String input, String entity) {
+        String en = SpineCatalog.normalize(entity);
+        if (en.isEmpty()) {
+            return input;
+        }
+        String flex = Pattern.quote(en).replace(" ", "\\s+");
+        return input.replaceAll("(?i)" + flex, " ");
+    }
+
+    private static void addIfEntityBearing(Set<String> tokens, String raw) {
+        if (raw == null || raw.isBlank()) {
+            return;
+        }
+        String trimmed = raw.trim();
+        if (containsIdentifierOrAmount(trimmed)
+                || KNOWN_SAMPLE_ENTITIES.matcher(trimmed).find()
+                || hasResidualName(trimmed)) {
+            tokens.add(trimmed);
+        }
+    }
+
+    private static boolean containsIdentifierOrAmount(String text) {
+        String upper = text.toUpperCase(java.util.Locale.ROOT);
+        return PAN.matcher(upper).find()
+                || CIN.matcher(upper).find()
+                || GSTIN.matcher(upper).find()
+                || ACCOUNT.matcher(text).find()
+                || AMOUNT.matcher(text).find();
+    }
+
+    private static boolean hasResidualName(String raw) {
+        String base = raw.replaceAll("(?i)\\.(pdf|xlsx|xls|docx?|png|jpe?g|csv|txt)$", "");
+        String normalized = SpineCatalog.normalize(base);
+        for (String word : normalized.split(" ")) {
+            if (word.length() >= 3 && !GENERIC_LABEL_WORDS.contains(word)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Document-type and file words that are not a borrower, promoter, or lender. */
+    private static final Set<String> GENERIC_LABEL_WORDS = Set.of(
+            "credit", "rating", "ratings", "report", "reports", "bank", "statement",
+            "statements", "cibil", "bureau", "information", "memorandum", "term",
+            "sheet", "resume", "director", "profile", "promoter", "management",
+            "net", "worth", "certificate", "pvsyst", "sale", "deed", "lease", "land",
+            "dpr", "detailed", "project", "quotation", "quote", "vendor", "screenshot",
+            "commercial", "default", "agreement", "invoice", "pdf", "xlsx", "xls",
+            "doc", "docx", "png", "jpg", "jpeg", "csv", "txt", "the", "and", "for",
+            "ltd", "limited", "pvt", "private", "llp", "crisil", "icra", "care",
+            "india", "final", "signed", "scan", "copy", "page");
 
     private static void collect(String text, Pattern p, List<String> out) {
         Matcher m = p.matcher(text);

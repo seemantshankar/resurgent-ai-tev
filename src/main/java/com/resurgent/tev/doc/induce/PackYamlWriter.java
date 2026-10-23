@@ -69,7 +69,7 @@ public final class PackYamlWriter {
 
         ArrayNode tables = root.putArray("tables");
         for (Map<String, Object> t : pack.tables()) {
-            tables.add(MAPPER.valueToTree(t));
+            tables.add(tableNode(t));
         }
 
         ArrayNode checklist = root.putArray("checklist");
@@ -93,6 +93,18 @@ public final class PackYamlWriter {
             }
         }
 
+        if (!pack.passages().isEmpty()) {
+            ArrayNode passages = root.putArray("passages");
+            for (com.resurgent.tev.doc.pack.PackPassage passage : pack.passages()) {
+                ObjectNode n = passages.addObject();
+                n.put("topic", passage.topic());
+                ArrayNode terms = n.putArray("heading_terms");
+                passage.headingTerms().forEach(terms::add);
+                ArrayNode keys = n.putArray("fields");
+                passage.fields().forEach(keys::add);
+            }
+        }
+
         if (pack.documentDateKind() != null) {
             ObjectNode date = root.putObject("document_date");
             date.put("kind", pack.documentDateKind());
@@ -108,6 +120,54 @@ public final class PackYamlWriter {
             out = out + "\n";
         }
         return out;
+    }
+
+    /**
+     * Table keys in the order seed packs and {@link com.resurgent.tev.doc.pack.PackLoader}
+     * round-trip. Map iteration order is not stable across a YAML reload.
+     */
+    private static ObjectNode tableNode(Map<String, Object> table) {
+        ObjectNode node = MAPPER.createObjectNode();
+        for (String key : java.util.List.of(
+                "name", "path", "path_root", "key_column", "entity_key", "site_key", "period_key")) {
+            Object value = table.get(key);
+            if (value != null && !String.valueOf(value).isBlank()) {
+                node.put(key, String.valueOf(value));
+            }
+        }
+        Object columns = table.get("fields");
+        if (columns instanceof java.util.List<?> list) {
+            ArrayNode fields = node.putArray("fields");
+            for (Object column : list) {
+                if (column instanceof Map<?, ?> map) {
+                    ObjectNode col = fields.addObject();
+                    putColumn(col, map, "key");
+                    putColumn(col, map, "value_kind");
+                    putColumn(col, map, "prompt_hint");
+                    for (Map.Entry<?, ?> entry : map.entrySet()) {
+                        String key = String.valueOf(entry.getKey());
+                        if (entry.getValue() == null || col.has(key)) {
+                            continue;
+                        }
+                        col.set(key, MAPPER.valueToTree(entry.getValue()));
+                    }
+                }
+            }
+        }
+        for (Map.Entry<String, Object> entry : table.entrySet()) {
+            if (entry.getValue() == null || node.has(entry.getKey())) {
+                continue;
+            }
+            node.set(entry.getKey(), MAPPER.valueToTree(entry.getValue()));
+        }
+        return node;
+    }
+
+    private static void putColumn(ObjectNode column, Map<?, ?> map, String key) {
+        Object value = map.get(key);
+        if (value != null && !String.valueOf(value).isBlank()) {
+            column.put(key, String.valueOf(value));
+        }
     }
 
     /**
