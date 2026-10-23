@@ -63,14 +63,26 @@ public final class DocLlmEnvironment {
         if (DataResidency.locked()) {
             return null;
         }
-        Map<String, String> env = load();
-        String key = env.get(API_KEY);
-        String model = modelId(env);
+        return clientOrNull(load(), null);
+    }
+
+    /**
+     * Live client from an explicit environment, or null when residency is
+     * {@code local_only} or no key and model are configured. Does not open a socket.
+     */
+    public static DocLlmClient clientOrNull(Map<String, String> env, String mandateResidency) {
+        Map<String, String> values = env == null ? Map.of() : env;
+        if (DataResidency.isLocalOnly(DataResidency.effective(
+                values.get(DataResidency.ENV), mandateResidency))) {
+            return null;
+        }
+        String key = values.get(API_KEY);
+        String model = modelId(values);
         if (key == null || key.isBlank() || model == null) {
             return null;
         }
-        long timeoutMs = parseLong(env.get(TIMEOUT_MS), 240_000L);
-        String baseUrl = env.get(BASE_URL);
+        long timeoutMs = parseLong(values.get(TIMEOUT_MS), 240_000L);
+        String baseUrl = values.get(BASE_URL);
         return new HttpDocLlmClient(key, model, baseUrl, timeoutMs);
     }
 

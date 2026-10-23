@@ -86,27 +86,29 @@ public final class DocExtractRunner {
         }
         ParseTier effectiveTier;
         Map<String, String> options = null;
-        if (!noParse && !localOnly && client instanceof LlamaExtractAdapter
+        if (client instanceof LlamaExtractAdapter && !noParse && !localOnly
                 && LlamaParseClient.hasApiKey()) {
             ParseService.ParseOutcome parsed = ParseService.parse(
                     db, documentVersionId, override, new LlamaParseClient(), blobs);
             effectiveTier = parsed.tier();
-            options = new LinkedHashMap<>();
             if (parsed.jobId() != null && parsed.fullCloudJob()) {
+                options = new LinkedHashMap<>();
                 options.put(LlamaExtractAdapter.KEY_PARSE_JOB_ID, parsed.jobId());
+                options.put(LlamaExtractAdapter.KEY_PARSE_TIER, parsed.tier().wireName());
+                if (parsed.credits() != null) {
+                    options.put(LlamaExtractAdapter.KEY_PARSE_CREDITS,
+                            String.valueOf(parsed.credits()));
+                }
+                options.put(LlamaExtractAdapter.KEY_PARSE_LATENCY_MS,
+                        String.valueOf(parsed.latencyMs()));
+            } else {
+                client = new DocLlmExtractClient();
             }
-            options.put(LlamaExtractAdapter.KEY_PARSE_TIER, parsed.tier().wireName());
-            if (parsed.credits() != null) {
-                options.put(LlamaExtractAdapter.KEY_PARSE_CREDITS, String.valueOf(parsed.credits()));
-            }
-            options.put(LlamaExtractAdapter.KEY_PARSE_LATENCY_MS,
-                    String.valueOf(parsed.latencyMs()));
         } else {
             effectiveTier = override != null ? override
                     : ParseService.selectTier(db, documentVersionId);
             if (client instanceof LlamaExtractAdapter) {
-                options = new LinkedHashMap<>();
-                options.put(LlamaExtractAdapter.KEY_PARSE_TIER, effectiveTier.wireName());
+                client = new DocLlmExtractClient();
             }
         }
 
@@ -157,7 +159,7 @@ public final class DocExtractRunner {
             }
         }
         for (DocTypePack pack : packs) {
-            if (pack.code().equals(code)) {
+            if (com.resurgent.tev.doc.pack.PackCodes.same(pack.code(), code)) {
                 return pack;
             }
         }
@@ -199,17 +201,17 @@ public final class DocExtractRunner {
                 : extractorId.trim().toLowerCase(Locale.ROOT);
         return switch (id) {
             case "fixture", "fixture-extract" -> new FixtureExtractClient();
+            case "doc-llm-extract", "doc-llm", "page" -> new DocLlmExtractClient();
             case "llama-extract", "llama", "llama-extract-2.5-agentic" -> new LlamaExtractAdapter();
             default -> throw new IllegalArgumentException(
-                    "unknown extractor: " + extractorId + " (use fixture|llama-extract)");
+                    "unknown extractor: " + extractorId
+                            + " (use doc-llm-extract|fixture|llama-extract)");
         };
     }
 
+    /** Page assembly. LlamaExtract is only used when the caller names it. */
     private static String defaultExtractor() {
-        if (LlamaExtractAdapter.hasApiKey()) {
-            return "llama-extract";
-        }
-        return "fixture";
+        return DocLlmExtractClient.ID;
     }
 
     /**

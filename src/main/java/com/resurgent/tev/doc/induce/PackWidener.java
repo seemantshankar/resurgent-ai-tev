@@ -34,7 +34,7 @@ final class PackWidener {
                         field.key(), field.path(), field.pathRoot(), field.valueKind(),
                         false, field.slots(), field.promptHint(), field.synonyms());
                 fields.put(field.key(), added);
-                notes.add(new Generalizer.DecisionNote(
+                notes.add(Generalizer.note(
                         field.key(),
                         field.required() ? "demoted_optional" : "promoted",
                         field.required() ? "widen_new_path" : "widen_optional",
@@ -61,7 +61,7 @@ final class PackWidener {
             String name = String.valueOf(table.get("name"));
             if (!tables.containsKey(name)) {
                 tables.put(name, table);
-                notes.add(new Generalizer.DecisionNote(name, "promoted", "widen_table",
+                notes.add(Generalizer.note(name, "promoted", "widen_table",
                         "Schedule table added while widening the pack."));
             }
         }
@@ -104,7 +104,7 @@ final class PackWidener {
                 PackClauseType prior = types.get(type.key());
                 if (prior == null) {
                     types.put(type.key(), type);
-                    notes.add(new Generalizer.DecisionNote(type.key(), "promoted", "widen_clause",
+                    notes.add(Generalizer.note(type.key(), "promoted", "widen_clause",
                             "Clause type added while widening the pack."));
                 } else {
                     types.put(type.key(), new PackClauseType(
@@ -132,7 +132,7 @@ final class PackWidener {
                 PackPassage prior = byTopic.get(passage.topic());
                 if (prior == null) {
                     byTopic.put(passage.topic(), passage);
-                    notes.add(new Generalizer.DecisionNote(passage.topic(), "promoted",
+                    notes.add(Generalizer.note(passage.topic(), "promoted",
                             "widen_passage", "Passage topic added while widening the pack."));
                 } else {
                     byTopic.put(passage.topic(), new PackPassage(

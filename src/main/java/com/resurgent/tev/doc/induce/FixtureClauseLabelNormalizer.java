@@ -7,7 +7,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Deterministic offline label normalisation (the M2 {@code FixturePackMiningClient}
+ * Deterministic offline label normalisation (the M2 {@code OfflinePackMiningClient}
  * precedent): only labels that normalise to the same words group, so an offline run
  * can still promote repeated identical proposals but never guesses that two differently
  * worded labels mean one clause. Clause text and keys are never invented.

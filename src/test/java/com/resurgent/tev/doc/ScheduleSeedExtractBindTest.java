@@ -284,7 +284,7 @@ class ScheduleSeedExtractBindTest {
 
     private static DocTypePack pack(String code) throws Exception {
         return PackLoader.loadSeedPacks().stream()
-                .filter(p -> code.equals(p.code()))
+                .filter(p -> com.resurgent.tev.doc.pack.PackCodes.same(p.code(), code))
                 .findFirst()
                 .orElseThrow();
     }

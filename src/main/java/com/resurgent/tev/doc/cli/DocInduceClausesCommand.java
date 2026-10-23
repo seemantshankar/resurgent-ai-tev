@@ -55,7 +55,9 @@ public final class DocInduceClausesCommand implements Callable<Integer> {
         var out = spec.commandLine().getOut();
         var err = spec.commandLine().getErr();
         try {
-            DocLlmClient client = clientForced ? forcedClient : DocLlmEnvironment.clientOrNull();
+            DocLlmClient client = clientForced
+                    ? forcedClient
+                    : DocLlmEnvironment.clientOrNull(db, mandateId);
             List<DocInduceClausesRunner.Result> results =
                     DocInduceClausesRunner.run(mandateId, db, client);
             int promotedTotal = 0;

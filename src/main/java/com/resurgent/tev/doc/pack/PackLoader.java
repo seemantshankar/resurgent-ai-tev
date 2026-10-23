@@ -357,10 +357,23 @@ public final class PackLoader {
         return packs;
     }
 
+    /**
+     * Seed pack for {@code code}, accepting {@code identity.promoter_net_worth} as
+     * the same pack as {@code identity.net_worth_certificate}.
+     */
+    public static DocTypePack findSeed(String code) throws PackValidationException {
+        for (DocTypePack pack : loadSeedPacks()) {
+            if (PackCodes.same(pack.code(), code)) {
+                return pack;
+            }
+        }
+        throw new PackValidationException("unknown seed pack: " + code);
+    }
+
     /** Loads the seed goldens from {@code docpacks/} on the classpath. */
     public static List<DocTypePack> loadSeedPacks() throws PackValidationException {
         return List.of(
-                loadClasspath("docpacks/identity.promoter_net_worth.yaml"),
+                loadClasspath("docpacks/identity.net_worth_certificate.yaml"),
                 loadClasspath("docpacks/quotation.vendor.yaml"),
                 loadClasspath("docpacks/agreement.ppa.yaml"),
                 loadClasspath("docpacks/financials.audited_summary.yaml"),

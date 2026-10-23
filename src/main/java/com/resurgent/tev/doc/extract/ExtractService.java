@@ -144,7 +144,9 @@ public final class ExtractService {
                         0, 0, 0, 0, 0, e.getMessage());
             }
 
-            if (FixtureExtractClient.ID.equals(client.id())) {
+            boolean pageBacked = FixtureExtractClient.ID.equals(client.id())
+                    || DocLlmExtractClient.ID.equals(client.id());
+            if (pageBacked) {
                 LayoutExtractBridge.materializeParseIfAbsent(
                         db.connection(), documentVersionId, pack);
                 if (result.facts().isEmpty()) {
@@ -193,6 +195,9 @@ public final class ExtractService {
                 MarkEvidenceLinker.attach(db.connection(), documentVersionId);
                 if (localOnly) {
                     OcrAmbiguity.apply(db.connection(), documentVersionId, parseRunId);
+                }
+                if (DocLlmExtractClient.ID.equals(client.id())) {
+                    PageAssembly.bind(db.connection(), documentVersionId, parseRunId, pack);
                 }
                 int fieldsMissing = countMissing(pack, writes);
                 int fieldsAmbiguous = countAmbiguous(writes);

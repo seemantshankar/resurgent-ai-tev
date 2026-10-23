@@ -1,5 +1,6 @@
 package com.resurgent.tev.doc.db;
 
+import com.resurgent.tev.doc.induce.InductionReasonCodes;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -72,7 +73,7 @@ public final class InductionDecisionRepository {
             setString(ps, 4, decision.targetCode());
             setString(ps, 5, decision.candidateKey());
             ps.setString(6, decision.outcome());
-            setString(ps, 7, decision.reasonCode());
+            setString(ps, 7, InductionReasonCodes.canonical(decision.reasonCode()));
             setString(ps, 8, decision.detailJson());
             ps.executeUpdate();
             try (ResultSet keys = ps.getGeneratedKeys()) {

@@ -67,7 +67,8 @@ public final class EmbeddingClients {
             String mandateResidency) {
         Map<String, String> values = env == null ? Map.of() : env;
         String endpoint = blankToNull(values.get(ENDPOINT));
-        if (endpoint == null || localOnly(values) || DataResidency.isLocalOnly(mandateResidency)) {
+        if (endpoint == null || DataResidency.isLocalOnly(
+                DataResidency.effective(values.get(RESIDENCY), mandateResidency))) {
             return new LocalHashEmbeddingClient();
         }
         String model = blankToNull(values.get(MODEL));
@@ -80,11 +81,6 @@ public final class EmbeddingClients {
         }
         EmbeddingTransport http = transport == null ? new JdkEmbeddingTransport() : transport;
         return new HttpEmbeddingClient(endpoint, model, key == null ? "" : key, 60_000L, http);
-    }
-
-    private static boolean localOnly(Map<String, String> env) {
-        String residency = env.get(RESIDENCY);
-        return residency != null && residency.trim().equalsIgnoreCase("local_only");
     }
 
     private static String blankToNull(String value) {

@@ -14,7 +14,7 @@ import java.util.regex.Pattern;
  * heading ({@code # …}) and runs to the next heading, across page boundaries. Lines
  * before the first heading are preamble and never become a passage.
  */
-final class PassageSplitter {
+public final class PassageSplitter {
 
     private static final Pattern HEADING = Pattern.compile("^#{1,6}\\s+(.+?)\\s*$");
 
@@ -28,7 +28,7 @@ final class PassageSplitter {
      * @param pageTo last page carrying the passage's text ({@code pageFrom} when empty)
      * @param text the passage's stored text lines, newline-joined
      */
-    record Passage(String heading, int pageFrom, int pageTo, String text) {}
+    public record Passage(String heading, int pageFrom, int pageTo, String text) {}
 
     /**
      * Splits pages into passages in reading order.
@@ -36,7 +36,7 @@ final class PassageSplitter {
      * @param pages stored parse pages in page order
      * @return the passages, possibly empty
      */
-    static List<Passage> split(List<ParsePage> pages) {
+    public static List<Passage> split(List<ParsePage> pages) {
         List<Passage> passages = new ArrayList<>();
         StringBuilder text = new StringBuilder();
         String heading = null;
@@ -75,7 +75,7 @@ final class PassageSplitter {
      * The pack passage spec whose heading terms cover this heading, or null when no
      * declared spec's terms occur in it. First declared spec wins, deterministically.
      */
-    static PackPassage specFor(DocTypePack pack, String heading) {
+    public static PackPassage specFor(DocTypePack pack, String heading) {
         String lower = heading.toLowerCase(Locale.ROOT);
         for (PackPassage spec : pack.passages()) {
             for (String term : spec.headingTerms()) {

@@ -106,6 +106,13 @@ public final class AssessPassagesRunner implements AssessStage {
         WorkspaceRepository repo = new WorkspaceRepository(connection);
         Map<String, DocTypePack> packsByCode = loadPacks(dbPath);
         List<VersionRow> versions = assessment.versionsForMandate(mandateId);
+        String mandateRow = new com.resurgent.tev.doc.db.MandatePolicyRepository(connection)
+                .dataResidency(mandateId);
+        boolean locked = com.resurgent.tev.doc.residency.DataResidency.isLocalOnly(
+                com.resurgent.tev.doc.residency.DataResidency.effective(
+                        System.getenv(com.resurgent.tev.doc.residency.DataResidency.ENV),
+                        mandateRow));
+        DocLlmClient model = locked ? null : client;
         ExtractClient extractor = resolveExtractor(dbPath);
         BlobStore blobs = BlobStore.besideDatabase(dbPath);
 
@@ -154,7 +161,7 @@ public final class AssessPassagesRunner implements AssessStage {
                 digests.add(chapter.heading() + "\n" + chapter.text());
             }
             // One summary call per document, never per passage.
-            List<String> llmSummaries = LlmPassageSummaries.find(client, digests, usage::add);
+            List<String> llmSummaries = LlmPassageSummaries.find(model, digests, usage::add);
             int index = 0;
             for (PassageSplitter.Passage chapter : chapters) {
                 index++;
@@ -267,16 +274,7 @@ public final class AssessPassagesRunner implements AssessStage {
                 // fall through
             }
         }
-        if (LlamaExtractAdapter.hasApiKey()) {
-            return new LlamaExtractAdapter();
-        }
-        FixtureExtractClient fixture = new FixtureExtractClient();
-        try {
-            fixture.loadDirectory(dir);
-        } catch (Exception e) {
-            // No staged fixtures is a legitimate empty state: chapters yield no facts.
-        }
-        return fixture;
+        return new com.resurgent.tev.doc.extract.DocLlmExtractClient();
     }
 
     /**

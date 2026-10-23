@@ -350,7 +350,7 @@ class SanitizedPackInductionTest {
     }
 
     private static PackMiningClient mining(String code, PackMiningClient.MinedField... fields) {
-        return new FixturePackMiningClient(new PackMiningClient.MiningResult(
+        return new OfflinePackMiningClient(new PackMiningClient.MiningResult(
                 code, "report", List.of("Credit Rating Report"), List.of(fields)));
     }
 
@@ -362,7 +362,7 @@ class SanitizedPackInductionTest {
             PackMiningClient.MinedClause clause,
             PackMiningClient.MinedPassage passage,
             String dateKind) {
-        return new FixturePackMiningClient(new PackMiningClient.MiningResult(
+        return new OfflinePackMiningClient(new PackMiningClient.MiningResult(
                 code,
                 "report",
                 List.of("Credit Rating Report"),

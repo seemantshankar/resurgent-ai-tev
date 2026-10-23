@@ -27,7 +27,8 @@ public final class DocExtractCommand implements Callable<Integer> {
     @Option(names = "--pack", description = "Pack code (default: classified pack)")
     String pack;
 
-    @Option(names = "--extractor", description = "llama-extract|fixture (default: config/env)")
+    @Option(names = "--extractor",
+            description = "doc-llm-extract|fixture|llama-extract (default: doc-llm-extract)")
     String extractor;
 
     @Option(names = "--pages",

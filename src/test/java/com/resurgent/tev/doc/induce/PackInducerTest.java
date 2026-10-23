@@ -32,7 +32,7 @@ class PackInducerTest {
     }
 
     private PackMiningClient goodMining() {
-        return new FixturePackMiningClient(new PackMiningClient.MiningResult(
+        return new OfflinePackMiningClient(new PackMiningClient.MiningResult(
                 "agreement.ppa",
                 "agreement",
                 List.of("Power Purchase Agreement"),
@@ -105,7 +105,7 @@ class PackInducerTest {
     @Test
     void gatesRejectZeroRequiredCoverage() throws Exception {
         // every field only "resolves" on no document → zero coverage
-        PackMiningClient mining = new FixturePackMiningClient(new PackMiningClient.MiningResult(
+        PackMiningClient mining = new OfflinePackMiningClient(new PackMiningClient.MiningResult(
                 "agreement.ppa",
                 "agreement",
                 List.of("PPA"),
@@ -131,7 +131,7 @@ class PackInducerTest {
 
     @Test
     void gatesRejectEntityTokensInFieldKeys() throws Exception {
-        PackMiningClient mining = new FixturePackMiningClient(new PackMiningClient.MiningResult(
+        PackMiningClient mining = new OfflinePackMiningClient(new PackMiningClient.MiningResult(
                 "agreement.ppa",
                 "agreement",
                 List.of("PPA"),
@@ -148,7 +148,7 @@ class PackInducerTest {
 
         // force a dirty key through generalizer by supplying an entity-free mining key
         // that still embeds the sample company name after normalize
-        PackMiningClient dirty = new FixturePackMiningClient(new PackMiningClient.MiningResult(
+        PackMiningClient dirty = new OfflinePackMiningClient(new PackMiningClient.MiningResult(
                 "agreement.ppa",
                 "agreement",
                 List.of("PPA"),

@@ -1,9 +1,12 @@
 package com.resurgent.tev.doc.cli;
 
+import com.resurgent.tev.doc.db.MandatePolicyRepository;
 import com.resurgent.tev.doc.induce.ChecklistLearner;
 import com.resurgent.tev.doc.induce.DocInduceChecklistsRunner;
 import com.resurgent.tev.doc.llm.DocLlmClient;
 import com.resurgent.tev.doc.llm.DocLlmEnvironment;
+import com.resurgent.tev.doc.residency.DataResidency;
+import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -55,8 +58,21 @@ public final class DocInduceChecklistsCommand implements Callable<Integer> {
             var config = new ChecklistLearner.Config(minObserved, minMissing, minIndustries);
             var inputs = workspaces.stream().map(w ->
                     new DocInduceChecklistsRunner.MandateWorkspace(w.mandateId, w.db)).toList();
-            var result = DocInduceChecklistsRunner.run(inputs,
-                    clientForced ? forcedClient : DocLlmEnvironment.clientOrNull(), config);
+            DocLlmClient client = clientForced ? forcedClient : DocLlmEnvironment.clientOrNull();
+            if (!clientForced && client != null) {
+                for (WorkspaceOptions workspace : workspaces) {
+                    try (WorkspaceDatabase db = WorkspaceDatabase.open(workspace.db)) {
+                        String row = new MandatePolicyRepository(db.connection())
+                                .dataResidency(workspace.mandateId);
+                        if (DataResidency.isLocalOnly(DataResidency.effective(
+                                System.getenv(DataResidency.ENV), row))) {
+                            client = null;
+                            break;
+                        }
+                    }
+                }
+            }
+            var result = DocInduceChecklistsRunner.run(inputs, client, config);
             var out = spec.commandLine().getOut();
             for (var update : result.updates()) {
                 out.printf("learned %s@%s (%s -> %s)%n", update.code(), update.newVersion(),

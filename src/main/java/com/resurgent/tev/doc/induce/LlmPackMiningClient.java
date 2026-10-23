@@ -24,15 +24,6 @@ import java.util.function.Consumer;
  */
 public final class LlmPackMiningClient implements PackMiningClient {
 
-    /** Per-document layout text sent to the model. */
-    static final int MAX_DOC_CHARS = 1_500;
-
-    /** Total layout text across the cluster. */
-    static final int MAX_TOTAL_CHARS = 12_000;
-
-    /** Documents described in one call. */
-    static final int MAX_DOCS = 8;
-
     private static final int MAX_COMPLETION_TOKENS = 8_000;
 
     private static final String SYSTEM = """
@@ -42,8 +33,9 @@ public final class LlmPackMiningClient implements PackMiningClient {
             - Field keys and ontology paths come from printed LABELS and roles, never from \
             instance values, amounts, company or person names, PAN, CIN, GSTIN or addresses.
             - Prefer these frozen spine paths when they fit: %s
-            - A field only belongs in the schema when its label appears across multiple \
-            documents of the cluster (cross-document consensus).
+            - A single evidenced document can yield fields, tables, clauses, and passages. \
+            Do not refuse a document because it is the only sample, and do not stop at a \
+            fixed field count.
             - value_kind must be one of: money, quantity, rate, percent, date, duration, \
             text, enum, boolean, list.
             - path_root must be one of: identity, economic, technical, commercial, legal, \
@@ -55,7 +47,8 @@ public final class LlmPackMiningClient implements PackMiningClient {
             - A table column key is a label, never a name or amount. Mark \
             domain_standard true when analysts always extract that item from this \
             document type.
-            - Return at most 12 fields. Keep prompt_hint under 12 words. No prose.
+            - Read every heading, table header, and layout line you are shown. \
+            Keep prompt_hint under 12 words. No prose.
             Reply with JSON only, no prose:
             {"suggested_code":"family.name","family":"<root-ish family>",
              "identity_signals":["<printed phrases that identify this document type>"],
@@ -163,23 +156,13 @@ public final class LlmPackMiningClient implements PackMiningClient {
             sb.append("Domain research:\n").append(snippets).append('\n');
         }
         List<MiningDocument> docs = request.documents();
-        int limit = Math.min(docs.size(), MAX_DOCS);
-        sb.append("\nSample documents (").append(limit).append("):\n");
-        int budget = MAX_TOTAL_CHARS;
-        for (int i = 0; i < limit; i++) {
-            MiningDocument doc = docs.get(i);
+        sb.append("\nSample documents (").append(docs.size()).append("):\n");
+        for (MiningDocument doc : docs) {
             sb.append("\n=== DOC ").append(doc.id()).append(" ===\n");
             sb.append("title: ").append(filter.redact(doc.title() == null ? "" : doc.title()))
                     .append('\n');
-            String text = StructuralFingerprint.promptText(List.of(doc));
-            if (text.length() > MAX_DOC_CHARS) {
-                text = text.substring(0, MAX_DOC_CHARS);
-            }
-            if (text.length() > budget) {
-                text = text.substring(0, Math.max(0, budget));
-            }
-            budget -= text.length();
-            sb.append("structure:\n").append(text).append('\n');
+            sb.append("structure:\n").append(StructuralFingerprint.promptText(List.of(doc)))
+                    .append('\n');
         }
         return sb.toString();
     }
