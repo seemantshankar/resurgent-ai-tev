@@ -1,5 +1,8 @@
 package com.resurgent.tev.doc.llm;
 
+import com.resurgent.tev.doc.db.MandatePolicyRepository;
+import com.resurgent.tev.doc.residency.DataResidency;
+import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -57,6 +60,9 @@ public final class DocLlmEnvironment {
      * Callers must fall back to their offline path on {@code null}.
      */
     public static DocLlmClient clientOrNull() {
+        if (DataResidency.locked()) {
+            return null;
+        }
         Map<String, String> env = load();
         String key = env.get(API_KEY);
         String model = modelId(env);
@@ -66,6 +72,24 @@ public final class DocLlmEnvironment {
         long timeoutMs = parseLong(env.get(TIMEOUT_MS), 240_000L);
         String baseUrl = env.get(BASE_URL);
         return new HttpDocLlmClient(key, model, baseUrl, timeoutMs);
+    }
+
+    /**
+     * Live client, or null when the process floor or this mandate is {@code local_only}
+     * or no key is configured. Callers then stay on their offline path.
+     */
+    public static DocLlmClient clientOrNull(java.nio.file.Path db, long mandateId) {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            String row = new MandatePolicyRepository(workspace.connection()).dataResidency(mandateId);
+            if (DataResidency.locked(row)) {
+                return null;
+            }
+        } catch (Exception e) {
+            if (DataResidency.locked()) {
+                return null;
+            }
+        }
+        return clientOrNull();
     }
 
     /** Resolved model id, or null when none is configured. */

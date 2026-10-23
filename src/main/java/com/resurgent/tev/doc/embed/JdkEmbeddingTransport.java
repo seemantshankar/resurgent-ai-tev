@@ -1,5 +1,6 @@
 package com.resurgent.tev.doc.embed;
 
+import com.resurgent.tev.doc.residency.DataResidency;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -22,6 +23,10 @@ final class JdkEmbeddingTransport implements EmbeddingTransport {
 
     @Override
     public String post(URI uri, String bearer, String jsonBody, long timeoutMs) {
+        if (DataResidency.locked()) {
+            throw new EmbeddingException(
+                    "remote embeddings blocked: data residency is local_only");
+        }
         long deadline = timeoutMs > 0 ? timeoutMs : 60_000L;
         HttpRequest.Builder request = HttpRequest.newBuilder(uri)
                 .timeout(Duration.ofMillis(deadline))

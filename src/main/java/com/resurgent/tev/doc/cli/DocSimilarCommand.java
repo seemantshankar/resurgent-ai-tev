@@ -54,7 +54,7 @@ public final class DocSimilarCommand implements Callable<Integer> {
             List<MandateQa.SimilarHit> hits;
             try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
                 hits = SimilaritySearch.topK(workspace.connection(), mandateId, kind, text, id,
-                        topK, EmbeddingClients.forAssessment());
+                        topK, EmbeddingClients.forAssessment(workspace.connection(), mandateId));
             }
             for (MandateQa.SimilarHit hit : hits) {
                 out.printf(Locale.ROOT, "%s %d score=%.3f | %s | %s | page %s%n",

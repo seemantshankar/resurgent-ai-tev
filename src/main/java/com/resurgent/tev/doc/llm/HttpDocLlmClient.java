@@ -1,6 +1,7 @@
 package com.resurgent.tev.doc.llm;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.resurgent.tev.doc.residency.DataResidency;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -61,6 +62,10 @@ public final class HttpDocLlmClient implements DocLlmClient {
 
     @Override
     public Completion complete(String system, String user, int maxTokens) throws DocLlmException {
+        if (DataResidency.locked()) {
+            throw new DocLlmException(
+                    "HttpDocLlmClient blocked: data residency is local_only");
+        }
         String body = requestBody(system, user, maxTokens);
         long start = System.nanoTime();
         HttpResponse<String> response = send(body);
