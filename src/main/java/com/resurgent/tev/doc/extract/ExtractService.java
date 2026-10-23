@@ -144,6 +144,18 @@ public final class ExtractService {
                         0, 0, 0, 0, 0, e.getMessage());
             }
 
+            if (FixtureExtractClient.ID.equals(client.id())) {
+                LayoutExtractBridge.materializeParseIfAbsent(
+                        db.connection(), documentVersionId, pack);
+                if (result.facts().isEmpty()) {
+                    ExtractResult fromLayout = LayoutExtractBridge.fromLayout(
+                            db.connection(), documentVersionId, pack, result);
+                    if (!fromLayout.facts().isEmpty()) {
+                        result = fromLayout;
+                    }
+                }
+            }
+
             // Money context from the parsed pages (Excel treatment: figures stay
             // numbers; currency and scale come from what the document states).
             // No parse pages means no context and nothing invented.

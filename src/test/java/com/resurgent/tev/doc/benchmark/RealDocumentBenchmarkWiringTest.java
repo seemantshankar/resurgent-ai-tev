@@ -88,8 +88,8 @@ class RealDocumentBenchmarkWiringTest {
 
             ClassifyResult wrongRole = new DocTypeClassifier().classify(new ClassifyRequest(
                     -1, "agreement", "cert.pdf", page1, "general", packs, true));
-            assertEquals("unknown", wrongRole.docTypeCode(),
-                    "the ingest-default role would have filtered the pack out — the bug");
+            assertEquals("sample.certificate", wrongRole.docTypeCode(),
+                    "a mismatched ingest role must not hide a pack whose identity signals match");
         } finally {
             if (previous == null) {
                 System.clearProperty("tev.benchmark.packdir");

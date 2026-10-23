@@ -51,6 +51,28 @@ public final class DocExtractRunner {
     public static Result run(long mandateId, long documentVersionId, Path db, BlobStore blobs,
             String packCode, String extractorId, String pages, String tier, boolean noParse)
             throws Exception {
+        return run(mandateId, documentVersionId, db, blobs, packCode, extractorId, pages, tier,
+                noParse, true);
+    }
+
+    /**
+     * Same as {@link #run(long, long, Path, BlobStore, String, String, String, String, boolean)}.
+     * When {@code autoInduce} is true and no pack override is given, an unknown version
+     * is classified (which induces a pack) before extract, and nomenclature is bound
+     * after a completed extract.
+     *
+     * @param autoInduce false restores the requirement to pass {@code --pack}
+     */
+    public static Result run(long mandateId, long documentVersionId, Path db, BlobStore blobs,
+            String packCode, String extractorId, String pages, String tier, boolean noParse,
+            boolean autoInduce) throws Exception {
+        if (autoInduce && (packCode == null || packCode.isBlank())) {
+            String classified = classifiedPackCode(db, documentVersionId);
+            if (classified == null || classified.isBlank() || "unknown".equalsIgnoreCase(classified)) {
+                com.resurgent.tev.doc.classify.DocClassifyRunner.run(
+                        mandateId, documentVersionId, db, blobs, null, "general", true, true);
+            }
+        }
         DocTypePack pack = resolvePack(db, documentVersionId, packCode);
         ExtractClient client = resolveClient(extractorId);
         PageSelection pageSelection = PageSelection.parseOptional(pages);
@@ -92,6 +114,10 @@ public final class DocExtractRunner {
         ExtractService.ExtractOutcome outcome = service.extract(
                 db, documentVersionId, mandateId, pack, client, client.id(), null, options,
                 pageIndices);
+        if (autoInduce && !"failed".equals(outcome.status())) {
+            com.resurgent.tev.doc.bind.DocBindRunner.run(
+                    mandateId, outcome.parseRunId(), db, pack.code());
+        }
         int ambiguous = outcome.fieldsAmbiguous();
         return new Result(
                 pack.identity(),
