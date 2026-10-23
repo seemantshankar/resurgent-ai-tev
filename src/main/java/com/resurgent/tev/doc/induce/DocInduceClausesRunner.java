@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.resurgent.tev.doc.db.ClauseRepository;
 import com.resurgent.tev.doc.db.DocumentRepository;
+import com.resurgent.tev.doc.db.InductionDecisionRepository;
+import com.resurgent.tev.doc.embed.Cosine;
+import com.resurgent.tev.doc.embed.EmbeddingRepository;
 import com.resurgent.tev.doc.llm.DocLlmClient;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackLoader;
@@ -39,6 +42,9 @@ public final class DocInduceClausesRunner {
     /** Exact stage id for run stats and LLM usage of clause promotion. */
     public static final String STAGE = "induce-clauses";
 
+    /** Stage value stored on {@code induction_decision} (underscore, not the run-stat hyphen). */
+    static final String DECISION_STAGE = "induce_clauses";
+
     /** Opaque induction run id stored on the published {@code doc_type_pack} row. */
     static final String RUN_ID_PREFIX = "clause-promotion:";
 
@@ -63,16 +69,20 @@ public final class DocInduceClausesRunner {
         Map<String, DocTypePack> basePacks = loadBasePacks(packsRoot);
 
         List<ClauseTypePromoter.Candidate> candidates;
+        Map<String, float[]> centroids;
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             candidates = loadCandidates(workspace.connection(), mandateId);
+            centroids = new EmbeddingRepository(workspace.connection())
+                    .openProposalCentroids(mandateId);
         }
 
         List<Outcome> outcomes = new ArrayList<>();
         for (ClauseTypePromoter.Candidate candidate : candidates) {
             List<DocLlmClient.Usage> usage = new ArrayList<>();
-            ClauseLabelNormalizer normalizer = client == null
+            ClauseLabelNormalizer base = client == null
                     ? new FixtureClauseLabelNormalizer()
                     : new LlmClauseLabelNormalizer(client, usage::add);
+            ClauseLabelNormalizer normalizer = new CosinePreclusterNormalizer(base, centroids);
             System.err.printf("[doc-induce] clause promotion for %s (%d open proposal(s)) via %s%n",
                     candidate.docTypeCode(), candidate.proposals().size(), normalizer.id());
             ClauseTypePromoter.PromotionResult result = new ClauseTypePromoter().promote(
@@ -112,6 +122,9 @@ public final class DocInduceClausesRunner {
             WorkspaceRepository repo = new WorkspaceRepository(connection);
             DocumentRepository docs = new DocumentRepository(connection);
             ClauseRepository clauses = new ClauseRepository(connection);
+            EmbeddingRepository embeddings = new EmbeddingRepository(connection);
+            InductionDecisionRepository decisions = new InductionDecisionRepository(connection);
+            Map<String, float[]> centroids = embeddings.openProposalCentroids(mandateId);
             connection.setAutoCommit(false);
             try {
                 for (Outcome outcome : outcomes) {
@@ -161,6 +174,7 @@ public final class DocInduceClausesRunner {
                         recordPackRow(store, docs, mandateId,
                                 result.docTypeCode(), result.packVersion());
                     }
+                    recordDecisions(decisions, mandateId, parseRunId, result, centroids);
                     repo.insertAuditLog(parseRunId, "clause_promotion_summary", Timestamps.now(),
                             summaryPayload(result, liveModel), "info");
                     repo.updateParseRunResult(parseRunId, Timestamps.now(),
@@ -239,6 +253,86 @@ public final class DocInduceClausesRunner {
         ArrayNode keptOpen = node.putArray("kept_open_types");
         for (ClauseTypePromoter.SkippedGroup skipped : result.skipped()) {
             keptOpen.add(skipped.key() + ": " + skipped.reason());
+        }
+        return node.toString();
+    }
+
+    private static void recordDecisions(InductionDecisionRepository decisions, long mandateId,
+            long parseRunId, ClauseTypePromoter.PromotionResult result,
+            Map<String, float[]> centroids) throws Exception {
+        decisions.deleteForRun(parseRunId, DECISION_STAGE);
+        for (ClauseTypePromoter.PromotedType promoted : result.promoted()) {
+            decisions.insert(new InductionDecisionRepository.Decision(
+                    null, mandateId, parseRunId, DECISION_STAGE,
+                    promoted.key(), String.join(",", promoted.memberCodes()),
+                    "promoted", "cluster_promoted",
+                    decisionDetail(promoted.memberCodes(), promoted.sourceDocumentIds(),
+                            pairSimilarity(promoted.memberCodes(), centroids),
+                            "Open clauses clustered by cosine similarity and passed consensus.")));
+        }
+        for (ClauseTypePromoter.SkippedGroup skipped : result.skipped()) {
+            decisions.insert(new InductionDecisionRepository.Decision(
+                    null, mandateId, parseRunId, DECISION_STAGE,
+                    skipped.key(), String.join(",", skipped.memberCodes()),
+                    "dropped", reasonCode(skipped.reason()),
+                    decisionDetail(skipped.memberCodes(), skipped.sourceDocumentIds(),
+                            pairSimilarity(skipped.memberCodes(), centroids),
+                            skipped.reason())));
+        }
+    }
+
+    /** Maps a promoter skip reason onto the closed induction reason codes. */
+    private static String reasonCode(String promoterReason) {
+        if (promoterReason == null) {
+            return "below_threshold";
+        }
+        String reason = promoterReason.toLowerCase(java.util.Locale.ROOT);
+        if (reason.contains("entity")) {
+            return "entity_token_rejected";
+        }
+        if (reason.contains("quality") || reason.contains("coverage")) {
+            return "low_coverage";
+        }
+        return "below_threshold";
+    }
+
+    private static Double pairSimilarity(List<String> codes, Map<String, float[]> centroids) {
+        double best = -1;
+        boolean any = false;
+        for (int i = 0; i < codes.size(); i++) {
+            float[] left = centroids.get(codes.get(i));
+            if (left == null) {
+                continue;
+            }
+            for (int j = i + 1; j < codes.size(); j++) {
+                float[] right = centroids.get(codes.get(j));
+                if (right == null) {
+                    continue;
+                }
+                any = true;
+                best = Math.max(best, Cosine.similarity(left, right));
+            }
+        }
+        return any ? best : null;
+    }
+
+    private static String decisionDetail(List<String> memberCodes, List<String> documents,
+            Double similarity, String rationale) {
+        ObjectNode node = MAPPER.createObjectNode();
+        node.put("rationale", rationale == null ? "" : rationale);
+        node.putNull("sanitized_query");
+        if (similarity == null) {
+            node.putNull("similarity");
+        } else {
+            node.put("similarity", similarity);
+        }
+        ArrayNode docs = node.putArray("documents");
+        for (String document : documents) {
+            docs.add(document);
+        }
+        ArrayNode members = node.putArray("member_codes");
+        for (String code : memberCodes) {
+            members.add(code);
         }
         return node.toString();
     }
