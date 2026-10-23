@@ -99,7 +99,7 @@ class LlmClassifyTieBreakTest {
     void classifierStaysUnknownWhenTieBreakModelInventsPack() throws Exception {
         List<DocTypePack> seeds = PackLoader.loadSeedPacks();
         LlmClassifyTieBreak tieBreak = new LlmClassifyTieBreak(
-                new FakeDocLlmClient("{\"pack_code\":\"identity.promoter_net_worth\"}"), null);
+                new FakeDocLlmClient("{\"pack_code\":\"report.not_a_pack\"}"), null);
         DocTypeClassifier classifier = new DocTypeClassifier(tieBreak);
 
         ClassifyResult result = classifier.classify(ClassifyRequest.scoreOnly(

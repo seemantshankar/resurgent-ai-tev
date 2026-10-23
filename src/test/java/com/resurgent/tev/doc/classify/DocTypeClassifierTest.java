@@ -7,6 +7,8 @@ import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -99,6 +101,35 @@ class DocTypeClassifierTest {
                 "Supply of inverters and modules as per annexure.");
         assertThat(result.status()).isEqualTo(ClassifyResult.Status.CLASSIFIED);
         assertThat(result.docTypeCode()).isEqualTo("quotation.vendor");
+    }
+
+    @Test
+    void otherRoleStillClassifiesWhenIdentitySignalsMatch() throws Exception {
+        ClassifyResult result = score("other", "net_worth_sharma.pdf", NET_WORTH_PAGE1);
+        assertThat(result.status()).isEqualTo(ClassifyResult.Status.CLASSIFIED);
+        assertThat(result.docTypeCode()).isEqualTo("identity.promoter_net_worth");
+    }
+
+    @Test
+    void mismatchedRoleStillClassifiesWhenIdentitySignalsMatch() throws Exception {
+        ClassifyResult result = score("agreement", "net_worth_sharma.pdf", NET_WORTH_PAGE1);
+        assertThat(result.status()).isEqualTo(ClassifyResult.Status.CLASSIFIED);
+        assertThat(result.docTypeCode()).isEqualTo("identity.promoter_net_worth");
+    }
+
+    @Test
+    void roleAlignmentBreaksAnEqualSignalTie() throws Exception {
+        List<DocTypePack> packs = List.of(
+                tinyPack("sample.alpha", "agreement", "Shared Marker"),
+                tinyPack("sample.beta", "certificate", "Shared Marker"));
+        ClassifyResult aligned = new DocTypeClassifier().classify(ClassifyRequest.scoreOnly(
+                "certificate", "marker.pdf", "Shared Marker", null, packs));
+        assertThat(aligned.docTypeCode()).isEqualTo("sample.beta");
+        assertThat(aligned.reasons()).anyMatch(r -> r.contains("+0.05"));
+
+        ClassifyResult generic = new DocTypeClassifier().classify(ClassifyRequest.scoreOnly(
+                "other", "marker.pdf", "Shared Marker", null, packs));
+        assertThat(generic.status()).isEqualTo(ClassifyResult.Status.UNKNOWN);
     }
 
     @Test
@@ -301,6 +332,26 @@ class DocTypeClassifierTest {
             assertThat(page1).contains("layout body");
             assertThat(page1).doesNotContain("cloud parsed page");
         }
+    }
+
+    private static DocTypePack tinyPack(String code, String role, String signal) throws Exception {
+        String yaml = """
+                code: %s
+                version: 1.0.0
+                family: %s
+                file_role: %s
+                industry_tags: [general]
+                identity_signals:
+                  any_of:
+                    - "%s"
+                fields:
+                  - key: marker
+                    path: identity > Legal Name
+                    path_root: identity
+                    value_kind: text
+                    required: false
+                """.formatted(code, role, role, signal);
+        return PackLoader.load(new ByteArrayInputStream(yaml.getBytes(StandardCharsets.UTF_8)), code);
     }
 
     private static String readDocTypeCode(Connection connection, long versionId) throws Exception {

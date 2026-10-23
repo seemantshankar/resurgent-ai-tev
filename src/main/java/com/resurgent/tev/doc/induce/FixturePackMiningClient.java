@@ -107,11 +107,16 @@ public final class FixturePackMiningClient implements PackMiningClient {
                 String key = EntityTokenFilter.snake(leaf.leafName());
                 Acc acc = byKey.get(key);
                 if (acc == null) {
+                    List<String> synonyms = new ArrayList<>();
+                    synonyms.add(leaf.leafName());
+                    if (!synonyms.contains(label)) {
+                        synonyms.add(label);
+                    }
                     byKey.put(key, new Acc(
                             key, leaf.path(), leaf.pathRoot(), guessKind(leaf),
                             leaf.leafName(),
                             new LinkedHashSet<>(List.of(d.id())),
-                            new ArrayList<>(List.of(leaf.leafName()))));
+                            synonyms));
                 } else {
                     acc.docIds().add(d.id());
                     if (!acc.synonyms().contains(label) && acc.synonyms().size() < 6) {
@@ -140,6 +145,12 @@ public final class FixturePackMiningClient implements PackMiningClient {
                 ? request.docTypeHint().trim()
                 : family + ".induced";
         OfflineDomainCatalog.Supplement supplement = OfflineDomainCatalog.match(request);
+        for (MinedField extra : supplement.fields()) {
+            boolean present = fields.stream().anyMatch(field -> field.key().equals(extra.key()));
+            if (!present) {
+                fields.add(extra);
+            }
+        }
         String query = supplement.webSearchQuery();
         if (query == null || query.isBlank()) {
             query = StructuralFingerprint.webQuery(docs, request.industryTag());

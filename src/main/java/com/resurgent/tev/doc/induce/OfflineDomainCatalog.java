@@ -2,6 +2,7 @@ package com.resurgent.tev.doc.induce;
 
 import com.resurgent.tev.doc.induce.PackMiningClient.MinedClause;
 import com.resurgent.tev.doc.induce.PackMiningClient.MinedColumn;
+import com.resurgent.tev.doc.induce.PackMiningClient.MinedField;
 import com.resurgent.tev.doc.induce.PackMiningClient.MinedPassage;
 import com.resurgent.tev.doc.induce.PackMiningClient.MinedTable;
 import com.resurgent.tev.doc.induce.PackMiningClient.MiningDocument;
@@ -32,6 +33,13 @@ final class OfflineDomainCatalog {
             }
         }
         List<String> ids = List.copyOf(docIds);
+        if (text.contains("term sheet") || text.contains("information memorandum")
+                || text.contains("debt structuring")) {
+            return debtStructuring(ids);
+        }
+        if (text.contains("vendor proposal")) {
+            return vendorProposal(ids);
+        }
         if (text.contains("credit rating") || text.contains("rated facility")
                 || text.contains("rating outlook")) {
             return creditRating(ids, text);
@@ -66,7 +74,46 @@ final class OfflineDomainCatalog {
                 "issue",
                 query,
                 "Offline domain standard for a credit rating report: rating, outlook, "
-                        + "rated facilities, and covenants.");
+                        + "rated facilities, and covenants.",
+                List.of(
+                        extra("rating_agency", "economic > Rating Agency", "economic",
+                                "Rating Agency", docIds),
+                        extra("long_term_rating", "economic > Long Term Rating", "economic",
+                                "Long Term Rating", docIds),
+                        extra("short_term_rating", "economic > Short Term Rating", "economic",
+                                "Short Term Rating", docIds)));
+    }
+
+    private static Supplement debtStructuring(List<String> docIds) {
+        return new Supplement(
+                List.of(table("facility_tranches", "economic > Facility Tranche", "economic",
+                        "tranche", null, null, null,
+                        List.of(column("tranche", "text"), column("limit", "text"),
+                                column("pricing", "text"), column("tenor", "text"),
+                                column("moratorium", "text"), column("repayment", "text")),
+                        docIds)),
+                List.of(new MinedClause("financial_covenant", "Financial Covenant", "covenant",
+                        List.of("Financial Covenant"), docIds, true)),
+                List.of(),
+                "issue",
+                null,
+                "Offline domain standard for a debt structuring term sheet.",
+                List.of());
+    }
+
+    private static Supplement vendorProposal(List<String> docIds) {
+        return new Supplement(
+                List.of(table("boq_lines", "economic > Project Cost > Line Item", "economic",
+                        "description", null, null, null,
+                        List.of(column("description", "text"), column("qty", "text"),
+                                column("rate", "text"), column("amount", "text")),
+                        docIds)),
+                List.of(),
+                List.of(),
+                "issue",
+                null,
+                "Offline domain standard for a vendor proposal.",
+                List.of());
     }
 
     private static Supplement bureau(List<String> docIds) {
@@ -81,7 +128,8 @@ final class OfflineDomainCatalog {
                         List.of("bureau_accounts"), docIds, true)),
                 "issue",
                 null,
-                "Offline domain standard for a credit bureau report.");
+                "Offline domain standard for a credit bureau report.",
+                List.of());
     }
 
     private static Supplement bankStatement(List<String> docIds) {
@@ -96,7 +144,8 @@ final class OfflineDomainCatalog {
                         List.of("monthly_activity"), docIds, true)),
                 "date",
                 null,
-                "Offline domain standard for a bank statement.");
+                "Offline domain standard for a bank statement.",
+                List.of());
     }
 
     private static Supplement promoterProfile(List<String> docIds) {
@@ -110,7 +159,14 @@ final class OfflineDomainCatalog {
                         List.of("qualifications"), docIds, true)),
                 "date",
                 null,
-                "Offline domain standard for a promoter or director profile.");
+                "Offline domain standard for a promoter or director profile.",
+                List.of());
+    }
+
+    private static MinedField extra(
+            String key, String path, String root, String label, List<String> docIds) {
+        return new MinedField(key, path, root, "text", false, label,
+                List.of(label), List.of(label), docIds, List.of(), true);
     }
 
     private static MinedTable table(
@@ -131,11 +187,12 @@ final class OfflineDomainCatalog {
             List<MinedPassage> passages,
             String documentDateKind,
             String webSearchQuery,
-            String domainRationale) {
+            String domainRationale,
+            List<MinedField> fields) {
 
         static Supplement none(String query) {
             return new Supplement(List.of(), List.of(), List.of(), null, query,
-                    "Offline structural fingerprint; web search was not used.");
+                    "Offline structural fingerprint; web search was not used.", List.of());
         }
     }
 }

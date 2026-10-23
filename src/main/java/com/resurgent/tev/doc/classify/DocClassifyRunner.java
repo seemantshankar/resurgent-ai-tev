@@ -1,6 +1,7 @@
 package com.resurgent.tev.doc.classify;
 
 import com.resurgent.tev.doc.db.DocumentRepository;
+import com.resurgent.tev.doc.induce.DocInduceRunner;
 import com.resurgent.tev.doc.induce.PackStore;
 import com.resurgent.tev.doc.ingest.BlobStore;
 import com.resurgent.tev.doc.llm.DocLlmClient;
@@ -45,6 +46,19 @@ public final class DocClassifyRunner {
      */
     public static Result run(long mandateId, long documentVersionId, Path db, BlobStore blobs,
             Path packDir, String industry, boolean force) throws Exception {
+        return run(mandateId, documentVersionId, db, blobs, packDir, industry, force, true);
+    }
+
+    /**
+     * Same as {@link #run(long, long, Path, BlobStore, Path, String, boolean)}.
+     * When {@code autoInduce} is true and scoring leaves the version {@code unknown},
+     * the unclassified documents in the mandate are induced, published, and this
+     * version is classified again onto the new pack.
+     *
+     * @param autoInduce false keeps an unknown document unknown ({@code --no-auto-induce})
+     */
+    public static Result run(long mandateId, long documentVersionId, Path db, BlobStore blobs,
+            Path packDir, String industry, boolean force, boolean autoInduce) throws Exception {
         List<DocTypePack> packs = loadCandidatePacks(db, packDir);
         String industryTag = industry == null || "auto".equalsIgnoreCase(industry)
                 ? null
@@ -73,7 +87,25 @@ public final class DocClassifyRunner {
                     force);
             connection.setAutoCommit(false);
             try {
-                ClassifyResult result = new DocTypeClassifier(tieBreak).classify(request, connection);
+                DocTypeClassifier classifier = new DocTypeClassifier(tieBreak);
+                ClassifyResult result = classifier.classify(request, connection);
+                if (autoInduce && unknown(result)) {
+                    // Release the write lock before induction opens its own connection.
+                    connection.commit();
+                    connection.setAutoCommit(true);
+                    induceUnknown(mandateId, db, industry);
+                    packs = loadCandidatePacks(db, packDir);
+                    request = new ClassifyRequest(
+                            documentVersionId,
+                            version.fileRole(),
+                            version.fileName(),
+                            DocTypeClassifier.loadPage1Text(connection, documentVersionId),
+                            industryTag,
+                            packs,
+                            true);
+                    connection.setAutoCommit(false);
+                    result = classifier.classify(request, connection);
+                }
                 recordUsage(connection, version, mandateId, industryTag, usage);
                 connection.commit();
                 return new Result(
@@ -97,6 +129,25 @@ public final class DocClassifyRunner {
                 } catch (Exception ignored) {
                     // connection may already be released
                 }
+            }
+        }
+    }
+
+    private static boolean unknown(ClassifyResult result) {
+        String code = result.docTypeCode();
+        return code == null || code.isBlank() || "unknown".equalsIgnoreCase(code);
+    }
+
+    /** Induces every still-unknown document in the mandate and publishes the packs. */
+    private static void induceUnknown(long mandateId, Path db, String industry) throws Exception {
+        String tag = industry == null || industry.isBlank() || "auto".equalsIgnoreCase(industry)
+                ? "general"
+                : industry;
+        try {
+            DocInduceRunner.run(mandateId, db, tag, null, null, null, false);
+        } catch (IllegalArgumentException e) {
+            if (e.getMessage() == null || !e.getMessage().contains("no matching documents")) {
+                throw e;
             }
         }
     }

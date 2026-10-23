@@ -19,11 +19,13 @@ import java.util.Optional;
 /**
  * Document-side classification between layout and extract (S2.12).
  *
- * <p>Deterministic first: filter candidate packs by {@code file_role}/family,
- * score pack {@code identity_signals} against page-1 text, title blocks, and the
- * file name, and accept a winner only when it clears a score floor and a margin.
- * Ties and low scores go to {@link ClassifyTieBreak}; the offline default declines
- * and the document stays {@code unknown}. A matching pack is never invented.
+ * <p>Deterministic first: score every seed and induced pack on {@code identity_signals}
+ * against page-1 text, title blocks, and the file name. {@code file_role} or family
+ * alignment is only a {@code +0.05} tie-break when those signals already match; a
+ * generic or mismatched role, including {@code other}, never drops a pack. A winner
+ * must clear a score floor and a margin, or win an equal-signal tie by that role
+ * boost. Remaining ties and low scores go to {@link ClassifyTieBreak}; the offline
+ * default declines and the document stays {@code unknown}. A pack is never invented.
  */
 public final class DocTypeClassifier {
 
@@ -38,6 +40,12 @@ public final class DocTypeClassifier {
 
     /** Weight of a signal hit only in the file name. */
     private static final double FILE_NAME_HIT = 0.5;
+
+    /**
+     * Soft boost when identity signals already matched and {@code file_role} or
+     * family aligns. Too small to outrank a real signal hit; enough to break a tie.
+     */
+    private static final double ROLE_BOOST = 0.05;
 
     /** Score that maps to confidence 1.0. */
     private static final double CONFIDENCE_SATURATION = 2.0;
@@ -150,14 +158,11 @@ public final class DocTypeClassifier {
                         ? ", industry=" + request.industryTag() : ""));
 
         for (DocTypePack pack : request.candidatePacks()) {
-            if (!roleMatches(pack, fileRole)) {
-                continue;
-            }
-            scored.add(scorePack(pack, request, reasons));
+            scored.add(scorePack(pack, request, fileRole, reasons));
         }
 
         if (scored.isEmpty()) {
-            reasons.add("no candidate packs after file_role/family filter");
+            reasons.add("no candidate packs");
             return ClassifyResult.unknown(reasons, "deterministic");
         }
 
@@ -173,10 +178,19 @@ public final class DocTypeClassifier {
                 .orElse("(none)"));
         reasons.add("winner=" + top.packCode() + " margin=" + margin);
 
-        boolean clearWin = top.score() >= MIN_SCORE && margin >= WIN_MARGIN;
-        if (clearWin) {
+        double secondSignal = runnerUp == null ? 0.0 : runnerUp.signalScore();
+        double signalMargin = top.signalScore() - secondSignal;
+        boolean clearWin = top.signalScore() >= MIN_SCORE && signalMargin >= WIN_MARGIN;
+        boolean roleBrokeTie = !clearWin
+                && runnerUp != null
+                && top.signalScore() >= MIN_SCORE
+                && Math.abs(top.signalScore() - secondSignal) < 1e-9
+                && margin + 1e-9 >= ROLE_BOOST;
+        if (clearWin || roleBrokeTie) {
             double confidence = confidence(top.score());
-            reasons.add("deterministic win (score>=MIN, margin>=WIN)");
+            reasons.add(roleBrokeTie
+                    ? "file_role tie-break (equal identity signals, +" + ROLE_BOOST + ")"
+                    : "deterministic win (score>=MIN, margin>=WIN)");
             return new ClassifyResult(top.packCode(), top.packCode(), top.packVersion(),
                     confidence, reasons, ClassifyResult.Status.CLASSIFIED, "deterministic");
         }
@@ -214,7 +228,7 @@ public final class DocTypeClassifier {
     }
 
     private static PackScore scorePack(DocTypePack pack, ClassifyRequest request,
-            List<String> reasons) {
+            String fileRole, List<String> reasons) {
         String page = normalize(request.page1Text());
         String fileName = normalize(request.fileName());
         List<String> matched = new ArrayList<>();
@@ -232,21 +246,27 @@ public final class DocTypeClassifier {
                 matched.add(signal + " (file_name)");
             }
         }
+        double signalScore = score;
+        if (signalScore > 0 && roleAligns(pack, fileRole)) {
+            score += ROLE_BOOST;
+            reasons.add(pack.code() + " file_role tie-break +" + ROLE_BOOST);
+        }
         if (!matched.isEmpty()) {
             reasons.add(pack.code() + " signals: " + String.join("; ", matched));
         }
-        return new PackScore(pack.code(), pack.version(), score, matched, pack.identitySignals());
+        return new PackScore(pack.code(), pack.version(), score, signalScore,
+                matched, pack.identitySignals());
     }
 
     /**
-     * A pack is a candidate when its {@code file_role} or {@code family} matches the
-     * document role, or when the role's default document family matches the pack
-     * family (e.g. {@code identity} → {@code certificate}). A blank role skips the
-     * filter so an open corpus can still score.
+     * True when a non-blank document role lines up with the pack's {@code file_role},
+     * its family, or the role's default document family. A blank role does not align
+     * with every pack. Alignment never decides membership — only the {@code +0.05}
+     * boost after identity signals have already matched.
      */
-    private static boolean roleMatches(DocTypePack pack, String fileRole) {
-        if (fileRole.isEmpty()) {
-            return true;
+    private static boolean roleAligns(DocTypePack pack, String fileRole) {
+        if (fileRole == null || fileRole.isBlank()) {
+            return false;
         }
         String role = fileRole.toLowerCase(Locale.ROOT);
         if (pack.fileRole() != null && pack.fileRole().toLowerCase(Locale.ROOT).equals(role)) {
@@ -364,7 +384,7 @@ public final class DocTypeClassifier {
     }
 
     private record PackScore(String packCode, String packVersion, double score,
-            List<String> matchedSignals, List<String> identitySignals) {
+            double signalScore, List<String> matchedSignals, List<String> identitySignals) {
         PackScore {
             matchedSignals = matchedSignals == null ? List.of() : List.copyOf(matchedSignals);
             identitySignals = identitySignals == null ? List.of() : List.copyOf(identitySignals);

@@ -89,8 +89,11 @@ public final class DocInduceRunner {
                     ? new HttpWebSearchClient(env.get(PackMiningClients.WEB_SEARCH_URL))
                     : null;
             PackMiningClient mining = PackMiningClients.select(env, live, web, clusterUsage::add);
+            String typeHint = docType == null || docType.isBlank()
+                    ? clusterCode(cluster.get(0))
+                    : docType;
             PackInducer.InduceRequest request = new PackInducer.InduceRequest(
-                    cluster, industryTag, fileRole, docType, null,
+                    cluster, industryTag, fileRole, typeHint, null,
                     mining, store,
                     PackQualityGates.DEFAULT_MIN_REQUIRED_COVERAGE,
                     Generalizer.DEFAULT_CONSENSUS_N,
@@ -116,6 +119,21 @@ public final class DocInduceRunner {
         }
         results.addAll(failures);
         return results;
+    }
+
+    /**
+     * A stable pack code for one cluster when the caller did not name a type.
+     * Distinct titles must not all publish as {@code document.induced}.
+     */
+    private static String clusterCode(PackInducer.InduceDocument document) {
+        String title = document.title() == null || document.title().isBlank()
+                ? document.id()
+                : document.title();
+        String slug = SpineCatalog.normalize(title).replace(' ', '_').replaceAll("[^a-z0-9_]", "");
+        if (slug.isBlank()) {
+            slug = "cluster";
+        }
+        return "induced." + slug;
     }
 
     private record Outcome(
@@ -363,6 +381,23 @@ public final class DocInduceRunner {
                 while (rs.next()) {
                     String text = rs.getString(1);
                     if (text != null && !text.isBlank()) {
+                        lines.add(text.trim());
+                    }
+                }
+            }
+        }
+        try (var ps = connection.prepareStatement(
+                "SELECT tc.text_raw FROM table_cell tc"
+                        + " JOIN table_grid tg ON tg.table_grid_id = tc.table_grid_id"
+                        + " JOIN block b ON b.block_id = tg.block_id"
+                        + " JOIN page p ON p.page_id = b.page_id"
+                        + " WHERE p.document_version_id = ?"
+                        + " ORDER BY p.page_index, tc.row_index, tc.col_index")) {
+            ps.setLong(1, documentVersionId);
+            try (var rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String text = rs.getString(1);
+                    if (text != null && !text.isBlank() && !lines.contains(text.trim())) {
                         lines.add(text.trim());
                     }
                 }
