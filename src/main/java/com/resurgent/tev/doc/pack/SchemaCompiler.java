@@ -14,10 +14,13 @@ import java.util.Set;
  * Builds the JSON Schema fragment sent to {@code ExtractClient} from a pack.
  * Object of field keys; each leaf carries {@code value_kind}, {@code required},
  * and a short {@code prompt_hint}. Multi-value leaves are arrays. Pack
- * {@code tables} are compiled as arrays of row objects (one property per column);
- * a table's {@code period_key} column is marked {@code "period": true} so row
- * facts can carry the period they were read for. A field whose key is a table
- * column compiles only inside its table — never as a root leaf.
+ * {@code tables} are compiled as arrays of row objects (one property per column).
+ * A table's {@code key_column} is marked {@code "line_key": true}, optional
+ * {@code entity_key} and {@code site_key} columns are marked {@code "entity"} and
+ * {@code "site"}, and {@code period_key} is marked {@code "period": true}, so a
+ * record schedule or a period matrix can emit one fact per value cell. A field
+ * whose key is a column of such a table compiles only inside its table — never
+ * as a root leaf.
  */
 public final class SchemaCompiler {
 
@@ -99,7 +102,10 @@ public final class SchemaCompiler {
     private static Set<String> tableOwnedKeys(DocTypePack pack) {
         Set<String> keys = new HashSet<>();
         for (Map<String, Object> table : pack.tables()) {
-            if (table.get("period_key") == null) {
+            // Period matrices and record schedules repeat their columns per row.
+            // A bare line-item table (no key and no period) keeps its columns off
+            // this set so a shared scalar can still compile at the root.
+            if (table.get("period_key") == null && table.get("key_column") == null) {
                 continue;
             }
             Object fieldsObj = table.get("fields");
@@ -142,8 +148,10 @@ public final class SchemaCompiler {
         ObjectNode items = tableNode.putObject("items");
         items.put("type", "object");
         ObjectNode itemProps = items.putObject("properties");
-        Object periodKey = table.get("period_key");
-        String periodColumn = periodKey == null ? null : String.valueOf(periodKey);
+        String periodColumn = columnRole(table, "period_key");
+        String keyColumn = columnRole(table, "key_column");
+        String entityColumn = columnRole(table, "entity_key");
+        String siteColumn = columnRole(table, "site_key");
         Object fieldsObj = table.get("fields");
         if (fieldsObj instanceof java.util.List<?> list) {
             for (Object raw : list) {
@@ -166,9 +174,28 @@ public final class SchemaCompiler {
                     if (key.equals(periodColumn)) {
                         col.put("period", true);
                     }
+                    if (key.equals(keyColumn)) {
+                        col.put("line_key", true);
+                    }
+                    if (key.equals(entityColumn)) {
+                        col.put("entity", true);
+                    }
+                    if (key.equals(siteColumn)) {
+                        col.put("site", true);
+                    }
                 }
             }
         }
+    }
+
+    /** The column a table role names, or null when the role is absent. */
+    private static String columnRole(Map<String, Object> table, String role) {
+        Object value = table.get(role);
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() || "null".equals(text) ? null : text;
     }
 
     private static void putValueKind(ObjectNode leaf, ValueKind kind) {

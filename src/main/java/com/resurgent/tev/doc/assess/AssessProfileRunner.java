@@ -10,6 +10,7 @@ import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.induce.PackStore;
 import com.resurgent.tev.doc.llm.DocLlmClient;
 import com.resurgent.tev.doc.pack.DocTypePack;
+import com.resurgent.tev.doc.pack.PackCodes;
 import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
@@ -180,25 +181,25 @@ public final class AssessProfileRunner implements AssessStage {
         if (version.docTypeCode() == null) {
             return DEFAULT_KIND;
         }
-        return kindsByPack.getOrDefault(version.docTypeCode(), DEFAULT_KIND);
+        String kind = kindsByPack.get(version.docTypeCode());
+        if (kind == null) {
+            kind = kindsByPack.get(PackCodes.canonical(version.docTypeCode()));
+        }
+        return kind == null ? DEFAULT_KIND : kind;
     }
 
     /** Pack-code → date kind for seed packs plus packs published beside the workspace. */
     private static Map<String, String> loadDateKinds(Path dbPath) throws Exception {
         Map<String, String> kinds = new LinkedHashMap<>();
         for (DocTypePack pack : PackLoader.loadSeedPacks()) {
-            if (pack.documentDateKind() != null) {
-                kinds.put(pack.code(), pack.documentDateKind());
-            }
+            putDateKind(kinds, pack);
         }
         Path packsRoot = dbPath.toAbsolutePath().getParent() == null
                 ? Path.of("packs")
                 : dbPath.toAbsolutePath().getParent().resolve("packs");
         try {
             for (DocTypePack pack : new PackStore(packsRoot).loadAll()) {
-                if (pack.documentDateKind() != null) {
-                    kinds.put(pack.code(), pack.documentDateKind());
-                }
+                putDateKind(kinds, pack);
             }
         } catch (RuntimeException e) {
             // A broken induced-pack registry must not block the assessment.
@@ -206,6 +207,17 @@ public final class AssessProfileRunner implements AssessStage {
                     + e.getMessage());
         }
         return kinds;
+    }
+
+    /** Records a pack's date kind under its code and any legacy alias of that code. */
+    private static void putDateKind(Map<String, String> kinds, DocTypePack pack) {
+        if (pack.documentDateKind() == null) {
+            return;
+        }
+        kinds.put(pack.code(), pack.documentDateKind());
+        for (String alias : PackCodes.equivalents(pack.code())) {
+            kinds.putIfAbsent(alias, pack.documentDateKind());
+        }
     }
 
     /** The provenance row for a stated date; null when the quote is not in the layout. */

@@ -120,7 +120,8 @@ class GeneralizerTest {
                 .containsExactly("gross_total");
         assertThat(multiResult.dropped()).anyMatch(d -> d.contains("payment_terms"));
 
-        // single-doc cluster: spine labels survive; non-spine one-offs do not
+        // single-doc cluster: spine labels stay required; an evidenced non-spine
+        // leaf under a known root is kept and demoted to optional
         PackMiningClient.MiningResult single = new PackMiningClient.MiningResult(
                 "identity.promoter_net_worth",
                 "certificate",
@@ -134,9 +135,13 @@ class GeneralizerTest {
         Generalizer.Result singleResult = generalizer.generalize(
                 single, 1, Generalizer.Config.defaults(Set.of()));
         assertThat(singleResult.packFields()).extracting(PackField::key)
-                .containsExactly("net_worth");
-        assertThat(singleResult.dropped())
-                .anyMatch(d -> d.contains("favourite_colour") && d.contains("spine"));
+                .containsExactly("net_worth", "favourite_colour");
+        assertThat(singleResult.packFields().get(0).required()).isTrue();
+        assertThat(singleResult.packFields().get(1).required()).isFalse();
+        assertThat(singleResult.decisions()).anySatisfy(note -> {
+            assertThat(note.candidateKey()).isEqualTo("favourite_colour");
+            assertThat(note.outcome()).isEqualTo("demoted_optional");
+        });
     }
 
     @Test

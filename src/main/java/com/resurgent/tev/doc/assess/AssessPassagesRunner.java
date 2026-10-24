@@ -10,6 +10,9 @@ import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.db.PassageRepository;
 import com.resurgent.tev.doc.db.PassageRepository.ParsePage;
+import com.resurgent.tev.doc.embed.EmbeddingClient;
+import com.resurgent.tev.doc.embed.EmbeddingClients;
+import com.resurgent.tev.doc.embed.EmbeddingRepository;
 import com.resurgent.tev.doc.extract.CandidateNormalizer;
 import com.resurgent.tev.doc.extract.ExtractClient;
 import com.resurgent.tev.doc.extract.ExtractException;
@@ -98,9 +101,18 @@ public final class AssessPassagesRunner implements AssessStage {
         DocumentRepository docs = new DocumentRepository(connection);
         FactRepository facts = new FactRepository(connection);
         PassageRepository passages = new PassageRepository(connection);
+        EmbeddingRepository embeddings = new EmbeddingRepository(connection);
+        EmbeddingClient embedder = EmbeddingClients.forAssessment(connection, mandateId);
         WorkspaceRepository repo = new WorkspaceRepository(connection);
         Map<String, DocTypePack> packsByCode = loadPacks(dbPath);
         List<VersionRow> versions = assessment.versionsForMandate(mandateId);
+        String mandateRow = new com.resurgent.tev.doc.db.MandatePolicyRepository(connection)
+                .dataResidency(mandateId);
+        boolean locked = com.resurgent.tev.doc.residency.DataResidency.isLocalOnly(
+                com.resurgent.tev.doc.residency.DataResidency.effective(
+                        System.getenv(com.resurgent.tev.doc.residency.DataResidency.ENV),
+                        mandateRow));
+        DocLlmClient model = locked ? null : client;
         ExtractClient extractor = resolveExtractor(dbPath);
         BlobStore blobs = BlobStore.besideDatabase(dbPath);
 
@@ -149,7 +161,7 @@ public final class AssessPassagesRunner implements AssessStage {
                 digests.add(chapter.heading() + "\n" + chapter.text());
             }
             // One summary call per document, never per passage.
-            List<String> llmSummaries = LlmPassageSummaries.find(client, digests, usage::add);
+            List<String> llmSummaries = LlmPassageSummaries.find(model, digests, usage::add);
             int index = 0;
             for (PassageSplitter.Passage chapter : chapters) {
                 index++;
@@ -172,6 +184,10 @@ public final class AssessPassagesRunner implements AssessStage {
                 }
                 long passageId = passages.insertPassage(version.documentVersionId(), index,
                         chapter.heading(), topic, chapter.pageFrom(), chapter.pageTo(), summary);
+                String embedded = chapter.text() == null || chapter.text().isBlank()
+                        ? chapter.heading() : chapter.text();
+                embeddings.upsertPassage(passageId, embedder.model(), embedder.embed(
+                        embedded == null ? "" : embedded));
                 Long provenanceId = insertPassageProvenance(assessment, docs, version,
                         passageId, chapter.heading(), chapter.text());
                 if (provenanceId != null) {
@@ -258,16 +274,7 @@ public final class AssessPassagesRunner implements AssessStage {
                 // fall through
             }
         }
-        if (LlamaExtractAdapter.hasApiKey()) {
-            return new LlamaExtractAdapter();
-        }
-        FixtureExtractClient fixture = new FixtureExtractClient();
-        try {
-            fixture.loadDirectory(dir);
-        } catch (Exception e) {
-            // No staged fixtures is a legitimate empty state: chapters yield no facts.
-        }
-        return fixture;
+        return new com.resurgent.tev.doc.extract.DocLlmExtractClient();
     }
 
     /**

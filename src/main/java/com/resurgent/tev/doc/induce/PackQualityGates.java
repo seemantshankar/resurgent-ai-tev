@@ -74,6 +74,25 @@ public final class PackQualityGates {
             }
             return false;
         }
+
+        /**
+         * Marks keys as already resolved on the given documents. Widening uses this
+         * so a required path kept from the previous pack does not fail coverage.
+         */
+        public CoverageProbe plus(Collection<String> keys, Collection<String> docIds) {
+            Map<String, Set<String>> copy = new LinkedHashMap<>();
+            for (Map.Entry<String, Set<String>> entry : resolvedByDocId.entrySet()) {
+                copy.put(entry.getKey(), new LinkedHashSet<>(entry.getValue()));
+            }
+            Collection<String> ids = docIds == null || docIds.isEmpty() ? copy.keySet() : docIds;
+            for (String id : ids) {
+                Set<String> resolved = copy.computeIfAbsent(id, key -> new LinkedHashSet<>());
+                if (keys != null) {
+                    resolved.addAll(keys);
+                }
+            }
+            return new CoverageProbe(copy);
+        }
     }
 
     /** Full gate report. */
@@ -266,7 +285,8 @@ public final class PackQualityGates {
         return new DocTypePack(
                 pack.code(), pack.version(), pack.family(), pack.fileRole(),
                 pack.industryTags(), pack.identitySignals(), fields,
-                pack.tables(), pack.checklist(), pack.reportSections());
+                pack.tables(), pack.checklist(), pack.reportSections(),
+                pack.documentDateKind(), pack.clauseSection(), pack.passages());
     }
 
     /**

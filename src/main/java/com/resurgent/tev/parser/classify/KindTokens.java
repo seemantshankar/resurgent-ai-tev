@@ -2,6 +2,7 @@ package com.resurgent.tev.parser.classify;
 
 import java.text.Normalizer;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -93,6 +94,54 @@ public final class KindTokens {
     private static final Pattern CAMEL_BOUNDARY = Pattern.compile("(?<=\\p{Ll})(?=\\p{Lu})");
     private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
+    /** Land, power, and process units on one wire key (issue #173). */
+    private static final Map<String, String> CANONICAL_UNITS = Map.ofEntries(
+            Map.entry("acre", "acre"),
+            Map.entry("acres", "acre"),
+            Map.entry("ekad", "acre"),
+            Map.entry("ekar", "acre"),
+            Map.entry("hectare", "hectare"),
+            Map.entry("hectares", "hectare"),
+            Map.entry("ha", "hectare"),
+            Map.entry("sqm", "sq_m"),
+            Map.entry("sqmeter", "sq_m"),
+            Map.entry("squaremeter", "sq_m"),
+            Map.entry("m2", "sq_m"),
+            Map.entry("sqft", "sq_ft"),
+            Map.entry("sqfeet", "sq_ft"),
+            Map.entry("squarefeet", "sq_ft"),
+            Map.entry("ft2", "sq_ft"),
+            Map.entry("sqyd", "sq_yd"),
+            Map.entry("sqyard", "sq_yd"),
+            Map.entry("squareyard", "sq_yd"),
+            Map.entry("yd2", "sq_yd"),
+            Map.entry("guntha", "guntha"),
+            Map.entry("gunthas", "guntha"),
+            Map.entry("bigha", "bigha"),
+            Map.entry("bighas", "bigha"),
+            Map.entry("beegha", "bigha"),
+            Map.entry("kanal", "kanal"),
+            Map.entry("kanals", "kanal"),
+            Map.entry("marla", "marla"),
+            Map.entry("marlas", "marla"),
+            Map.entry("cent", "cent"),
+            Map.entry("cents", "cent"),
+            Map.entry("are", "are"),
+            Map.entry("ares", "are"),
+            Map.entry("kwp", "kwp"),
+            Map.entry("mwp", "mwp"),
+            Map.entry("kwhm2", "kwh_m2"),
+            Map.entry("kwhperm2", "kwh_m2"),
+            Map.entry("kwhkwp", "kwh_kwp"),
+            Map.entry("kwhperkwp", "kwh_kwp"),
+            Map.entry("mwhyr", "mwh_yr"),
+            Map.entry("mwhyear", "mwh_yr"),
+            Map.entry("mwhperyear", "mwh_yr"),
+            Map.entry("tpd", "tpd"),
+            Map.entry("klpd", "klpd"),
+            Map.entry("mva", "mva"),
+            Map.entry("kv", "kv"));
+
     /**
      * One spelling of a header/label for every matcher: {@code SALES(Rs. In Lacs)} and
      * {@code Sales ( Rs. in lacs )} must read the same, however the workbook author glued
@@ -174,7 +223,19 @@ public final class KindTokens {
      * quantity/rate groupings and comparisons key identically.
      */
     public static String normalizeUnit(String token) {
-        String t = token.toLowerCase(Locale.ROOT).replace(".", "").replace(" ", "");
+        if (token == null || token.isBlank()) {
+            return token;
+        }
+        String t = token.toLowerCase(Locale.ROOT)
+                .replace(".", "")
+                .replace(" ", "")
+                .replace("²", "2")
+                .replace("³", "3");
+        String compact = t.replace("/", "").replace("-", "").replace("_", "");
+        String canonical = CANONICAL_UNITS.get(compact);
+        if (canonical != null) {
+            return canonical;
+        }
         if (t.equals("%") || t.equals("percent")) {
             return "percent";
         }

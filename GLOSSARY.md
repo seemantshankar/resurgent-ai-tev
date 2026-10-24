@@ -238,6 +238,26 @@ _Avoid_: missed conflict, ignored pair
 How a document fact got its place on the shared nomenclature (the same heads the financial model binds cells to): the pack's own wording is only a candidate, resolved by the shared label and alias rules, or — for a label none of them names — by one system judgement restricted to the paths of the living master set. It ends **bound** with that path, or **unbound** with the reason it stayed out, and a written note of how it was placed (a model-placed note names the page the label was read on — the pipeline's own provenance, never the model's prose). Unbound is a successful result, not an error: the fact is still retrievable, and the system never asks a person to place it. The document-side unbound reasons are `no_pack_field` (the pack names no field for it), `no_model` (no document model was configured for the run), `model_declined` (the model left that label unplaced), and `model_path_refused` (the path it named is not of the living master set) — enumerated in code and pinned by a unit test, never by a database CHECK.
 _Avoid_: pack path as truth, analyst mapping, unmapped parking lot
 
+**Page triage**:
+The per-page judgement on a scanned or image-bearing page that decides whether its local optical reading is trustworthy enough to keep or needs escalation to a vision parser. It relies on word confidence, ink-to-text coverage, script integrity, table arithmetic, and handwriting or stamp overlap — never a text-only model guessing from garbled text.
+_Avoid_: text-only OCR grading, whole-document cloud OCR by default
+
+**Data residency**:
+Whether a mandate allows sending document pages or text to external cloud services or locks all reading, extraction, and similarity to local processing. When locked to local, any page that fails page triage stays local and its low-confidence readings are marked unclear rather than escalated.
+_Avoid_: silent cloud fallback, global-only residency toggle
+
+**Schedule line**:
+One structured table row or cell read from a supporting document or screenshot — a land parcel in a lease or sale deed, a monthly generation or loss row in a PVsyst report, a rated facility or debt tranche in a credit rating report or debt structuring document, a delinquency or account row in a CIBIL or credit bureau screenshot, a monthly balance or transaction row in a bank statement, a qualification or career row in a resume or promoter profile, an equipment row in a DPR or quotation, or a statement line for a financial year — kept distinct from totals and tagged with its own row identifier, entity, site, and period so it binds and compares under its branch of the shared nomenclature.
+_Avoid_: financial-statement-only tables, headline-only summary, rolling detail lines into parent totals
+
+**Autonomous pack induction**:
+How the system learns a document type pack on the fly whenever an unfamiliar document or screenshot arrives — whether a single instance or a batch across TEV or debt syndication mandates. Using sanitized headings and industry context (never client names or amounts), the system researches the document type's domain structure via web-grounded search, synthesizes its identifying signals, scalar fields, schedule tables, clauses, and narrative passages under the shared nomenclature roots, validates that all keys are generic labels rather than instance values, and publishes or widens the pack automatically so extraction proceeds without human pack authoring.
+_Avoid_: manual pack authoring, failing on unknown document types, dropping single-document domain fields as one-offs
+
+**Induction decision**:
+The recorded record of why a candidate document field, table, clause type, or checklist item was promoted, rewritten, downgraded, or dropped during automatic learning, together with the web-research rationale, documents, similarity evidence, and quality gates that supported or rejected it.
+_Avoid_: human promotion queue, silent schema drop
+
 ## Phase 1 (current scope)
 
 - **FM Loader**: file adapters (xlsx / xls / csv), safety limits, SQLite persistence, ingest QA (cell / reference / formula reconciliation). Cell contract: coord, typed values, formula text + `formula_normalized` + cached value, merges, hidden flags, `style_id` → shared cell style (bold, `number_format`, fill FG + pattern, per-side borders), reference edges, and the formula graph (precedents and dependents) at ingest — no quantity parsing, header labels, font name/size, or fill background (ADR 0013, ADR 0024).

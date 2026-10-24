@@ -32,6 +32,11 @@ import java.util.List;
  * @param versionsDiffer conflicts that are really a revision: the same document type
  *     on two different document dates, newest first, settlement left to M4 (M3-12;
  *     appended)
+ * @param conflictSkips source pairs the system deliberately did not compare
+ * @param similar top-K nearest clauses or passages when the query asked for them;
+ *     empty on the plain mandate read (M5-6)
+ * @param inductionDecisions pack, clause, and checklist induction outcomes for this
+ *     mandate (promoted, rewritten, demoted optional, or dropped)
  */
 public record MandateQa(
         long mandateId,
@@ -47,7 +52,89 @@ public record MandateQa(
         List<ChecklistSummaryRow> checklistSummary,
         List<ConflictRow> conflicts,
         List<ConflictRow> versionsDiffer,
-        List<ConflictSkipRow> conflictSkips) {
+        List<ConflictSkipRow> conflictSkips,
+        List<SimilarHit> similar,
+        List<InductionDecisionRow> inductionDecisions) {
+
+    /** Reads written before induction decisions were part of the QA payload. */
+    public MandateQa(
+            long mandateId,
+            List<DocumentDateRow> documents,
+            List<AssessmentRunRow> stages,
+            List<EntityRow> entities,
+            List<ClauseRow> clauses,
+            List<SiteRow> sites,
+            List<PassageRow> passages,
+            List<IndustryRow> industries,
+            CountryRow country,
+            List<ChecklistResultRow> checklist,
+            List<ChecklistSummaryRow> checklistSummary,
+            List<ConflictRow> conflicts,
+            List<ConflictRow> versionsDiffer,
+            List<ConflictSkipRow> conflictSkips,
+            List<SimilarHit> similar) {
+        this(mandateId, documents, stages, entities, clauses, sites, passages, industries, country,
+                checklist, checklistSummary, conflicts, versionsDiffer, conflictSkips, similar,
+                List.of());
+    }
+
+    public MandateQa {
+        similar = similar == null ? List.of() : List.copyOf(similar);
+        inductionDecisions = inductionDecisions == null ? List.of() : List.copyOf(inductionDecisions);
+    }
+
+    /**
+     * One induction outcome: a field, table, clause, passage, or checklist item that
+     * was promoted, rewritten, made optional, or dropped.
+     *
+     * @param decisionId stored row id
+     * @param stage {@code induce_pack} | {@code induce_clauses} | {@code induce_checklist}
+     * @param targetCode pack or checklist code the decision belongs to
+     * @param candidateKey field, table, clause, passage, or checklist item key
+     * @param outcome {@code promoted} | {@code rewritten} | {@code demoted_optional} | {@code dropped}
+     * @param reasonCode why that outcome was chosen
+     * @param detailJson sanitized web-search query and domain rationale
+     */
+    public record InductionDecisionRow(
+            long decisionId,
+            String stage,
+            String targetCode,
+            String candidateKey,
+            String outcome,
+            String reasonCode,
+            String detailJson) {}
+
+    /**
+     * One nearest clause or passage, with the document, page, and verbatim snippet
+     * a reader needs to open the source.
+     *
+     * @param kind {@code clause} or {@code passage}
+     * @param id clause id or passage id
+     * @param documentId logical document id
+     * @param documentVersionId version the hit was read from
+     * @param logicalName document logical name
+     * @param fileName stored file name
+     * @param page page of the clause or passage
+     * @param snippet verbatim text
+     * @param score cosine similarity in [-1, 1]
+     */
+    public record SimilarHit(
+            String kind,
+            long id,
+            long documentId,
+            long documentVersionId,
+            String logicalName,
+            String fileName,
+            Integer page,
+            String snippet,
+            double score) {}
+
+    /** The same read with similarity hits attached. */
+    public MandateQa withSimilar(List<SimilarHit> hits) {
+        return new MandateQa(mandateId, documents, stages, entities, clauses, sites, passages,
+                industries, country, checklist, checklistSummary, conflicts, versionsDiffer,
+                conflictSkips, hits, inductionDecisions);
+    }
 
     /** A document/model pair not compared; ambiguity is visible, never a conflict. */
     public record ConflictSkipRow(

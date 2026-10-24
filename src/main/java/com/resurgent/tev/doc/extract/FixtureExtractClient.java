@@ -185,62 +185,9 @@ public final class FixtureExtractClient implements ExtractClient {
         }
         JsonNode itemProps = schema.path("properties").path(tableName).path("items")
                 .path("properties");
-        String periodColumn = periodColumnOf(itemProps);
         for (JsonNode row : rows) {
-            String period = periodColumn != null && row.hasNonNull(periodColumn)
-                    ? row.get(periodColumn).asText(null) : null;
-            Iterator<Map.Entry<String, JsonNode>> it = row.fields();
-            while (it.hasNext()) {
-                Map.Entry<String, JsonNode> col = it.next();
-                JsonNode cell = col.getValue();
-                if (col.getKey().equals(periodColumn) || cell == null || cell.isNull()) {
-                    continue;
-                }
-                String value;
-                String quote;
-                int page;
-                if (cell.isObject()) {
-                    value = cell.hasNonNull("value") ? cell.get("value").asText() : null;
-                    quote = cell.hasNonNull("quote") ? cell.get("quote").asText() : value;
-                    page = cell.hasNonNull("page") ? cell.get("page").asInt(1) : 1;
-                } else {
-                    value = cell.asText(null);
-                    quote = value;
-                    page = 1;
-                }
-                if (value == null) {
-                    continue;
-                }
-                FactCandidate candidate = new FactCandidate(col.getKey(),
-                        kindOf(itemProps, col.getKey()))
-                        .valueText(value)
-                        .period(period)
-                        .confidence(0.95)
-                        .extractionMethod("deterministic")
-                        .statedOrDerived("stated");
-                if (quote != null) {
-                    Citation citation = Citation.of(page, quote);
-                    candidate.addCitation(citation);
-                    citations.add(citation);
-                }
-                facts.add(candidate);
-            }
+            ScheduleCells.expand(tableName, itemProps, row, facts, citations);
         }
-    }
-
-    /** The schema column carrying {@code "period": true}, or null when the table has none. */
-    private static String periodColumnOf(JsonNode itemProps) {
-        if (itemProps == null || !itemProps.isObject()) {
-            return null;
-        }
-        Iterator<Map.Entry<String, JsonNode>> it = itemProps.fields();
-        while (it.hasNext()) {
-            Map.Entry<String, JsonNode> entry = it.next();
-            if (entry.getValue().path("period").asBoolean(false)) {
-                return entry.getKey();
-            }
-        }
-        return null;
     }
 
     /**

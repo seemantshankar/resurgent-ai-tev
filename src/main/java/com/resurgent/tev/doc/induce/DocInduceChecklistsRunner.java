@@ -288,6 +288,8 @@ public final class DocInduceChecklistsRunner {
         repo.recordRunStat(parseRunId, STAGE, "items_spine_promoted", (double) promoted, null);
         repo.recordRunStat(parseRunId, STAGE, "llm_calls",
                 (double) (liveModel && judged ? 1 : 0), null);
+        InductionDecisionLog.recordChecklist(
+                connection, workspace.mandateId(), parseRunId, outcome);
         repo.insertAuditLog(parseRunId, "checklist_learning_summary", Timestamps.now(),
                 summaryPayload(workspace, outcome, published, liveModel, mandatesRead,
                         config), "info");

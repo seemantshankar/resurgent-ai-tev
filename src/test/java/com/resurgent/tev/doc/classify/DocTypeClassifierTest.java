@@ -7,6 +7,8 @@ import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -64,8 +66,8 @@ class DocTypeClassifierTest {
     void goldenNetWorthClassifiesToSeedPack() throws Exception {
         ClassifyResult result = score("certificate", "net_worth_sharma.pdf", NET_WORTH_PAGE1);
         assertThat(result.status()).isEqualTo(ClassifyResult.Status.CLASSIFIED);
-        assertThat(result.docTypeCode()).isEqualTo("identity.promoter_net_worth");
-        assertThat(result.packCode()).isEqualTo("identity.promoter_net_worth");
+        assertThat(result.docTypeCode()).isEqualTo("identity.net_worth_certificate");
+        assertThat(result.packCode()).isEqualTo("identity.net_worth_certificate");
         assertThat(result.packVersion()).isEqualTo("1.0.0");
         assertThat(result.confidence()).isGreaterThanOrEqualTo(0.5).isLessThanOrEqualTo(1.0);
         assertThat(result.reasons()).anyMatch(r -> r.contains("Net Worth"));
@@ -99,6 +101,35 @@ class DocTypeClassifierTest {
                 "Supply of inverters and modules as per annexure.");
         assertThat(result.status()).isEqualTo(ClassifyResult.Status.CLASSIFIED);
         assertThat(result.docTypeCode()).isEqualTo("quotation.vendor");
+    }
+
+    @Test
+    void otherRoleStillClassifiesWhenIdentitySignalsMatch() throws Exception {
+        ClassifyResult result = score("other", "net_worth_sharma.pdf", NET_WORTH_PAGE1);
+        assertThat(result.status()).isEqualTo(ClassifyResult.Status.CLASSIFIED);
+        assertThat(result.docTypeCode()).isEqualTo("identity.net_worth_certificate");
+    }
+
+    @Test
+    void mismatchedRoleStillClassifiesWhenIdentitySignalsMatch() throws Exception {
+        ClassifyResult result = score("agreement", "net_worth_sharma.pdf", NET_WORTH_PAGE1);
+        assertThat(result.status()).isEqualTo(ClassifyResult.Status.CLASSIFIED);
+        assertThat(result.docTypeCode()).isEqualTo("identity.net_worth_certificate");
+    }
+
+    @Test
+    void roleAlignmentBreaksAnEqualSignalTie() throws Exception {
+        List<DocTypePack> packs = List.of(
+                tinyPack("sample.alpha", "agreement", "Shared Marker"),
+                tinyPack("sample.beta", "certificate", "Shared Marker"));
+        ClassifyResult aligned = new DocTypeClassifier().classify(ClassifyRequest.scoreOnly(
+                "certificate", "marker.pdf", "Shared Marker", null, packs));
+        assertThat(aligned.docTypeCode()).isEqualTo("sample.beta");
+        assertThat(aligned.reasons()).anyMatch(r -> r.contains("+0.05"));
+
+        ClassifyResult generic = new DocTypeClassifier().classify(ClassifyRequest.scoreOnly(
+                "other", "marker.pdf", "Shared Marker", null, packs));
+        assertThat(generic.status()).isEqualTo(ClassifyResult.Status.UNKNOWN);
     }
 
     @Test
@@ -183,9 +214,9 @@ class DocTypeClassifierTest {
             ClassifyResult forced = classifier.classify(new ClassifyRequest(
                     versionId, "certificate", "net_worth_sharma.pdf", NET_WORTH_PAGE1, null,
                     seedPacks(), true), connection);
-            assertThat(forced.docTypeCode()).isEqualTo("identity.promoter_net_worth");
+            assertThat(forced.docTypeCode()).isEqualTo("identity.net_worth_certificate");
             assertThat(readDocTypeCode(connection, versionId))
-                    .isEqualTo("identity.promoter_net_worth");
+                    .isEqualTo("identity.net_worth_certificate");
 
             // Unknown also overwrites and clears document.doc_type_code.
             ClassifyResult unknown = classifier.classify(new ClassifyRequest(
@@ -210,7 +241,7 @@ class DocTypeClassifierTest {
             ClassifyResult result = new DocTypeClassifier().classify(new ClassifyRequest(
                     versionId, "certificate", "net_worth.pdf", NET_WORTH_PAGE1, "general",
                     seedPacks(), true), connection);
-            assertThat(result.docTypeCode()).isEqualTo("identity.promoter_net_worth");
+            assertThat(result.docTypeCode()).isEqualTo("identity.net_worth_certificate");
 
             try (PreparedStatement ps = connection.prepareStatement(
                     "SELECT doc_type_code, pack_code, pack_version, confidence, reasons_json,"
@@ -220,8 +251,8 @@ class DocTypeClassifierTest {
                 try (ResultSet rs = ps.executeQuery()) {
                     assertThat(rs.next()).isTrue();
                     assertThat(rs.getString("doc_type_code"))
-                            .isEqualTo("identity.promoter_net_worth");
-                    assertThat(rs.getString("pack_code")).isEqualTo("identity.promoter_net_worth");
+                            .isEqualTo("identity.net_worth_certificate");
+                    assertThat(rs.getString("pack_code")).isEqualTo("identity.net_worth_certificate");
                     assertThat(rs.getString("pack_version")).isEqualTo("1.0.0");
                     assertThat(rs.getDouble("confidence")).isGreaterThan(0.0);
                     assertThat(rs.getString("reasons_json")).contains("Net Worth");
@@ -301,6 +332,26 @@ class DocTypeClassifierTest {
             assertThat(page1).contains("layout body");
             assertThat(page1).doesNotContain("cloud parsed page");
         }
+    }
+
+    private static DocTypePack tinyPack(String code, String role, String signal) throws Exception {
+        String yaml = """
+                code: %s
+                version: 1.0.0
+                family: %s
+                file_role: %s
+                industry_tags: [general]
+                identity_signals:
+                  any_of:
+                    - "%s"
+                fields:
+                  - key: marker
+                    path: identity > Legal Name
+                    path_root: identity
+                    value_kind: text
+                    required: false
+                """.formatted(code, role, role, signal);
+        return PackLoader.load(new ByteArrayInputStream(yaml.getBytes(StandardCharsets.UTF_8)), code);
     }
 
     private static String readDocTypeCode(Connection connection, long versionId) throws Exception {

@@ -27,7 +27,8 @@ public final class DocExtractCommand implements Callable<Integer> {
     @Option(names = "--pack", description = "Pack code (default: classified pack)")
     String pack;
 
-    @Option(names = "--extractor", description = "llama-extract|fixture (default: config/env)")
+    @Option(names = "--extractor",
+            description = "doc-llm-extract|fixture|llama-extract (default: doc-llm-extract)")
     String extractor;
 
     @Option(names = "--pages",
@@ -42,6 +43,10 @@ public final class DocExtractCommand implements Callable<Integer> {
     @Option(names = "--no-parse",
             description = "Skip the LlamaParse reuse step; upload the original to extract")
     boolean noParse;
+
+    @Option(names = "--no-auto-induce",
+            description = "Do not induce a pack when the version is still unknown")
+    boolean noAutoInduce;
 
     @Option(names = "--blob-root", description = "Blob store root (default: <db-parent>/blobs)")
     Path blobRoot;
@@ -59,7 +64,8 @@ public final class DocExtractCommand implements Callable<Integer> {
                     ? new BlobStore(blobRoot)
                     : BlobStore.besideDatabase(db);
             var result = com.resurgent.tev.doc.extract.DocExtractRunner.run(
-                    mandateId, documentVersionId, db, blobs, pack, extractor, pages, tier, noParse);
+                    mandateId, documentVersionId, db, blobs, pack, extractor, pages, tier,
+                    noParse, !noAutoInduce);
             out.printf("Extracted with pack %s via %s%n", result.packIdentity(), result.extractorId());
             if (result.parseTier() != null) {
                 out.printf("parse tier: %s%n", result.parseTier());

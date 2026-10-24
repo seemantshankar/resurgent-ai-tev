@@ -1,9 +1,10 @@
 package com.resurgent.tev.doc.extract;
 
-import com.resurgent.tev.doc.db.FactRepository;
+import com.resurgent.tev.doc.db.MandatePolicyRepository;
 import com.resurgent.tev.doc.ingest.BlobStore;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackLoader;
+import com.resurgent.tev.doc.residency.DataResidency;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -50,32 +51,64 @@ public final class DocExtractRunner {
     public static Result run(long mandateId, long documentVersionId, Path db, BlobStore blobs,
             String packCode, String extractorId, String pages, String tier, boolean noParse)
             throws Exception {
+        return run(mandateId, documentVersionId, db, blobs, packCode, extractorId, pages, tier,
+                noParse, true);
+    }
+
+    /**
+     * Same as {@link #run(long, long, Path, BlobStore, String, String, String, String, boolean)}.
+     * When {@code autoInduce} is true and no pack override is given, an unknown version
+     * is classified (which induces a pack) before extract, and nomenclature is bound
+     * after a completed extract.
+     *
+     * @param autoInduce false restores the requirement to pass {@code --pack}
+     */
+    public static Result run(long mandateId, long documentVersionId, Path db, BlobStore blobs,
+            String packCode, String extractorId, String pages, String tier, boolean noParse,
+            boolean autoInduce) throws Exception {
+        if (autoInduce && (packCode == null || packCode.isBlank())) {
+            String classified = classifiedPackCode(db, documentVersionId);
+            if (classified == null || classified.isBlank() || "unknown".equalsIgnoreCase(classified)) {
+                com.resurgent.tev.doc.classify.DocClassifyRunner.run(
+                        mandateId, documentVersionId, db, blobs, null, "general", true, true);
+            }
+        }
         DocTypePack pack = resolvePack(db, documentVersionId, packCode);
         ExtractClient client = resolveClient(extractorId);
         PageSelection pageSelection = PageSelection.parseOptional(pages);
         List<Integer> pageIndices = pageSelection == null ? null : pageSelection.indices();
 
         ParseTier override = tier == null || tier.isBlank() ? null : ParseTier.fromWire(tier);
+        boolean localOnly = localOnly(db, mandateId);
+        if (localOnly && client instanceof LlamaExtractAdapter) {
+            throw new ExtractException(
+                    "LlamaExtractAdapter blocked: data residency is local_only");
+        }
         ParseTier effectiveTier;
         Map<String, String> options = null;
-        if (!noParse && client instanceof LlamaExtractAdapter && LlamaParseClient.hasApiKey()) {
+        if (client instanceof LlamaExtractAdapter && !noParse && !localOnly
+                && LlamaParseClient.hasApiKey()) {
             ParseService.ParseOutcome parsed = ParseService.parse(
                     db, documentVersionId, override, new LlamaParseClient(), blobs);
             effectiveTier = parsed.tier();
-            options = new LinkedHashMap<>();
-            options.put(LlamaExtractAdapter.KEY_PARSE_JOB_ID, parsed.jobId());
-            options.put(LlamaExtractAdapter.KEY_PARSE_TIER, parsed.tier().wireName());
-            if (parsed.credits() != null) {
-                options.put(LlamaExtractAdapter.KEY_PARSE_CREDITS, String.valueOf(parsed.credits()));
+            if (parsed.jobId() != null && parsed.fullCloudJob()) {
+                options = new LinkedHashMap<>();
+                options.put(LlamaExtractAdapter.KEY_PARSE_JOB_ID, parsed.jobId());
+                options.put(LlamaExtractAdapter.KEY_PARSE_TIER, parsed.tier().wireName());
+                if (parsed.credits() != null) {
+                    options.put(LlamaExtractAdapter.KEY_PARSE_CREDITS,
+                            String.valueOf(parsed.credits()));
+                }
+                options.put(LlamaExtractAdapter.KEY_PARSE_LATENCY_MS,
+                        String.valueOf(parsed.latencyMs()));
+            } else {
+                client = new DocLlmExtractClient();
             }
-            options.put(LlamaExtractAdapter.KEY_PARSE_LATENCY_MS,
-                    String.valueOf(parsed.latencyMs()));
         } else {
             effectiveTier = override != null ? override
                     : ParseService.selectTier(db, documentVersionId);
             if (client instanceof LlamaExtractAdapter) {
-                options = new LinkedHashMap<>();
-                options.put(LlamaExtractAdapter.KEY_PARSE_TIER, effectiveTier.wireName());
+                client = new DocLlmExtractClient();
             }
         }
 
@@ -83,6 +116,10 @@ public final class DocExtractRunner {
         ExtractService.ExtractOutcome outcome = service.extract(
                 db, documentVersionId, mandateId, pack, client, client.id(), null, options,
                 pageIndices);
+        if (autoInduce && !"failed".equals(outcome.status())) {
+            com.resurgent.tev.doc.bind.DocBindRunner.run(
+                    mandateId, outcome.parseRunId(), db, pack.code());
+        }
         int ambiguous = outcome.fieldsAmbiguous();
         return new Result(
                 pack.identity(),
@@ -101,6 +138,15 @@ public final class DocExtractRunner {
      * classified pack. Searches seed packs and every pack published under
      * {@code {db-parent}/packs}, so an induced pack is usable right after classify.
      */
+    private static boolean localOnly(Path db, long mandateId) throws Exception {
+        try (com.resurgent.tev.parser.db.WorkspaceDatabase workspace =
+                com.resurgent.tev.parser.db.WorkspaceDatabase.open(db)) {
+            String row = new MandatePolicyRepository(workspace.connection()).dataResidency(mandateId);
+            return DataResidency.isLocalOnly(
+                    DataResidency.effective(System.getenv(DataResidency.ENV), row));
+        }
+    }
+
     private static DocTypePack resolvePack(Path db, long documentVersionId, String packCode)
             throws Exception {
         List<DocTypePack> packs = loadAllPacks(db);
@@ -113,7 +159,7 @@ public final class DocExtractRunner {
             }
         }
         for (DocTypePack pack : packs) {
-            if (pack.code().equals(code)) {
+            if (com.resurgent.tev.doc.pack.PackCodes.same(pack.code(), code)) {
                 return pack;
             }
         }
@@ -155,17 +201,17 @@ public final class DocExtractRunner {
                 : extractorId.trim().toLowerCase(Locale.ROOT);
         return switch (id) {
             case "fixture", "fixture-extract" -> new FixtureExtractClient();
+            case "doc-llm-extract", "doc-llm", "page" -> new DocLlmExtractClient();
             case "llama-extract", "llama", "llama-extract-2.5-agentic" -> new LlamaExtractAdapter();
             default -> throw new IllegalArgumentException(
-                    "unknown extractor: " + extractorId + " (use fixture|llama-extract)");
+                    "unknown extractor: " + extractorId
+                            + " (use doc-llm-extract|fixture|llama-extract)");
         };
     }
 
+    /** Page assembly. LlamaExtract is only used when the caller names it. */
     private static String defaultExtractor() {
-        if (LlamaExtractAdapter.hasApiKey()) {
-            return "llama-extract";
-        }
-        return "fixture";
+        return DocLlmExtractClient.ID;
     }
 
     /**

@@ -146,8 +146,10 @@ public final class ChecklistAssessor {
         Map<String, List<DocScopeRow>> versionsByType = new LinkedHashMap<>();
         for (DocScopeRow document : inputs.documents()) {
             if (document.docTypeCode() != null) {
-                versionsByType.computeIfAbsent(document.docTypeCode(), key -> new ArrayList<>())
-                        .add(document);
+                for (String code : com.resurgent.tev.doc.pack.PackCodes.equivalents(
+                        document.docTypeCode())) {
+                    versionsByType.computeIfAbsent(code, key -> new ArrayList<>()).add(document);
+                }
             }
         }
 

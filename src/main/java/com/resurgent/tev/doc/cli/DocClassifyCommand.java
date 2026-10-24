@@ -33,6 +33,10 @@ public final class DocClassifyCommand implements Callable<Integer> {
     @Option(names = "--force", description = "Overwrite an existing classification")
     boolean force;
 
+    @Option(names = "--no-auto-induce",
+            description = "Leave an unknown document unknown instead of inducing a pack")
+    boolean noAutoInduce;
+
     @Option(names = "--blob-root", description = "Blob store root (default: <db-parent>/blobs)")
     Path blobRoot;
 
@@ -49,7 +53,8 @@ public final class DocClassifyCommand implements Callable<Integer> {
                     ? new BlobStore(blobRoot)
                     : BlobStore.besideDatabase(db);
             var result = com.resurgent.tev.doc.classify.DocClassifyRunner.run(
-                    mandateId, documentVersionId, db, blobs, packDir, industry, force);
+                    mandateId, documentVersionId, db, blobs, packDir, industry, force,
+                    !noAutoInduce);
             String llm = result.liveModel() ? " (LLM tie-break available)" : "";
             if ("unknown".equals(result.docTypeCode())) {
                 out.printf("Classified version %d as unknown (confidence %.2f, %s)%s.%n",

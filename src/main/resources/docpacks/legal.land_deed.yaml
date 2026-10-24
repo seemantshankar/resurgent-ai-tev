@@ -1,0 +1,51 @@
+code: legal.land_deed
+version: 1.0.0
+family: legal
+file_role: land_document
+industry_tags: [general]
+identity_signals:
+  any_of:
+    - "Sale Deed"
+    - "Lease Deed"
+    - "Land Deed"
+fields:
+  - key: grantor
+    path: identity > Legal Name
+    path_root: identity
+    value_kind: text
+    required: false
+    prompt_hint: "Person transferring the land"
+  - key: total_area
+    path: technical > Site > Land area
+    path_root: technical
+    value_kind: quantity
+    required: false
+    slots: [unit]
+    prompt_hint: "Total land area stated on the deed"
+tables:
+  - name: parcels
+    path: technical > Site > Parcel
+    path_root: technical
+    key_column: survey_no
+    entity_key: owner
+    site_key: village
+    fields:
+      - key: survey_no
+        value_kind: text
+        prompt_hint: "Survey or khasra number of the parcel"
+      - key: owner
+        value_kind: text
+        prompt_hint: "Owner of this parcel"
+      - key: village
+        value_kind: text
+        prompt_hint: "Village or site of this parcel"
+      - key: area
+        value_kind: quantity
+        prompt_hint: "Area of this parcel"
+      - key: consideration
+        value_kind: money
+        prompt_hint: "Consideration for this parcel"
+checklist: []
+document_date:
+  kind: issue
+report_sections: [technical_viability]

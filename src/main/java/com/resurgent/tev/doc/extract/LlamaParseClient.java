@@ -2,6 +2,7 @@ package com.resurgent.tev.doc.extract;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.resurgent.tev.doc.residency.DataResidency;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URI;
@@ -32,7 +33,7 @@ import java.util.UUID;
  * <p>Parse job ids can be passed as Extract v2 {@code file_input} so extract skips
  * re-parsing. Env keys match {@link LlamaExtractAdapter}.
  */
-public final class LlamaParseClient {
+public final class LlamaParseClient implements PageParseClient {
 
     /**
      * Fallback Parse tier when no caller tier is configured. Production always passes an
@@ -54,6 +55,7 @@ public final class LlamaParseClient {
     private final String tier;
     private final String version;
     private final long timeoutMs;
+    private final String residency;
 
     /** Live client from process env and {@code .env}. */
     public LlamaParseClient() {
@@ -80,6 +82,7 @@ public final class LlamaParseClient {
         this.timeoutMs = parseLong(
                 env.get(LlamaExtractAdapter.KEY_TIMEOUT_MS),
                 LlamaExtractAdapter.DEFAULT_TIMEOUT_MS);
+        this.residency = env.get(DataResidency.ENV);
     }
 
     /** True when a LlamaParse/LlamaCloud API key is configured. */
@@ -108,6 +111,20 @@ public final class LlamaParseClient {
      * @throws ExtractException on missing key, HTTP failure, timeout, or failed job
      */
     public ParseJob parse(Path file, ParseTier tier) throws ExtractException {
+        return parse(file, tier, null);
+    }
+
+    /**
+     * Uploads and parses, optionally restricting the job to {@code targetPages}
+     * (1-based). Null or empty sends the whole file, which is the historical call.
+     */
+    @Override
+    public ParseJob parse(Path file, ParseTier tier, java.util.List<Integer> targetPages)
+            throws ExtractException {
+        if (DataResidency.locked(residency)) {
+            throw new ExtractException(
+                    "LlamaParseClient blocked: data residency is local_only");
+        }
         Objects.requireNonNull(file, "file");
         if (apiKey == null || apiKey.isBlank()) {
             throw new ExtractException(
@@ -117,12 +134,13 @@ public final class LlamaParseClient {
             throw new ExtractException("parse file not found: " + file);
         }
         String tierWire = tier != null ? tier.wireName() : this.tier;
+        String pagesWire = PageSelection.wire(targetPages);
         long start = System.nanoTime();
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(Math.min(timeoutMs, 30_000L)))
                 .build();
         try {
-            String jobId = uploadAndCreate(client, file, tierWire);
+            String jobId = uploadAndCreate(client, file, tierWire, pagesWire);
             JsonNode job = poll(client, jobId, start);
             String status = statusOf(job);
             if (!"COMPLETED".equals(status)) {
@@ -154,6 +172,10 @@ public final class LlamaParseClient {
      * @throws ExtractException on HTTP failure or incomplete job
      */
     public ParseJob get(String jobId) throws ExtractException {
+        if (DataResidency.locked(residency)) {
+            throw new ExtractException(
+                    "LlamaParseClient blocked: data residency is local_only");
+        }
         if (apiKey == null || apiKey.isBlank()) {
             throw new ExtractException("LlamaParse API key is not set");
         }
@@ -205,10 +227,10 @@ public final class LlamaParseClient {
         }
     }
 
-    private String uploadAndCreate(HttpClient client, Path file, String tierWire)
+    private String uploadAndCreate(HttpClient client, Path file, String tierWire, String pagesWire)
             throws IOException, InterruptedException, ExtractException {
         String boundary = "----tevparse" + UUID.randomUUID().toString().replace("-", "");
-        byte[] body = multipart(boundary, file, tierWire);
+        byte[] body = multipart(boundary, file, tierWire, pagesWire);
         HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + PARSE_PATH + "/upload"))
                 .timeout(Duration.ofMillis(timeoutMs))
                 .header("Authorization", "Bearer " + apiKey)
@@ -320,10 +342,15 @@ public final class LlamaParseClient {
         return out;
     }
 
-    private byte[] multipart(String boundary, Path file, String tierWire) throws IOException {
+    private byte[] multipart(String boundary, Path file, String tierWire, String pagesWire)
+            throws IOException {
         String name = file.getFileName() == null ? "document" : file.getFileName().toString();
         byte[] bytes = Files.readAllBytes(file);
-        String configuration = "{\"tier\":\"" + tierWire + "\",\"version\":\"" + version + "\"}";
+        String configuration = "{\"tier\":\"" + tierWire + "\",\"version\":\"" + version + "\"";
+        if (pagesWire != null && !pagesWire.isBlank()) {
+            configuration += ",\"target_pages\":\"" + pagesWire + "\"";
+        }
+        configuration += "}";
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         String crlf = "\r\n";
         out.write(("--" + boundary + crlf).getBytes(StandardCharsets.UTF_8));

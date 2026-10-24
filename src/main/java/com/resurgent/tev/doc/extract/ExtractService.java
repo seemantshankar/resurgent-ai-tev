@@ -5,7 +5,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resurgent.tev.doc.db.CloudParsePageRepository;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.FactRepository;
+import com.resurgent.tev.doc.db.MandatePolicyRepository;
+import com.resurgent.tev.doc.db.SiteRepository;
 import com.resurgent.tev.doc.ingest.BlobStore;
+import com.resurgent.tev.doc.residency.DataResidency;
+import com.resurgent.tev.doc.layout.ocr.MarkEvidenceLinker;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackField;
 import com.resurgent.tev.parser.db.CostUnit;
@@ -13,6 +17,8 @@ import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
 import java.math.BigDecimal;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -114,9 +120,20 @@ public final class ExtractService {
 
             long parseRunId = ensureExtractRun(repo, version.sourceFileId(), mandateId, configHash);
 
+            String residency = DataResidency.effective(System.getenv(DataResidency.ENV),
+                    new MandatePolicyRepository(db.connection()).dataResidency(mandateId));
+            boolean localOnly = DataResidency.isLocalOnly(residency);
+            PageTriage.applyIfUnrouted(db.connection(), documentVersionId,
+                    BlobStore.besideDatabase(dbPath), localOnly);
+            Map<String, String> requestOptions = new LinkedHashMap<>();
+            if (options != null) {
+                requestOptions.putAll(options);
+            }
+            requestOptions.put(DataResidency.OPTION, residency);
+
             JsonNode schema = pack.toExtractSchema();
             ExtractRequest request =
-                    buildRequest(dbPath, version, pack, instructions, options, pages);
+                    buildRequest(dbPath, version, pack, instructions, requestOptions, pages);
 
             ExtractResult result;
             try {
@@ -125,6 +142,20 @@ public final class ExtractService {
                 markRunFailed(repo, parseRunId, e.getMessage());
                 return new ExtractOutcome(parseRunId, documentVersionId, "failed",
                         0, 0, 0, 0, 0, e.getMessage());
+            }
+
+            boolean pageBacked = FixtureExtractClient.ID.equals(client.id())
+                    || DocLlmExtractClient.ID.equals(client.id());
+            if (pageBacked) {
+                LayoutExtractBridge.materializeParseIfAbsent(
+                        db.connection(), documentVersionId, pack);
+                if (result.facts().isEmpty()) {
+                    ExtractResult fromLayout = LayoutExtractBridge.fromLayout(
+                            db.connection(), documentVersionId, pack, result);
+                    if (!fromLayout.facts().isEmpty()) {
+                        result = fromLayout;
+                    }
+                }
             }
 
             // Money context from the parsed pages (Excel treatment: figures stay
@@ -155,11 +186,19 @@ public final class ExtractService {
 
             db.connection().setAutoCommit(false);
             try {
+                writes = assignSites(db.connection(), mandateId, writes);
                 // A re-run replaces the whole doc-extract stage: clear prior usage/stats so a
                 // model or stat the new run did not produce does not linger.
                 repo.deleteStageStats(parseRunId, "doc-extract");
                 FactRepository.ReplaceStats stats =
                         facts.replaceFacts(parseRunId, documentVersionId, writes);
+                MarkEvidenceLinker.attach(db.connection(), documentVersionId);
+                if (localOnly) {
+                    OcrAmbiguity.apply(db.connection(), documentVersionId, parseRunId);
+                }
+                if (DocLlmExtractClient.ID.equals(client.id())) {
+                    PageAssembly.bind(db.connection(), documentVersionId, parseRunId, pack);
+                }
                 int fieldsMissing = countMissing(pack, writes);
                 int fieldsAmbiguous = countAmbiguous(writes);
 
@@ -308,6 +347,32 @@ public final class ExtractService {
         return writes;
     }
 
+    /**
+     * A row's {@code site_key} names a mandate site. The same spelling on two rows
+     * is one site; a different spelling is another. Facts with no site stay untagged.
+     */
+    static List<FactRepository.FactWrite> assignSites(Connection connection, long mandateId,
+            List<FactRepository.FactWrite> writes) throws SQLException {
+        SiteRepository sites = new SiteRepository(connection);
+        Map<String, Long> ids = new LinkedHashMap<>();
+        List<FactRepository.FactWrite> assigned = new ArrayList<>();
+        for (FactRepository.FactWrite write : writes) {
+            String name = write.siteName();
+            if (name == null || name.isBlank()) {
+                assigned.add(write);
+                continue;
+            }
+            String key = name.trim().toLowerCase(Locale.ROOT);
+            Long siteId = ids.get(key);
+            if (siteId == null) {
+                siteId = sites.findOrCreate(mandateId, name.trim());
+                ids.put(key, siteId);
+            }
+            assigned.add(write.toBuilder().siteId(siteId).build());
+        }
+        return assigned;
+    }
+
     private static FactRepository.FactWrite toWrite(FactCandidate c, DocTypePack pack,
             String extractorId, String documentSubject) {
         String path = null;
@@ -316,6 +381,12 @@ public final class ExtractService {
         if (field.isPresent()) {
             path = field.get().path();
             pathRoot = field.get().pathRootWire();
+        } else {
+            ScheduleCells.TableRef table = ScheduleCells.owner(pack, c.key());
+            if (table != null && table.path() != null && !"null".equals(table.path())) {
+                path = table.path();
+                pathRoot = table.pathRoot();
+            }
         }
         String subject = c.subjectEntity();
         if ((subject == null || subject.isBlank()) && c.period() != null) {
@@ -343,6 +414,8 @@ public final class ExtractService {
                 .derivedFromKeys(c.derivedFromKeys())
                 .period(c.period())
                 .basisEvidence(c.basisEvidence())
+                .siteName(c.siteName())
+                .langSource(c.langSource())
                 .build();
     }
 

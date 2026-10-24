@@ -23,8 +23,10 @@ public final class FactCandidate {
     private String scale;
     private String absoluteAmount;
     private String subjectEntity;
+    private String siteName;
     private String lineKey;
     private String period;
+    private String langSource;
     private Double confidence;
     private String statedOrDerived = "stated";
     private String extractionMethod = "llm_field";
@@ -120,6 +122,25 @@ public final class FactCandidate {
 
     public FactCandidate subjectEntity(String subjectEntity) {
         this.subjectEntity = subjectEntity;
+        return this;
+    }
+
+    /** Site named on this row ({@code site_key}), not yet resolved to {@code site_id}. */
+    public String siteName() {
+        return siteName;
+    }
+
+    public FactCandidate siteName(String siteName) {
+        this.siteName = siteName;
+        return this;
+    }
+
+    public String langSource() {
+        return langSource;
+    }
+
+    public FactCandidate langSource(String langSource) {
+        this.langSource = langSource;
         return this;
     }
 

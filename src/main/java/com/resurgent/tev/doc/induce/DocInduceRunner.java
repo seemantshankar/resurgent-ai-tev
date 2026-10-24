@@ -60,8 +60,11 @@ public final class DocInduceRunner {
         PackStore store = new PackStore(packsRoot);
 
         List<PackInducer.InduceDocument> documents;
+        String mandateResidency = null;
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             documents = loadCorpus(workspace.connection(), mandateId, fileRole, docType, versions);
+            mandateResidency = new com.resurgent.tev.doc.db.MandatePolicyRepository(
+                    workspace.connection()).dataResidency(mandateId);
         }
         if (documents.isEmpty()) {
             throw new IllegalArgumentException(
@@ -69,7 +72,7 @@ public final class DocInduceRunner {
                             + (fileRole == null ? " (unknown/unclassified only)" : ""));
         }
 
-        DocLlmClient live = DocLlmEnvironment.clientOrNull();
+        DocLlmClient live = DocLlmEnvironment.clientOrNull(db, mandateId);
         List<List<PackInducer.InduceDocument>> clusters;
         if (docType != null && !docType.isBlank()) {
             clusters = List.of(documents);
@@ -84,11 +87,19 @@ public final class DocInduceRunner {
                 continue;
             }
             List<DocLlmClient.Usage> clusterUsage = new ArrayList<>();
-            PackMiningClient mining = live == null
-                    ? new FixturePackMiningClient()
-                    : new LlmPackMiningClient(live, clusterUsage::add);
+            java.util.Map<String, String> env = System.getenv();
+            String effective = com.resurgent.tev.doc.residency.DataResidency.effective(
+                    env.get(com.resurgent.tev.doc.residency.DataResidency.ENV), mandateResidency);
+            WebSearchClient web = PackMiningClients.webSearchAllowed(env, mandateResidency)
+                    ? new HttpWebSearchClient(env.get(PackMiningClients.WEB_SEARCH_URL), effective, null)
+                    : null;
+            PackMiningClient mining = PackMiningClients.select(
+                    env, live, web, clusterUsage::add, mandateResidency);
+            String typeHint = docType == null || docType.isBlank()
+                    ? clusterCode(cluster.get(0))
+                    : docType;
             PackInducer.InduceRequest request = new PackInducer.InduceRequest(
-                    cluster, industryTag, fileRole, docType, null,
+                    cluster, industryTag, fileRole, typeHint, null,
                     mining, store,
                     PackQualityGates.DEFAULT_MIN_REQUIRED_COVERAGE,
                     Generalizer.DEFAULT_CONSENSUS_N,
@@ -114,6 +125,21 @@ public final class DocInduceRunner {
         }
         results.addAll(failures);
         return results;
+    }
+
+    /**
+     * A stable pack code for one cluster when the caller did not name a type.
+     * Distinct titles must not all publish as {@code document.induced}.
+     */
+    private static String clusterCode(PackInducer.InduceDocument document) {
+        String title = document.title() == null || document.title().isBlank()
+                ? document.id()
+                : document.title();
+        String slug = SpineCatalog.normalize(title).replace(' ', '_').replaceAll("[^a-z0-9_]", "");
+        if (slug.isBlank()) {
+            slug = "cluster";
+        }
+        return "induced." + slug;
     }
 
     private record Outcome(
@@ -220,6 +246,8 @@ public final class DocInduceRunner {
                             result.published() ? "success" : "partial",
                             "{\"pack\":\"" + code + "\",\"live_model\":" + liveModel
                                     + ",\"published\":" + result.published() + "}");
+                    InductionDecisionLog.recordPack(
+                            connection, mandateId, parseRunId, code, result.decisions());
                     repo.insertAuditLog(parseRunId, "induce_completed", Timestamps.now(),
                             "{\"pack\":\"" + code + "\",\"published\":" + result.published()
                                     + ",\"gates_passed\":" + result.allGatesPassed()
@@ -343,17 +371,7 @@ public final class DocInduceRunner {
      * every PAN/CIN/GSTIN/amount token seen in the layout.
      */
     private static Set<String> entityTokens(String title, String fileName, List<String> layout) {
-        Set<String> tokens = new LinkedHashSet<>();
-        if (title != null && !title.isBlank()) {
-            tokens.add(title.trim());
-        }
-        if (fileName != null && !fileName.isBlank()) {
-            tokens.add(fileName.trim());
-        }
-        for (String line : layout) {
-            tokens.addAll(EntityTokenFilter.extractValueTokens(line));
-        }
-        return tokens;
+        return EntityTokenFilter.sampleTokens(title, fileName, layout);
     }
 
     private static List<String> loadLayoutText(Connection connection, long documentVersionId)
@@ -369,6 +387,23 @@ public final class DocInduceRunner {
                 while (rs.next()) {
                     String text = rs.getString(1);
                     if (text != null && !text.isBlank()) {
+                        lines.add(text.trim());
+                    }
+                }
+            }
+        }
+        try (var ps = connection.prepareStatement(
+                "SELECT tc.text_raw FROM table_cell tc"
+                        + " JOIN table_grid tg ON tg.table_grid_id = tc.table_grid_id"
+                        + " JOIN block b ON b.block_id = tg.block_id"
+                        + " JOIN page p ON p.page_id = b.page_id"
+                        + " WHERE p.document_version_id = ?"
+                        + " ORDER BY p.page_index, tc.row_index, tc.col_index")) {
+            ps.setLong(1, documentVersionId);
+            try (var rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String text = rs.getString(1);
+                    if (text != null && !text.isBlank() && !lines.contains(text.trim())) {
                         lines.add(text.trim());
                     }
                 }

@@ -3,6 +3,9 @@ package com.resurgent.tev.doc.assess;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.resurgent.tev.doc.db.AssessmentRepository;
+import com.resurgent.tev.doc.embed.EmbeddingClient;
+import com.resurgent.tev.doc.embed.EmbeddingClients;
+import com.resurgent.tev.doc.embed.EmbeddingRepository;
 import com.resurgent.tev.doc.db.AssessmentRepository.BlockAnchor;
 import com.resurgent.tev.doc.db.ClauseRepository;
 import com.resurgent.tev.doc.db.ClauseRepository.ClauseWrite;
@@ -84,6 +87,8 @@ public final class AssessClausesRunner implements AssessStage {
             DocLlmClient client) throws Exception {
         AssessmentRepository assessment = new AssessmentRepository(connection);
         ClauseRepository clauses = new ClauseRepository(connection);
+        EmbeddingRepository embeddings = new EmbeddingRepository(connection);
+        EmbeddingClient embedder = EmbeddingClients.forAssessment(connection, mandateId);
         DocumentRepository docs = new DocumentRepository(connection);
         WorkspaceRepository repo = new WorkspaceRepository(connection);
         Map<String, DocTypePack> packsByCode = loadPacks(dbPath);
@@ -147,8 +152,8 @@ public final class AssessClausesRunner implements AssessStage {
                                 .toList();
                 if (matched != null) {
                     long clauseTypeId = clauses.upsertPackType(pack.code(), pack.version(), matched);
-                    storeClause(clauses, docs, assessment, version, parseRunId, segment,
-                            clauseTypeId, "bound", "known",
+                    storeClause(clauses, docs, assessment, embeddings, embedder, version, parseRunId,
+                            segment, clauseTypeId, "bound", "known",
                             method != null ? method : METHOD_ALIAS, summary, importance, slots);
                     bound++;
                     total++;
@@ -165,8 +170,8 @@ public final class AssessClausesRunner implements AssessStage {
                                     : reading.proposedCode(),
                             reading.proposedFamily());
                 }
-                storeClause(clauses, docs, assessment, version, parseRunId, segment,
-                        proposedTypeId, "open", "new", method, summary, importance, slots);
+                storeClause(clauses, docs, assessment, embeddings, embedder, version, parseRunId,
+                        segment, proposedTypeId, "open", "new", method, summary, importance, slots);
                 open++;
                 total++;
             }
@@ -229,10 +234,10 @@ public final class AssessClausesRunner implements AssessStage {
 
     /** Inserts the clause and, when the text is in the layout, its provenance anchor. */
     private static long storeClause(ClauseRepository clauses, DocumentRepository docs,
-            AssessmentRepository assessment, AssessmentRepository.VersionRow version,
-            Long parseRunId, ClauseSegmenter.Segment segment, Long clauseTypeId,
-            String status, String novelty, String method, String summary, String importance,
-            List<ClauseRepository.SlotWrite> slots) throws Exception {
+            AssessmentRepository assessment, EmbeddingRepository embeddings, EmbeddingClient embedder,
+            AssessmentRepository.VersionRow version, Long parseRunId, ClauseSegmenter.Segment segment,
+            Long clauseTypeId, String status, String novelty, String method, String summary,
+            String importance, List<ClauseRepository.SlotWrite> slots) throws Exception {
         long clauseId = clauses.insertClause(new ClauseWrite(
                 version.documentVersionId(), parseRunId, clauseTypeId,
                 segment.heading(), segment.text(), segment.pageStart(), segment.pageEnd(),
@@ -253,6 +258,8 @@ public final class AssessClausesRunner implements AssessStage {
         for (ClauseRepository.SlotWrite slot : slots) {
             clauses.insertSlot(clauseId, slot);
         }
+        embeddings.upsertClause(clauseId, embedder.model(), embedder.embed(
+                segment.text() == null ? "" : segment.text()));
         return clauseId;
     }
 

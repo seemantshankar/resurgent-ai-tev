@@ -1,8 +1,11 @@
 package com.resurgent.tev.doc.induce;
 
 import com.resurgent.tev.doc.extract.ValueKind;
+import com.resurgent.tev.doc.pack.ClauseSection;
 import com.resurgent.tev.doc.pack.DocTypePack;
+import com.resurgent.tev.doc.pack.PackClauseType;
 import com.resurgent.tev.doc.pack.PackField;
+import com.resurgent.tev.doc.pack.PackPassage;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -22,8 +25,11 @@ import java.util.Set;
  *   <li><b>Spine-first</b> — map to frozen spine leaves; new industry leaves only under
  *       known {@link DocTypePack#SPINE_ROOTS} with layer=industry.</li>
  *   <li><b>Cross-document consensus</b> — required only when the field appears in
- *       ≥ N cluster docs (N=1 for a single-doc cluster when the label matches a spine
- *       leaf). One-off company facts never enter the pack.</li>
+ *       ≥ N cluster docs. A single document ({@code N = 1}) still keeps a field,
+ *       table, clause, or passage that passes {@link EntityTokenFilter}, sits under
+ *       a spine root, and is evidenced or marked as a domain standard. Non-spine
+ *       leaves on {@code N = 1} are optional. One-off company facts never enter
+ *       the pack.</li>
  *   <li><b>Nomenclature</b> — populate identity_signals and field prompt_hint synonyms
  *       from labels across the cluster.</li>
  * </ol>
@@ -65,19 +71,31 @@ public final class Generalizer {
         }
     }
 
+    /** One promotion, rewrite, demotion, or drop. */
+    public record DecisionNote(String candidateKey, String outcome, String reasonCode, String rationale) {}
+
     /** Result of generalizing one mined cluster. */
     public record Result(
             List<GeneralizedField> fields,
             List<String> identitySignals,
             List<String> dropped,
             List<String> rewritten,
-            List<String> notes) {
+            List<String> notes,
+            List<Map<String, Object>> tables,
+            ClauseSection clauseSection,
+            List<PackPassage> passages,
+            String documentDateKind,
+            List<DecisionNote> decisions) {
         public Result {
             fields = fields == null ? List.of() : List.copyOf(fields);
             identitySignals = identitySignals == null ? List.of() : List.copyOf(identitySignals);
             dropped = dropped == null ? List.of() : List.copyOf(dropped);
             rewritten = rewritten == null ? List.of() : List.copyOf(rewritten);
             notes = notes == null ? List.of() : List.copyOf(notes);
+            tables = tables == null ? List.of() : List.copyOf(tables);
+            clauseSection = clauseSection == null ? ClauseSection.NONE : clauseSection;
+            passages = passages == null ? List.of() : List.copyOf(passages);
+            decisions = decisions == null ? List.of() : List.copyOf(decisions);
         }
 
         /** Pack fields only. */
@@ -105,23 +123,27 @@ public final class Generalizer {
         List<String> dropped = new ArrayList<>();
         List<String> rewritten = new ArrayList<>();
         List<String> notes = new ArrayList<>();
+        List<DecisionNote> decisions = new ArrayList<>();
         Map<String, GeneralizedField> kept = new LinkedHashMap<>();
 
         for (PackMiningClient.MinedField f : mined.fields()) {
             String rawKey = f.key() == null ? "" : f.key().trim();
             if (rawKey.isEmpty()) {
                 dropped.add("(unnamed): empty key");
+                decisions.add(note("(unnamed)", "dropped", "empty_key", "Empty field key."));
                 continue;
             }
 
             // --- 1. label-not-value ---
             if (entityFilter.isEntityToken(rawKey)) {
                 dropped.add(rawKey + ": key is an entity/value token");
+                decisions.add(note(rawKey, "dropped", "entity_token", "Key is an entity or value token."));
                 continue;
             }
             String labelKey = entityFilter.rewriteKey(rawKey);
             if (labelKey.isEmpty()) {
                 dropped.add(rawKey + ": key is only entity/value tokens");
+                decisions.add(note(rawKey, "dropped", "entity_token", "Key is only entity or value tokens."));
                 continue;
             }
             String pathCandidate = f.path() == null ? "" : f.path().trim();
@@ -131,6 +153,7 @@ public final class Generalizer {
             if (entityFilter.isEntityToken(pathCandidate)
                     && SpineCatalog.matchLabel(pathCandidate).isEmpty()) {
                 dropped.add(rawKey + ": path is an entity/value token");
+                decisions.add(note(rawKey, "dropped", "entity_token", "Path is an entity or value token."));
                 continue;
             }
 
@@ -190,6 +213,8 @@ public final class Generalizer {
                     } else {
                         dropped.add(rawKey + ": cannot map to a spine leaf and root '"
                                 + proposedRoot + "' is not a known spine root");
+                        decisions.add(note(rawKey, "dropped", "unknown_root",
+                                "Root '" + proposedRoot + "' is not one of the seven spine roots."));
                         continue;
                     }
                 }
@@ -209,21 +234,27 @@ public final class Generalizer {
                     .toList();
             int docCount = docIds.isEmpty() ? docs : docIds.size();
             int threshold = docs == 1 ? 1 : config.consensusN();
-            boolean singleDocSpineOk = docs == 1 && spineLeaf;
-            boolean consensusMet = docCount >= threshold || singleDocSpineOk;
-            if (docs == 1 && !spineLeaf) {
+            boolean domainStandard = f.domainStandard();
+            boolean evidenced = !docIds.isEmpty() || domainStandard;
+            if (docs == 1 && !spineLeaf && !evidenced) {
                 dropped.add(rawKey + ": single-doc cluster and label is not a spine leaf (one-off)");
+                decisions.add(note(rawKey, "dropped", "not_evidenced",
+                        "Single-document field is not a spine leaf and is not evidenced."));
                 continue;
             }
-            if (!consensusMet) {
+            if (docs > 1 && docCount < threshold) {
                 dropped.add(rawKey + ": one-off (appeared in " + docCount + "/" + docs
                         + " docs; need ≥ " + threshold + ")");
+                decisions.add(note(rawKey, "dropped", "below_consensus",
+                        "Appeared in " + docCount + " of " + docs + " documents."));
                 continue;
             }
 
-            // required only if consensus met AND LLM did not mark optional
+            // required only if consensus met AND LLM did not mark optional.
+            // Non-spine leaves on a single document stay optional.
             boolean llmRequired = f.required() == null || f.required();
-            boolean required = consensusMet && llmRequired;
+            boolean demoteOptional = docs == 1 && !spineLeaf && llmRequired;
+            boolean required = demoteOptional ? false : llmRequired && (docs == 1 || docCount >= threshold);
 
             // --- 4. nomenclature ---
             List<String> labels = new ArrayList<>();
@@ -282,17 +313,292 @@ public final class Generalizer {
                 kept.put(mapKey, new GeneralizedField(
                         field, labels, docCount, spineLeaf, industryLeaf));
             }
+            boolean keyRewritten = !cleanKey.equals(rawKey) && !cleanKey.equalsIgnoreCase(rawKey);
+            if (keyRewritten) {
+                decisions.add(note(cleanKey, "rewritten", "label_not_value",
+                        "Key rewritten from '" + rawKey + "'."));
+            }
+            if (demoteOptional) {
+                decisions.add(note(cleanKey, "demoted_optional",
+                        domainStandard ? "domain_standard" : "single_document_industry_leaf",
+                        "Non-spine leaf on a single document is optional."));
+            } else if (!keyRewritten) {
+                decisions.add(note(cleanKey, "promoted",
+                        spineLeaf ? "spine_leaf" : (domainStandard ? "domain_standard" : "evidenced"),
+                        spineLeaf
+                                ? "Spine leaf kept."
+                                : "Domain field kept under " + pathRoot + "."));
+            }
         }
 
         List<String> identitySignals = nomenclatureSignals(
                 mined.identitySignals(), mined.fields(), entityFilter, notes);
+        List<Map<String, Object>> tables = generalizeTables(
+                mined, docs, entityFilter, decisions, dropped);
+        ClauseSection clauses = generalizeClauses(mined, docs, entityFilter, decisions, dropped);
+        String dateKind = dateKind(mined.documentDateKind());
+        Set<String> knownKeys = new LinkedHashSet<>();
+        for (GeneralizedField field : kept.values()) {
+            knownKeys.add(field.field().key());
+        }
+        for (Map<String, Object> table : tables) {
+            Object name = table.get("name");
+            if (name != null) {
+                knownKeys.add(String.valueOf(name));
+            }
+        }
+        List<PackPassage> passages = generalizePassages(
+                mined, docs, entityFilter, knownKeys, decisions, dropped);
 
         return new Result(
                 List.copyOf(kept.values()),
                 identitySignals,
                 dropped,
                 rewritten,
-                notes);
+                notes,
+                tables,
+                clauses,
+                passages,
+                dateKind,
+                decisions);
+    }
+
+    static DecisionNote note(String key, String outcome, String reason, String rationale) {
+        return new DecisionNote(key, outcome, InductionReasonCodes.canonical(reason), rationale);
+    }
+
+    private static DecisionNote drop(String key, String reason, String rationale) {
+        return note(key, "dropped", reason, rationale);
+    }
+
+    private static List<Map<String, Object>> generalizeTables(
+            PackMiningClient.MiningResult mined,
+            int docs,
+            EntityTokenFilter filter,
+            List<DecisionNote> decisions,
+            List<String> dropped) {
+        List<Map<String, Object>> tables = new ArrayList<>();
+        for (PackMiningClient.MinedTable table : mined.tables()) {
+            String rawName = table.name() == null ? "" : table.name().trim();
+            String name = filter.rewriteKey(rawName);
+            if (name.isEmpty() || filter.isEntityToken(rawName)) {
+                dropped.add(rawName + ": table name is an entity/value token");
+                decisions.add(drop(rawName.isEmpty() ? "(table)" : rawName, "entity_token",
+                        "Table name is an entity or value token."));
+                continue;
+            }
+            if (!keepStructure(docs, table.docIds(), table.domainStandard())) {
+                dropped.add(name + ": table is not evidenced");
+                decisions.add(drop(name, "not_evidenced", "Table is not evidenced on this cluster."));
+                continue;
+            }
+            String root = rootOf(table.pathRoot(), table.path());
+            if (!SpineCatalog.isKnownRoot(root)) {
+                dropped.add(name + ": table root is not a spine root");
+                decisions.add(drop(name, "unknown_root", "Table root is not one of the seven spine roots."));
+                continue;
+            }
+            List<Map<String, Object>> columns = new ArrayList<>();
+            LinkedHashSet<String> columnKeys = new LinkedHashSet<>();
+            for (PackMiningClient.MinedColumn column : table.columns()) {
+                String key = filter.rewriteKey(column.key() == null ? "" : column.key());
+                if (key.isEmpty() || !columnKeys.add(key)) {
+                    continue;
+                }
+                Map<String, Object> col = new LinkedHashMap<>();
+                col.put("key", key);
+                col.put("value_kind", parseKind(column.valueKind()).wireName());
+                columns.add(col);
+            }
+            if (columns.isEmpty()) {
+                dropped.add(name + ": table has no columns");
+                decisions.add(drop(name, "no_columns", "Table has no usable columns."));
+                continue;
+            }
+            String keyColumn = columnOrDefault(filter.rewriteKey(table.keyColumn()), columnKeys, columns);
+            Map<String, Object> mapped = new LinkedHashMap<>();
+            mapped.put("name", name);
+            mapped.put("path", structurePath(table.path(), root, name));
+            mapped.put("path_root", root);
+            mapped.put("key_column", keyColumn);
+            putRole(mapped, "entity_key", filter.rewriteKey(table.entityKey()), columnKeys);
+            putRole(mapped, "site_key", filter.rewriteKey(table.siteKey()), columnKeys);
+            putRole(mapped, "period_key", filter.rewriteKey(table.periodKey()), columnKeys);
+            mapped.put("fields", columns);
+            tables.add(mapped);
+            decisions.add(note(name, "promoted",
+                    table.domainStandard() ? "domain_standard" : "evidenced",
+                    "Schedule table kept under " + root + "."));
+        }
+        return tables;
+    }
+
+    private static ClauseSection generalizeClauses(
+            PackMiningClient.MiningResult mined,
+            int docs,
+            EntityTokenFilter filter,
+            List<DecisionNote> decisions,
+            List<String> dropped) {
+        List<PackClauseType> types = new ArrayList<>();
+        LinkedHashSet<String> seen = new LinkedHashSet<>();
+        for (PackMiningClient.MinedClause clause : mined.clauses()) {
+            String rawKey = clause.key() == null ? "" : clause.key().trim();
+            String key = filter.rewriteKey(rawKey);
+            if (key.isEmpty() || filter.isEntityToken(rawKey) || !seen.add(key)) {
+                dropped.add(rawKey + ": clause key is an entity/value token");
+                decisions.add(drop(rawKey.isEmpty() ? "(clause)" : rawKey, "entity_token",
+                        "Clause key is an entity or value token."));
+                continue;
+            }
+            if (!keepStructure(docs, clause.docIds(), clause.domainStandard())) {
+                dropped.add(key + ": clause is not evidenced");
+                decisions.add(drop(key, "not_evidenced", "Clause is not evidenced on this cluster."));
+                continue;
+            }
+            String label = clause.label() == null ? "" : filter.redact(clause.label()).trim();
+            if (label.isEmpty() || filter.isEntityToken(label)) {
+                label = key.replace('_', ' ');
+            }
+            List<String> aliases = new ArrayList<>();
+            for (String alias : clause.aliases()) {
+                if (alias == null || alias.isBlank() || filter.containsEntity(alias)) {
+                    continue;
+                }
+                String cleaned = alias.trim();
+                if (!aliases.contains(cleaned)) {
+                    aliases.add(cleaned);
+                }
+            }
+            String family = clause.parentFamily() == null || clause.parentFamily().isBlank()
+                    ? null
+                    : filter.rewriteKey(clause.parentFamily());
+            if (family != null && family.isBlank()) {
+                family = null;
+            }
+            types.add(new PackClauseType(key, label, family, aliases));
+            decisions.add(note(key, "promoted",
+                    clause.domainStandard() ? "domain_standard" : "evidenced",
+                    "Clause type kept."));
+        }
+        if (types.isEmpty()) {
+            return ClauseSection.NONE;
+        }
+        return new ClauseSection(true, true, types);
+    }
+
+    private static List<PackPassage> generalizePassages(
+            PackMiningClient.MiningResult mined,
+            int docs,
+            EntityTokenFilter filter,
+            Set<String> knownKeys,
+            List<DecisionNote> decisions,
+            List<String> dropped) {
+        List<PackPassage> passages = new ArrayList<>();
+        LinkedHashSet<String> topics = new LinkedHashSet<>();
+        for (PackMiningClient.MinedPassage passage : mined.passages()) {
+            String topic = filter.rewriteKey(passage.topic() == null ? "" : passage.topic());
+            if (topic.isEmpty() || !topics.add(topic)) {
+                dropped.add(topic + ": passage topic rejected");
+                decisions.add(drop(topic.isEmpty() ? "(passage)" : topic, "entity_token",
+                        "Passage topic is empty or an entity token."));
+                continue;
+            }
+            if (!keepStructure(docs, passage.docIds(), passage.domainStandard())) {
+                dropped.add(topic + ": passage is not evidenced");
+                decisions.add(drop(topic, "not_evidenced", "Passage is not evidenced on this cluster."));
+                continue;
+            }
+            List<String> terms = new ArrayList<>();
+            for (String term : passage.headingTerms()) {
+                if (term == null || term.isBlank() || filter.containsEntity(term)) {
+                    continue;
+                }
+                String cleaned = term.trim();
+                if (!terms.contains(cleaned)) {
+                    terms.add(cleaned);
+                }
+            }
+            if (terms.isEmpty()) {
+                terms.add(topic.replace('_', ' '));
+            }
+            List<String> refs = new ArrayList<>();
+            for (String field : passage.fields()) {
+                if (field != null && knownKeys.contains(field) && !refs.contains(field)) {
+                    refs.add(field);
+                }
+            }
+            if (refs.isEmpty()) {
+                dropped.add(topic + ": passage names no declared field or table");
+                decisions.add(drop(topic, "no_field", "Passage names no declared field or table."));
+                continue;
+            }
+            passages.add(new PackPassage(topic, terms, refs));
+            decisions.add(note(topic, "promoted",
+                    passage.domainStandard() ? "domain_standard" : "evidenced",
+                    "Passage topic kept."));
+        }
+        return passages;
+    }
+
+    private static boolean keepStructure(int docs, List<String> docIds, boolean domainStandard) {
+        boolean evidenced = (docIds != null && !docIds.isEmpty()) || domainStandard;
+        if (docs == 1) {
+            return evidenced;
+        }
+        if (domainStandard || docIds == null || docIds.isEmpty()) {
+            return true;
+        }
+        return docIds.size() >= 2 || docs < 2;
+    }
+
+    private static String rootOf(String pathRoot, String path) {
+        if (pathRoot != null && SpineCatalog.isKnownRoot(pathRoot)) {
+            return pathRoot.toLowerCase(Locale.ROOT).trim();
+        }
+        if (path != null && path.contains(">")) {
+            String first = path.split(">")[0].trim();
+            if (SpineCatalog.isKnownRoot(first)) {
+                return first.toLowerCase(Locale.ROOT);
+            }
+        }
+        return pathRoot == null ? "" : pathRoot.toLowerCase(Locale.ROOT).trim();
+    }
+
+    private static String structurePath(String path, String root, String name) {
+        Optional<SpineCatalog.SpineLeaf> spine = SpineCatalog.matchLabel(path);
+        if (spine.isPresent() && spine.get().pathRoot().equals(root)) {
+            return spine.get().path();
+        }
+        if (path != null && path.toLowerCase(Locale.ROOT).startsWith(root + " ")) {
+            return path.trim();
+        }
+        return root + " > " + leafNameOf(name.replace('_', ' '), name);
+    }
+
+    private static String columnOrDefault(
+            String requested, Set<String> columnKeys, List<Map<String, Object>> columns) {
+        if (requested != null && columnKeys.contains(requested)) {
+            return requested;
+        }
+        return String.valueOf(columns.get(0).get("key"));
+    }
+
+    private static void putRole(
+            Map<String, Object> table, String role, String column, Set<String> columnKeys) {
+        if (column != null && !column.isBlank() && columnKeys.contains(column)) {
+            table.put(role, column);
+        }
+    }
+
+    private static String dateKind(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String kind = raw.trim().toLowerCase(Locale.ROOT);
+        if (!DocTypePack.DOCUMENT_DATE_KINDS.contains(kind)) {
+            return null;
+        }
+        return kind;
     }
 
     /**

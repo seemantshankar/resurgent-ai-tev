@@ -324,6 +324,34 @@ public final class MandateQaJson {
             n.put("reason", row.reason());
         }
 
+        ArrayNode similar = root.putArray("similar");
+        for (MandateQa.SimilarHit hit : qa.similar()) {
+            ObjectNode n = similar.addObject();
+            n.put("kind", hit.kind());
+            n.put("id", hit.id());
+            n.put("document_id", hit.documentId());
+            n.put("document_version_id", hit.documentVersionId());
+            n.put("logical_name", hit.logicalName());
+            n.put("file_name", hit.fileName());
+            if (hit.page() != null) {
+                n.put("page", hit.page());
+            }
+            n.put("snippet", hit.snippet());
+            n.put("score", hit.score());
+        }
+
+        ArrayNode induction = root.putArray("induction_decisions");
+        for (MandateQa.InductionDecisionRow row : qa.inductionDecisions()) {
+            ObjectNode n = induction.addObject();
+            n.put("decision_id", row.decisionId());
+            n.put("stage", row.stage());
+            n.put("target_code", row.targetCode());
+            n.put("candidate_key", row.candidateKey());
+            n.put("outcome", row.outcome());
+            n.put("reason_code", row.reasonCode());
+            n.put("detail_json", row.detailJson());
+        }
+
         try {
             return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root);
         } catch (Exception e) {

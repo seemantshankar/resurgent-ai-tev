@@ -1,0 +1,58 @@
+code: technical.pvsyst_report
+version: 1.0.0
+family: technical
+file_role: technical_report
+industry_tags: [solar_power]
+identity_signals:
+  any_of:
+    - "PVsyst"
+    - "PVSyst"
+    - "Grid-Connected System"
+fields:
+  - key: project_name
+    path: identity > Project > Name
+    path_root: identity
+    value_kind: text
+    required: false
+    prompt_hint: "Project name printed on the PVsyst report"
+  - key: specific_yield
+    path: technical > Yield
+    path_root: technical
+    value_kind: quantity
+    required: false
+    slots: [unit]
+    prompt_hint: "Specific production (kWh/kWp/year)"
+tables:
+  - name: monthly_generation
+    path: technical > Generation > Month
+    path_root: technical
+    key_column: month
+    period_key: month
+    fields:
+      - key: month
+        value_kind: text
+        prompt_hint: "Calendar month of the generation row"
+      - key: glob_hor
+        value_kind: quantity
+        prompt_hint: "Global horizontal irradiation for the month (kWh/m2)"
+      - key: e_grid
+        value_kind: quantity
+        prompt_hint: "Energy injected into the grid for the month"
+  - name: losses
+    path: technical > Generation > Loss
+    path_root: technical
+    key_column: loss
+    fields:
+      - key: loss
+        value_kind: text
+        prompt_hint: "Loss line (soiling, temperature, or the total)"
+      - key: kwh
+        value_kind: quantity
+        prompt_hint: "Energy of this loss line, kept distinct from the total"
+      - key: percent
+        value_kind: percent
+        prompt_hint: "Share of this loss line"
+checklist: []
+document_date:
+  kind: issue
+report_sections: [technical_viability]
