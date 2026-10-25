@@ -57,8 +57,9 @@ public final class ExtractService {
     /**
      * Reads one document on the file pages recorded for it. Labeled lines are taken
      * first; a second local pass then takes the lines and tables that pass missed.
-     * A cloud model is asked only when residency allows it, and only for lines
-     * still unread.
+     * A sentence or a table split by a page break stays one statement in that pass,
+     * and the fact cites each file page it was read from. A cloud model is asked
+     * only when residency allows it, and only for lines still unread.
      *
      * @param dbPath workspace database
      * @param documentId document whose {@code document_page} rows are read

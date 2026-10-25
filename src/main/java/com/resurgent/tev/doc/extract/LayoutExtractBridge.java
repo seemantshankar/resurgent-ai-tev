@@ -18,6 +18,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Reads layout blocks and table cells when the fixture extractor has no sidecar.
@@ -28,6 +30,15 @@ import java.util.Set;
 final class LayoutExtractBridge {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    /** A line that is only a figure, optionally with the unit the page states. */
+    private static final Pattern FIGURE = Pattern.compile(
+            "^\\s*[₹$]?\\s*\\d[\\d,]*(?:\\.\\d+)?(?:\\s+[\\p{L}./]+)?\\s*[.!?]?\\s*$");
+
+    private static final Pattern FIGURE_NUMBER = Pattern.compile("\\d[\\d,]*(?:\\.\\d+)?");
+
+    private static final Pattern TRAILING_COPULA = Pattern.compile(
+            "(?i)\\s+\\b(is|are|was|were|be)\\b\\s*$");
 
     private LayoutExtractBridge() {}
 
@@ -95,8 +106,9 @@ final class LayoutExtractBridge {
     }
 
     /**
-     * Label pass, then the key-value lines it missed. {@code pages} null reads every
-     * page of the version; a set reads only those file pages.
+     * Label pass, then the key-value lines it missed, joining a sentence or a table
+     * across a page break. {@code pages} null reads every page of the version; a
+     * set reads only those file pages.
      */
     static LocalReading readLocal(Connection connection, long documentVersionId,
             DocTypePack pack, Set<Integer> pages) throws SQLException {
@@ -371,6 +383,8 @@ final class LayoutExtractBridge {
                 blocks.add(line);
             }
         }
+        joinContinuedSentences(blocks, facts, citations);
+        storeUnexplainedFigures(blocks, facts, citations);
         Set<String> consumed = quotesOf(facts);
         for (BlockLine line : blocks) {
             if (consumed.contains(line.text()) || line.text().indexOf(':') >= 0) {
@@ -388,14 +402,32 @@ final class LayoutExtractBridge {
             }
         }
         Set<Grid> readGrids = new HashSet<>();
+        CarriedTable carried = null;
         for (Grid grid : grids) {
-            if (matchedStrict(grid, tables)) {
+            Header header = headerOf(grid, tables, pack);
+            if (header != null) {
+                if (!header.strict()) {
+                    for (int i = header.headerAt() + 1; i < grid.cells().size(); i++) {
+                        expandRow(header.table(), header.columns(), grid.cells().get(i),
+                                pack, facts, citations);
+                    }
+                }
                 readGrids.add(grid);
+                carried = new CarriedTable(header.table(), header.columns(), grid.page(),
+                        width(grid));
                 continue;
             }
-            if (expandLoose(grid, tables, pack, facts, citations)) {
+            if (carried != null && grid.page() == carried.page() + 1
+                    && width(grid) == carried.width()) {
+                for (List<Cell> row : grid.cells()) {
+                    expandRow(carried.table(), carried.columns(), row, pack, facts, citations);
+                }
                 readGrids.add(grid);
+                carried = new CarriedTable(carried.table(), carried.columns(), grid.page(),
+                        carried.width());
+                continue;
             }
+            carried = null;
         }
         List<String> unread = new ArrayList<>();
         Set<String> quotes = quotesOf(facts);
@@ -479,45 +511,37 @@ final class LayoutExtractBridge {
         return line.substring(Math.min(index, line.length())).trim();
     }
 
-    /** A header the column keys missed, matched from the column name or its prompt. */
-    private static boolean expandLoose(Grid grid, List<TableSpec> tables, DocTypePack pack,
-            List<FactCandidate> facts, List<Citation> citations) {
+    /**
+     * The column heading on this grid, strict pack names first. A heading the
+     * column keys missed is still a heading when the prompt names it.
+     */
+    private static Header headerOf(Grid grid, List<TableSpec> tables, DocTypePack pack) {
         List<List<Cell>> rows = grid.cells();
-        int headerAt = -1;
-        TableSpec matched = null;
-        Map<Integer, String> columns = Map.of();
+        for (int i = 0; i < rows.size(); i++) {
+            for (TableSpec table : tables) {
+                Map<Integer, String> mapped = mapHeader(rows.get(i), table);
+                if (mapped != null) {
+                    return new Header(table, mapped, i, true);
+                }
+            }
+        }
         for (int i = 0; i < rows.size(); i++) {
             for (TableSpec table : tables) {
                 Map<Integer, String> mapped = mapHeaderLoose(rows.get(i), table, pack);
                 if (mapped != null) {
-                    headerAt = i;
-                    matched = table;
-                    columns = mapped;
-                    break;
+                    return new Header(table, mapped, i, false);
                 }
             }
-            if (headerAt >= 0) {
-                break;
-            }
         }
-        if (matched == null) {
-            return false;
-        }
-        for (int i = headerAt + 1; i < rows.size(); i++) {
-            expandRow(matched, columns, rows.get(i), pack, facts, citations);
-        }
-        return true;
+        return null;
     }
 
-    private static boolean matchedStrict(Grid grid, List<TableSpec> tables) {
+    private static int width(Grid grid) {
+        int width = 0;
         for (List<Cell> row : grid.cells()) {
-            for (TableSpec table : tables) {
-                if (mapHeader(row, table) != null) {
-                    return true;
-                }
-            }
+            width = Math.max(width, row.size());
         }
-        return false;
+        return width;
     }
 
     private static Map<Integer, String> mapHeaderLoose(List<Cell> row, TableSpec table,
@@ -595,6 +619,123 @@ final class LayoutExtractBridge {
             }
         }
         return hints;
+    }
+
+    /**
+     * A figure at the top of a page keeps the meaning of the sentence it continues,
+     * including words on the previous page, for as long as that sentence goes on.
+     * One fact cites each file page the sentence was read from.
+     */
+    private static void joinContinuedSentences(List<BlockLine> blocks,
+            List<FactCandidate> facts, List<Citation> citations) {
+        for (int i = 0; i < blocks.size(); i++) {
+            BlockLine figure = blocks.get(i);
+            if (!isFigure(figure.text()) || !startsPage(blocks, i)) {
+                continue;
+            }
+            int start = unfinishedStart(blocks, i);
+            if (start < 0) {
+                continue;
+            }
+            String meaning = meaningOf(blocks, start, i);
+            if (meaning.isBlank()) {
+                continue;
+            }
+            int end = sentenceEnd(blocks, i);
+            FactCandidate candidate = new FactCandidate(meaning, ValueKind.TEXT)
+                    .valueText(figure.text())
+                    .confidence(0.9)
+                    .extractionMethod("deterministic");
+            for (int j = start; j <= end; j++) {
+                BlockLine part = blocks.get(j);
+                Citation citation = Citation.of(part.page(), part.text());
+                candidate.addCitation(citation);
+                citations.add(citation);
+            }
+            facts.add(candidate);
+        }
+    }
+
+    /**
+     * A figure whose surrounding pages never say what it is is stored as that
+     * number and its page. Nothing is invented for it, including a label such
+     * as a sanctioned limit.
+     */
+    private static void storeUnexplainedFigures(List<BlockLine> blocks,
+            List<FactCandidate> facts, List<Citation> citations) {
+        Set<String> quoted = quotesOf(facts);
+        for (BlockLine line : blocks) {
+            if (!isFigure(line.text()) || quoted.contains(line.text())) {
+                continue;
+            }
+            String number = figureNumber(line.text());
+            if (number.isBlank()) {
+                continue;
+            }
+            FactCandidate candidate = new FactCandidate(number, ValueKind.TEXT)
+                    .valueText(number)
+                    .confidence(0.9)
+                    .extractionMethod("deterministic");
+            Citation citation = Citation.of(line.page(), line.text());
+            candidate.addCitation(citation);
+            citations.add(citation);
+            facts.add(candidate);
+            quoted.add(line.text());
+        }
+    }
+
+    private static String figureNumber(String text) {
+        Matcher matcher = FIGURE_NUMBER.matcher(text);
+        return matcher.find() ? matcher.group() : "";
+    }
+
+    /** First text line on its page: a figure lower down does not continue the previous page. */
+    private static boolean startsPage(List<BlockLine> blocks, int index) {
+        return index == 0 || blocks.get(index - 1).page() != blocks.get(index).page();
+    }
+
+    /**
+     * Lines of the unfinished sentence before the figure. {@code -1} when the
+     * previous line already ended a sentence, so the figure has no continued meaning.
+     */
+    private static int unfinishedStart(List<BlockLine> blocks, int figureAt) {
+        if (figureAt == 0 || endsSentence(blocks.get(figureAt - 1).text())) {
+            return -1;
+        }
+        int start = figureAt - 1;
+        while (start > 0 && !endsSentence(blocks.get(start - 1).text())) {
+            start--;
+        }
+        return start;
+    }
+
+    /** Last line of the sentence that opened before the figure. */
+    private static int sentenceEnd(List<BlockLine> blocks, int figureAt) {
+        int end = figureAt;
+        while (end + 1 < blocks.size() && !endsSentence(blocks.get(end).text())) {
+            end++;
+        }
+        return end;
+    }
+
+    private static String meaningOf(List<BlockLine> blocks, int start, int figureAt) {
+        StringBuilder words = new StringBuilder();
+        for (int j = start; j < figureAt; j++) {
+            if (words.length() > 0) {
+                words.append(' ');
+            }
+            words.append(blocks.get(j).text());
+        }
+        return TRAILING_COPULA.matcher(words.toString()).replaceFirst("").trim();
+    }
+
+    private static boolean isFigure(String text) {
+        return text != null && FIGURE.matcher(text).matches();
+    }
+
+    private static boolean endsSentence(String text) {
+        String trimmed = text == null ? "" : text.trim();
+        return trimmed.endsWith(".") || trimmed.endsWith("!") || trimmed.endsWith("?");
     }
 
     private static Set<String> quotesOf(List<FactCandidate> facts) {
@@ -783,6 +924,12 @@ final class LayoutExtractBridge {
             String periodColumn) {}
 
     private record BlockLine(int page, String text) {}
+
+    /** Column heading carried forward while the same table continues on the next page. */
+    private record CarriedTable(TableSpec table, Map<Integer, String> columns, int page, int width) {}
+
+    /** A heading row: {@code strict} means the label pass already stored its rows. */
+    private record Header(TableSpec table, Map<Integer, String> columns, int headerAt, boolean strict) {}
 
     private record Cell(String text, String quote, int page) {}
 
