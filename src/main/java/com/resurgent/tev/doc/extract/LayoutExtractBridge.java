@@ -878,6 +878,18 @@ final class LayoutExtractBridge {
         return cells;
     }
 
+    /** A header or footer that is only a page number is not a figure and not a sentence. */
+    private static boolean barePageNumber(String kind, String text) {
+        if (kind == null || text == null) {
+            return false;
+        }
+        String folded = kind.toLowerCase(Locale.ROOT);
+        if (!folded.equals("header") && !folded.equals("footer")) {
+            return false;
+        }
+        return text.trim().matches("\\d+");
+    }
+
     private static List<BlockLine> loadBlocks(Connection connection, long documentVersionId)
             throws SQLException {
         List<BlockLine> lines = new ArrayList<>();
@@ -891,13 +903,14 @@ final class LayoutExtractBridge {
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     String kind = rs.getString(2);
-                    if ("table".equals(kind)) {
+                    if ("table".equalsIgnoreCase(kind)) {
                         continue;
                     }
                     String text = rs.getString(3);
-                    if (text != null && !text.isBlank()) {
-                        lines.add(new BlockLine(rs.getInt(1), text.trim()));
+                    if (text == null || text.isBlank() || barePageNumber(kind, text)) {
+                        continue;
                     }
+                    lines.add(new BlockLine(rs.getInt(1), text.trim()));
                 }
             }
         }

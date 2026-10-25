@@ -866,7 +866,8 @@ public final class ExtractService {
         String lines = String.join("\n", unread);
         options.put(ExtractRequest.REMAINDER_LINES, lines);
         return new ExtractRequest(request.pageBundleDir(), request.originalFile(),
-                request.pageIndices(), request.langHint(), request.docTypeCode(), lines, options);
+                request.pageIndices(), request.langHint(), request.docTypeCode(),
+                request.instructions(), options);
     }
 
     /**

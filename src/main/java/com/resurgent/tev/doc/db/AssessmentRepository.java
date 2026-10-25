@@ -154,7 +154,7 @@ public final class AssessmentRepository {
      */
     public List<PageText> memberPageTexts(long documentVersionId) throws SQLException {
         if (hasMemberPages(documentVersionId)) {
-            return readPageTexts(documentVersionId, """
+            List<PageText> pages = readPageTexts(documentVersionId, """
                     SELECT p.page_index AS page_index,
                            COALESCE(NULLIF(b.text_norm, ''), b.text_raw) AS block_text
                       FROM block b
@@ -164,8 +164,56 @@ public final class AssessmentRepository {
                      WHERE dv.document_version_id = ?
                      ORDER BY p.page_index, COALESCE(b.reading_order, b.block_index)
                     """);
+            if (!pages.isEmpty()) {
+                return pages;
+            }
+            return memberCloudTexts(connection, documentVersionId);
         }
         return pageTexts(documentVersionId);
+    }
+
+    /**
+     * Scanned pages keep their text on the version that owns the page rows.
+     * Membership selects which of those cloud pages belong to this document.
+     */
+    static List<PageText> memberCloudTexts(Connection connection, long documentVersionId)
+            throws SQLException {
+        long holder = documentVersionId;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT p.document_version_id FROM page p"
+                        + " JOIN document_page dp ON dp.page_id = p.page_id"
+                        + " JOIN document_version dv ON dv.document_id = dp.document_id"
+                        + " WHERE dv.document_version_id = ? LIMIT 1")) {
+            ps.setLong(1, documentVersionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    holder = rs.getLong(1);
+                }
+            }
+        }
+        List<Integer> members = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT p.page_index FROM page p"
+                        + " JOIN document_page dp ON dp.page_id = p.page_id"
+                        + " JOIN document_version dv ON dv.document_id = dp.document_id"
+                        + " WHERE dv.document_version_id = ?")) {
+            ps.setLong(1, documentVersionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    members.add(rs.getInt(1));
+                }
+            }
+        }
+        List<String> cloudPages = new CloudParsePageRepository(connection).loadTextPages(holder);
+        List<PageText> pages = new ArrayList<>();
+        for (int i = 0; i < cloudPages.size(); i++) {
+            int pageIndex = i + 1;
+            if (!members.contains(pageIndex)) {
+                continue;
+            }
+            pages.add(new PageText(pageIndex, cloudPages.get(i)));
+        }
+        return pages;
     }
 
     private boolean hasMemberPages(long documentVersionId) throws SQLException {

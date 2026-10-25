@@ -117,8 +117,8 @@ public final class DocClassifyRunner {
                     // The induced type is kept. It is not sent back through a heading contest.
                     connection.commit();
                     connection.setAutoCommit(true);
-                    DocInduceRunner.Result kept = publishedPack(
-                            induceUnknown(mandateId, db, industry));
+                    DocInduceRunner.Result kept = publishedFor(
+                            induceUnknown(mandateId, db, industry), documentVersionId);
                     connection.setAutoCommit(false);
                     if (kept != null) {
                         String packVersion = kept.packVersion() == null
@@ -173,16 +173,9 @@ public final class DocClassifyRunner {
     private static void keepInduced(long mandateId, Path db, String industryTag) throws Exception {
         List<DocInduceRunner.Result> induced = induceUnknown(mandateId, db,
                 industryTag == null || industryTag.isBlank() ? "auto" : industryTag);
-        DocInduceRunner.Result kept = publishedPack(induced);
-        if (kept == null) {
+        if (induced == null || induced.stream().noneMatch(DocClassifyRunner::published)) {
             return;
         }
-        String packVersion = kept.packVersion() == null || kept.packVersion().isBlank()
-                || "-".equals(kept.packVersion()) ? "1.0.0" : kept.packVersion();
-        ClassifyResult result = new ClassifyResult(
-                kept.packCode(), kept.packCode(), packVersion, 0.8,
-                List.of("induced from the page contents and kept"),
-                ClassifyResult.Status.CLASSIFIED, "induced");
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             Connection connection = workspace.connection();
             DocTypeClassifier classifier = new DocTypeClassifier(ClassifyTieBreak.offline());
@@ -208,9 +201,13 @@ public final class DocClassifyRunner {
             connection.setAutoCommit(false);
             try {
                 for (UnknownVersion version : versions) {
+                    DocInduceRunner.Result kept = publishedFor(induced, version.id());
+                    if (kept == null) {
+                        continue;
+                    }
                     classifier.record(connection, new ClassifyRequest(
                             version.id(), version.role(), version.fileName(), "",
-                            industryTag, List.of(), true), result);
+                            industryTag, List.of(), true), inducedType(kept));
                 }
                 connection.commit();
             } catch (Exception e) {
@@ -253,17 +250,33 @@ public final class DocClassifyRunner {
         }
     }
 
-    private static DocInduceRunner.Result publishedPack(List<DocInduceRunner.Result> induced) {
+    /** The published pack whose cluster contains this version. Another cluster's pack is not used. */
+    private static DocInduceRunner.Result publishedFor(List<DocInduceRunner.Result> induced,
+            long versionId) {
         if (induced == null) {
             return null;
         }
         for (DocInduceRunner.Result result : induced) {
-            if (result.published() && result.packCode() != null && !result.packCode().isBlank()
-                    && !result.packCode().startsWith("(")) {
+            if (published(result) && result.versionIds() != null
+                    && result.versionIds().contains(versionId)) {
                 return result;
             }
         }
         return null;
+    }
+
+    private static boolean published(DocInduceRunner.Result result) {
+        return result.published() && result.packCode() != null && !result.packCode().isBlank()
+                && !result.packCode().startsWith("(");
+    }
+
+    private static ClassifyResult inducedType(DocInduceRunner.Result kept) {
+        String packVersion = kept.packVersion() == null || kept.packVersion().isBlank()
+                || "-".equals(kept.packVersion()) ? "1.0.0" : kept.packVersion();
+        return new ClassifyResult(
+                kept.packCode(), kept.packCode(), packVersion, 0.8,
+                List.of("induced from the page contents and kept"),
+                ClassifyResult.Status.CLASSIFIED, "induced");
     }
 
     /**

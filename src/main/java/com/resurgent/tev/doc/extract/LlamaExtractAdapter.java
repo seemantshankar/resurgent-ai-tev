@@ -231,14 +231,10 @@ public final class LlamaExtractAdapter implements ExtractClient {
                             + " (set LLAMA_CLOUD_API_KEY or llamaparse_api_key in .env,"
                             + " or choose another extractor)");
         }
-        Path original = req.originalFile();
-        String parseJobId = req.options() != null ? req.options().get(KEY_PARSE_JOB_ID) : null;
-        boolean hasParseJob = parseJobId != null && !parseJobId.isBlank();
-        if (!hasParseJob && (original == null || !Files.isRegularFile(original))) {
-            throw new ExtractException("originalFile is required for LlamaExtract: " + original
-                    + " (or set options.llama_parse_job_id)");
-        }
-
+        String remainder = req.options() == null ? null
+                : req.options().get(ExtractRequest.REMAINDER_LINES);
+        boolean remainderOnly = remainder != null && !remainder.isBlank();
+        Path remainderFile = null;
         long timeoutMs = resolveLong(req.options(), KEY_TIMEOUT_MS, defaultTimeoutMs);
         Double maxUsd = resolveDouble(req.options(), KEY_MAX_USD, defaultMaxUsd);
         long startNanos = System.nanoTime();
@@ -247,12 +243,24 @@ public final class LlamaExtractAdapter implements ExtractClient {
                 .build();
 
         try {
+            if (remainderOnly) {
+                remainderFile = Files.createTempFile("tev-remainder-", ".txt");
+                Files.writeString(remainderFile, remainder, StandardCharsets.UTF_8);
+            }
+            Path original = remainderOnly ? remainderFile : req.originalFile();
+            String parseJobId = req.options() != null ? req.options().get(KEY_PARSE_JOB_ID) : null;
+            boolean hasParseJob = !remainderOnly && parseJobId != null && !parseJobId.isBlank();
+            List<Integer> pageIndices = remainderOnly ? List.of() : req.pageIndices();
+            if (!hasParseJob && (original == null || !Files.isRegularFile(original))) {
+                throw new ExtractException("originalFile is required for LlamaExtract: " + original
+                        + " (or set options.llama_parse_job_id)");
+            }
             // Cost guard before/around the call (S2.3): estimate the expected spend from
             // the selected page count and the tier's credits-per-page rate, convert the
             // credits to USD at the vendor rate, and refuse pre-submit when the estimate
             // exceeds the USD cap — no spend is incurred.
             String tierWire = resolveTier(req.options());
-            int pages = estimatePageCount(req);
+            int pages = remainderOnly ? 1 : estimatePageCount(req);
             int creditsPerPage = ParseTier.fromWire(tierWire).creditsPerPage();
             double estimatedCredits = (double) pages * creditsPerPage;
             double estimatedUsd = estimatedCredits * usdPerCredit;
@@ -269,7 +277,7 @@ public final class LlamaExtractAdapter implements ExtractClient {
                 fileId = uploadFile(client, original, timeoutMs);
             }
             String jobId = createExtractJob(client, fileId, schema, req.instructions(),
-                    tierWire, PageSelection.wire(req.pageIndices()), timeoutMs);
+                    tierWire, PageSelection.wire(pageIndices), timeoutMs);
             JsonNode job = pollJob(client, jobId, timeoutMs, startNanos);
             String status = job.path("status").asText("");
             if (!"COMPLETED".equals(status)) {
@@ -304,6 +312,14 @@ public final class LlamaExtractAdapter implements ExtractClient {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new ExtractException("LlamaExtract interrupted", e);
+        } finally {
+            if (remainderFile != null) {
+                try {
+                    Files.deleteIfExists(remainderFile);
+                } catch (IOException ignored) {
+                    // the unread-line file is temporary
+                }
+            }
         }
     }
 

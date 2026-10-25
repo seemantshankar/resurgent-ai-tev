@@ -501,6 +501,19 @@ class SeveralDocumentsInOneFileTest {
     }
 
     @Test
+    void twoChaptersOfOneReportStayOneDocument() throws Exception {
+        Stored file = seed("Volume 2", "volume-2.pdf", "other", null, List.of(
+                reportPage(),
+                reportPage()));
+
+        type(file.versionId());
+
+        List<Held> held = heldDocuments();
+        assertThat(held).hasSize(1);
+        assertThat(pagesOf(held, "report.dpr")).containsExactly(1, 2);
+    }
+
+    @Test
     void aDocumentThatStatesNoDateUsesFileMetadataNotItsNeighboursDate() throws Exception {
         Stored file = seed("Volume 2", "volume-2.pdf", "other",
                 "{\"file_modified_at\":\"2020-08-15T00:00:00Z\"}", List.of(

@@ -12,6 +12,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -104,7 +105,11 @@ final class FileDocuments {
             if (stated && !page.headingOnly()) {
                 String type = read.result().docTypeCode();
                 if (current != null && type.equals(current.type())) {
-                    current = open(read.result(), page, waiting, works);
+                    if (startsAnotherWork(page, current)) {
+                        current = open(read.result(), page, waiting, works);
+                    } else {
+                        current.pages.add(page);
+                    }
                     continue;
                 }
                 Work earlier = latest(works, type);
@@ -141,6 +146,58 @@ final class FileDocuments {
         work.pages.add(page);
         works.add(work);
         return work;
+    }
+
+    /**
+     * A later page of the same type continues the open work. It starts another
+     * work when it is an amendment, or when an identity on it (vendor, seller,
+     * buyer, promoter, subject) differs from the open work.
+     */
+    private static boolean startsAnotherWork(StoredPage page, Work current) {
+        String text = page.text();
+        String first = text.stripLeading().lines().findFirst().orElse("");
+        if (first.toLowerCase(Locale.ROOT).startsWith("amendment")) {
+            return true;
+        }
+        Map<String, String> stated = identities(text);
+        Map<String, String> held = identities(current.text());
+        for (Map.Entry<String, String> identity : stated.entrySet()) {
+            String previous = held.get(identity.getKey());
+            if (previous != null && !previous.equals(identity.getValue())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static final Pattern IDENTITY_LABEL = Pattern.compile(
+            "(?im)^\\s*(vendor|from|seller|buyer|promoter|subject)\\s*:\\s*(.+)$");
+    private static final Pattern IDENTITY_COPULA = Pattern.compile(
+            "(?i)\\bthe (seller|buyer|vendor) is\\s+([^\\n.]+)");
+
+    private static Map<String, String> identities(String text) {
+        Map<String, String> found = new LinkedHashMap<>();
+        if (text == null || text.isBlank()) {
+            return found;
+        }
+        var labels = IDENTITY_LABEL.matcher(text);
+        while (labels.find()) {
+            found.put(identityKey(labels.group(1)), identityValue(labels.group(2)));
+        }
+        var copula = IDENTITY_COPULA.matcher(text);
+        while (copula.find()) {
+            found.putIfAbsent(identityKey(copula.group(1)), identityValue(copula.group(2)));
+        }
+        return found;
+    }
+
+    private static String identityKey(String label) {
+        String key = label.toLowerCase(Locale.ROOT);
+        return "from".equals(key) ? "vendor" : key;
+    }
+
+    private static String identityValue(String raw) {
+        return raw.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
     }
 
     /**
@@ -332,18 +389,60 @@ final class FileDocuments {
                 }
             }
             for (Long extra : versions) {
+                deleteVersionDependents(connection, extra);
                 deleteRows(connection,
                         "DELETE FROM doc_classification WHERE document_version_id = ?", extra);
                 deleteRows(connection,
                         "DELETE FROM document_relation WHERE from_document_version_id = ?"
                                 + " OR to_document_version_id = ?", extra, extra);
             }
+            deleteFactsWhere(connection, "document_id = ?", sibling);
             new DocumentRepository(connection).replaceMemberPages(sibling, List.of());
             deleteRows(connection,
                     "UPDATE document SET current_version_id = NULL WHERE document_id = ?", sibling);
             deleteRows(connection, "DELETE FROM document_version WHERE document_id = ?", sibling);
             deleteRows(connection, "DELETE FROM document WHERE document_id = ?", sibling);
         }
+    }
+
+    /**
+     * Rows that reference a sibling version. Fact rows owned by the sibling
+     * document but stored on the file version are removed with the document.
+     */
+    private static void deleteVersionDependents(Connection connection, long versionId)
+            throws SQLException {
+        deleteRows(connection,
+                "DELETE FROM checklist_result WHERE document_version_id = ?", versionId);
+        deleteRows(connection,
+                "DELETE FROM conflict WHERE left_document_version_id = ?"
+                        + " OR right_document_version_id = ?", versionId, versionId);
+        deleteRows(connection,
+                "DELETE FROM conflict_skip WHERE document_version_id = ?", versionId);
+        deleteRows(connection,
+                "UPDATE mandate_industry_record SET document_version_id = NULL"
+                        + " WHERE document_version_id = ?", versionId);
+        deleteRows(connection,
+                "UPDATE mandate_country_record SET document_version_id = NULL"
+                        + " WHERE document_version_id = ?", versionId);
+        deleteRows(connection, "DELETE FROM passage WHERE document_version_id = ?", versionId);
+        deleteRows(connection, "DELETE FROM clause WHERE document_version_id = ?", versionId);
+        deleteRows(connection, "DELETE FROM site_alias WHERE document_version_id = ?", versionId);
+        deleteFactsWhere(connection, "document_version_id = ?", versionId);
+        deleteRows(connection,
+                "DELETE FROM provenance_doc WHERE document_version_id = ?", versionId);
+    }
+
+    private static void deleteFactsWhere(Connection connection, String predicate, long id)
+            throws SQLException {
+        String factIds = "SELECT fact_id FROM fact WHERE " + predicate;
+        deleteRows(connection,
+                "DELETE FROM snapshot_fact_link WHERE fact_id IN (" + factIds + ")", id);
+        deleteRows(connection, "DELETE FROM fact_value WHERE fact_id IN (" + factIds + ")", id);
+        deleteRows(connection, "DELETE FROM fact_evidence WHERE fact_id IN (" + factIds + ")", id);
+        deleteRows(connection,
+                "DELETE FROM provenance_doc WHERE entity_type = 'fact' AND entity_id IN ("
+                        + factIds + ")", id);
+        deleteRows(connection, "DELETE FROM fact WHERE " + predicate, id);
     }
 
     private static void deleteRows(Connection connection, String sql, long id) throws SQLException {

@@ -300,7 +300,7 @@ public final class ClauseRepository {
         // document_page, so a later agreement is still mined and a neighbour's
         // page is not. A version with no recorded membership reads the pages it owns.
         if (hasMemberPages(documentVersionId)) {
-            return readClausePages(documentVersionId, """
+            List<PageText> pages = readClausePages(documentVersionId, """
                     SELECT p.page_index AS page_index, b.text_raw AS block_text
                       FROM block b
                       JOIN page p ON p.page_id = b.page_id
@@ -309,6 +309,10 @@ public final class ClauseRepository {
                      WHERE dv.document_version_id = ?
                      ORDER BY p.page_index, COALESCE(b.reading_order, b.block_index)
                     """);
+            if (!pages.isEmpty()) {
+                return pages;
+            }
+            return AssessmentRepository.memberCloudTexts(connection, documentVersionId);
         }
         List<PageText> pages = readClausePages(documentVersionId, """
                 SELECT p.page_index AS page_index, b.text_raw AS block_text

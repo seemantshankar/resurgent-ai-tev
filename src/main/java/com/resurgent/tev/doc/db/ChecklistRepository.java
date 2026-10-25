@@ -492,9 +492,10 @@ public final class ChecklistRepository {
         Map<Long, FactEvidenceRow> best = new LinkedHashMap<>();
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT f.fact_id,"
-                        + " COALESCE((SELECT owner.current_version_id FROM document owner"
-                        + "    WHERE owner.document_id = f.document_id),"
-                        + "    f.document_version_id) AS document_version_id,"
+                        + " CASE WHEN f.document_id IS NOT NULL AND f.document_id <> dv.document_id"
+                        + " THEN COALESCE((SELECT owner.current_version_id FROM document owner"
+                        + "    WHERE owner.document_id = f.document_id), f.document_version_id)"
+                        + " ELSE f.document_version_id END AS document_version_id,"
                         + " f.field_key, f.ontology_path,"
                         + " f.entity_id, f.site_id, f.confidence, f.value_text, e.ordinal,"
                         + " e.source_text, e.resolution, e.provenance_id, p.page_index"

@@ -543,6 +543,12 @@ public final class DocumentRepository {
             ps.executeUpdate();
         }
         try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM document_page WHERE page_id IN ("
+                        + " SELECT page_id FROM page WHERE document_version_id = ?)")) {
+            ps.setLong(1, documentVersionId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
                 "DELETE FROM page WHERE document_version_id = ?")) {
             ps.setLong(1, documentVersionId);
             ps.executeUpdate();

@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
 public final class ReportQuestionQueryRunner {
 
     private static final Pattern TOKEN = Pattern.compile("[\\p{L}\\p{N}]+(?:\\.[\\p{N}]+)?");
-    private static final Pattern AMOUNT = Pattern.compile("\\d+(?:\\.\\d+)?");
+    private static final Pattern AMOUNT = Pattern.compile("\\d[\\d,]*(?:\\.\\d+)?");
 
     private static final Set<String> STOPWORDS = Set.of(
             "a", "an", "the", "is", "are", "was", "were", "do", "does", "did",
@@ -96,8 +96,18 @@ public final class ReportQuestionQueryRunner {
         List<ReportAnswer> marked = new ArrayList<>();
         for (int i = 0; i < answers.size(); i++) {
             ReportAnswer answer = answers.get(i);
+            boolean disagrees = false;
+            if (!perAnswer.get(i).isEmpty()) {
+                for (int j = 0; j < perAnswer.size(); j++) {
+                    if (j != i && !perAnswer.get(j).isEmpty()
+                            && !perAnswer.get(j).equals(perAnswer.get(i))) {
+                        disagrees = true;
+                        break;
+                    }
+                }
+            }
             marked.add(new ReportAnswer(answer.store(), answer.text(), answer.filePage(),
-                    !perAnswer.get(i).isEmpty(), answer.filePages()));
+                    disagrees, answer.filePages()));
         }
         return marked;
     }
@@ -109,7 +119,8 @@ public final class ReportQuestionQueryRunner {
         }
         Matcher matcher = AMOUNT.matcher(text);
         while (matcher.find()) {
-            found.add(new BigDecimal(matcher.group()).stripTrailingZeros().toPlainString());
+            String raw = matcher.group().replace(",", "");
+            found.add(new BigDecimal(raw).stripTrailingZeros().toPlainString());
         }
         return found;
     }

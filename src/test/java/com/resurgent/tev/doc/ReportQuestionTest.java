@@ -208,6 +208,26 @@ class ReportQuestionTest {
     }
 
     @Test
+    void anIndianGroupedAmountDoesNotDisagreeWithItself() throws Exception {
+        String amount = "Project cost Rs. 10,00,000";
+        long pageId = docs.insertPage(documentVersionId, 4, 600, 800, "hash-report/pages/p004.png");
+        docs.insertBlock(pageId, 0, "paragraph", 72.0, 600.0, 500.0, 640.0, amount, amount, 0, "test");
+        facts.replaceFacts(parseRunId, documentVersionId, List.of(new FactRepository.FactWrite(
+                "figure_a", "economic > Test > figure_a", "economic", null,
+                "money", amount, 1000000.0, null, null, "INR", null, "1000000",
+                null, "llm_field", "test-extract", 0.9, "stated",
+                null, null, List.of(Citation.of(4, amount)), List.of())));
+
+        List<ReportAnswer> answers = questions.answer(
+                new ReportQuestion(MANDATE_ID, "What is the project cost?"));
+
+        assertThat(answers).anySatisfy(answer -> {
+            assertThat(answer.text()).contains("10,00,000");
+            assertThat(answer.disagrees()).isFalse();
+        });
+    }
+
+    @Test
     void anUnnamedNumberComesBackAsThatNumberAndItsPage() throws Exception {
         long before = docs.insertPage(documentVersionId, 1, 600, 800, "hash-report/pages/p001.png");
         docs.insertBlock(before, 0, "paragraph", 72.0, 700.0, 500.0, 740.0,
