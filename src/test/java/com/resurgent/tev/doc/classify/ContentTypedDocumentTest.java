@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.resurgent.tev.doc.assess.AssessChecklistRunner;
 import com.resurgent.tev.doc.db.AssessmentRepository;
 import com.resurgent.tev.doc.db.DocumentRepository;
+import com.resurgent.tev.doc.db.DocumentRepository.HeldDocument;
 import com.resurgent.tev.doc.db.MandateQaQueryRunner;
 import com.resurgent.tev.doc.ingest.BlobStore;
 import com.resurgent.tev.doc.query.MandateQa;
@@ -12,6 +13,7 @@ import com.resurgent.tev.doc.query.MandateQaQuery;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -151,6 +153,37 @@ class ContentTypedDocumentTest {
     }
 
     @Test
+    void anUnknownKindBesideAKnownWorkIsInducedAndKept() throws Exception {
+        Stored file = seed("Volume 2", "volume-2.pdf", "other", List.of(
+                List.of(
+                        line("paragraph", "Project capacity: 25 MW"),
+                        line("paragraph", "Project cost: Rs. 120 crore"),
+                        line("paragraph", "Technology: monocrystalline modules on single-axis trackers"),
+                        line("paragraph", "Plant and machinery: modules, inverters, and mounting structures")),
+                List.of(
+                        line("paragraph", "Instrument rating: AA"),
+                        line("paragraph", "Rating outlook: Stable"),
+                        line("paragraph", "Rated facility: Working capital"),
+                        line("paragraph", "Facility pricing: 9.50 percent per annum")),
+                List.of(line("heading", "Credit Rating Report"))));
+
+        DocClassifyRunner.Result typed = type(file.versionId());
+
+        assertThat(typed.docTypeCode()).isEqualTo("report.dpr");
+        List<Held> held = heldDocuments();
+        assertThat(held).extracting(Held::docTypeCode).contains("report.dpr");
+        Held induced = held.stream()
+                .filter(document -> document.docTypeCode() != null
+                        && document.docTypeCode().startsWith("induced."))
+                .findFirst().orElseThrow();
+        assertThat(induced.pages()).containsExactly(2);
+        assertThat(pagesOf(held, "report.dpr")).containsExactly(1, 3);
+        assertThat(held).hasSize(2);
+        assertThat(publishedPacks()).anyMatch(path -> path.getFileName().toString()
+                .startsWith(induced.docTypeCode()));
+    }
+
+    @Test
     void aHeadingAloneDoesNotBecomeAPack() throws Exception {
         Stored file = seed("Credit Rating Report", "credit-rating.pdf", "other", List.of(
                 List.of(line("heading", "Credit Rating Report"))));
@@ -185,6 +218,28 @@ class ContentTypedDocumentTest {
     private MandateQa assess() throws Exception {
         new AssessChecklistRunner().run(MANDATE, dbPath, null);
         return MandateQaQueryRunner.query(dbPath, MandateQaQuery.forMandate(MANDATE));
+    }
+
+    private List<Held> heldDocuments() throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            DocumentRepository repo = new DocumentRepository(db.connection());
+            List<Held> held = new ArrayList<>();
+            for (HeldDocument document : repo.documentsIn(MANDATE)) {
+                List<Integer> pages = repo.pageIndexesOf(document.documentId());
+                if (!pages.isEmpty()) {
+                    held.add(new Held(document.docTypeCode(), pages));
+                }
+            }
+            return held;
+        }
+    }
+
+    private static List<Integer> pagesOf(List<Held> held, String docType) {
+        return held.stream()
+                .filter(document -> docType.equals(document.docTypeCode()))
+                .findFirst()
+                .orElseThrow()
+                .pages();
     }
 
     private List<Integer> pageIndexes(long documentId) throws Exception {
@@ -269,4 +324,6 @@ class ContentTypedDocumentTest {
     private record Line(String kind, String text) {}
 
     private record Stored(long documentId, long versionId) {}
+
+    private record Held(String docTypeCode, List<Integer> pages) {}
 }

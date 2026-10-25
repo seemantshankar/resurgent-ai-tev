@@ -97,6 +97,9 @@ public final class DocClassifyRunner {
                     if (separated.isPresent()) {
                         recordUsage(connection, version, mandateId, industryTag, usage);
                         connection.commit();
+                        if (autoInduce) {
+                            keepInduced(mandateId, db, industryTag);
+                        }
                         ClassifyResult held = separated.get();
                         return new Result(
                                 held.docTypeCode(),
@@ -163,6 +166,72 @@ public final class DocClassifyRunner {
             }
         }
     }
+
+    /**
+     * A work that fit no known type was stored unknown. Induce it on the existing
+     * path and keep the published type. The file's known works are left as they are.
+     */
+    private static void keepInduced(long mandateId, Path db, String industryTag) throws Exception {
+        List<DocInduceRunner.Result> induced = induceUnknown(mandateId, db,
+                industryTag == null || industryTag.isBlank() ? "auto" : industryTag);
+        DocInduceRunner.Result kept = publishedPack(induced);
+        if (kept == null) {
+            return;
+        }
+        String packVersion = kept.packVersion() == null || kept.packVersion().isBlank()
+                || "-".equals(kept.packVersion()) ? "1.0.0" : kept.packVersion();
+        ClassifyResult result = new ClassifyResult(
+                kept.packCode(), kept.packCode(), packVersion, 0.8,
+                List.of("induced from the page contents and kept"),
+                ClassifyResult.Status.CLASSIFIED, "induced");
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            Connection connection = workspace.connection();
+            DocTypeClassifier classifier = new DocTypeClassifier(ClassifyTieBreak.offline());
+            List<UnknownVersion> versions = new ArrayList<>();
+            try (var ps = connection.prepareStatement(
+                    "SELECT dv.document_version_id, dv.file_role, dv.file_name"
+                            + " FROM document_version dv"
+                            + " JOIN document d ON d.document_id = dv.document_id"
+                            + " JOIN doc_classification c"
+                            + "  ON c.document_version_id = dv.document_version_id"
+                            + " WHERE d.mandate_id = ? AND c.doc_type_code = 'unknown'")) {
+                ps.setLong(1, mandateId);
+                try (var rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        versions.add(new UnknownVersion(rs.getLong(1), rs.getString(2),
+                                rs.getString(3)));
+                    }
+                }
+            }
+            if (versions.isEmpty()) {
+                return;
+            }
+            connection.setAutoCommit(false);
+            try {
+                for (UnknownVersion version : versions) {
+                    classifier.record(connection, new ClassifyRequest(
+                            version.id(), version.role(), version.fileName(), "",
+                            industryTag, List.of(), true), result);
+                }
+                connection.commit();
+            } catch (Exception e) {
+                try {
+                    connection.rollback();
+                } catch (Exception ignored) {
+                    // keep the original failure
+                }
+                throw e;
+            } finally {
+                try {
+                    connection.setAutoCommit(true);
+                } catch (Exception ignored) {
+                    // connection may already be released
+                }
+            }
+        }
+    }
+
+    private record UnknownVersion(long id, String role, String fileName) {}
 
     private static boolean unknown(ClassifyResult result) {
         String code = result.docTypeCode();

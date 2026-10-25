@@ -127,21 +127,6 @@ public final class AssessmentRepository {
      * @throws SQLException if the query fails
      */
     public List<PageText> pageTexts(long documentVersionId) throws SQLException {
-        // A document's date is read from its own pages. Sibling works in the same
-        // file stay out. A version with no recorded membership still reads every
-        // page it owns.
-        if (hasMemberPages(documentVersionId)) {
-            return readPageTexts(documentVersionId, """
-                    SELECT p.page_index AS page_index,
-                           COALESCE(NULLIF(b.text_norm, ''), b.text_raw) AS block_text
-                      FROM block b
-                      JOIN page p ON p.page_id = b.page_id
-                      JOIN document_page dp ON dp.page_id = p.page_id
-                      JOIN document_version dv ON dv.document_id = dp.document_id
-                     WHERE dv.document_version_id = ?
-                     ORDER BY p.page_index, COALESCE(b.reading_order, b.block_index)
-                    """);
-        }
         List<PageText> pages = readPageTexts(documentVersionId, """
                 SELECT p.page_index AS page_index,
                        COALESCE(NULLIF(b.text_norm, ''), b.text_raw) AS block_text
@@ -160,6 +145,27 @@ public final class AssessmentRepository {
             fallback.add(new PageText(i + 1, cloudPages.get(i)));
         }
         return fallback;
+    }
+
+    /**
+     * Page text limited to the document's own member pages. A document's date is
+     * read from these. A version with no recorded membership still reads every
+     * page it owns.
+     */
+    public List<PageText> memberPageTexts(long documentVersionId) throws SQLException {
+        if (hasMemberPages(documentVersionId)) {
+            return readPageTexts(documentVersionId, """
+                    SELECT p.page_index AS page_index,
+                           COALESCE(NULLIF(b.text_norm, ''), b.text_raw) AS block_text
+                      FROM block b
+                      JOIN page p ON p.page_id = b.page_id
+                      JOIN document_page dp ON dp.page_id = p.page_id
+                      JOIN document_version dv ON dv.document_id = dp.document_id
+                     WHERE dv.document_version_id = ?
+                     ORDER BY p.page_index, COALESCE(b.reading_order, b.block_index)
+                    """);
+        }
+        return pageTexts(documentVersionId);
     }
 
     private boolean hasMemberPages(long documentVersionId) throws SQLException {
@@ -222,11 +228,30 @@ public final class AssessmentRepository {
         if (normalized == null || normalized.isBlank()) {
             return Optional.empty();
         }
+        return findAnchor(documentVersionId, normalized, " WHERE p.document_version_id = ?");
+    }
+
+    /**
+     * The same anchor search limited to the document's member pages. Used for a
+     * date read from those pages. A version with no membership searches every
+     * page it owns.
+     */
+    public Optional<BlockAnchor> findMemberBlockAnchor(long documentVersionId, String needle)
+            throws SQLException {
+        String normalized = normalizeWhitespace(needle);
+        if (normalized == null || normalized.isBlank()) {
+            return Optional.empty();
+        }
         String membership = hasMemberPages(documentVersionId)
                 ? " JOIN document_page dp ON dp.page_id = p.page_id"
                         + " JOIN document_version dv ON dv.document_id = dp.document_id"
                         + " WHERE dv.document_version_id = ?"
                 : " WHERE p.document_version_id = ?";
+        return findAnchor(documentVersionId, normalized, membership);
+    }
+
+    private Optional<BlockAnchor> findAnchor(long documentVersionId, String normalized,
+            String membership) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT b.block_id, p.page_id, p.page_index, b.bbox_x0, b.bbox_y0,"
                         + " b.bbox_x1, b.bbox_y1, COALESCE(b.text_norm, b.text_raw) AS block_text"

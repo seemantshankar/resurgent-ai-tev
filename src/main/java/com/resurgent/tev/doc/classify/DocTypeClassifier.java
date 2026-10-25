@@ -3,6 +3,7 @@ package com.resurgent.tev.doc.classify;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resurgent.tev.doc.db.CloudParsePageRepository;
+import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackField;
 import com.resurgent.tev.doc.pack.PackPassage;
@@ -134,19 +135,9 @@ public final class DocTypeClassifier {
                         + " COALESCE(b.reading_order, b.block_index)")) {
             ps.setLong(1, documentVersionId);
             try (ResultSet rs = ps.executeQuery()) {
-                StringBuilder sb = new StringBuilder();
-                while (rs.next()) {
-                    String text = rs.getString("page_text");
-                    if (text == null || text.isBlank()) {
-                        continue;
-                    }
-                    if (sb.length() > 0) {
-                        sb.append('\n');
-                    }
-                    sb.append(text.trim());
-                }
-                if (!sb.isEmpty()) {
-                    return sb.toString();
+                String joined = joinPageText(rs);
+                if (!joined.isEmpty()) {
+                    return joined;
                 }
             }
         }
@@ -175,19 +166,9 @@ public final class DocTypeClassifier {
                         + " b.block_index")) {
             ps.setLong(1, documentVersionId);
             try (ResultSet rs = ps.executeQuery()) {
-                StringBuilder sb = new StringBuilder();
-                while (rs.next()) {
-                    String text = rs.getString("page_text");
-                    if (text == null || text.isBlank()) {
-                        continue;
-                    }
-                    if (sb.length() > 0) {
-                        sb.append('\n');
-                    }
-                    sb.append(text.trim());
-                }
-                if (!sb.isEmpty()) {
-                    return sb.toString();
+                String joined = joinPageText(rs);
+                if (!joined.isEmpty()) {
+                    return joined;
                 }
             }
         }
@@ -197,6 +178,22 @@ public final class DocTypeClassifier {
             return "";
         }
         return String.join("\n", pages).trim();
+    }
+
+    /** Skips blank blocks and joins the rest with newlines, in the query's order. */
+    private static String joinPageText(ResultSet rs) throws SQLException {
+        StringBuilder sb = new StringBuilder();
+        while (rs.next()) {
+            String text = rs.getString("page_text");
+            if (text == null || text.isBlank()) {
+                continue;
+            }
+            if (!sb.isEmpty()) {
+                sb.append('\n');
+            }
+            sb.append(text.trim());
+        }
+        return sb.toString();
     }
 
     /**
@@ -573,7 +570,11 @@ public final class DocTypeClassifier {
                 result.status() == ClassifyResult.Status.CLASSIFIED);
     }
 
-    /** Records the version's pages on a typed document, and clears them when it is not one. */
+    /**
+     * Records the version's own pages on a typed document, and clears them when it
+     * is not one. A sibling work keeps physical pages on the file version; its
+     * membership is already recorded and is left in place.
+     */
     private static void syncPages(Connection connection, long versionId, boolean classified)
             throws SQLException {
         long documentId;
@@ -587,21 +588,24 @@ public final class DocTypeClassifier {
                 documentId = rs.getLong(1);
             }
         }
+        List<Long> owned = new ArrayList<>();
         try (PreparedStatement ps = connection.prepareStatement(
-                "DELETE FROM document_page WHERE document_id = ?")) {
-            ps.setLong(1, documentId);
-            ps.executeUpdate();
+                "SELECT page_id FROM page WHERE document_version_id = ? ORDER BY page_index")) {
+            ps.setLong(1, versionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    owned.add(rs.getLong(1));
+                }
+            }
         }
         if (!classified) {
+            new DocumentRepository(connection).replaceMemberPages(documentId, List.of());
             return;
         }
-        try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO document_page (document_id, page_id)"
-                        + " SELECT ?, page_id FROM page WHERE document_version_id = ?")) {
-            ps.setLong(1, documentId);
-            ps.setLong(2, versionId);
-            ps.executeUpdate();
+        if (owned.isEmpty()) {
+            return;
         }
+        new DocumentRepository(connection).replaceMemberPages(documentId, owned);
     }
 
     private static final class PackReading {

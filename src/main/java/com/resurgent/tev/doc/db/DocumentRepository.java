@@ -433,6 +433,40 @@ public final class DocumentRepository {
      * @return one-based page indexes
      * @throws SQLException if the lookup fails
      */
+    /**
+     * File version that holds this document's pages, or the document's own version
+     * when membership has not been recorded.
+     *
+     * @param documentId logical document
+     * @return the version id whose {@code page} rows hold the file
+     * @throws SQLException if the lookup fails
+     * @throws IllegalArgumentException when the document has no version
+     */
+    public long versionHolding(long documentId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT p.document_version_id FROM document_page dp"
+                        + " JOIN page p ON p.page_id = dp.page_id"
+                        + " WHERE dp.document_id = ? ORDER BY p.page_index LIMIT 1")) {
+            ps.setLong(1, documentId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+            }
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT document_version_id FROM document_version WHERE document_id = ?"
+                        + " ORDER BY document_version_id LIMIT 1")) {
+            ps.setLong(1, documentId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+            }
+        }
+        throw new IllegalArgumentException("document " + documentId + " has no file pages");
+    }
+
     public List<Integer> pageIndexesOf(long documentId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT p.page_index FROM document_page dp"

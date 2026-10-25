@@ -78,40 +78,10 @@ public final class ExtractService {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
             DocumentRepository docs = new DocumentRepository(db.connection());
             pages = docs.pageIndexesOf(documentId);
-            versionId = versionHolding(db.connection(), documentId);
+            versionId = docs.versionHolding(documentId);
         }
         return extract(dbPath, versionId, mandateId, pack, client, extractorBundleVersion,
                 null, null, pages, documentId);
-    }
-
-    /**
-     * File version that holds this document's pages, or the document's own version
-     * when membership has not been recorded.
-     */
-    private static long versionHolding(java.sql.Connection connection, long documentId)
-            throws java.sql.SQLException {
-        try (java.sql.PreparedStatement ps = connection.prepareStatement(
-                "SELECT p.document_version_id FROM document_page dp"
-                        + " JOIN page p ON p.page_id = dp.page_id"
-                        + " WHERE dp.document_id = ? ORDER BY p.page_index LIMIT 1")) {
-            ps.setLong(1, documentId);
-            try (java.sql.ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    return rs.getLong(1);
-                }
-            }
-        }
-        try (java.sql.PreparedStatement ps = connection.prepareStatement(
-                "SELECT document_version_id FROM document_version WHERE document_id = ?"
-                        + " ORDER BY document_version_id LIMIT 1")) {
-            ps.setLong(1, documentId);
-            try (java.sql.ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    return rs.getLong(1);
-                }
-            }
-        }
-        throw new IllegalArgumentException("document " + documentId + " has no file pages");
     }
 
     /**

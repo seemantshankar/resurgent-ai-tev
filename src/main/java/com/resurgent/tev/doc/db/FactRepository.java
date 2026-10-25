@@ -324,7 +324,11 @@ public final class FactRepository {
     public ReplaceStats replaceFacts(long parseRunId, long documentVersionId, Long documentId,
             List<FactWrite> facts) throws SQLException {
         Long owner = documentId != null ? documentId : documentIdOf(documentVersionId);
-        deleteFactsForParseRun(parseRunId);
+        if (owner == null) {
+            deleteFactsForParseRun(parseRunId);
+        } else {
+            deleteFactsForDocument(parseRunId, owner);
+        }
         if (facts == null || facts.isEmpty()) {
             return new ReplaceStats(0, 0, 0, 0, 0);
         }
@@ -582,6 +586,59 @@ public final class FactRepository {
         try (PreparedStatement ps = connection.prepareStatement(
                 "DELETE FROM fact WHERE parse_run_id = ?")) {
             ps.setLong(1, parseRunId);
+            ps.executeUpdate();
+        }
+    }
+
+    /**
+     * Deletes one document's facts for a parse run. Another document read on the
+     * same run keeps its facts.
+     */
+    private void deleteFactsForDocument(long parseRunId, long documentId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE fact_snapshot SET is_stale = 1, stale_reason = 'referenced facts were deleted during re-extraction' "
+                        + "WHERE snapshot_id IN ("
+                        + "    SELECT sfl.snapshot_id FROM snapshot_fact_link sfl "
+                        + "    JOIN fact f ON f.fact_id = sfl.fact_id "
+                        + "    WHERE f.parse_run_id = ? AND f.document_id = ?"
+                        + ")")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, documentId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM snapshot_fact_link WHERE fact_id IN ("
+                        + "    SELECT fact_id FROM fact WHERE parse_run_id = ? AND document_id = ?"
+                        + ")")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, documentId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM fact_value WHERE fact_id IN"
+                        + " (SELECT fact_id FROM fact WHERE parse_run_id = ? AND document_id = ?)")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, documentId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM fact_evidence WHERE fact_id IN"
+                        + " (SELECT fact_id FROM fact WHERE parse_run_id = ? AND document_id = ?)")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, documentId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM provenance_doc WHERE entity_type = 'fact' AND entity_id IN"
+                        + " (SELECT fact_id FROM fact WHERE parse_run_id = ? AND document_id = ?)")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, documentId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM fact WHERE parse_run_id = ? AND document_id = ?")) {
+            ps.setLong(1, parseRunId);
+            ps.setLong(2, documentId);
             ps.executeUpdate();
         }
     }

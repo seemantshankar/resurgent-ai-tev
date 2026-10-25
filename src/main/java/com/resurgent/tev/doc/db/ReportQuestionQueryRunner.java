@@ -97,7 +97,7 @@ public final class ReportQuestionQueryRunner {
         for (int i = 0; i < answers.size(); i++) {
             ReportAnswer answer = answers.get(i);
             marked.add(new ReportAnswer(answer.store(), answer.text(), answer.filePage(),
-                    !perAnswer.get(i).isEmpty()));
+                    !perAnswer.get(i).isEmpty(), answer.filePages()));
         }
         return marked;
     }
@@ -117,35 +117,48 @@ public final class ReportQuestionQueryRunner {
     private void addFacts(long mandateId, List<String> wanted, List<ReportAnswer> answers)
             throws SQLException {
         for (FactRow fact : new FactRepository(connection).query(FactQuery.forMandate(mandateId))) {
-            String text = null;
-            Integer page = null;
+            List<Integer> pages = new ArrayList<>();
+            String covering = null;
+            Integer coveringPage = null;
             for (FactRow.EvidenceRow evidence : fact.evidence()) {
-                if (evidence.verbatim() != null && covers(wanted, evidence.verbatim())
-                        && evidence.pageIndex() != null) {
-                    text = evidence.verbatim();
-                    page = evidence.pageIndex();
-                    break;
+                if (evidence.pageIndex() != null && !pages.contains(evidence.pageIndex())) {
+                    pages.add(evidence.pageIndex());
+                }
+                if (covering == null && evidence.verbatim() != null
+                        && covers(wanted, evidence.verbatim()) && evidence.pageIndex() != null) {
+                    covering = evidence.verbatim();
+                    coveringPage = evidence.pageIndex();
                 }
             }
-            if (text == null && fact.valueText() != null && covers(wanted, fact.valueText())) {
-                text = fact.valueText();
-                page = firstPage(fact);
+            boolean valueCovers = fact.valueText() != null && covers(wanted, fact.valueText());
+            if (covering == null && !valueCovers) {
+                continue;
             }
-            if (text != null && page != null) {
-                answers.add(new ReportAnswer(ReportAnswer.FACT, text, page));
+            if (pages.size() > 1 && fact.valueText() != null && !fact.valueText().isBlank()) {
+                answers.add(new ReportAnswer(ReportAnswer.FACT, fact.valueText(), pages.get(0),
+                        false, pages));
+            } else if (covering != null && coveringPage != null) {
+                answers.add(new ReportAnswer(ReportAnswer.FACT, covering, coveringPage));
+            } else if (valueCovers && !pages.isEmpty()) {
+                answers.add(new ReportAnswer(ReportAnswer.FACT, fact.valueText(), pages.get(0)));
             }
         }
     }
 
     private void addDocumentTypes(long mandateId, List<String> wanted, List<ReportAnswer> answers)
             throws SQLException {
-        String sql = "SELECT d.doc_type_code, MIN(pg.page_index) AS page_index"
+        String sql = "SELECT d.doc_type_code, COALESCE("
+                + " (SELECT MIN(p.page_index) FROM document_page dp"
+                + "   JOIN page p ON p.page_id = dp.page_id"
+                + "   WHERE dp.document_id = d.document_id),"
+                + " (SELECT MIN(p.page_index) FROM page p"
+                + "   JOIN document_version dv"
+                + "     ON dv.document_version_id = p.document_version_id"
+                + "   WHERE dv.document_id = d.document_id)"
+                + " ) AS page_index"
                 + " FROM document d"
-                + " JOIN document_version dv ON dv.document_id = d.document_id"
-                + " JOIN page pg ON pg.document_version_id = dv.document_version_id"
                 + " WHERE d.mandate_id = ? AND d.status != 'deleted_by_analyst'"
-                + " AND d.doc_type_code IS NOT NULL"
-                + " GROUP BY d.document_id, d.doc_type_code";
+                + " AND d.doc_type_code IS NOT NULL";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setLong(1, mandateId);
             try (ResultSet rs = ps.executeQuery()) {
@@ -202,19 +215,10 @@ public final class ReportQuestionQueryRunner {
             ps.setLong(1, mandateId);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    String verbatim = rs.getString("verbatim");
-                    String summary = rs.getString("summary");
-                    String heading = rs.getString("heading");
-                    int pageFrom = rs.getInt("page_from");
-                    Integer provenancePage = asInteger(rs.getObject("page_index"));
-                    if (verbatim != null && covers(wanted, verbatim)) {
-                        answers.add(new ReportAnswer(ReportAnswer.PASSAGE, verbatim,
-                                provenancePage != null ? provenancePage : pageFrom));
-                    } else if (summary != null && covers(wanted, summary)) {
-                        answers.add(new ReportAnswer(ReportAnswer.PASSAGE, summary, pageFrom));
-                    } else if (heading != null && covers(wanted, heading)) {
-                        answers.add(new ReportAnswer(ReportAnswer.PASSAGE, heading, pageFrom));
-                    }
+                    addCascade(ReportAnswer.PASSAGE, rs.getString("verbatim"),
+                            rs.getString("summary"), rs.getString("heading"),
+                            rs.getInt("page_from"), asInteger(rs.getObject("page_index")),
+                            wanted, answers);
                 }
             }
         }
@@ -235,16 +239,9 @@ public final class ReportQuestionQueryRunner {
                     if (page == null) {
                         continue;
                     }
-                    String verbatim = rs.getString("verbatim_text");
-                    String summary = rs.getString("summary");
-                    String heading = rs.getString("heading");
-                    if (verbatim != null && covers(wanted, verbatim)) {
-                        answers.add(new ReportAnswer(ReportAnswer.CLAUSE, verbatim, page));
-                    } else if (summary != null && covers(wanted, summary)) {
-                        answers.add(new ReportAnswer(ReportAnswer.CLAUSE, summary, page));
-                    } else if (heading != null && covers(wanted, heading)) {
-                        answers.add(new ReportAnswer(ReportAnswer.CLAUSE, heading, page));
-                    }
+                    addCascade(ReportAnswer.CLAUSE, rs.getString("verbatim_text"),
+                            rs.getString("summary"), rs.getString("heading"),
+                            page, page, wanted, answers);
                 }
             }
         }
@@ -275,6 +272,22 @@ public final class ReportQuestionQueryRunner {
         }
     }
 
+    /**
+     * Verbatim wins, then the summary, then the heading. The verbatim cites its
+     * own page when that page is known.
+     */
+    private static void addCascade(String store, String verbatim, String summary, String heading,
+            int page, Integer verbatimPage, List<String> wanted, List<ReportAnswer> answers) {
+        if (verbatim != null && covers(wanted, verbatim)) {
+            answers.add(new ReportAnswer(store, verbatim,
+                    verbatimPage != null ? verbatimPage : page));
+        } else if (summary != null && covers(wanted, summary)) {
+            answers.add(new ReportAnswer(store, summary, page));
+        } else if (heading != null && covers(wanted, heading)) {
+            answers.add(new ReportAnswer(store, heading, page));
+        }
+    }
+
     private static Integer asInteger(Object value) {
         if (value == null) {
             return null;
@@ -283,15 +296,6 @@ public final class ReportQuestionQueryRunner {
             return number.intValue();
         }
         return Integer.valueOf(value.toString());
-    }
-
-    private static Integer firstPage(FactRow fact) {
-        for (FactRow.EvidenceRow evidence : fact.evidence()) {
-            if (evidence.pageIndex() != null) {
-                return evidence.pageIndex();
-            }
-        }
-        return null;
     }
 
     private static boolean covers(List<String> wanted, String stored) {

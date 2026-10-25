@@ -2,7 +2,10 @@ package com.resurgent.tev.doc.classify;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.resurgent.tev.doc.assess.AssessChecklistRunner;
+import com.resurgent.tev.doc.assess.AssessClausesRunner;
+import com.resurgent.tev.doc.assess.AssessProfileRunner;
 import com.resurgent.tev.doc.assess.DocAssessRunner;
 import com.resurgent.tev.doc.db.AssessmentRepository;
 import com.resurgent.tev.doc.db.DocumentRepository;
@@ -10,7 +13,13 @@ import com.resurgent.tev.doc.db.DocumentRepository.HeldDocument;
 import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.db.MandateQaQueryRunner;
 import com.resurgent.tev.doc.db.ReportQuestionQueryRunner;
+import com.resurgent.tev.doc.extract.ExtractClient;
+import com.resurgent.tev.doc.extract.ExtractRequest;
+import com.resurgent.tev.doc.extract.ExtractResult;
+import com.resurgent.tev.doc.extract.ExtractService;
+import com.resurgent.tev.doc.extract.ExtractStats;
 import com.resurgent.tev.doc.ingest.BlobStore;
+import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.doc.query.FactQuery;
 import com.resurgent.tev.doc.query.FactRow;
 import com.resurgent.tev.doc.query.MandateQa;
@@ -294,6 +303,204 @@ class SeveralDocumentsInOneFileTest {
     }
 
     @Test
+    void clausesAreReadOnlyFromTheAgreement() throws Exception {
+        Stored file = seed("Volume 2", "volume-2.pdf", "other", null, List.of(
+                List.of(
+                        line("paragraph", "Project capacity: 25 MW"),
+                        line("paragraph", "Project cost: Rs. 120 crore"),
+                        line("paragraph", "Technology: monocrystalline modules on single-axis trackers"),
+                        line("paragraph", "Plant and machinery: modules, inverters, and mounting structures"),
+                        line("paragraph", "12. TERMINATION"),
+                        line("paragraph", "The project report may be withdrawn on ninety days notice.")),
+                List.of(
+                        line("paragraph", "The seller is Helios Power Private Limited."),
+                        line("paragraph", "The buyer is the state distribution licensee."),
+                        line("paragraph", "The tariff is Rs. 3.10 per kWh."),
+                        line("paragraph", "The term of the agreement is 25 years."),
+                        line("paragraph", "12. TERMINATION"),
+                        line("paragraph",
+                                "Either party may terminate this Agreement on ninety (90) days prior written notice."))));
+
+        type(file.versionId());
+        Held agreement = heldDocuments().stream()
+                .filter(document -> "agreement.ppa".equals(document.docTypeCode()))
+                .findFirst().orElseThrow();
+
+        new AssessClausesRunner().run(MANDATE, dbPath, null);
+
+        List<MandateQa.ClauseRow> clauses = MandateQaQueryRunner
+                .query(dbPath, MandateQaQuery.forMandate(MANDATE)).clauses();
+        assertThat(clauses).isNotEmpty();
+        assertThat(clauses).allSatisfy(clause -> {
+            assertThat(clause.documentVersionId()).isEqualTo(agreement.documentVersionId());
+            assertThat(clause.verbatim()).contains("terminate this Agreement");
+            assertThat(clause.verbatim()).doesNotContain("project report may be withdrawn");
+            assertThat(clause.pageStart()).isEqualTo(2);
+        });
+    }
+
+    @Test
+    void industryAndCountryAreReadFromAPageThatBelongsToNoDocument() throws Exception {
+        Stored file = seed("Volume 2", "volume-2.pdf", "other",
+                "{\"file_modified_at\":\"2020-08-15T00:00:00Z\"}", List.of(
+                List.of(
+                        line("heading", "Index"),
+                        line("paragraph",
+                                "The works in this volume are for a solar power project in India.")),
+                List.of(
+                        line("paragraph", "Report date: 4 January 2024"),
+                        line("paragraph", "Project capacity: 25 MW"),
+                        line("paragraph", "Project cost: Rs. 120 crore"),
+                        line("paragraph", "Technology: monocrystalline modules on single-axis trackers"),
+                        line("paragraph", "Plant and machinery: modules, inverters, and mounting structures")),
+                agreementPage()));
+
+        type(file.versionId());
+        List<Held> held = heldDocuments();
+        assertThat(held).allSatisfy(document -> assertThat(document.pages()).doesNotContain(1));
+        Held report = held.stream()
+                .filter(document -> "report.dpr".equals(document.docTypeCode()))
+                .findFirst().orElseThrow();
+        Held agreement = held.stream()
+                .filter(document -> "agreement.ppa".equals(document.docTypeCode()))
+                .findFirst().orElseThrow();
+
+        new AssessProfileRunner().run(MANDATE, dbPath, null);
+
+        MandateQa qa = MandateQaQueryRunner.query(dbPath, MandateQaQuery.forMandate(MANDATE));
+        assertThat(qa.industries()).anySatisfy(industry -> {
+            assertThat(industry.industry()).containsIgnoringCase("solar");
+            assertThat(industry.pageIndex()).isEqualTo(1);
+        });
+        assertThat(qa.country()).isNotNull();
+        assertThat(qa.country().country()).isEqualTo("India");
+        assertThat(qa.country().pageIndex()).isEqualTo(1);
+
+        MandateQa.DocumentDateRow reportDate = dateOf(report.documentVersionId());
+        MandateQa.DocumentDateRow agreementDate = dateOf(agreement.documentVersionId());
+        assertThat(reportDate.documentDate()).isEqualTo("2024-01-04");
+        assertThat(reportDate.dateSource()).isEqualTo("stated");
+        assertThat(agreementDate.dateSource()).isEqualTo("file_metadata");
+        assertThat(agreementDate.documentDate()).isEqualTo("2020-08-15");
+    }
+
+    @Test
+    void twoQuotationsKeepBothFactSetsAndTheChecklistKeepsEachDocumentsFacts() throws Exception {
+        publishFactChecklist();
+        Stored file = seedExtractable("Volume 2", "volume-2.pdf", List.of(
+                List.of(
+                        line("paragraph", "Vendor: Alpha Modules Private Limited"),
+                        line("paragraph", "Grand Total: Rs. 10,00,000")),
+                List.of(
+                        line("paragraph", "Vendor: Beta Structures Private Limited"),
+                        line("paragraph", "Grand Total: Rs. 4,00,000"))));
+
+        type(file.versionId());
+        List<Held> held = heldDocuments();
+        assertThat(held).hasSize(2);
+        Held alpha = held.stream().filter(document -> document.pages().equals(List.of(1)))
+                .findFirst().orElseThrow();
+        Held beta = held.stream().filter(document -> document.pages().equals(List.of(2)))
+                .findFirst().orElseThrow();
+
+        ExtractService extract = new ExtractService();
+        extract.read(dbPath, alpha.documentId(), MANDATE, PackLoader.findSeed("quotation.vendor"),
+                new NoCloud(), "test");
+        extract.read(dbPath, beta.documentId(), MANDATE, PackLoader.findSeed("quotation.vendor"),
+                new NoCloud(), "test");
+
+        assertThat(factsOf(alpha.documentId())).anySatisfy(fact -> {
+            assertThat(fact.fieldKey()).isEqualTo("gross_total");
+            assertThat(fact.valueText()).contains("10,00,000");
+        });
+        assertThat(factsOf(beta.documentId())).anySatisfy(fact -> {
+            assertThat(fact.fieldKey()).isEqualTo("gross_total");
+            assertThat(fact.valueText()).contains("4,00,000");
+        });
+    }
+
+    @Test
+    void aProjectReportCostAndAnAgreementTariffStayOnTheirOwnDocuments() throws Exception {
+        publishFactChecklist();
+        Stored file = seedExtractable("Volume 2", "volume-2.pdf", List.of(
+                reportPage(),
+                List.of(
+                        line("paragraph", "The seller is Helios Power Private Limited."),
+                        line("paragraph", "Seller: Helios Power Private Limited"),
+                        line("paragraph", "The buyer is the state distribution licensee."),
+                        line("paragraph", "Buyer: the state distribution licensee"),
+                        line("paragraph", "The tariff is Rs. 3.10 per kWh."),
+                        line("paragraph", "Tariff: Rs. 3.10 per kWh"),
+                        line("paragraph", "The term of the agreement is 25 years."))));
+
+        type(file.versionId());
+        Held report = heldDocuments().stream()
+                .filter(document -> "report.dpr".equals(document.docTypeCode()))
+                .findFirst().orElseThrow();
+        Held agreement = heldDocuments().stream()
+                .filter(document -> "agreement.ppa".equals(document.docTypeCode()))
+                .findFirst().orElseThrow();
+
+        ExtractService extract = new ExtractService();
+        extract.read(dbPath, report.documentId(), MANDATE, PackLoader.findSeed("report.dpr"),
+                new NoCloud(), "test");
+        extract.read(dbPath, agreement.documentId(), MANDATE, PackLoader.findSeed("agreement.ppa"),
+                new NoCloud(), "test");
+
+        assertThat(factsOf(report.documentId())).anyMatch(fact -> "project_cost".equals(fact.fieldKey()));
+        assertThat(factsOf(report.documentId())).noneMatch(fact -> "tariff".equals(fact.fieldKey()));
+        assertThat(factsOf(agreement.documentId())).anyMatch(fact -> "tariff".equals(fact.fieldKey()));
+        assertThat(factsOf(agreement.documentId()))
+                .noneMatch(fact -> "project_cost".equals(fact.fieldKey()));
+
+        MandateQa qa = assess();
+        MandateQa.ChecklistResultRow cost = item(qa, "report_cost");
+        MandateQa.ChecklistResultRow tariff = item(qa, "agreement_tariff");
+        assertThat(cost.status()).isEqualTo("provided");
+        assertThat(cost.documentVersionId()).isEqualTo(report.documentVersionId());
+        assertThat(tariff.status()).isEqualTo("provided");
+        assertThat(tariff.documentVersionId()).isEqualTo(agreement.documentVersionId());
+    }
+
+    @Test
+    void powerPurchaseQuestionIsAnsweredFromTheLaterWorkNotTheIndex() throws Exception {
+        Stored file = seed("Volume 2", "volume-2.pdf", "other", null, List.of(
+                List.of(
+                        line("heading", "Index"),
+                        line("paragraph", "1. Project report. 2. Power purchase agreement.")),
+                reportPage(),
+                agreementPage()));
+
+        type(file.versionId());
+
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            List<ReportAnswer> answers = new ReportQuestionQueryRunner(db.connection())
+                    .answer(new ReportQuestion(MANDATE, "Do we have the power purchase agreement?"));
+            assertThat(answers).anySatisfy(answer -> {
+                assertThat(answer.store()).isEqualTo(ReportAnswer.DOCUMENT_TYPE);
+                assertThat(answer.text()).isEqualTo("Power Purchase Agreement");
+                assertThat(answer.filePage()).isEqualTo(3);
+            });
+        }
+    }
+
+    @Test
+    void aFullyClassifyingContinuationRejoinsTheInterruptedReport() throws Exception {
+        publishPowerPurchaseChecklist();
+        Stored file = seed("Volume 2", "volume-2.pdf", "other", null, List.of(
+                reportPage(),
+                agreementPage(),
+                reportPage()));
+
+        type(file.versionId());
+
+        List<Held> held = heldDocuments();
+        assertThat(held).hasSize(2);
+        assertThat(pagesOf(held, "report.dpr")).containsExactly(1, 3);
+        assertThat(pagesOf(held, "agreement.ppa")).containsExactly(2);
+    }
+
+    @Test
     void aDocumentThatStatesNoDateUsesFileMetadataNotItsNeighboursDate() throws Exception {
         Stored file = seed("Volume 2", "volume-2.pdf", "other",
                 "{\"file_modified_at\":\"2020-08-15T00:00:00Z\"}", List.of(
@@ -434,6 +641,95 @@ class SeveralDocumentsInOneFileTest {
                             .valueText(value)
                             .extractionMethod("deterministic")
                             .build()));
+        }
+    }
+
+    private Stored seedExtractable(String logicalName, String fileName, List<List<Line>> pages)
+            throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            WorkspaceRepository files = new WorkspaceRepository(db.connection());
+            long sourceId = files.insertSourceFile(MANDATE, fileName, fileName + "-hash",
+                    "pdf", "2026-01-01T00:00:00Z", "0.1.0", null);
+            DocumentRepository repo = new DocumentRepository(db.connection());
+            long documentId = repo.insertDocument(MANDATE, logicalName, "other", null);
+            long versionId = repo.insertDocumentVersion(
+                    documentId, "v1", fileName, fileName + "-hash", ".pdf", "other",
+                    pages.size(), false, sourceId, null);
+            int pageIndex = 1;
+            for (List<Line> page : pages) {
+                long pageId = repo.insertPage(versionId, pageIndex, null, null, null);
+                int blockIndex = 0;
+                for (Line line : page) {
+                    repo.insertBlock(pageId, blockIndex, line.kind(), null, null, null, null,
+                            line.text(), line.text(), blockIndex, "test");
+                    blockIndex++;
+                }
+                pageIndex++;
+            }
+            return new Stored(documentId, versionId);
+        }
+    }
+
+    private List<FactRow> factsOf(long documentId) throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            return new FactRepository(db.connection())
+                    .query(FactQuery.forMandate(MANDATE).withDocument(documentId));
+        }
+    }
+
+    private void publishFactChecklist() throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            new AssessmentRepository(db.connection()).insertIndustryRecord(
+                    MANDATE, "solar power", "solar_power", false,
+                    "The file is for a solar project.", null);
+        }
+        Path dir = tempDir.resolve("checklists");
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("in.solar_power.yaml"), """
+                code: in.solar_power
+                version: 1.0.0
+                scope: industry
+                country: IN
+                industries:
+                  - solar_power
+                items:
+                  - key: report_cost
+                    label: Project cost
+                    level: data_point
+                    granularity: mandate
+                    document_type: report.dpr
+                    field_key: project_cost
+                    ontology_path: "economic > Project Cost"
+                    mandatory: true
+                    basis:
+                      kind: practice
+                      text: "The project report states the project cost."
+                    request: "Please state the project cost."
+                  - key: agreement_tariff
+                    label: Tariff
+                    level: data_point
+                    granularity: mandate
+                    document_type: agreement.ppa
+                    field_key: tariff
+                    ontology_path: "commercial > Offtake > Tariff"
+                    mandatory: true
+                    basis:
+                      kind: practice
+                      text: "The power purchase agreement states the tariff."
+                    request: "Please state the tariff."
+                """);
+    }
+
+    /** Local reading must not call a cloud extractor. */
+    private static final class NoCloud implements ExtractClient {
+        @Override
+        public String id() {
+            return "cloud-extract";
+        }
+
+        @Override
+        public ExtractResult extractFieldSchema(ExtractRequest req, JsonNode schema) {
+            return new ExtractResult(id(), null, List.of(), List.of(), ExtractStats.empty());
         }
     }
 

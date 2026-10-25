@@ -6,12 +6,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.FactRepository;
+import com.resurgent.tev.doc.db.ReportQuestionQueryRunner;
 import com.resurgent.tev.doc.db.MandatePolicyRepository;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackCodes;
 import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.doc.query.FactQuery;
 import com.resurgent.tev.doc.query.FactRow;
+import com.resurgent.tev.doc.query.ReportAnswer;
+import com.resurgent.tev.doc.query.ReportQuestion;
 import com.resurgent.tev.doc.residency.DataResidency;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
@@ -90,6 +93,28 @@ class PageBreakExtractTest {
         assertThat(limit.fieldKey()).containsIgnoringCase("sanctioned limit");
         assertThat(limit.valueText()).contains("194.25");
         assertThat(pagesOf(limit)).containsExactly(4, 5);
+    }
+
+    @Test
+    void sanctionedLimitQuestionReturnsTheContinuedFigureAndBothPages() throws Exception {
+        long page4 = page(4);
+        long page5 = page(5);
+        line(page4, 0, "the sanctioned limit of the facility is");
+        line(page5, 0, "194.25 crores");
+        member(reportId, page4);
+        member(reportId, page5);
+
+        new ExtractService().read(dbPath, reportId, MANDATE, reportPack, new RecordingClient(), "test");
+
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            List<ReportAnswer> answers = new ReportQuestionQueryRunner(db.connection())
+                    .answer(new ReportQuestion(MANDATE, "What is the sanctioned limit?"));
+            assertThat(answers).anySatisfy(answer -> {
+                assertThat(answer.store()).isEqualTo(ReportAnswer.FACT);
+                assertThat(answer.text()).isEqualTo("194.25 crores");
+                assertThat(answer.filePages()).containsExactly(4, 5);
+            });
+        }
     }
 
     @Test

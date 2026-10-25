@@ -376,13 +376,19 @@ public final class DocInduceRunner {
 
     private static List<String> loadLayoutText(Connection connection, long documentVersionId)
             throws Exception {
+        Long documentId = documentIdOf(connection, documentVersionId);
+        boolean members = documentId != null && hasMemberPages(connection, documentId);
+        long key = members ? documentId : documentVersionId;
+        String pageJoin = members
+                ? " JOIN document_page dp ON dp.page_id = p.page_id WHERE dp.document_id = ?"
+                : " WHERE p.document_version_id = ?";
         List<String> lines = new ArrayList<>();
         try (var ps = connection.prepareStatement(
                 "SELECT COALESCE(NULLIF(b.text_norm, ''), b.text_raw) FROM block b"
                         + " JOIN page p ON p.page_id = b.page_id"
-                        + " WHERE p.document_version_id = ?"
+                        + pageJoin
                         + " ORDER BY p.page_index, b.block_index LIMIT 120")) {
-            ps.setLong(1, documentVersionId);
+            ps.setLong(1, key);
             try (var rs = ps.executeQuery()) {
                 while (rs.next()) {
                     String text = rs.getString(1);
@@ -397,9 +403,9 @@ public final class DocInduceRunner {
                         + " JOIN table_grid tg ON tg.table_grid_id = tc.table_grid_id"
                         + " JOIN block b ON b.block_id = tg.block_id"
                         + " JOIN page p ON p.page_id = b.page_id"
-                        + " WHERE p.document_version_id = ?"
+                        + pageJoin
                         + " ORDER BY p.page_index, tc.row_index, tc.col_index")) {
-            ps.setLong(1, documentVersionId);
+            ps.setLong(1, key);
             try (var rs = ps.executeQuery()) {
                 while (rs.next()) {
                     String text = rs.getString(1);
@@ -409,10 +415,30 @@ public final class DocInduceRunner {
                 }
             }
         }
-        if (lines.isEmpty()) {
+        if (lines.isEmpty() && !members) {
             lines.addAll(new CloudParsePageRepository(connection).loadTextPages(documentVersionId));
         }
         return lines.stream().limit(120).toList();
+    }
+
+    private static Long documentIdOf(Connection connection, long documentVersionId) throws Exception {
+        try (var ps = connection.prepareStatement(
+                "SELECT document_id FROM document_version WHERE document_version_id = ?")) {
+            ps.setLong(1, documentVersionId);
+            try (var rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : null;
+            }
+        }
+    }
+
+    private static boolean hasMemberPages(Connection connection, long documentId) throws Exception {
+        try (var ps = connection.prepareStatement(
+                "SELECT 1 FROM document_page WHERE document_id = ? LIMIT 1")) {
+            ps.setLong(1, documentId);
+            try (var rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
     }
 
     /**

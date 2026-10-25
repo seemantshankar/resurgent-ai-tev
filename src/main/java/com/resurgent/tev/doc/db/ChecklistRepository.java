@@ -491,12 +491,16 @@ public final class ChecklistRepository {
         Map<Long, Double> scores = new LinkedHashMap<>();
         Map<Long, FactEvidenceRow> best = new LinkedHashMap<>();
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT f.fact_id, f.document_version_id, f.field_key, f.ontology_path,"
+                "SELECT f.fact_id,"
+                        + " COALESCE((SELECT owner.current_version_id FROM document owner"
+                        + "    WHERE owner.document_id = f.document_id),"
+                        + "    f.document_version_id) AS document_version_id,"
+                        + " f.field_key, f.ontology_path,"
                         + " f.entity_id, f.site_id, f.confidence, f.value_text, e.ordinal,"
                         + " e.source_text, e.resolution, e.provenance_id, p.page_index"
                         + " FROM fact f"
                         + " JOIN document_version dv ON dv.document_version_id = f.document_version_id"
-                        + " JOIN document d ON d.document_id = dv.document_id"
+                        + " JOIN document d ON d.document_id = COALESCE(f.document_id, dv.document_id)"
                         + " LEFT JOIN fact_evidence e ON e.fact_id = f.fact_id"
                         + " LEFT JOIN provenance_doc pd ON pd.provenance_id = e.provenance_id"
                         + " LEFT JOIN page p ON p.page_id = pd.page_id"

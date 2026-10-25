@@ -104,7 +104,7 @@ public final class AssessProfileRunner implements AssessStage {
             // the new provenance insert can never be deleted by the same run.
             assessment.clearDocumentDate(version.documentVersionId());
             String kind = kindFor(version, kindsByPack);
-            List<PageText> pages = assessment.pageTexts(version.documentVersionId());
+            List<PageText> pages = assessment.memberPageTexts(version.documentVersionId());
             Optional<StatedDate> stated = DocumentDateScanner.scan(kind, pages);
             if (stated.isEmpty()) {
                 stated = LlmDocumentDate.find(client, kind, pages, usage::add);
@@ -223,7 +223,7 @@ public final class AssessProfileRunner implements AssessStage {
     /** The provenance row for a stated date; null when the quote is not in the layout. */
     private static Long insertDateProvenance(AssessmentRepository assessment,
             DocumentRepository docs, VersionRow version, StatedDate stated) throws Exception {
-        Optional<BlockAnchor> anchor = assessment.findBlockAnchor(
+        Optional<BlockAnchor> anchor = assessment.findMemberBlockAnchor(
                 version.documentVersionId(), stated.quote());
         if (anchor.isEmpty()) {
             return null;

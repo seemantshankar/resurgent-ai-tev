@@ -1,16 +1,19 @@
 package com.resurgent.tev.doc.classify;
 
 import com.resurgent.tev.doc.db.DocumentRepository;
+import com.resurgent.tev.doc.induce.SpineCatalog;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -19,11 +22,13 @@ import java.util.regex.Pattern;
  * <p>A page that states a known document starts that document. A page that states
  * two works belongs to both, joining a work already open rather than copying it.
  * A later page that states the same document on its own is another document, so
- * two quotations are not merged. A page that only continues a work already
- * started — including after another document — stays with that work. A heading
- * that only names a type stays with the preceding document. An index and a blank
- * page belong to none. Returns empty when no page states a known document, and
- * writes nothing.
+ * two quotations are not merged. A page that states an earlier work after a
+ * different work interrupted it rejoins that work, even when the page would
+ * classify as that type on its own. A heading that only names a type stays with
+ * the preceding document. An index and a blank page belong to none. Pages that
+ * fit no known type, and state enough to learn one, are kept as their own
+ * document. Returns empty when no page states a known document, and writes
+ * nothing.
  */
 final class FileDocuments {
 
@@ -46,6 +51,7 @@ final class FileDocuments {
         if (works.isEmpty()) {
             return Optional.empty();
         }
+        List<StoredPage> untyped = unplaced(pages, works);
         removeSiblingWorks(connection, version.documentId(), version.documentVersionId());
         String logicalName = logicalName(connection, version.documentId());
         String rawMetadata = rawMetadata(connection, version.documentVersionId());
@@ -61,6 +67,13 @@ final class FileDocuments {
             }
             insertWork(connection, docs, version, mandateId, industryTag, packs, classifier,
                     logicalName, rawMetadata, work);
+        }
+        if (inducible(untyped)) {
+            Work unknown = new Work(ClassifyResult.unknown(
+                    List.of("contents fit no known document type"), "deterministic"));
+            unknown.pages.addAll(untyped);
+            insertWork(connection, docs, version, mandateId, industryTag, packs, classifier,
+                    logicalName, rawMetadata, unknown);
         }
         return Optional.of(works.get(0).result);
     }
@@ -89,11 +102,18 @@ final class FileDocuments {
                 continue;
             }
             if (stated && !page.headingOnly()) {
-                Work work = new Work(read.result());
-                claim(waiting, work);
-                work.pages.add(page);
-                works.add(work);
-                current = work;
+                String type = read.result().docTypeCode();
+                if (current != null && type.equals(current.type())) {
+                    current = open(read.result(), page, waiting, works);
+                    continue;
+                }
+                Work earlier = latest(works, type);
+                if (earlier != null) {
+                    earlier.pages.add(page);
+                    current = earlier;
+                    continue;
+                }
+                current = open(read.result(), page, waiting, works);
                 continue;
             }
             if (page.contentCodes.size() == 1) {
@@ -111,6 +131,70 @@ final class FileDocuments {
             }
         }
         return works;
+    }
+
+    /** A page that states a type no work holds yet starts that work. */
+    private static Work open(ClassifyResult result, StoredPage page, List<StoredPage> waiting,
+            List<Work> works) {
+        Work work = new Work(result);
+        claim(waiting, work);
+        work.pages.add(page);
+        works.add(work);
+        return work;
+    }
+
+    /**
+     * Pages that state no known document. A heading alone, an index, and a blank
+     * page are not a document.
+     */
+    private static List<StoredPage> unplaced(List<StoredPage> pages, List<Work> works) {
+        Set<Long> held = new HashSet<>();
+        for (Work work : works) {
+            for (StoredPage page : work.pages) {
+                held.add(page.pageId);
+            }
+        }
+        List<StoredPage> rest = new ArrayList<>();
+        for (StoredPage page : pages) {
+            if (held.contains(page.pageId) || page.blank() || page.index() || page.headingOnly()) {
+                continue;
+            }
+            rest.add(page);
+        }
+        return rest;
+    }
+
+    /**
+     * True when the pages state at least two labeled values a new type could be
+     * learned from. A heading alone, or one borrowed figure, does not.
+     */
+    private static boolean inducible(List<StoredPage> pages) {
+        int stated = 0;
+        for (StoredPage page : pages) {
+            for (Block block : page.blocks) {
+                if ("heading".equalsIgnoreCase(block.kind())) {
+                    continue;
+                }
+                String text = block.text();
+                if (text == null || text.isBlank()) {
+                    continue;
+                }
+                String trimmed = text.trim();
+                if (!trimmed.contains(":") && !trimmed.chars().anyMatch(Character::isDigit)) {
+                    continue;
+                }
+                String label = trimmed;
+                int colon = trimmed.indexOf(':');
+                if (colon > 0) {
+                    label = trimmed.substring(0, colon).trim();
+                }
+                if (SpineCatalog.matchLabel(label).isPresent()
+                        || SpineCatalog.matchLabel(trimmed).isPresent()) {
+                    stated++;
+                }
+            }
+        }
+        return stated >= 2;
     }
 
     /**
@@ -248,28 +332,28 @@ final class FileDocuments {
                 }
             }
             for (Long extra : versions) {
-                deleteQuiet(connection,
+                deleteRows(connection,
                         "DELETE FROM doc_classification WHERE document_version_id = ?", extra);
-                deleteQuiet(connection,
+                deleteRows(connection,
                         "DELETE FROM document_relation WHERE from_document_version_id = ?"
                                 + " OR to_document_version_id = ?", extra, extra);
             }
-            deleteQuiet(connection, "DELETE FROM document_page WHERE document_id = ?", sibling);
-            deleteQuiet(connection,
+            new DocumentRepository(connection).replaceMemberPages(sibling, List.of());
+            deleteRows(connection,
                     "UPDATE document SET current_version_id = NULL WHERE document_id = ?", sibling);
-            deleteQuiet(connection, "DELETE FROM document_version WHERE document_id = ?", sibling);
-            deleteQuiet(connection, "DELETE FROM document WHERE document_id = ?", sibling);
+            deleteRows(connection, "DELETE FROM document_version WHERE document_id = ?", sibling);
+            deleteRows(connection, "DELETE FROM document WHERE document_id = ?", sibling);
         }
     }
 
-    private static void deleteQuiet(Connection connection, String sql, long id) throws SQLException {
+    private static void deleteRows(Connection connection, String sql, long id) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setLong(1, id);
             ps.executeUpdate();
         }
     }
 
-    private static void deleteQuiet(Connection connection, String sql, long left, long right)
+    private static void deleteRows(Connection connection, String sql, long left, long right)
             throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setLong(1, left);
