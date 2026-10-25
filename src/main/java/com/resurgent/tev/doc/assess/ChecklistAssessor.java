@@ -420,6 +420,13 @@ public final class ChecklistAssessor {
         FactEvidenceRow best = best(scopedFacts(candidates, scope, factsByVersion));
         DocScopeRow owning = candidates.get(0);
         if (best == null) {
+            if (owning.memberPageIndex() != null) {
+                String cite = "the " + item.documentType() + " document is provided"
+                        + forScope(scope) + " (page " + owning.memberPageIndex() + ")";
+                return result(effective, scope, STATUS_PROVIDED, cite,
+                        owning.documentVersionId(), owning.fileName(),
+                        owning.memberPageIndex(), 1.0, cite, null);
+            }
             return unclear(effective, scope, owning, null, null,
                     "the " + item.documentType() + " document is present" + forScope(scope)
                             + " but no readable evidence was extracted from it");

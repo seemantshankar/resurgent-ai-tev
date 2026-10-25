@@ -73,13 +73,16 @@ public final class ChecklistRepository {
      * @param docTypeCode classified pack code, or null when unclassified
      * @param confidence classification confidence, or null
      * @param industryTag industry tag recorded at classification, or null
+     * @param memberPageIndex lowest file page recorded as belonging to this document,
+     *     or null when the file was not stored as that document
      */
     public record DocScopeRow(
             long documentVersionId,
             String fileName,
             String docTypeCode,
             Double confidence,
-            String industryTag) {}
+            String industryTag,
+            Integer memberPageIndex) {}
 
     /**
      * One fact with its best evidence line, for checklist matching.
@@ -449,7 +452,10 @@ public final class ChecklistRepository {
     public List<DocScopeRow> documentScopes(long mandateId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT dv.document_version_id, dv.file_name, dc.doc_type_code, dc.confidence,"
-                        + " dc.industry_tag"
+                        + " dc.industry_tag,"
+                        + " (SELECT MIN(p.page_index) FROM document_page dp"
+                        + "   JOIN page p ON p.page_id = dp.page_id"
+                        + "   WHERE dp.document_id = d.document_id) AS member_page"
                         + " FROM document_version dv"
                         + " JOIN document d ON d.document_id = dv.document_id"
                         + " LEFT JOIN doc_classification dc"
@@ -460,12 +466,15 @@ public final class ChecklistRepository {
             try (ResultSet rs = ps.executeQuery()) {
                 List<DocScopeRow> rows = new ArrayList<>();
                 while (rs.next()) {
+                    int memberPage = rs.getInt("member_page");
+                    Integer member = rs.wasNull() ? null : memberPage;
                     rows.add(new DocScopeRow(
                             rs.getLong("document_version_id"),
                             rs.getString("file_name"),
                             rs.getString("doc_type_code"),
                             asDouble(rs.getObject("confidence")),
-                            rs.getString("industry_tag")));
+                            rs.getString("industry_tag"),
+                            member));
                 }
                 return rows;
             }

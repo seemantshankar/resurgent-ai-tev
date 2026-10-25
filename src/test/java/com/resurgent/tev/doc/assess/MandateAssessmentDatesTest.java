@@ -101,7 +101,8 @@ class MandateAssessmentDatesTest {
         long versionId = ingestAndLayout(
                 writePdf("quotation_down.pdf",
                         "Quotation for Supply of Solar Modules",
-                        "Supply of 10 MW solar modules at the indicated rates."),
+                        "Supply of 10 MW solar modules at the indicated rates.",
+                        "Grand Total: Rs. 10,00,000"),
                 "Vendor Quote - Down", "quotation");
         classify(versionId, quotationPack);
 
@@ -174,6 +175,7 @@ class MandateAssessmentDatesTest {
                 writePdf("quotation_month.pdf",
                         "Quotation for Supply of Solar Modules",
                         "Supply of 10 MW solar modules at the indicated rates.",
+                        "Grand Total: Rs. 10,00,000",
                         "The prices quoted above are firm through March 2025."),
                 "Vendor Quote - Solar", "quotation");
         classify(versionId, quotationPack);
@@ -269,7 +271,7 @@ class MandateAssessmentDatesTest {
         long versionId = ingestAndLayout(
                 writePdf("quotation_stats.pdf",
                         "Quotation for Supply of Solar Modules",
-                        "The prices quoted above are firm through March 2025."),
+                        "Vendor prices quoted above are firm through March 2025."),
                 "Vendor Quote - Stats", "quotation");
         classify(versionId, quotationPack);
 

@@ -368,6 +368,30 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * File pages recorded as belonging to this document, in page order.
+     * Empty when the file was not stored as that document.
+     *
+     * @param documentId logical document
+     * @return one-based page indexes
+     * @throws SQLException if the lookup fails
+     */
+    public List<Integer> pageIndexesOf(long documentId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT p.page_index FROM document_page dp"
+                        + " JOIN page p ON p.page_id = dp.page_id"
+                        + " WHERE dp.document_id = ? ORDER BY p.page_index")) {
+            ps.setLong(1, documentId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<Integer> pages = new ArrayList<>();
+                while (rs.next()) {
+                    pages.add(rs.getInt(1));
+                }
+                return pages;
+            }
+        }
+    }
+
     public Optional<Long> findPageId(long documentVersionId, int pageIndex) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT page_id FROM page WHERE document_version_id = ? AND page_index = ?")) {

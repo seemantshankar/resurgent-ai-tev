@@ -3,6 +3,7 @@ package com.resurgent.tev.doc.classify;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.induce.DocInduceRunner;
 import com.resurgent.tev.doc.induce.PackStore;
+import com.resurgent.tev.doc.induce.SpineCatalog;
 import com.resurgent.tev.doc.ingest.BlobStore;
 import com.resurgent.tev.doc.llm.DocLlmClient;
 import com.resurgent.tev.doc.llm.DocLlmEnvironment;
@@ -76,12 +77,12 @@ public final class DocClassifyRunner {
                     docs.findVersion(documentVersionId).orElseThrow(
                             () -> new IllegalArgumentException(
                                     "unknown document_version " + documentVersionId));
-            String page1Text = DocTypeClassifier.loadPage1Text(connection, documentVersionId);
+            String pageText = DocTypeClassifier.loadContents(connection, documentVersionId);
             ClassifyRequest request = new ClassifyRequest(
                     documentVersionId,
                     version.fileRole(),
                     version.fileName(),
-                    page1Text,
+                    pageText,
                     industryTag,
                     packs,
                     force);
@@ -89,22 +90,33 @@ public final class DocClassifyRunner {
             try {
                 DocTypeClassifier classifier = new DocTypeClassifier(tieBreak);
                 ClassifyResult result = classifier.classify(request, connection);
-                if (autoInduce && unknown(result)) {
+                if (autoInduce && unknown(result)
+                        && statesInducibleContents(connection, documentVersionId)) {
                     // Release the write lock before induction opens its own connection.
+                    // The induced type is kept. It is not sent back through a heading contest.
                     connection.commit();
                     connection.setAutoCommit(true);
-                    induceUnknown(mandateId, db, industry);
-                    packs = loadCandidatePacks(db, packDir);
-                    request = new ClassifyRequest(
-                            documentVersionId,
-                            version.fileRole(),
-                            version.fileName(),
-                            DocTypeClassifier.loadPage1Text(connection, documentVersionId),
-                            industryTag,
-                            packs,
-                            true);
+                    DocInduceRunner.Result kept = publishedPack(
+                            induceUnknown(mandateId, db, industry));
                     connection.setAutoCommit(false);
-                    result = classifier.classify(request, connection);
+                    if (kept != null) {
+                        String packVersion = kept.packVersion() == null
+                                || kept.packVersion().isBlank()
+                                || "-".equals(kept.packVersion())
+                                ? "1.0.0" : kept.packVersion();
+                        result = new ClassifyResult(
+                                kept.packCode(), kept.packCode(), packVersion, 0.8,
+                                List.of("induced from the page contents and kept"),
+                                ClassifyResult.Status.CLASSIFIED, "induced");
+                        classifier.record(connection, new ClassifyRequest(
+                                documentVersionId,
+                                version.fileRole(),
+                                version.fileName(),
+                                DocTypeClassifier.loadContents(connection, documentVersionId),
+                                industryTag,
+                                List.of(),
+                                true), result);
+                    }
                 }
                 recordUsage(connection, version, mandateId, industryTag, usage);
                 connection.commit();
@@ -139,17 +151,72 @@ public final class DocClassifyRunner {
     }
 
     /** Induces every still-unknown document in the mandate and publishes the packs. */
-    private static void induceUnknown(long mandateId, Path db, String industry) throws Exception {
+    private static List<DocInduceRunner.Result> induceUnknown(long mandateId, Path db,
+            String industry) throws Exception {
         String tag = industry == null || industry.isBlank() || "auto".equalsIgnoreCase(industry)
                 ? "general"
                 : industry;
         try {
-            DocInduceRunner.run(mandateId, db, tag, null, null, null, false);
+            return DocInduceRunner.run(mandateId, db, tag, null, null, null, false);
         } catch (IllegalArgumentException e) {
             if (e.getMessage() == null || !e.getMessage().contains("no matching documents")) {
                 throw e;
             }
+            return List.of();
         }
+    }
+
+    private static DocInduceRunner.Result publishedPack(List<DocInduceRunner.Result> induced) {
+        if (induced == null) {
+            return null;
+        }
+        for (DocInduceRunner.Result result : induced) {
+            if (result.published() && result.packCode() != null && !result.packCode().isBlank()
+                    && !result.packCode().startsWith("(")) {
+                return result;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * True when the body states at least two labeled values a new type could be
+     * learned from. A heading alone, or one borrowed figure, does not.
+     */
+    private static boolean statesInducibleContents(Connection connection, long versionId)
+            throws Exception {
+        int stated = 0;
+        try (var ps = connection.prepareStatement(
+                "SELECT b.block_kind, COALESCE(NULLIF(b.text_norm, ''), b.text_raw)"
+                        + " FROM block b"
+                        + " JOIN page p ON p.page_id = b.page_id"
+                        + " WHERE p.document_version_id = ?"
+                        + " ORDER BY p.page_index, b.block_index")) {
+            ps.setLong(1, versionId);
+            try (var rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String kind = rs.getString(1);
+                    String text = rs.getString(2);
+                    if (text == null || text.isBlank() || "heading".equalsIgnoreCase(kind)) {
+                        continue;
+                    }
+                    String trimmed = text.trim();
+                    if (!trimmed.contains(":") && !trimmed.chars().anyMatch(Character::isDigit)) {
+                        continue;
+                    }
+                    String label = trimmed;
+                    int colon = trimmed.indexOf(':');
+                    if (colon > 0) {
+                        label = trimmed.substring(0, colon).trim();
+                    }
+                    if (SpineCatalog.matchLabel(label).isPresent()
+                            || SpineCatalog.matchLabel(trimmed).isPresent()) {
+                        stated++;
+                    }
+                }
+            }
+        }
+        return stated >= 2;
     }
 
     /**
