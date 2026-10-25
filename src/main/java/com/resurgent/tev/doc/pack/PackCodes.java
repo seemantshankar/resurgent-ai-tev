@@ -1,6 +1,8 @@
 package com.resurgent.tev.doc.pack;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Pack codes that must keep resolving after a rename. The shipped net-worth
@@ -13,6 +15,29 @@ public final class PackCodes {
 
     public static final String NET_WORTH_LEGACY = "identity.promoter_net_worth";
 
+    /** Pack code of a project report. The spine checklist still says {@code project.dpr}. */
+    public static final String PROJECT_REPORT = "report.dpr";
+
+    /** Checklist spelling of {@link #PROJECT_REPORT}. The same document. */
+    public static final String PROJECT_REPORT_LEGACY = "project.dpr";
+
+    private static final Map<String, String> CANONICAL_OF;
+    private static final Map<String, List<String>> EQUIVALENTS_OF;
+
+    static {
+        Map<String, List<String>> groups = new LinkedHashMap<>();
+        groups.put(NET_WORTH, List.of(NET_WORTH, NET_WORTH_LEGACY));
+        groups.put(PROJECT_REPORT, List.of(PROJECT_REPORT, PROJECT_REPORT_LEGACY));
+        Map<String, String> canonical = new LinkedHashMap<>();
+        for (Map.Entry<String, List<String>> group : groups.entrySet()) {
+            for (String alias : group.getValue()) {
+                canonical.put(alias, group.getKey());
+            }
+        }
+        CANONICAL_OF = Map.copyOf(canonical);
+        EQUIVALENTS_OF = Map.copyOf(groups);
+    }
+
     private PackCodes() {}
 
     /** The code stored on the seed pack. A legacy alias maps to that code. */
@@ -21,10 +46,7 @@ public final class PackCodes {
             return null;
         }
         String trimmed = code.trim();
-        if (NET_WORTH_LEGACY.equals(trimmed)) {
-            return NET_WORTH;
-        }
-        return trimmed;
+        return CANONICAL_OF.getOrDefault(trimmed, trimmed);
     }
 
     /** True when both strings name the same pack, including the net-worth alias. */
@@ -37,9 +59,11 @@ public final class PackCodes {
 
     /** Every spelling that should hit the same pack row. */
     public static List<String> equivalents(String code) {
-        if (NET_WORTH.equals(canonical(code))) {
-            return List.of(NET_WORTH, NET_WORTH_LEGACY);
+        String canonical = canonical(code);
+        if (canonical == null) {
+            return List.of();
         }
-        return code == null ? List.of() : List.of(code);
+        List<String> group = EQUIVALENTS_OF.get(canonical);
+        return group != null ? group : List.of(code);
     }
 }

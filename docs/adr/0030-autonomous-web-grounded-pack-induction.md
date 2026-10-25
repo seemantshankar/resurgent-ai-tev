@@ -1,5 +1,7 @@
 # Autonomous web-grounded pack induction and single-document generalization
 
+The re-classification of an induced pack against heading phrases, and the assumption of one document type per file, are superseded by [ADR 0031](0031-read-each-document-from-its-contents.md). Induction of a new kind of document, single-document generalisation, and pack widening stand.
+
 In M2, `PackInducer` and `Generalizer` were built around multi-document corpus clustering (`clusterDocCount >= 2`): `Generalizer` dropped every non-spine field when `clusterDocCount == 1`, `LlmPackMiningClient` inspected only the first 1,500 characters of raw text without domain or web grounding, `PackInducer` hardcoded empty lists for `tables`, `clauses`, and `passages`, `DocTypeClassifier` filtered out candidate packs whenever `file_role` did not match, and `DocExtractRunner` threw an exception whenever a document remained `unknown`. In practice, TEV and Debt Syndication mandates regularly introduce document types on a single-instance basis (`N = 1`) — including Bank Statements, Resumes/Director Profiles, Credit Rating Reports (CRISIL/ICRA/CARE/India Ratings), Debt Structuring Term Sheets and Information Memoranda, CIBIL/Bureau default screenshots, Land Lease/Sale Deeds, Vendor Quotations, and specialized technical reports. Requiring manual YAML pack creation or multi-document batches causes the pipeline to fail whenever a new industry or mandate document arrives.
 
 **Decision.**

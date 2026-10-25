@@ -254,7 +254,8 @@ class ClauseTypePromotionTest {
                 List.of("general"),
                 List.of("Loan Syndication Agreement", "Loan Agreement"),
                 List.of(new PackField("borrower_name", "identity > Legal Name", "identity",
-                        ValueKind.TEXT, true, List.of(), "Borrower name", List.of("Borrower"))),
+                        ValueKind.TEXT, true, List.of(), "Borrower name",
+                        List.of("Borrower", "Lender"))),
                 List.of(), List.of(), List.of(),
                 "execution",
                 new ClauseSection(true, true, List.of(

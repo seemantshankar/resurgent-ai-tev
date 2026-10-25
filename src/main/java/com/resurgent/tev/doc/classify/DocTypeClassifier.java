@@ -3,8 +3,10 @@ package com.resurgent.tev.doc.classify;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resurgent.tev.doc.db.CloudParsePageRepository;
-import com.resurgent.tev.doc.ingest.DocumentFileKind;
+import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.pack.DocTypePack;
+import com.resurgent.tev.doc.pack.PackField;
+import com.resurgent.tev.doc.pack.PackPassage;
 import com.resurgent.tev.parser.db.Timestamps;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -12,43 +14,27 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 /**
- * Document-side classification between layout and extract (S2.12).
+ * Document-side classification between layout and extract (S2.12, ADR 0031).
  *
- * <p>Deterministic first: score every seed and induced pack on {@code identity_signals}
- * against page-1 text, title blocks, and the file name. {@code file_role} or family
- * alignment is only a {@code +0.05} tie-break when those signals already match; a
- * generic or mismatched role, including {@code other}, never drops a pack. A winner
- * must clear a score floor and a margin, or win an equal-signal tie by that role
- * boost. Remaining ties and low scores go to {@link ClassifyTieBreak}; the offline
- * default declines and the document stays {@code unknown}. A pack is never invented.
+ * <p>The type is read from the contents the pages state: pack field synonyms, passage
+ * terms, and table names. A heading, a title, or a filename that only names a type
+ * does not assign one. A phrase that more than one type states does not assign one
+ * either. Two distinct fields are enough; one field is enough only when the pages
+ * also name that type. Synonyms of the same field count once. A word inside a title
+ * does not count unless that line states it as a label or a sentence.
+ * Two candidate types that state the same amount of contents go to {@link ClassifyTieBreak};
+ * the offline default declines and the document stays {@code unknown}. A pack is never
+ * invented here.
  */
 public final class DocTypeClassifier {
-
-    /** Minimum pack score (one full page/title phrase hit) to classify without a tie-break. */
-    static final double MIN_SCORE = 1.0;
-
-    /** Required gap between the winner and the runner-up for a deterministic win. */
-    static final double WIN_MARGIN = 1.0;
-
-    /** Weight of a signal hit in page-1 / heading text. */
-    private static final double PAGE_HIT = 1.0;
-
-    /** Weight of a signal hit only in the file name. */
-    private static final double FILE_NAME_HIT = 0.5;
-
-    /**
-     * Soft boost when identity signals already matched and {@code file_role} or
-     * family aligns. Too small to outrank a real signal hit; enough to break a tie.
-     */
-    private static final double ROLE_BOOST = 0.05;
-
-    /** Score that maps to confidence 1.0. */
-    private static final double CONFIDENCE_SATURATION = 2.0;
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -100,13 +86,36 @@ public final class DocTypeClassifier {
             }
         }
 
-        ClassifyResult result = score(request);
+        ClassifyResult result = score(request).result();
 
         if (persist) {
             write(connection, request, result);
         }
         return result;
     }
+
+    /**
+     * Scores one stretch of layout text without writing. {@link PageRead#contentCodes()}
+     * names every pack whose own contents the text states, including a single phrase
+     * that is not yet enough to be that document. {@link PageRead#statedCodes()} names
+     * the packs stated strongly enough to be that document on their own.
+     *
+     * @param request score-only or version request (required)
+     * @return the decision and the packs the contents support
+     */
+    PageRead read(ClassifyRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request is required");
+        }
+        Score scored = score(request);
+        return new PageRead(scored.result(), scored.contentCodes(), scored.statedCodes());
+    }
+
+    /**
+     * A classification, every pack whose contents the text mentions, and the packs
+     * stated strongly enough to be that document on their own.
+     */
+    record PageRead(ClassifyResult result, List<String> contentCodes, List<String> statedCodes) {}
 
     /**
      * Gathers whitespace-normalized page-1 block text in reading order, headings
@@ -128,19 +137,9 @@ public final class DocTypeClassifier {
                         + " COALESCE(b.reading_order, b.block_index)")) {
             ps.setLong(1, documentVersionId);
             try (ResultSet rs = ps.executeQuery()) {
-                StringBuilder sb = new StringBuilder();
-                while (rs.next()) {
-                    String text = rs.getString("page_text");
-                    if (text == null || text.isBlank()) {
-                        continue;
-                    }
-                    if (sb.length() > 0) {
-                        sb.append('\n');
-                    }
-                    sb.append(text.trim());
-                }
-                if (!sb.isEmpty()) {
-                    return sb.toString();
+                String joined = joinPageText(rs);
+                if (!joined.isEmpty()) {
+                    return joined;
                 }
             }
         }
@@ -148,150 +147,372 @@ public final class DocTypeClassifier {
                 .loadPageText(documentVersionId, 1).trim();
     }
 
-    private ClassifyResult score(ClassifyRequest request) {
-        List<String> reasons = new ArrayList<>();
-        List<PackScore> scored = new ArrayList<>();
+    /**
+     * Layout text of every page of the version, in page order. Content typing reads
+     * this, not the first page alone. Falls back to persisted cloud text when the
+     * version has no blocks.
+     *
+     * @param connection workspace connection (required)
+     * @param documentVersionId version whose pages are read
+     * @return combined page text, or empty when the file has no layout
+     * @throws SQLException when the lookup fails
+     */
+    public static String loadContents(Connection connection, long documentVersionId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COALESCE(NULLIF(b.text_norm, ''), b.text_raw) AS page_text"
+                        + " FROM block b"
+                        + " JOIN page p ON p.page_id = b.page_id"
+                        + " WHERE p.document_version_id = ?"
+                        + " ORDER BY p.page_index, COALESCE(b.reading_order, b.block_index),"
+                        + " b.block_index")) {
+            ps.setLong(1, documentVersionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                String joined = joinPageText(rs);
+                if (!joined.isEmpty()) {
+                    return joined;
+                }
+            }
+        }
+        List<String> pages = new CloudParsePageRepository(connection)
+                .loadTextPages(documentVersionId);
+        if (pages.isEmpty()) {
+            return "";
+        }
+        return String.join("\n", pages).trim();
+    }
 
+    /** Skips blank blocks and joins the rest with newlines, in the query's order. */
+    private static String joinPageText(ResultSet rs) throws SQLException {
+        StringBuilder sb = new StringBuilder();
+        while (rs.next()) {
+            String text = rs.getString("page_text");
+            if (text == null || text.isBlank()) {
+                continue;
+            }
+            if (!sb.isEmpty()) {
+                sb.append('\n');
+            }
+            sb.append(text.trim());
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Writes a classification that was already decided (an induced type kept as
+     * itself) and records the version's pages as that document.
+     *
+     * @param connection workspace connection (required)
+     * @param request version to record against (required)
+     * @param result decision to store (required)
+     * @throws SQLException when persistence fails
+     */
+    public void record(Connection connection, ClassifyRequest request, ClassifyResult result)
+            throws SQLException {
+        if (connection == null || request == null || result == null) {
+            throw new IllegalArgumentException("connection, request, and result are required");
+        }
+        write(connection, request, result);
+    }
+
+    private Score score(ClassifyRequest request) {
+        List<String> reasons = new ArrayList<>();
         String fileRole = request.fileRole() == null ? "" : request.fileRole().trim();
         reasons.add("file_role=" + (fileRole.isEmpty() ? "(none)" : fileRole)
                 + (request.industryTag() != null && !request.industryTag().isBlank()
                         ? ", industry=" + request.industryTag() : ""));
 
-        for (DocTypePack pack : request.candidatePacks()) {
-            scored.add(scorePack(pack, request, fileRole, reasons));
-        }
-
-        if (scored.isEmpty()) {
+        if (request.candidatePacks().isEmpty()) {
             reasons.add("no candidate packs");
-            return ClassifyResult.unknown(reasons, "deterministic");
+            return new Score(ClassifyResult.unknown(reasons, "deterministic"), List.of(), List.of());
         }
 
-        scored.sort(Comparator.comparingDouble(PackScore::score).reversed()
-                .thenComparing(PackScore::packCode));
-        PackScore top = scored.get(0);
-        PackScore runnerUp = scored.size() > 1 ? scored.get(1) : null;
-        double secondScore = runnerUp == null ? 0.0 : runnerUp.score();
-        double margin = top.score() - secondScore;
-        reasons.add("scores: " + scored.stream()
-                .map(s -> s.packCode() + "=" + s.score())
-                .reduce((a, b) -> a + ", " + b)
-                .orElse("(none)"));
-        reasons.add("winner=" + top.packCode() + " margin=" + margin);
-
-        double secondSignal = runnerUp == null ? 0.0 : runnerUp.signalScore();
-        double signalMargin = top.signalScore() - secondSignal;
-        boolean clearWin = top.signalScore() >= MIN_SCORE && signalMargin >= WIN_MARGIN;
-        boolean roleBrokeTie = !clearWin
-                && runnerUp != null
-                && top.signalScore() >= MIN_SCORE
-                && Math.abs(top.signalScore() - secondSignal) < 1e-9
-                && margin + 1e-9 >= ROLE_BOOST;
-        if (clearWin || roleBrokeTie) {
-            double confidence = confidence(top.score());
-            reasons.add(roleBrokeTie
-                    ? "file_role tie-break (equal identity signals, +" + ROLE_BOOST + ")"
-                    : "deterministic win (score>=MIN, margin>=WIN)");
-            return new ClassifyResult(top.packCode(), top.packCode(), top.packVersion(),
-                    confidence, reasons, ClassifyResult.Status.CLASSIFIED, "deterministic");
+        List<String> pageWords = words(fold(request.page1Text()));
+        List<ContentPhrase> phrases = new ArrayList<>();
+        List<PackReading> readings = new ArrayList<>();
+        for (DocTypePack pack : request.candidatePacks()) {
+            phrases.addAll(contentPhrases(pack));
+            readings.add(new PackReading(pack));
         }
 
-        reasons.add(top.score() < MIN_SCORE
-                ? "low score (below MIN_SCORE) — requesting tie-break"
-                : "tie/low margin — requesting tie-break");
+        Set<String> sharedNoted = new HashSet<>();
+        for (String line : request.page1Text().split("\\R", -1)) {
+            if (line.isBlank()) {
+                continue;
+            }
+            List<String> lineWords = words(fold(line));
+            int colon = line.indexOf(':');
+            boolean bareTitle = colon < 0 && !hasCopula(lineWords) && !hasDigit(line);
+            for (int i = 0; i < lineWords.size(); ) {
+                PhraseHit hit = longest(phrases, lineWords, i);
+                if (hit == null) {
+                    i++;
+                    continue;
+                }
+                // "Vendor Proposal" merely starts with a field word. A label, a
+                // sentence, or a word further along the line still states the field.
+                boolean statedLine = !(bareTitle && i == 0 && hit.length() < lineWords.size());
+                if (statedLine && hit.packCodes().size() == 1) {
+                    String code = hit.packCodes().iterator().next();
+                    for (PackReading reading : readings) {
+                        if (reading.pack.code().equals(code)) {
+                            reading.matched.add(hit.display());
+                            reading.fields.addAll(hit.fieldKeys());
+                        }
+                    }
+                } else if (statedLine && sharedNoted.add(hit.folded())) {
+                    reasons.add("\"" + hit.folded() + "\" is stated by more than one document type"
+                            + " and does not assign one");
+                }
+                i += hit.length();
+            }
+        }
+
+        for (PackReading reading : readings) {
+            List<String> named = matchedIdentity(reading.pack, pageWords);
+            reading.named.addAll(named);
+            for (String signal : named) {
+                reasons.add(reading.pack.code() + " named on the page: " + signal);
+            }
+            if (!reading.matched.isEmpty()) {
+                reasons.add(reading.pack.code() + " contents: "
+                        + String.join("; ", reading.matched));
+            }
+        }
+
+        List<String> contentCodes = new ArrayList<>();
+        List<String> statedCodes = new ArrayList<>();
+        for (PackReading reading : readings) {
+            if (!reading.matched.isEmpty()) {
+                contentCodes.add(reading.pack.code());
+            }
+            if (reading.eligible()) {
+                statedCodes.add(reading.pack.code());
+            }
+        }
+        List<String> codes = List.copyOf(contentCodes);
+        List<String> stated = List.copyOf(statedCodes);
+
+        List<PackReading> eligible = new ArrayList<>();
+        for (PackReading reading : readings) {
+            if (reading.eligible()) {
+                eligible.add(reading);
+            }
+        }
+        if (eligible.isEmpty()) {
+            reasons.add("no document type is stated by the page contents");
+            return new Score(ClassifyResult.unknown(reasons, "deterministic"), codes, stated);
+        }
+        eligible.sort(Comparator.comparingInt((PackReading reading) -> reading.fields.size())
+                .reversed()
+                .thenComparing(reading -> reading.pack.code()));
+        PackReading top = eligible.get(0);
+        List<PackReading> tied = new ArrayList<>();
+        for (PackReading reading : eligible) {
+            if (reading.fields.size() == top.fields.size()) {
+                tied.add(reading);
+            }
+        }
+        if (tied.size() == 1) {
+            reasons.add("contents state " + top.pack.code());
+            return new Score(classified(top, reasons, "deterministic", confidence(top.fields.size())),
+                    codes, stated);
+        }
+
+        reasons.add("equal contents — requesting tie-break");
         ClassifyTieBreak.TieBreakContext context = new ClassifyTieBreak.TieBreakContext(
                 fileRole,
                 request.fileName(),
                 request.page1Text(),
                 request.industryTag(),
-                scored.stream()
-                        .map(s -> new ClassifyTieBreak.ScoredPack(
-                                s.packCode(), s.packVersion(), s.score(), s.matchedSignals(),
-                                s.identitySignals()))
+                tied.stream()
+                        .map(reading -> new ClassifyTieBreak.ScoredPack(
+                                reading.pack.code(), reading.pack.version(),
+                                reading.fields.size(), List.copyOf(reading.matched),
+                                reading.pack.identitySignals()))
                         .toList());
         Optional<ClassifyTieBreak.TieBreakChoice> choice = tieBreak.resolve(context);
         if (choice.isEmpty()) {
             reasons.add("tie-break declined — staying unknown (never invent a pack)");
-            return ClassifyResult.unknown(reasons, "tie-break");
+            return new Score(ClassifyResult.unknown(reasons, "tie-break"), codes, stated);
         }
         ClassifyTieBreak.TieBreakChoice won = choice.get();
-        DocTypePack pack = request.candidatePacks().stream()
-                .filter(p -> p.code().equals(won.packCode()))
-                .findFirst()
-                .orElse(null);
-        if (pack == null) {
-            reasons.add("tie-break chose unknown pack '" + won.packCode() + "' — staying unknown");
-            return ClassifyResult.unknown(reasons, "tie-break");
+        PackReading chosen = null;
+        for (PackReading reading : tied) {
+            if (reading.pack.code().equals(won.packCode())) {
+                chosen = reading;
+                break;
+            }
         }
-        reasons.add("tie-break chose " + pack.code() + ": " + won.reason());
-        return new ClassifyResult(pack.code(), pack.code(), pack.version(),
-                won.confidence(), reasons, ClassifyResult.Status.CLASSIFIED, "tie-break");
+        if (chosen == null) {
+            reasons.add("tie-break chose '" + won.packCode()
+                    + "' which these contents do not state — staying unknown");
+            return new Score(ClassifyResult.unknown(reasons, "tie-break"), codes, stated);
+        }
+        reasons.add("tie-break chose " + chosen.pack.code() + ": " + won.reason());
+        return new Score(classified(chosen, reasons, "tie-break", won.confidence()), codes, stated);
     }
 
-    private static PackScore scorePack(DocTypePack pack, ClassifyRequest request,
-            String fileRole, List<String> reasons) {
-        String page = normalize(request.page1Text());
-        String fileName = normalize(request.fileName());
-        List<String> matched = new ArrayList<>();
-        double score = 0.0;
-        for (String signal : pack.identitySignals()) {
-            String phrase = normalize(signal);
-            if (phrase.isEmpty()) {
-                continue;
-            }
-            if (page.contains(phrase)) {
-                score += PAGE_HIT;
-                matched.add(signal + " (page)");
-            } else if (fileName.contains(phrase)) {
-                score += FILE_NAME_HIT;
-                matched.add(signal + " (file_name)");
-            }
-        }
-        double signalScore = score;
-        if (signalScore > 0 && roleAligns(pack, fileRole)) {
-            score += ROLE_BOOST;
-            reasons.add(pack.code() + " file_role tie-break +" + ROLE_BOOST);
-        }
-        if (!matched.isEmpty()) {
-            reasons.add(pack.code() + " signals: " + String.join("; ", matched));
-        }
-        return new PackScore(pack.code(), pack.version(), score, signalScore,
-                matched, pack.identitySignals());
+    private record Score(ClassifyResult result, List<String> contentCodes, List<String> statedCodes) {}
+
+    private static ClassifyResult classified(PackReading reading, List<String> reasons,
+            String classifier, double confidence) {
+        return new ClassifyResult(reading.pack.code(), reading.pack.code(), reading.pack.version(),
+                confidence, reasons, ClassifyResult.Status.CLASSIFIED, classifier);
     }
 
     /**
-     * True when a non-blank document role lines up with the pack's {@code file_role},
-     * its family, or the role's default document family. A blank role does not align
-     * with every pack. Alignment never decides membership — only the {@code +0.05}
-     * boost after identity signals have already matched.
+     * Two distinct fields, or one field on a page that also names the document,
+     * is enough. Synonyms of one field count once, so tenor and term together do
+     * not become a power purchase agreement.
      */
-    private static boolean roleAligns(DocTypePack pack, String fileRole) {
-        if (fileRole == null || fileRole.isBlank()) {
-            return false;
-        }
-        String role = fileRole.toLowerCase(Locale.ROOT);
-        if (pack.fileRole() != null && pack.fileRole().toLowerCase(Locale.ROOT).equals(role)) {
-            return true;
-        }
-        if (pack.family() != null && pack.family().toLowerCase(Locale.ROOT).equals(role)) {
-            return true;
-        }
-        String family = DocumentFileKind.defaultDocFamily(
-                DocumentFileKind.normalizeFileRole(role));
-        return pack.family() != null && pack.family().toLowerCase(Locale.ROOT).equals(family);
+    private static boolean eligible(int fields, boolean named) {
+        return fields >= 2 || (fields >= 1 && named);
     }
 
-    private static double confidence(double packScore) {
-        if (packScore <= 0) {
+    /** A sentence that states a value, rather than a title that merely contains a word. */
+    private static boolean hasCopula(List<String> lineWords) {
+        return lineWords.contains("is") || lineWords.contains("are");
+    }
+
+    private static boolean hasDigit(String line) {
+        for (int i = 0; i < line.length(); i++) {
+            if (Character.isDigit(line.charAt(i))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static double confidence(int contents) {
+        if (contents <= 0) {
             return 0.0;
         }
-        return Math.min(1.0, packScore / CONFIDENCE_SATURATION);
+        return Math.min(1.0, contents / 2.0);
     }
 
-    private static String normalize(String raw) {
+    private static List<ContentPhrase> contentPhrases(DocTypePack pack) {
+        List<ContentPhrase> phrases = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (PackField field : pack.fields()) {
+            if (field.synonyms().isEmpty()) {
+                addPhrase(phrases, seen, pack.code(), field.key().replace('_', ' '), field.key());
+            } else {
+                for (String synonym : field.synonyms()) {
+                    addPhrase(phrases, seen, pack.code(), synonym, field.key());
+                }
+            }
+        }
+        for (PackPassage passage : pack.passages()) {
+            for (String term : passage.headingTerms()) {
+                addPhrase(phrases, seen, pack.code(), term, "passage:" + term);
+            }
+        }
+        for (java.util.Map<String, Object> table : pack.tables()) {
+            Object name = table.get("name");
+            if (name != null) {
+                addPhrase(phrases, seen, pack.code(), String.valueOf(name).replace('_', ' '),
+                        "table:" + name);
+            }
+        }
+        return phrases;
+    }
+
+    private static void addPhrase(List<ContentPhrase> phrases, Set<String> seen,
+            String packCode, String raw, String fieldKey) {
+        if (raw == null || raw.isBlank()) {
+            return;
+        }
+        List<String> tokens = words(fold(raw));
+        if (tokens.isEmpty() || (tokens.size() == 1 && tokens.get(0).length() < 4)) {
+            return;
+        }
+        String folded = String.join(" ", tokens);
+        if (!seen.add(folded)) {
+            return;
+        }
+        phrases.add(new ContentPhrase(packCode, tokens, raw.trim(), folded, fieldKey));
+    }
+
+    private static List<String> matchedIdentity(DocTypePack pack, List<String> pageWords) {
+        List<String> matched = new ArrayList<>();
+        for (String signal : pack.identitySignals()) {
+            List<String> tokens = words(fold(signal));
+            if (tokens.isEmpty() || (tokens.size() == 1 && tokens.get(0).length() < 3)) {
+                continue;
+            }
+            if (containsAt(pageWords, 0, tokens) || indexOf(pageWords, tokens) >= 0) {
+                matched.add(signal);
+            }
+        }
+        return matched;
+    }
+
+    private static PhraseHit longest(List<ContentPhrase> phrases, List<String> pageWords, int at) {
+        int best = 0;
+        List<ContentPhrase> found = new ArrayList<>();
+        for (ContentPhrase phrase : phrases) {
+            if (phrase.tokens().size() < best || phrase.tokens().size() > pageWords.size() - at) {
+                continue;
+            }
+            if (!containsAt(pageWords, at, phrase.tokens())) {
+                continue;
+            }
+            if (phrase.tokens().size() > best) {
+                best = phrase.tokens().size();
+                found.clear();
+            }
+            found.add(phrase);
+        }
+        if (found.isEmpty()) {
+            return null;
+        }
+        Set<String> codes = new LinkedHashSet<>();
+        Set<String> fieldKeys = new LinkedHashSet<>();
+        for (ContentPhrase phrase : found) {
+            codes.add(phrase.packCode());
+            fieldKeys.add(phrase.fieldKey());
+        }
+        ContentPhrase first = found.get(0);
+        return new PhraseHit(codes, first.display(), first.folded(), first.tokens().size(),
+                fieldKeys);
+    }
+
+    private static boolean containsAt(List<String> page, int at, List<String> needle) {
+        if (at < 0 || needle.size() > page.size() - at) {
+            return false;
+        }
+        for (int j = 0; j < needle.size(); j++) {
+            if (!page.get(at + j).equals(needle.get(j))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static int indexOf(List<String> page, List<String> needle) {
+        for (int i = 0; i <= page.size() - needle.size(); i++) {
+            if (containsAt(page, i, needle)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static String fold(String raw) {
         if (raw == null) {
             return "";
         }
-        return raw.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+        String folded = raw.toLowerCase(Locale.ROOT).replace('&', ' ');
+        folded = folded.replaceAll("[^\\p{L}\\p{N}]+", " ");
+        return folded.replaceAll("\\s+", " ").trim();
+    }
+
+    private static List<String> words(String folded) {
+        if (folded == null || folded.isBlank()) {
+            return List.of();
+        }
+        return List.of(folded.split(" "));
     }
 
     private static Optional<ClassifyResult> readExisting(Connection connection, long versionId)
@@ -381,13 +602,66 @@ public final class DocTypeClassifier {
             ps.setLong(3, request.documentVersionId());
             ps.executeUpdate();
         }
+        syncPages(connection, request.documentVersionId(),
+                result.status() == ClassifyResult.Status.CLASSIFIED);
     }
 
-    private record PackScore(String packCode, String packVersion, double score,
-            double signalScore, List<String> matchedSignals, List<String> identitySignals) {
-        PackScore {
-            matchedSignals = matchedSignals == null ? List.of() : List.copyOf(matchedSignals);
-            identitySignals = identitySignals == null ? List.of() : List.copyOf(identitySignals);
+    /**
+     * Records the version's own pages on a typed document, and clears them when it
+     * is not one. A sibling work keeps physical pages on the file version; its
+     * membership is already recorded and is left in place.
+     */
+    private static void syncPages(Connection connection, long versionId, boolean classified)
+            throws SQLException {
+        long documentId;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT document_id FROM document_version WHERE document_version_id = ?")) {
+            ps.setLong(1, versionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return;
+                }
+                documentId = rs.getLong(1);
+            }
+        }
+        List<Long> owned = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT page_id FROM page WHERE document_version_id = ? ORDER BY page_index")) {
+            ps.setLong(1, versionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    owned.add(rs.getLong(1));
+                }
+            }
+        }
+        if (!classified) {
+            new DocumentRepository(connection).replaceMemberPages(documentId, List.of());
+            return;
+        }
+        if (owned.isEmpty()) {
+            return;
+        }
+        new DocumentRepository(connection).replaceMemberPages(documentId, owned);
+    }
+
+    private static final class PackReading {
+        private final DocTypePack pack;
+        private final Set<String> matched = new LinkedHashSet<>();
+        private final Set<String> fields = new LinkedHashSet<>();
+        private final List<String> named = new ArrayList<>();
+
+        private PackReading(DocTypePack pack) {
+            this.pack = pack;
+        }
+
+        private boolean eligible() {
+            return DocTypeClassifier.eligible(fields.size(), !named.isEmpty());
         }
     }
+
+    private record ContentPhrase(String packCode, List<String> tokens, String display,
+            String folded, String fieldKey) {}
+
+    private record PhraseHit(Set<String> packCodes, String display, String folded, int length,
+            Set<String> fieldKeys) {}
 }

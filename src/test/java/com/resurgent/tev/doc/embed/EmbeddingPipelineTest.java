@@ -170,6 +170,8 @@ class EmbeddingPipelineTest {
 
         long rating = ingest(pdf("rating.pdf",
                 "Project Report",
+                "Project cost: Rs. 120 crore",
+                "Technology: monocrystalline modules",
                 "Credit Rating Report",
                 "Rating rationale",
                 "Liquidity is weak because receivables are stretched."),

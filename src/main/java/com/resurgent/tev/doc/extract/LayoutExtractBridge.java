@@ -18,6 +18,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Reads layout blocks and table cells when the fixture extractor has no sidecar.
@@ -28,6 +30,15 @@ import java.util.Set;
 final class LayoutExtractBridge {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    /** A line that is only a figure, optionally with the unit the page states. */
+    private static final Pattern FIGURE = Pattern.compile(
+            "^\\s*[₹$]?\\s*\\d[\\d,]*(?:\\.\\d+)?(?:\\s+[\\p{L}./]+)?\\s*[.!?]?\\s*$");
+
+    private static final Pattern FIGURE_NUMBER = Pattern.compile("\\d[\\d,]*(?:\\.\\d+)?");
+
+    private static final Pattern TRAILING_COPULA = Pattern.compile(
+            "(?i)\\s+\\b(is|are|was|were|be)\\b\\s*$");
 
     private LayoutExtractBridge() {}
 
@@ -94,15 +105,46 @@ final class LayoutExtractBridge {
         pages.replacePages(documentVersionId, "local-layout", "local", markdownPages, textPages);
     }
 
+    /**
+     * Label pass, then the key-value lines it missed, joining a sentence or a table
+     * across a page break. {@code pages} null reads every page of the version; a
+     * set reads only those file pages.
+     */
+    static LocalReading readLocal(Connection connection, long documentVersionId,
+            DocTypePack pack, Set<Integer> pages) throws SQLException {
+        ExtractResult labeled = fromLayout(connection, documentVersionId, pack,
+                new ExtractResult(pack.code(), null, List.of(), List.of(), null), pages);
+        return appendMissed(connection, documentVersionId, pack, labeled, pages);
+    }
+
+    /** Lines still unread after both local passes, in reading order. */
+    record LocalReading(ExtractResult result, List<String> unread) {}
+
     /** Layout-derived facts, or {@code original} when the layout has nothing to read. */
     static ExtractResult fromLayout(Connection connection, long documentVersionId,
             DocTypePack pack, ExtractResult original) throws SQLException {
+        return fromLayout(connection, documentVersionId, pack, original, null);
+    }
+
+    /** Layout-derived facts on {@code pages} only. Null reads every page. */
+    static ExtractResult fromLayout(Connection connection, long documentVersionId,
+            DocTypePack pack, ExtractResult original, Set<Integer> pages) throws SQLException {
         List<Label> labels = labels(pack);
         List<TableSpec> tables = tables(pack);
         List<FactCandidate> facts = new ArrayList<>();
         List<Citation> citations = new ArrayList<>();
-        List<BlockLine> blocks = loadBlocks(connection, documentVersionId);
-        List<Grid> grids = loadGrids(connection, documentVersionId);
+        List<BlockLine> blocks = new ArrayList<>();
+        for (BlockLine line : loadBlocks(connection, documentVersionId)) {
+            if (pages == null || pages.contains(line.page())) {
+                blocks.add(line);
+            }
+        }
+        List<Grid> grids = new ArrayList<>();
+        for (Grid grid : loadGrids(connection, documentVersionId)) {
+            if (pages == null || pages.contains(grid.page())) {
+                grids.add(grid);
+            }
+        }
         Set<Integer> gridPages = new HashSet<>();
         Set<Integer> blockPages = new HashSet<>();
         for (Grid grid : grids) {
@@ -113,7 +155,7 @@ final class LayoutExtractBridge {
         }
         readTextLines(blocks, gridPages, tables, labels, pack, facts, citations);
         readCloudLines(connection, documentVersionId, blockPages, gridPages, tables, labels,
-                pack, facts, citations);
+                pack, facts, citations, pages);
         for (Grid grid : grids) {
             readGrid(grid, tables, labels, pack, facts, citations);
         }
@@ -158,11 +200,14 @@ final class LayoutExtractBridge {
     private static void readCloudLines(Connection connection, long documentVersionId,
             Set<Integer> blockPages, Set<Integer> gridPages, List<TableSpec> tables,
             List<Label> labels, DocTypePack pack, List<FactCandidate> facts,
-            List<Citation> citations) throws SQLException {
+            List<Citation> citations, Set<Integer> onlyPages) throws SQLException {
         List<PassageRepository.ParsePage> pages = new PassageRepository(connection)
                 .parsePages(documentVersionId);
         List<BlockLine> lines = new ArrayList<>();
         for (PassageRepository.ParsePage page : pages) {
+            if (onlyPages != null && !onlyPages.contains(page.pageIndex())) {
+                continue;
+            }
             if (blockPages.contains(page.pageIndex()) || page.text() == null) {
                 continue;
             }
@@ -323,6 +368,403 @@ final class LayoutExtractBridge {
         facts.add(candidate);
     }
 
+    /**
+     * Key-value lines the label pass left behind, including a line with no colon.
+     * A fact already stored skips only that field; the rest of the page is still read.
+     */
+    private static LocalReading appendMissed(Connection connection, long documentVersionId,
+            DocTypePack pack, ExtractResult labeled, Set<Integer> pages) throws SQLException {
+        List<Label> labels = labels(pack);
+        List<FactCandidate> facts = new ArrayList<>(labeled.facts());
+        List<Citation> citations = new ArrayList<>(labeled.citations());
+        List<BlockLine> blocks = new ArrayList<>();
+        for (BlockLine line : loadBlocks(connection, documentVersionId)) {
+            if (pages == null || pages.contains(line.page())) {
+                blocks.add(line);
+            }
+        }
+        joinContinuedSentences(blocks, facts, citations);
+        storeUnexplainedFigures(blocks, facts, citations);
+        Set<String> consumed = quotesOf(facts);
+        Set<String> repeated = new HashSet<>();
+        for (BlockLine line : blocks) {
+            if (consumed.contains(line.text()) || line.text().indexOf(':') >= 0) {
+                continue;
+            }
+            if (readUnlabeled(line.text(), line.page(), labels, facts, citations, repeated)) {
+                consumed.add(line.text());
+            }
+        }
+        if (!repeated.isEmpty()) {
+            List<FactCandidate> dropped = new ArrayList<>();
+            facts.removeIf(fact -> {
+                if (repeated.contains(fact.key())) {
+                    dropped.add(fact);
+                    return true;
+                }
+                return false;
+            });
+            for (FactCandidate fact : dropped) {
+                citations.removeAll(fact.citations());
+            }
+        }
+        List<TableSpec> tables = tables(pack);
+        List<Grid> grids = new ArrayList<>();
+        for (Grid grid : loadGrids(connection, documentVersionId)) {
+            if (pages == null || pages.contains(grid.page())) {
+                grids.add(grid);
+            }
+        }
+        Set<Grid> readGrids = new HashSet<>();
+        CarriedTable carried = null;
+        for (Grid grid : grids) {
+            Header header = headerOf(grid, tables, pack);
+            if (header != null) {
+                if (!header.strict()) {
+                    for (int i = header.headerAt() + 1; i < grid.cells().size(); i++) {
+                        expandRow(header.table(), header.columns(), grid.cells().get(i),
+                                pack, facts, citations);
+                    }
+                }
+                readGrids.add(grid);
+                carried = new CarriedTable(header.table(), header.columns(), grid.page(),
+                        width(grid));
+                continue;
+            }
+            if (carried != null && grid.page() == carried.page() + 1
+                    && width(grid) == carried.width()) {
+                for (List<Cell> row : grid.cells()) {
+                    expandRow(carried.table(), carried.columns(), row, pack, facts, citations);
+                }
+                readGrids.add(grid);
+                carried = new CarriedTable(carried.table(), carried.columns(), grid.page(),
+                        carried.width());
+                continue;
+            }
+            carried = null;
+        }
+        List<String> unread = new ArrayList<>();
+        Set<String> quotes = quotesOf(facts);
+        for (BlockLine line : blocks) {
+            if (!quotes.contains(line.text())) {
+                unread.add(line.text());
+            }
+        }
+        for (Grid grid : grids) {
+            if (readGrids.contains(grid)) {
+                continue;
+            }
+            for (List<Cell> row : grid.cells()) {
+                String joined = row.stream().map(Cell::text).filter(text -> !text.isBlank())
+                        .reduce((a, b) -> a + " | " + b).orElse("");
+                if (!joined.isBlank() && !quotes.contains(joined)) {
+                    unread.add(joined);
+                }
+            }
+        }
+        return new LocalReading(new ExtractResult(labeled.extractorId(), labeled.payload(),
+                facts, citations, labeled.stats()), List.copyOf(unread));
+    }
+
+    /** Longest pack label that opens the line; the remainder is the value. */
+    private static boolean readUnlabeled(String line, int page, List<Label> labels,
+            List<FactCandidate> facts, List<Citation> citations, Set<String> repeated) {
+        String folded = norm(line);
+        for (Label label : labels) {
+            String name = label.norm();
+            if (name.length() < 3) {
+                continue;
+            }
+            boolean exact = folded.equals(name);
+            boolean prefix = folded.startsWith(name + " ");
+            if (!exact && !prefix) {
+                continue;
+            }
+            if (exact) {
+                return false;
+            }
+            String value = remainderAfter(line, name.split(" ").length);
+            if (value.isBlank()) {
+                return false;
+            }
+            for (FactCandidate existing : facts) {
+                if (existing.key().equals(label.key())) {
+                    repeated.add(label.key());
+                    return false;
+                }
+            }
+            FactCandidate candidate = new FactCandidate(label.key(), label.kind())
+                    .valueText(value)
+                    .confidence(0.9)
+                    .extractionMethod("deterministic");
+            if (page >= 1) {
+                Citation citation = Citation.of(page, line);
+                candidate.addCitation(citation);
+                citations.add(citation);
+            }
+            facts.add(candidate);
+            return true;
+        }
+        return false;
+    }
+
+    private static String remainderAfter(String line, int tokens) {
+        int index = 0;
+        int seen = 0;
+        while (index < line.length() && seen < tokens) {
+            while (index < line.length() && !Character.isLetterOrDigit(line.charAt(index))) {
+                index++;
+            }
+            if (index >= line.length()) {
+                break;
+            }
+            while (index < line.length() && Character.isLetterOrDigit(line.charAt(index))) {
+                index++;
+            }
+            seen++;
+        }
+        return line.substring(Math.min(index, line.length())).trim();
+    }
+
+    /**
+     * The column heading on this grid, strict pack names first. A heading the
+     * column keys missed is still a heading when the prompt names it.
+     */
+    private static Header headerOf(Grid grid, List<TableSpec> tables, DocTypePack pack) {
+        List<List<Cell>> rows = grid.cells();
+        for (int i = 0; i < rows.size(); i++) {
+            for (TableSpec table : tables) {
+                Map<Integer, String> mapped = mapHeader(rows.get(i), table);
+                if (mapped != null) {
+                    return new Header(table, mapped, i, true);
+                }
+            }
+        }
+        for (int i = 0; i < rows.size(); i++) {
+            for (TableSpec table : tables) {
+                Map<Integer, String> mapped = mapHeaderLoose(rows.get(i), table, pack);
+                if (mapped != null) {
+                    return new Header(table, mapped, i, false);
+                }
+            }
+        }
+        return null;
+    }
+
+    private static int width(Grid grid) {
+        int width = 0;
+        for (List<Cell> row : grid.cells()) {
+            width = Math.max(width, row.size());
+        }
+        return width;
+    }
+
+    private static Map<Integer, String> mapHeaderLoose(List<Cell> row, TableSpec table,
+            DocTypePack pack) {
+        Map<String, String> hints = columnHints(pack, table.name());
+        Map<Integer, String> mapped = new LinkedHashMap<>();
+        Set<String> used = new HashSet<>();
+        boolean anchor = false;
+        String anchorColumn = table.keyColumn() != null ? table.keyColumn() : table.periodColumn();
+        for (int i = 0; i < row.size(); i++) {
+            String column = columnForHeader(row.get(i).text(), table.columns(), hints, used);
+            if (column == null) {
+                continue;
+            }
+            used.add(column);
+            mapped.put(i, column);
+            if (column.equals(anchorColumn)) {
+                anchor = true;
+            }
+        }
+        if (anchorColumn == null || !anchor
+                || mapped.size() < Math.min(2, table.columns().size())) {
+            return null;
+        }
+        return mapped;
+    }
+
+    private static String columnForHeader(String header, List<String> columns,
+            Map<String, String> hints, Set<String> used) {
+        String folded = norm(header);
+        if (folded.isEmpty()) {
+            return null;
+        }
+        for (String column : columns) {
+            if (used.contains(column)) {
+                continue;
+            }
+            String key = column.replace('_', ' ');
+            if (folded.equals(key) || (key.length() >= 3 && folded.startsWith(key))) {
+                return column;
+            }
+            String hint = hints.get(column);
+            if (hint == null) {
+                continue;
+            }
+            String hintNorm = norm(hint);
+            if (hintNorm.equals(folded) || (folded.length() >= 4 && hintNorm.startsWith(folded + " "))) {
+                return column;
+            }
+            for (String token : hintNorm.split(" ")) {
+                if (token.length() >= 5 && token.equals(folded)) {
+                    return column;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static Map<String, String> columnHints(DocTypePack pack, String tableName) {
+        Map<String, String> hints = new LinkedHashMap<>();
+        for (Map<String, Object> table : pack.tables()) {
+            if (!tableName.equals(String.valueOf(table.get("name")))) {
+                continue;
+            }
+            Object fields = table.get("fields");
+            if (!(fields instanceof List<?> list)) {
+                continue;
+            }
+            for (Object raw : list) {
+                if (raw instanceof Map<?, ?> column && column.get("key") != null
+                        && column.get("prompt_hint") != null) {
+                    hints.put(String.valueOf(column.get("key")),
+                            String.valueOf(column.get("prompt_hint")));
+                }
+            }
+        }
+        return hints;
+    }
+
+    /**
+     * A figure at the top of a page keeps the meaning of the sentence it continues,
+     * including words on the previous page, for as long as that sentence goes on.
+     * One fact cites each file page the sentence was read from.
+     */
+    private static void joinContinuedSentences(List<BlockLine> blocks,
+            List<FactCandidate> facts, List<Citation> citations) {
+        for (int i = 0; i < blocks.size(); i++) {
+            BlockLine figure = blocks.get(i);
+            if (!isFigure(figure.text()) || !startsPage(blocks, i)) {
+                continue;
+            }
+            int start = unfinishedStart(blocks, i);
+            if (start < 0) {
+                continue;
+            }
+            String meaning = meaningOf(blocks, start, i);
+            if (meaning.isBlank()) {
+                continue;
+            }
+            int end = sentenceEnd(blocks, i);
+            FactCandidate candidate = new FactCandidate(meaning, ValueKind.TEXT)
+                    .valueText(figure.text())
+                    .confidence(0.9)
+                    .extractionMethod("deterministic");
+            for (int j = start; j <= end; j++) {
+                BlockLine part = blocks.get(j);
+                Citation citation = Citation.of(part.page(), part.text());
+                candidate.addCitation(citation);
+                citations.add(citation);
+            }
+            facts.add(candidate);
+        }
+    }
+
+    /**
+     * A figure whose surrounding pages never say what it is is stored as that
+     * number and its page. Nothing is invented for it, including a label such
+     * as a sanctioned limit.
+     */
+    private static void storeUnexplainedFigures(List<BlockLine> blocks,
+            List<FactCandidate> facts, List<Citation> citations) {
+        Set<String> quoted = quotesOf(facts);
+        for (BlockLine line : blocks) {
+            if (!isFigure(line.text()) || quoted.contains(line.text())) {
+                continue;
+            }
+            String number = figureNumber(line.text());
+            if (number.isBlank()) {
+                continue;
+            }
+            FactCandidate candidate = new FactCandidate(number, ValueKind.TEXT)
+                    .valueText(number)
+                    .confidence(0.9)
+                    .extractionMethod("deterministic");
+            Citation citation = Citation.of(line.page(), line.text());
+            candidate.addCitation(citation);
+            citations.add(citation);
+            facts.add(candidate);
+            quoted.add(line.text());
+        }
+    }
+
+    private static String figureNumber(String text) {
+        Matcher matcher = FIGURE_NUMBER.matcher(text);
+        return matcher.find() ? matcher.group() : "";
+    }
+
+    /** First text line on its page: a figure lower down does not continue the previous page. */
+    private static boolean startsPage(List<BlockLine> blocks, int index) {
+        return index == 0 || blocks.get(index - 1).page() != blocks.get(index).page();
+    }
+
+    /**
+     * Lines of the unfinished sentence before the figure. {@code -1} when the
+     * previous line already ended a sentence, so the figure has no continued meaning.
+     */
+    private static int unfinishedStart(List<BlockLine> blocks, int figureAt) {
+        if (figureAt == 0 || endsSentence(blocks.get(figureAt - 1).text())) {
+            return -1;
+        }
+        int start = figureAt - 1;
+        while (start > 0 && !endsSentence(blocks.get(start - 1).text())) {
+            start--;
+        }
+        return start;
+    }
+
+    /** Last line of the sentence that opened before the figure. */
+    private static int sentenceEnd(List<BlockLine> blocks, int figureAt) {
+        int end = figureAt;
+        while (end + 1 < blocks.size() && !endsSentence(blocks.get(end).text())) {
+            end++;
+        }
+        return end;
+    }
+
+    private static String meaningOf(List<BlockLine> blocks, int start, int figureAt) {
+        StringBuilder words = new StringBuilder();
+        for (int j = start; j < figureAt; j++) {
+            if (words.length() > 0) {
+                words.append(' ');
+            }
+            words.append(blocks.get(j).text());
+        }
+        return TRAILING_COPULA.matcher(words.toString()).replaceFirst("").trim();
+    }
+
+    private static boolean isFigure(String text) {
+        return text != null && FIGURE.matcher(text).matches();
+    }
+
+    private static boolean endsSentence(String text) {
+        String trimmed = text == null ? "" : text.trim();
+        return trimmed.endsWith(".") || trimmed.endsWith("!") || trimmed.endsWith("?");
+    }
+
+    private static Set<String> quotesOf(List<FactCandidate> facts) {
+        Set<String> quotes = new HashSet<>();
+        for (FactCandidate fact : facts) {
+            for (Citation citation : fact.citations()) {
+                if (citation.verbatim() != null && !citation.verbatim().isBlank()) {
+                    quotes.add(citation.verbatim().trim());
+                }
+            }
+        }
+        return quotes;
+    }
+
     private static Label match(String left, List<Label> labels) {
         String n = norm(left);
         if (n.isEmpty()) {
@@ -436,6 +878,18 @@ final class LayoutExtractBridge {
         return cells;
     }
 
+    /** A header or footer that is only a page number is not a figure and not a sentence. */
+    private static boolean barePageNumber(String kind, String text) {
+        if (kind == null || text == null) {
+            return false;
+        }
+        String folded = kind.toLowerCase(Locale.ROOT);
+        if (!folded.equals("header") && !folded.equals("footer")) {
+            return false;
+        }
+        return text.trim().matches("\\d+");
+    }
+
     private static List<BlockLine> loadBlocks(Connection connection, long documentVersionId)
             throws SQLException {
         List<BlockLine> lines = new ArrayList<>();
@@ -449,13 +903,14 @@ final class LayoutExtractBridge {
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     String kind = rs.getString(2);
-                    if ("table".equals(kind)) {
+                    if ("table".equalsIgnoreCase(kind)) {
                         continue;
                     }
                     String text = rs.getString(3);
-                    if (text != null && !text.isBlank()) {
-                        lines.add(new BlockLine(rs.getInt(1), text.trim()));
+                    if (text == null || text.isBlank() || barePageNumber(kind, text)) {
+                        continue;
                     }
+                    lines.add(new BlockLine(rs.getInt(1), text.trim()));
                 }
             }
         }
@@ -497,6 +952,12 @@ final class LayoutExtractBridge {
             String periodColumn) {}
 
     private record BlockLine(int page, String text) {}
+
+    /** Column heading carried forward while the same table continues on the next page. */
+    private record CarriedTable(TableSpec table, Map<Integer, String> columns, int page, int width) {}
+
+    /** A heading row: {@code strict} means the label pass already stored its rows. */
+    private record Header(TableSpec table, Map<Integer, String> columns, int headerAt, boolean strict) {}
 
     private record Cell(String text, String quote, int page) {}
 

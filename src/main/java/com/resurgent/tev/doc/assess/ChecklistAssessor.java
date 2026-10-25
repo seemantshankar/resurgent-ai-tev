@@ -420,6 +420,13 @@ public final class ChecklistAssessor {
         FactEvidenceRow best = best(scopedFacts(candidates, scope, factsByVersion));
         DocScopeRow owning = candidates.get(0);
         if (best == null) {
+            if (owning.memberPageIndex() != null) {
+                String cite = "the " + item.documentType() + " document is provided"
+                        + forScope(scope) + " (page " + owning.memberPageIndex() + ")";
+                return result(effective, scope, STATUS_PROVIDED, cite,
+                        owning.documentVersionId(), owning.fileName(),
+                        owning.memberPageIndex(), 1.0, cite, null);
+            }
             return unclear(effective, scope, owning, null, null,
                     "the " + item.documentType() + " document is present" + forScope(scope)
                             + " but no readable evidence was extracted from it");
@@ -599,6 +606,11 @@ public final class ChecklistAssessor {
     }
 
     private static boolean better(FactEvidenceRow candidate, FactEvidenceRow current) {
+        boolean candidateResolved = "resolved".equals(candidate.resolution());
+        boolean currentResolved = "resolved".equals(current.resolution());
+        if (candidateResolved != currentResolved) {
+            return candidateResolved;
+        }
         double candidateConfidence = candidate.confidence() == null ? -1 : candidate.confidence();
         double currentConfidence = current.confidence() == null ? -1 : current.confidence();
         if (candidateConfidence != currentConfidence) {
@@ -606,11 +618,6 @@ public final class ChecklistAssessor {
         }
         if ((candidate.pageIndex() != null) != (current.pageIndex() != null)) {
             return candidate.pageIndex() != null;
-        }
-        boolean candidateResolved = "resolved".equals(candidate.resolution());
-        boolean currentResolved = "resolved".equals(current.resolution());
-        if (candidateResolved != currentResolved) {
-            return candidateResolved;
         }
         return false;
     }

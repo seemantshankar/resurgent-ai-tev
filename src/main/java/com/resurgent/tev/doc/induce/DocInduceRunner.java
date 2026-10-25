@@ -114,14 +114,14 @@ public final class DocInduceRunner {
                         cluster.get(0).id(), e.getMessage());
                 failures.add(new Result("(mining failed)", "-", industryTag, null,
                         0, 0, false, List.of(), List.of(),
-                        List.of("error: " + e.getMessage())));
+                        List.of("error: " + e.getMessage()), versionIds(cluster)));
             }
         }
 
         persist(db, packsRoot, mandateId, industryTag, outcomes, live != null);
         List<Result> results = new ArrayList<>();
         for (Outcome outcome : outcomes) {
-            results.add(toResult(outcome.result()));
+            results.add(toResult(outcome));
         }
         results.addAll(failures);
         return results;
@@ -147,7 +147,8 @@ public final class DocInduceRunner {
             PackInducer.InduceResult result,
             List<DocLlmClient.Usage> usage) {}
 
-    private static Result toResult(PackInducer.InduceResult result) {
+    private static Result toResult(Outcome outcome) {
+        PackInducer.InduceResult result = outcome.result();
         List<String> gateMessages = new ArrayList<>();
         int passed = 0;
         for (PackQualityGates.GateResult gate : result.gates()) {
@@ -169,7 +170,23 @@ public final class DocInduceRunner {
                 result.published(),
                 result.droppedFields(),
                 result.rewrittenFields(),
-                gateMessages);
+                gateMessages,
+                versionIds(outcome.cluster()));
+    }
+
+    /** Version ids encoded as {@code dv:<id>} on the cluster's documents. */
+    private static List<Long> versionIds(List<PackInducer.InduceDocument> cluster) {
+        List<Long> ids = new ArrayList<>();
+        if (cluster == null) {
+            return ids;
+        }
+        for (PackInducer.InduceDocument document : cluster) {
+            Long id = versionIdOf(document.id());
+            if (id != null) {
+                ids.add(id);
+            }
+        }
+        return List.copyOf(ids);
     }
 
     /**
@@ -376,13 +393,19 @@ public final class DocInduceRunner {
 
     private static List<String> loadLayoutText(Connection connection, long documentVersionId)
             throws Exception {
+        Long documentId = documentIdOf(connection, documentVersionId);
+        boolean members = documentId != null && hasMemberPages(connection, documentId);
+        long key = members ? documentId : documentVersionId;
+        String pageJoin = members
+                ? " JOIN document_page dp ON dp.page_id = p.page_id WHERE dp.document_id = ?"
+                : " WHERE p.document_version_id = ?";
         List<String> lines = new ArrayList<>();
         try (var ps = connection.prepareStatement(
                 "SELECT COALESCE(NULLIF(b.text_norm, ''), b.text_raw) FROM block b"
                         + " JOIN page p ON p.page_id = b.page_id"
-                        + " WHERE p.document_version_id = ?"
+                        + pageJoin
                         + " ORDER BY p.page_index, b.block_index LIMIT 120")) {
-            ps.setLong(1, documentVersionId);
+            ps.setLong(1, key);
             try (var rs = ps.executeQuery()) {
                 while (rs.next()) {
                     String text = rs.getString(1);
@@ -397,9 +420,9 @@ public final class DocInduceRunner {
                         + " JOIN table_grid tg ON tg.table_grid_id = tc.table_grid_id"
                         + " JOIN block b ON b.block_id = tg.block_id"
                         + " JOIN page p ON p.page_id = b.page_id"
-                        + " WHERE p.document_version_id = ?"
+                        + pageJoin
                         + " ORDER BY p.page_index, tc.row_index, tc.col_index")) {
-            ps.setLong(1, documentVersionId);
+            ps.setLong(1, key);
             try (var rs = ps.executeQuery()) {
                 while (rs.next()) {
                     String text = rs.getString(1);
@@ -410,9 +433,73 @@ public final class DocInduceRunner {
             }
         }
         if (lines.isEmpty()) {
-            lines.addAll(new CloudParsePageRepository(connection).loadTextPages(documentVersionId));
+            long holder = members
+                    ? pageHolder(connection, documentId, documentVersionId)
+                    : documentVersionId;
+            List<Integer> memberPages = members ? memberIndexes(connection, documentId) : List.of();
+            List<String> cloud = new CloudParsePageRepository(connection).loadTextPages(holder);
+            for (int i = 0; i < cloud.size(); i++) {
+                if (!memberPages.isEmpty() && !memberPages.contains(i + 1)) {
+                    continue;
+                }
+                String text = cloud.get(i);
+                if (text != null && !text.isBlank()) {
+                    lines.add(text.trim());
+                }
+            }
         }
         return lines.stream().limit(120).toList();
+    }
+
+    /** The version that owns the physical pages a document's membership points at. */
+    private static long pageHolder(Connection connection, long documentId, long fallback)
+            throws Exception {
+        try (var ps = connection.prepareStatement(
+                "SELECT p.document_version_id FROM page p"
+                        + " JOIN document_page dp ON dp.page_id = p.page_id"
+                        + " WHERE dp.document_id = ? LIMIT 1")) {
+            ps.setLong(1, documentId);
+            try (var rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : fallback;
+            }
+        }
+    }
+
+    private static List<Integer> memberIndexes(Connection connection, long documentId)
+            throws Exception {
+        List<Integer> indexes = new ArrayList<>();
+        try (var ps = connection.prepareStatement(
+                "SELECT p.page_index FROM page p"
+                        + " JOIN document_page dp ON dp.page_id = p.page_id"
+                        + " WHERE dp.document_id = ?")) {
+            ps.setLong(1, documentId);
+            try (var rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    indexes.add(rs.getInt(1));
+                }
+            }
+        }
+        return indexes;
+    }
+
+    private static Long documentIdOf(Connection connection, long documentVersionId) throws Exception {
+        try (var ps = connection.prepareStatement(
+                "SELECT document_id FROM document_version WHERE document_version_id = ?")) {
+            ps.setLong(1, documentVersionId);
+            try (var rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : null;
+            }
+        }
+    }
+
+    private static boolean hasMemberPages(Connection connection, long documentId) throws Exception {
+        try (var ps = connection.prepareStatement(
+                "SELECT 1 FROM document_page WHERE document_id = ? LIMIT 1")) {
+            ps.setLong(1, documentId);
+            try (var rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
     }
 
     /**
@@ -428,6 +515,7 @@ public final class DocInduceRunner {
      * @param droppedFields fields dropped by generalization (one-off/entity)
      * @param rewrittenFields keys/paths rewritten to labels
      * @param gateMessages per-gate reasons
+     * @param versionIds document versions in the cluster this pack was induced from
      */
     public record Result(
             String packCode,
@@ -439,6 +527,7 @@ public final class DocInduceRunner {
             boolean published,
             List<String> droppedFields,
             List<String> rewrittenFields,
-            List<String> gateMessages) {
+            List<String> gateMessages,
+            List<Long> versionIds) {
     }
 }

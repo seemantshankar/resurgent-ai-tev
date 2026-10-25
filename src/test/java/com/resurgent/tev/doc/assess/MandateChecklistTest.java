@@ -441,8 +441,7 @@ class MandateChecklistTest {
                         "Vendor Quotation / Price Bid",
                         "From: Sunbeam Solar Systems Pvt Ltd",
                         "Quotation for 10 MW solar power plant equipment",
-                        "Date: 12 April 2026",
-                        "Total: Rs. 48,20,00,000"));
+                        "Date: 12 April 2026"));
     }
 
     /** The present quotation carries no quoted gross total value in this scan. */
