@@ -296,14 +296,60 @@ public final class ClauseRepository {
      * @throws SQLException if the query fails
      */
     public List<PageText> pageTextsForClauses(long documentVersionId) throws SQLException {
+        // Sibling works keep physical pages on the file version. Membership is
+        // document_page, so a later agreement is still mined and a neighbour's
+        // page is not. A version with no recorded membership reads the pages it owns.
+        if (hasMemberPages(documentVersionId)) {
+            List<PageText> pages = readClausePages(documentVersionId, """
+                    SELECT p.page_index AS page_index, b.text_raw AS block_text
+                      FROM block b
+                      JOIN page p ON p.page_id = b.page_id
+                      JOIN document_page dp ON dp.page_id = p.page_id
+                      JOIN document_version dv ON dv.document_id = dp.document_id
+                     WHERE dv.document_version_id = ?
+                     ORDER BY p.page_index, COALESCE(b.reading_order, b.block_index)
+                    """);
+            if (!pages.isEmpty()) {
+                return pages;
+            }
+            return AssessmentRepository.memberCloudTexts(connection, documentVersionId);
+        }
+        List<PageText> pages = readClausePages(documentVersionId, """
+                SELECT p.page_index AS page_index, b.text_raw AS block_text
+                  FROM block b
+                  JOIN page p ON p.page_id = b.page_id
+                 WHERE p.document_version_id = ?
+                 ORDER BY p.page_index, COALESCE(b.reading_order, b.block_index)
+                """);
+        if (!pages.isEmpty()) {
+            return pages;
+        }
+        List<String> cloudPages = new CloudParsePageRepository(connection)
+                .loadTextPages(documentVersionId);
+        List<PageText> fallback = new ArrayList<>();
+        for (int i = 0; i < cloudPages.size(); i++) {
+            fallback.add(new PageText(i + 1, cloudPages.get(i)));
+        }
+        return fallback;
+    }
+
+    private boolean hasMemberPages(long documentVersionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT 1 FROM document_page dp"
+                        + " JOIN document_version dv ON dv.document_id = dp.document_id"
+                        + " WHERE dv.document_version_id = ? LIMIT 1")) {
+            ps.setLong(1, documentVersionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    private List<PageText> readClausePages(long documentVersionId, String sql) throws SQLException {
         List<PageText> pages = new ArrayList<>();
         int currentPage = -1;
         StringBuilder buffer = new StringBuilder();
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT p.page_index AS page_index, b.text_raw AS block_text"
-                        + " FROM block b JOIN page p ON p.page_id = b.page_id"
-                        + " WHERE p.document_version_id = ?"
-                        + " ORDER BY p.page_index, COALESCE(b.reading_order, b.block_index)")) {
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setLong(1, documentVersionId);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
@@ -329,16 +375,7 @@ public final class ClauseRepository {
                 }
             }
         }
-        if (!pages.isEmpty()) {
-            return pages;
-        }
-        List<String> cloudPages = new CloudParsePageRepository(connection)
-                .loadTextPages(documentVersionId);
-        List<PageText> fallback = new ArrayList<>();
-        for (int i = 0; i < cloudPages.size(); i++) {
-            fallback.add(new PageText(i + 1, cloudPages.get(i)));
-        }
-        return fallback;
+        return pages;
     }
 
     /**

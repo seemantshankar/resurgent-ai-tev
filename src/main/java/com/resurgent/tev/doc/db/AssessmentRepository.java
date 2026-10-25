@@ -127,15 +127,112 @@ public final class AssessmentRepository {
      * @throws SQLException if the query fails
      */
     public List<PageText> pageTexts(long documentVersionId) throws SQLException {
+        List<PageText> pages = readPageTexts(documentVersionId, """
+                SELECT p.page_index AS page_index,
+                       COALESCE(NULLIF(b.text_norm, ''), b.text_raw) AS block_text
+                  FROM block b
+                  JOIN page p ON p.page_id = b.page_id
+                 WHERE p.document_version_id = ?
+                 ORDER BY p.page_index, COALESCE(b.reading_order, b.block_index)
+                """);
+        if (!pages.isEmpty()) {
+            return pages;
+        }
+        List<String> cloudPages = new CloudParsePageRepository(connection)
+                .loadTextPages(documentVersionId);
+        List<PageText> fallback = new ArrayList<>();
+        for (int i = 0; i < cloudPages.size(); i++) {
+            fallback.add(new PageText(i + 1, cloudPages.get(i)));
+        }
+        return fallback;
+    }
+
+    /**
+     * Page text limited to the document's own member pages. A document's date is
+     * read from these. A version with no recorded membership still reads every
+     * page it owns.
+     */
+    public List<PageText> memberPageTexts(long documentVersionId) throws SQLException {
+        if (hasMemberPages(documentVersionId)) {
+            List<PageText> pages = readPageTexts(documentVersionId, """
+                    SELECT p.page_index AS page_index,
+                           COALESCE(NULLIF(b.text_norm, ''), b.text_raw) AS block_text
+                      FROM block b
+                      JOIN page p ON p.page_id = b.page_id
+                      JOIN document_page dp ON dp.page_id = p.page_id
+                      JOIN document_version dv ON dv.document_id = dp.document_id
+                     WHERE dv.document_version_id = ?
+                     ORDER BY p.page_index, COALESCE(b.reading_order, b.block_index)
+                    """);
+            if (!pages.isEmpty()) {
+                return pages;
+            }
+            return memberCloudTexts(connection, documentVersionId);
+        }
+        return pageTexts(documentVersionId);
+    }
+
+    /**
+     * Scanned pages keep their text on the version that owns the page rows.
+     * Membership selects which of those cloud pages belong to this document.
+     */
+    static List<PageText> memberCloudTexts(Connection connection, long documentVersionId)
+            throws SQLException {
+        long holder = documentVersionId;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT p.document_version_id FROM page p"
+                        + " JOIN document_page dp ON dp.page_id = p.page_id"
+                        + " JOIN document_version dv ON dv.document_id = dp.document_id"
+                        + " WHERE dv.document_version_id = ? LIMIT 1")) {
+            ps.setLong(1, documentVersionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    holder = rs.getLong(1);
+                }
+            }
+        }
+        List<Integer> members = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT p.page_index FROM page p"
+                        + " JOIN document_page dp ON dp.page_id = p.page_id"
+                        + " JOIN document_version dv ON dv.document_id = dp.document_id"
+                        + " WHERE dv.document_version_id = ?")) {
+            ps.setLong(1, documentVersionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    members.add(rs.getInt(1));
+                }
+            }
+        }
+        List<String> cloudPages = new CloudParsePageRepository(connection).loadTextPages(holder);
+        List<PageText> pages = new ArrayList<>();
+        for (int i = 0; i < cloudPages.size(); i++) {
+            int pageIndex = i + 1;
+            if (!members.contains(pageIndex)) {
+                continue;
+            }
+            pages.add(new PageText(pageIndex, cloudPages.get(i)));
+        }
+        return pages;
+    }
+
+    private boolean hasMemberPages(long documentVersionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT 1 FROM document_page dp"
+                        + " JOIN document_version dv ON dv.document_id = dp.document_id"
+                        + " WHERE dv.document_version_id = ? LIMIT 1")) {
+            ps.setLong(1, documentVersionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    private List<PageText> readPageTexts(long documentVersionId, String sql) throws SQLException {
         List<PageText> pages = new ArrayList<>();
         int currentPage = -1;
         StringBuilder buffer = new StringBuilder();
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT p.page_index AS page_index,"
-                        + " COALESCE(NULLIF(b.text_norm, ''), b.text_raw) AS block_text"
-                        + " FROM block b JOIN page p ON p.page_id = b.page_id"
-                        + " WHERE p.document_version_id = ?"
-                        + " ORDER BY p.page_index, COALESCE(b.reading_order, b.block_index)")) {
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setLong(1, documentVersionId);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
@@ -161,16 +258,7 @@ public final class AssessmentRepository {
                 }
             }
         }
-        if (!pages.isEmpty()) {
-            return pages;
-        }
-        List<String> cloudPages = new CloudParsePageRepository(connection)
-                .loadTextPages(documentVersionId);
-        List<PageText> fallback = new ArrayList<>();
-        for (int i = 0; i < cloudPages.size(); i++) {
-            fallback.add(new PageText(i + 1, cloudPages.get(i)));
-        }
-        return fallback;
+        return pages;
     }
 
     /**
@@ -188,11 +276,35 @@ public final class AssessmentRepository {
         if (normalized == null || normalized.isBlank()) {
             return Optional.empty();
         }
+        return findAnchor(documentVersionId, normalized, " WHERE p.document_version_id = ?");
+    }
+
+    /**
+     * The same anchor search limited to the document's member pages. Used for a
+     * date read from those pages. A version with no membership searches every
+     * page it owns.
+     */
+    public Optional<BlockAnchor> findMemberBlockAnchor(long documentVersionId, String needle)
+            throws SQLException {
+        String normalized = normalizeWhitespace(needle);
+        if (normalized == null || normalized.isBlank()) {
+            return Optional.empty();
+        }
+        String membership = hasMemberPages(documentVersionId)
+                ? " JOIN document_page dp ON dp.page_id = p.page_id"
+                        + " JOIN document_version dv ON dv.document_id = dp.document_id"
+                        + " WHERE dv.document_version_id = ?"
+                : " WHERE p.document_version_id = ?";
+        return findAnchor(documentVersionId, normalized, membership);
+    }
+
+    private Optional<BlockAnchor> findAnchor(long documentVersionId, String normalized,
+            String membership) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT b.block_id, p.page_id, p.page_index, b.bbox_x0, b.bbox_y0,"
                         + " b.bbox_x1, b.bbox_y1, COALESCE(b.text_norm, b.text_raw) AS block_text"
                         + " FROM block b JOIN page p ON p.page_id = b.page_id"
-                        + " WHERE p.document_version_id = ?"
+                        + membership
                         + " AND instr(COALESCE(b.text_norm, b.text_raw), ?) > 0"
                         + " ORDER BY p.page_index, COALESCE(b.reading_order, b.block_index)"
                         + " LIMIT 1")) {

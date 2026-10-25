@@ -162,9 +162,17 @@ _Avoid_: cost-head table, per-FM dictionary, Unmapped parking lot, frame path, p
 
 ## Document intelligence
 
+**File**:
+The file a client sent for a mandate. It holds as many documents as the client included, with no fixed limit, and pages that state no work, such as an index or a blank page, stay in the file and belong to no document.
+_Avoid_: document, version
+
+**Document**:
+One work the client provided, such as a project report or a power purchase agreement, on the file pages that state that work, including a page shared with another work and a stretch another document interrupts. A second work is its own document even when the type matches; a borrowed figure, or a heading that only names a type, does not create one.
+_Avoid_: file, upload, version
+
 **Document type**:
-What kind of supporting document a file is (net-worth certificate, vendor quotation, PPA, PVsyst report…), decided by the system; a type it has not seen before stays unknown until it is learned from similar documents.
-_Avoid_: category, file role
+What kind of document a set of pages is (a net-worth certificate, a vendor quotation, a PPA, a PVsyst report), decided from the contents those pages state, including when those contents are worded differently from the known type's usual labels. A heading, title, or filename that only names a type does not assign it, and neither does a fact that more than one type states; pages no known type fits are induced from those contents, and pages no type can be induced from stay unknown.
+_Avoid_: category, file role, title match, heading match
 
 **Fact**:
 One data point taken from a supporting document (a net-worth figure, a quotation total, a tariff), stored with its normalised value, the exact source words, and its page and position, and tagged with the entity it is about and, where relevant, the site.
@@ -182,8 +190,16 @@ _Avoid_: location, plant, project (alone)
 A section of prose from a supporting document (a DPR chapter, a promoter profile), kept verbatim with its pages, a short summary and a topic, together with the facts found inside it.
 _Avoid_: chunk, paragraph, narrative block
 
+**Layout text**:
+The verbatim words on the pages of a file, before a fact or a passage is taken from them. A sentence or a table split by a page break stays one statement, so a figure takes its meaning from the words or the column heading it continues, for as long as that sentence or table goes on, and a current fact for that amount is the record of it.
+_Avoid_: fact, passage, chunk
+
+**Report question**:
+A question asked in ordinary words while a TEV or debt report is being written, answered from whatever stored form that information takes — a fact, a document's type, a passage, a clause, or the words on a page — without having to use the stored wording. A disagreement between those stores stays visible, and a number whose surrounding pages never say what it is comes back as that number, not as an invented meaning.
+_Avoid_: exact label, schema query, keyword search
+
 **Document date**:
-The date a document was made, signed, executed or issued, as stated in the document itself. File metadata dates are used only when the document states none, and are marked as such. It is the main signal for which document is the latest.
+The date a document was made, signed, executed or issued, as stated on that document's own pages. File metadata is used only when those pages state none, and is marked as such; it is the main signal for which document of a type is the latest.
 _Avoid_: file date, created date
 
 **Upload date**:
@@ -251,8 +267,8 @@ One structured table row or cell read from a supporting document or screenshot �
 _Avoid_: financial-statement-only tables, headline-only summary, rolling detail lines into parent totals
 
 **Autonomous pack induction**:
-How the system learns a document type pack on the fly whenever an unfamiliar document or screenshot arrives — whether a single instance or a batch across TEV or debt syndication mandates. Using sanitized headings and industry context (never client names or amounts), the system researches the document type's domain structure via web-grounded search, synthesizes its identifying signals, scalar fields, schedule tables, clauses, and narrative passages under the shared nomenclature roots, validates that all keys are generic labels rather than instance values, and publishes or widens the pack automatically so extraction proceeds without human pack authoring.
-_Avoid_: manual pack authoring, failing on unknown document types, dropping single-document domain fields as one-offs
+How the system learns a document type pack on the fly whenever an unfamiliar document or screenshot arrives, whether a single instance or a batch. It learns the pack from the contents the pages state — generic labels for the fields, schedules, clauses, and passages, never client names or amounts — researches that kind of document's public structure, and publishes or widens the pack so extraction proceeds without a person writing it.
+_Avoid_: manual pack authoring, failing on unknown document types, dropping single-document domain fields as one-offs, a pack induced from the title
 
 **Induction decision**:
 The recorded record of why a candidate document field, table, clause type, or checklist item was promoted, rewritten, downgraded, or dropped during automatic learning, together with the web-research rationale, documents, similarity evidence, and quality gates that supported or rejected it.

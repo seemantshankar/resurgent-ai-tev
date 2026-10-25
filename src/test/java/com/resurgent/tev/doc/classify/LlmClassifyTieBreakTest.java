@@ -78,7 +78,7 @@ class LlmClassifyTieBreakTest {
     }
 
     @Test
-    void classifierUsesTieBreakForAmbiguousDocument() throws Exception {
+    void classifierDoesNotLetTieBreakAssignATypeThePagesDoNotState() throws Exception {
         List<DocTypePack> seeds = PackLoader.loadSeedPacks();
         LlmClassifyTieBreak tieBreak = new LlmClassifyTieBreak(
                 new FakeDocLlmClient("{\"pack_code\":\"agreement.ppa\",\"confidence\":0.6,"
@@ -90,9 +90,8 @@ class LlmClassifyTieBreakTest {
                 "Letter of intent regarding power offtake terms and conditions.",
                 null, seeds));
 
-        assertThat(result.status()).isEqualTo(ClassifyResult.Status.CLASSIFIED);
-        assertThat(result.docTypeCode()).isEqualTo("agreement.ppa");
-        assertThat(result.classifier()).isEqualTo("tie-break");
+        assertThat(result.status()).isEqualTo(ClassifyResult.Status.UNKNOWN);
+        assertThat(result.docTypeCode()).isEqualTo("unknown");
     }
 
     @Test

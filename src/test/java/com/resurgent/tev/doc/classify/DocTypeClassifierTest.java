@@ -96,11 +96,11 @@ class DocTypeClassifierTest {
     }
 
     @Test
-    void fileNameSignalBoostsQuotationWhenPageIsQuiet() throws Exception {
+    void fileNameDoesNotAssignATypeWhenThePageDoesNotStateIt() throws Exception {
         ClassifyResult result = score("quotation", "Quotation_vendor_boq.pdf",
                 "Supply of inverters and modules as per annexure.");
-        assertThat(result.status()).isEqualTo(ClassifyResult.Status.CLASSIFIED);
-        assertThat(result.docTypeCode()).isEqualTo("quotation.vendor");
+        assertThat(result.status()).isEqualTo(ClassifyResult.Status.UNKNOWN);
+        assertThat(result.docTypeCode()).isEqualTo("unknown");
     }
 
     @Test
@@ -118,14 +118,13 @@ class DocTypeClassifierTest {
     }
 
     @Test
-    void roleAlignmentBreaksAnEqualSignalTie() throws Exception {
+    void sharedHeadingDoesNotAssignAType() throws Exception {
         List<DocTypePack> packs = List.of(
                 tinyPack("sample.alpha", "agreement", "Shared Marker"),
                 tinyPack("sample.beta", "certificate", "Shared Marker"));
         ClassifyResult aligned = new DocTypeClassifier().classify(ClassifyRequest.scoreOnly(
                 "certificate", "marker.pdf", "Shared Marker", null, packs));
-        assertThat(aligned.docTypeCode()).isEqualTo("sample.beta");
-        assertThat(aligned.reasons()).anyMatch(r -> r.contains("+0.05"));
+        assertThat(aligned.status()).isEqualTo(ClassifyResult.Status.UNKNOWN);
 
         ClassifyResult generic = new DocTypeClassifier().classify(ClassifyRequest.scoreOnly(
                 "other", "marker.pdf", "Shared Marker", null, packs));
@@ -151,25 +150,22 @@ class DocTypeClassifierTest {
     }
 
     @Test
-    void ambiguousSignalsInvokeTieBreakAndOfflineDeclines() throws Exception {
-        // Both signals present: PPA page + quotation title — near-tie under offline default.
-        ClassifyResult result = score("agreement", "mixed.pdf",
+    void headingPhrasesDoNotAssignAType() throws Exception {
+        ClassifyResult mixed = score("agreement", "mixed.pdf",
                 "Power Purchase Agreement and Quotation for balance of plant");
-        // PPA has more distinct hits ("Power Purchase Agreement", "Power Purchase") so it
-        // may still clear the margin; force a true tie by using only shared-scale signals.
-        ClassifyResult tie = score("quotation", "offer.pdf",
+        assertThat(mixed.status()).isEqualTo(ClassifyResult.Status.UNKNOWN);
+
+        ClassifyResult quotationHeadings = score("quotation", "offer.pdf",
                 "Offer and Bill of Quantities and Quotation");
-        assertThat(tie.status()).isEqualTo(ClassifyResult.Status.CLASSIFIED);
-        assertThat(tie.docTypeCode()).isEqualTo("quotation.vendor");
-        // Offline tie-break path is exercised when a single weak file-name hit cannot clear MIN_SCORE.
+        assertThat(quotationHeadings.status()).isEqualTo(ClassifyResult.Status.UNKNOWN);
+
         ClassifyResult weak = score("certificate", "certificate.pdf",
                 "This certificate is issued for general purposes only.");
         assertThat(weak.status()).isEqualTo(ClassifyResult.Status.UNKNOWN);
-        assertThat(weak.reasons()).anyMatch(r -> r.contains("tie-break"));
     }
 
     @Test
-    void tieBreakSpiCanResolveAmbiguity() throws Exception {
+    void tieBreakCannotAssignATypeThePagesDoNotState() throws Exception {
         ClassifyTieBreak pickPpa = context -> Optional.of(
                 new ClassifyTieBreak.TieBreakChoice("agreement.ppa", 0.4, "llm chose ppa"));
         DocTypeClassifier classifier = new DocTypeClassifier(pickPpa);
@@ -177,11 +173,8 @@ class DocTypeClassifierTest {
                 "agreement", "mystery.pdf",
                 "Letter of intent regarding power offtake terms and conditions.",
                 null, seedPacks()));
-        // Letter of intent has no identity signals — score 0 → tie-break.
-        assertThat(result.status()).isEqualTo(ClassifyResult.Status.CLASSIFIED);
-        assertThat(result.docTypeCode()).isEqualTo("agreement.ppa");
-        assertThat(result.classifier()).isEqualTo("tie-break");
-        assertThat(result.reasons()).anyMatch(r -> r.contains("llm chose ppa"));
+        assertThat(result.status()).isEqualTo(ClassifyResult.Status.UNKNOWN);
+        assertThat(result.docTypeCode()).isEqualTo("unknown");
     }
 
     @Test
@@ -285,7 +278,8 @@ class DocTypeClassifierTest {
 
             ClassifyResult result = new DocTypeClassifier().classify(ClassifyRequest.scoreOnly(
                     "agreement", "doc.pdf", page1, null, seedPacks()));
-            assertThat(result.docTypeCode()).isEqualTo("agreement.ppa");
+            assertThat(result.status()).isEqualTo(ClassifyResult.Status.UNKNOWN);
+            assertThat(result.docTypeCode()).isEqualTo("unknown");
         }
     }
 

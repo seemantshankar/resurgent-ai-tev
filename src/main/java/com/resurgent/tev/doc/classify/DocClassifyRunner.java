@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * CLI facade for classification. Delegates to {@link DocTypeClassifier} and, when a
@@ -76,35 +77,67 @@ public final class DocClassifyRunner {
                     docs.findVersion(documentVersionId).orElseThrow(
                             () -> new IllegalArgumentException(
                                     "unknown document_version " + documentVersionId));
-            String page1Text = DocTypeClassifier.loadPage1Text(connection, documentVersionId);
+            DocTypeClassifier classifier = new DocTypeClassifier(tieBreak);
+            String pageText = DocTypeClassifier.loadContents(connection, documentVersionId);
             ClassifyRequest request = new ClassifyRequest(
                     documentVersionId,
                     version.fileRole(),
                     version.fileName(),
-                    page1Text,
+                    pageText,
                     industryTag,
                     packs,
                     force);
             connection.setAutoCommit(false);
             try {
-                DocTypeClassifier classifier = new DocTypeClassifier(tieBreak);
+                boolean split = force || docs.findClassificationCode(documentVersionId).isEmpty();
+                if (split) {
+                    Optional<ClassifyResult> separated = FileDocuments.separate(
+                            connection, docs, version, mandateId, industryTag, packs, classifier);
+                    if (separated.isPresent()) {
+                        recordUsage(connection, version, mandateId, industryTag, usage);
+                        connection.commit();
+                        if (autoInduce) {
+                            keepInduced(mandateId, db, industryTag);
+                        }
+                        ClassifyResult held = separated.get();
+                        return new Result(
+                                held.docTypeCode(),
+                                held.packCode(),
+                                held.packVersion(),
+                                held.confidence(),
+                                held.reasons(),
+                                held.classifier(),
+                                client != null);
+                    }
+                }
                 ClassifyResult result = classifier.classify(request, connection);
-                if (autoInduce && unknown(result)) {
+                if (autoInduce && unknown(result)
+                        && statesInducibleContents(connection, documentVersionId)) {
                     // Release the write lock before induction opens its own connection.
+                    // The induced type is kept. It is not sent back through a heading contest.
                     connection.commit();
                     connection.setAutoCommit(true);
-                    induceUnknown(mandateId, db, industry);
-                    packs = loadCandidatePacks(db, packDir);
-                    request = new ClassifyRequest(
-                            documentVersionId,
-                            version.fileRole(),
-                            version.fileName(),
-                            DocTypeClassifier.loadPage1Text(connection, documentVersionId),
-                            industryTag,
-                            packs,
-                            true);
+                    DocInduceRunner.Result kept = publishedFor(
+                            induceUnknown(mandateId, db, industry), documentVersionId);
                     connection.setAutoCommit(false);
-                    result = classifier.classify(request, connection);
+                    if (kept != null) {
+                        String packVersion = kept.packVersion() == null
+                                || kept.packVersion().isBlank()
+                                || "-".equals(kept.packVersion())
+                                ? "1.0.0" : kept.packVersion();
+                        result = new ClassifyResult(
+                                kept.packCode(), kept.packCode(), packVersion, 0.8,
+                                List.of("induced from the page contents and kept"),
+                                ClassifyResult.Status.CLASSIFIED, "induced");
+                        classifier.record(connection, new ClassifyRequest(
+                                documentVersionId,
+                                version.fileRole(),
+                                version.fileName(),
+                                DocTypeClassifier.loadContents(connection, documentVersionId),
+                                industryTag,
+                                List.of(),
+                                true), result);
+                    }
                 }
                 recordUsage(connection, version, mandateId, industryTag, usage);
                 connection.commit();
@@ -133,23 +166,190 @@ public final class DocClassifyRunner {
         }
     }
 
+    /**
+     * A work that fit no known type was stored unknown. Induce it on the existing
+     * path and keep the published type. The file's known works are left as they are.
+     */
+    private static void keepInduced(long mandateId, Path db, String industryTag) throws Exception {
+        List<DocInduceRunner.Result> induced = induceUnknown(mandateId, db,
+                industryTag == null || industryTag.isBlank() ? "auto" : industryTag);
+        if (induced == null || induced.stream().noneMatch(DocClassifyRunner::published)) {
+            return;
+        }
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            Connection connection = workspace.connection();
+            DocTypeClassifier classifier = new DocTypeClassifier(ClassifyTieBreak.offline());
+            List<UnknownVersion> versions = new ArrayList<>();
+            try (var ps = connection.prepareStatement(
+                    "SELECT dv.document_version_id, dv.file_role, dv.file_name"
+                            + " FROM document_version dv"
+                            + " JOIN document d ON d.document_id = dv.document_id"
+                            + " JOIN doc_classification c"
+                            + "  ON c.document_version_id = dv.document_version_id"
+                            + " WHERE d.mandate_id = ? AND c.doc_type_code = 'unknown'")) {
+                ps.setLong(1, mandateId);
+                try (var rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        versions.add(new UnknownVersion(rs.getLong(1), rs.getString(2),
+                                rs.getString(3)));
+                    }
+                }
+            }
+            if (versions.isEmpty()) {
+                return;
+            }
+            connection.setAutoCommit(false);
+            try {
+                for (UnknownVersion version : versions) {
+                    DocInduceRunner.Result kept = publishedFor(induced, version.id());
+                    if (kept == null) {
+                        continue;
+                    }
+                    classifier.record(connection, new ClassifyRequest(
+                            version.id(), version.role(), version.fileName(), "",
+                            industryTag, List.of(), true), inducedType(kept));
+                }
+                connection.commit();
+            } catch (Exception e) {
+                try {
+                    connection.rollback();
+                } catch (Exception ignored) {
+                    // keep the original failure
+                }
+                throw e;
+            } finally {
+                try {
+                    connection.setAutoCommit(true);
+                } catch (Exception ignored) {
+                    // connection may already be released
+                }
+            }
+        }
+    }
+
+    private record UnknownVersion(long id, String role, String fileName) {}
+
     private static boolean unknown(ClassifyResult result) {
         String code = result.docTypeCode();
         return code == null || code.isBlank() || "unknown".equalsIgnoreCase(code);
     }
 
     /** Induces every still-unknown document in the mandate and publishes the packs. */
-    private static void induceUnknown(long mandateId, Path db, String industry) throws Exception {
+    private static List<DocInduceRunner.Result> induceUnknown(long mandateId, Path db,
+            String industry) throws Exception {
         String tag = industry == null || industry.isBlank() || "auto".equalsIgnoreCase(industry)
                 ? "general"
                 : industry;
         try {
-            DocInduceRunner.run(mandateId, db, tag, null, null, null, false);
+            return DocInduceRunner.run(mandateId, db, tag, null, null, null, false);
         } catch (IllegalArgumentException e) {
             if (e.getMessage() == null || !e.getMessage().contains("no matching documents")) {
                 throw e;
             }
+            return List.of();
         }
+    }
+
+    /** The published pack whose cluster contains this version. Another cluster's pack is not used. */
+    private static DocInduceRunner.Result publishedFor(List<DocInduceRunner.Result> induced,
+            long versionId) {
+        if (induced == null) {
+            return null;
+        }
+        for (DocInduceRunner.Result result : induced) {
+            if (published(result) && result.versionIds() != null
+                    && result.versionIds().contains(versionId)) {
+                return result;
+            }
+        }
+        return null;
+    }
+
+    private static boolean published(DocInduceRunner.Result result) {
+        return result.published() && result.packCode() != null && !result.packCode().isBlank()
+                && !result.packCode().startsWith("(");
+    }
+
+    private static ClassifyResult inducedType(DocInduceRunner.Result kept) {
+        String packVersion = kept.packVersion() == null || kept.packVersion().isBlank()
+                || "-".equals(kept.packVersion()) ? "1.0.0" : kept.packVersion();
+        return new ClassifyResult(
+                kept.packCode(), kept.packCode(), packVersion, 0.8,
+                List.of("induced from the page contents and kept"),
+                ClassifyResult.Status.CLASSIFIED, "induced");
+    }
+
+    /**
+     * True when the body states at least two values a new type could be learned
+     * from: a colon label with a value, or a number written among words. A heading
+     * alone, or one borrowed figure, does not. Known pack labels are not required.
+     */
+    private static boolean statesInducibleContents(Connection connection, long versionId)
+            throws Exception {
+        int stated = 0;
+        try (var ps = connection.prepareStatement(
+                "SELECT b.block_kind, COALESCE(NULLIF(b.text_norm, ''), b.text_raw)"
+                        + " FROM block b"
+                        + " JOIN page p ON p.page_id = b.page_id"
+                        + " WHERE p.document_version_id = ?"
+                        + " ORDER BY p.page_index, b.block_index")) {
+            ps.setLong(1, versionId);
+            try (var rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String kind = rs.getString(1);
+                    String text = rs.getString(2);
+                    if (text == null || text.isBlank() || "heading".equalsIgnoreCase(kind)
+                            || "table".equalsIgnoreCase(kind)) {
+                        continue;
+                    }
+                    if (valueBearing(text.trim())) {
+                        stated++;
+                    }
+                }
+            }
+        }
+        stated += valueBearingRows(connection, versionId);
+        return stated >= 2;
+    }
+
+    /** Each table row is its own line. A grid stored as one block still counts per row. */
+    private static int valueBearingRows(Connection connection, long versionId) throws Exception {
+        int stated = 0;
+        try (var ps = connection.prepareStatement(
+                "SELECT group_concat(tc.text_raw, ' ')"
+                        + " FROM table_cell tc"
+                        + " JOIN table_grid tg ON tg.table_grid_id = tc.table_grid_id"
+                        + " JOIN block b ON b.block_id = tg.block_id"
+                        + " JOIN page p ON p.page_id = b.page_id"
+                        + " WHERE p.document_version_id = ?"
+                        + " GROUP BY tg.table_grid_id, tc.row_index")) {
+            ps.setLong(1, versionId);
+            try (var rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String text = rs.getString(1);
+                    if (text != null && valueBearing(text.trim())) {
+                        stated++;
+                    }
+                }
+            }
+        }
+        return stated;
+    }
+
+    /** A colon label with a remainder, or a number written among words. */
+    private static boolean valueBearing(String trimmed) {
+        int colon = trimmed.indexOf(':');
+        if (colon > 0 && colon < trimmed.length() - 1) {
+            return !trimmed.substring(colon + 1).trim().isEmpty();
+        }
+        boolean digit = false;
+        boolean letter = false;
+        for (int i = 0; i < trimmed.length(); i++) {
+            char c = trimmed.charAt(i);
+            digit = digit || Character.isDigit(c);
+            letter = letter || Character.isLetter(c);
+        }
+        return digit && letter;
     }
 
     /**

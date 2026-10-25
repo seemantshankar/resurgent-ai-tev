@@ -499,14 +499,16 @@ class LlamaExtractAdapterTest {
                 .isEqualTo("llama-extract-2.5-agentic");
     }
 
-    /** Spy server capturing the extract-create POST body (upload stubbed). */
-    private record CreateSpy(HttpServer server, AtomicReference<String> lastCreate) {}
+    /** Spy server capturing the extract-create POST body and the uploaded file. */
+    private record CreateSpy(HttpServer server, AtomicReference<String> lastCreate,
+            AtomicReference<byte[]> lastFile) {}
 
     private CreateSpy startCreateSpy() throws IOException {
         AtomicReference<String> lastCreate = new AtomicReference<>();
+        AtomicReference<byte[]> lastFile = new AtomicReference<>();
         HttpServer spy = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         spy.createContext("/api/v1/beta/files", ex -> {
-            ex.getRequestBody().readAllBytes();
+            lastFile.set(ex.getRequestBody().readAllBytes());
             write(ex, 200, "{\"id\":\"dfl-1\"}");
         });
         spy.createContext("/api/v2/extract", ex -> {
@@ -520,7 +522,7 @@ class LlamaExtractAdapterTest {
             }
         });
         spy.start();
-        return new CreateSpy(spy, lastCreate);
+        return new CreateSpy(spy, lastCreate, lastFile);
     }
 
     private ExtractRequest requestPages(Path original, List<Integer> pages) {
@@ -555,6 +557,30 @@ class LlamaExtractAdapterTest {
                     "http://127.0.0.1:" + spy.server().getAddress().getPort()));
             a.extractFieldSchema(requestPages(writeOriginal(), List.of()), sampleSchema());
             JsonNode configuration = MAPPER.readTree(spy.lastCreate().get()).path("configuration");
+            assertThat(configuration.has("target_pages")).isFalse();
+        } finally {
+            spy.server().stop(0);
+        }
+    }
+
+    @Test
+    void remainderUploadsTheUnreadLinesAndKeepsTheSchemaPrompt() throws Exception {
+        CreateSpy spy = startCreateSpy();
+        try {
+            LlamaExtractAdapter adapter = new LlamaExtractAdapter(Map.of(
+                    "LLAMA_CLOUD_API_KEY", "k",
+                    "LLAMA_EXTRACT_BASE_URL",
+                    "http://127.0.0.1:" + spy.server().getAddress().getPort()));
+            ExtractRequest request = new ExtractRequest(temp, writeOriginal(), List.of(1, 2, 3),
+                    "en", "agreement.ppa", "Extract the tariff quote",
+                    Map.of(ExtractRequest.REMAINDER_LINES, "Unread tariff line Rs. 3.40",
+                            LlamaExtractAdapter.KEY_PARSE_JOB_ID, "job-should-not-be-reused"));
+            adapter.extractFieldSchema(request, sampleSchema());
+            String uploaded = new String(spy.lastFile().get(), StandardCharsets.UTF_8);
+            assertThat(uploaded).contains("Unread tariff line Rs. 3.40");
+            assertThat(uploaded).doesNotContain("%PDF");
+            JsonNode configuration = MAPPER.readTree(spy.lastCreate().get()).path("configuration");
+            assertThat(configuration.path("system_prompt").asText()).isEqualTo("Extract the tariff quote");
             assertThat(configuration.has("target_pages")).isFalse();
         } finally {
             spy.server().stop(0);
