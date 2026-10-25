@@ -16,12 +16,14 @@ import java.util.regex.Pattern;
 /**
  * Holds each work in a file as its own document (issue #183, ADR 0031).
  *
- * <p>A page that states a known document starts that document. A later page that
- * states the same document on its own is another document, so two quotations are
- * not merged. A page that only continues a work already started — including after
- * another document — stays with that work. A heading that only names a type stays
- * with the preceding document. An index and a blank page belong to none.
- * Returns empty when no page states a known document, and writes nothing.
+ * <p>A page that states a known document starts that document. A page that states
+ * two works belongs to both, joining a work already open rather than copying it.
+ * A later page that states the same document on its own is another document, so
+ * two quotations are not merged. A page that only continues a work already
+ * started — including after another document — stays with that work. A heading
+ * that only names a type stays with the preceding document. An index and a blank
+ * page belong to none. Returns empty when no page states a known document, and
+ * writes nothing.
  */
 final class FileDocuments {
 
@@ -82,6 +84,10 @@ final class FileDocuments {
             if (page.index() && !stated) {
                 continue;
             }
+            if (!page.headingOnly() && read.statedCodes().size() >= 2) {
+                current = share(page, read, works, packs, waiting);
+                continue;
+            }
             if (stated && !page.headingOnly()) {
                 Work work = new Work(read.result());
                 claim(waiting, work);
@@ -105,6 +111,42 @@ final class FileDocuments {
             }
         }
         return works;
+    }
+
+    /**
+     * A page that states two works is a member of each. An open work of that type
+     * keeps the page; a work that has not started is recorded from this page.
+     */
+    private static Work share(StoredPage page, DocTypeClassifier.PageRead read, List<Work> works,
+            List<DocTypePack> packs, List<StoredPage> waiting) {
+        Work latestOnPage = null;
+        for (String code : read.statedCodes()) {
+            Work open = latest(works, code);
+            if (open == null) {
+                open = new Work(resultFor(code, read, packs));
+                claim(waiting, open);
+                works.add(open);
+            }
+            if (!open.pages.contains(page)) {
+                open.pages.add(page);
+            }
+            latestOnPage = open;
+        }
+        return latestOnPage;
+    }
+
+    private static ClassifyResult resultFor(String code, DocTypeClassifier.PageRead read,
+            List<DocTypePack> packs) {
+        ClassifyResult result = read.result();
+        if (result.status() == ClassifyResult.Status.CLASSIFIED && code.equals(result.docTypeCode())) {
+            return result;
+        }
+        DocTypePack pack = packFor(packs, code);
+        String version = pack == null || pack.version() == null || pack.version().isBlank()
+                ? "1.0.0" : pack.version();
+        return new ClassifyResult(code, code, version, 1.0,
+                List.of("contents state " + code),
+                ClassifyResult.Status.CLASSIFIED, "deterministic");
     }
 
     /** Pages held back because their contents belong to a work that had not started. */
@@ -260,7 +302,7 @@ final class FileDocuments {
             throws SQLException {
         LinkedHashMap<Long, StoredPage> byId = new LinkedHashMap<>();
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT p.page_id, p.page_index, b.block_kind,"
+                "SELECT p.page_id, p.page_index, b.block_index, b.block_kind,"
                         + " COALESCE(NULLIF(b.text_norm, ''), b.text_raw) AS block_text"
                         + " FROM page p"
                         + " LEFT JOIN block b ON b.page_id = p.page_id"
@@ -275,15 +317,51 @@ final class FileDocuments {
                     StoredPage page = byId.computeIfAbsent(pageId,
                             id -> new StoredPage(pageId, pageIndex));
                     String kind = rs.getString("block_kind");
-                    String text = rs.getString("block_text");
-                    if (kind == null || text == null || text.isBlank()) {
+                    if (kind == null) {
                         continue;
                     }
-                    page.blocks.add(new Block(kind, text.trim()));
+                    String text = rs.getString("block_text");
+                    boolean table = "table".equalsIgnoreCase(kind);
+                    if ((text == null || text.isBlank()) && !table) {
+                        continue;
+                    }
+                    page.blocks.add(new Block(rs.getInt("block_index"), kind,
+                            text == null ? "" : text.trim()));
                 }
             }
         }
+        appendCells(connection, versionId, byId);
         return List.copyOf(byId.values());
+    }
+
+    /** Table cells are contents of the page, in row order, on the table's block. */
+    private static void appendCells(Connection connection, long versionId,
+            LinkedHashMap<Long, StoredPage> byId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT b.page_id, b.block_index, tc.text_raw"
+                        + " FROM table_cell tc"
+                        + " JOIN table_grid tg ON tg.table_grid_id = tc.table_grid_id"
+                        + " JOIN block b ON b.block_id = tg.block_id"
+                        + " JOIN page p ON p.page_id = b.page_id"
+                        + " WHERE p.document_version_id = ?"
+                        + " ORDER BY p.page_index, b.block_index, tc.row_index, tc.col_index")) {
+            ps.setLong(1, versionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    StoredPage page = byId.get(rs.getLong("page_id"));
+                    if (page == null) {
+                        continue;
+                    }
+                    int blockIndex = rs.getInt("block_index");
+                    for (Block block : page.blocks) {
+                        if (block.index == blockIndex) {
+                            block.add(rs.getString("text_raw"));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private static final class Work {
@@ -327,13 +405,13 @@ final class FileDocuments {
 
         private boolean headingOnly() {
             return !blocks.isEmpty()
-                    && blocks.stream().allMatch(block -> "heading".equalsIgnoreCase(block.kind));
+                    && blocks.stream().allMatch(block -> "heading".equalsIgnoreCase(block.kind()));
         }
 
         /** An index or a contents page states no work, even if a word on it is a field name. */
         private boolean index() {
             for (Block block : blocks) {
-                String folded = block.text.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+                String folded = block.text().toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
                 if (folded.equals("index") || folded.equals("contents")
                         || folded.equals("table of contents")
                         || folded.startsWith("index:") || folded.startsWith("index ")
@@ -350,11 +428,39 @@ final class FileDocuments {
                 if (!text.isEmpty()) {
                     text.append('\n');
                 }
-                text.append(block.text);
+                text.append(block.text());
             }
             return text.toString();
         }
     }
 
-    private record Block(String kind, String text) {}
+    private static final class Block {
+        private final int index;
+        private final String kind;
+        private final StringBuilder text;
+
+        private Block(int index, String kind, String text) {
+            this.index = index;
+            this.kind = kind;
+            this.text = new StringBuilder(text == null ? "" : text);
+        }
+
+        private String kind() {
+            return kind;
+        }
+
+        private String text() {
+            return text.toString();
+        }
+
+        private void add(String more) {
+            if (more == null || more.isBlank()) {
+                return;
+            }
+            if (!text.isEmpty()) {
+                text.append('\n');
+            }
+            text.append(more.trim());
+        }
+    }
 }
