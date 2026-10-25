@@ -869,7 +869,11 @@ public final class ExtractService {
                 request.pageIndices(), request.langHint(), request.docTypeCode(), lines, options);
     }
 
-    /** Local facts stay. Cloud facts are added only for fields the local pass did not store. */
+    /**
+     * Local facts stay, except where the cloud restates the same line or returns
+     * the row the local pass had flattened to one field. A restatement keeps the
+     * cloud value. A new field is added.
+     */
     private static ExtractResult mergeLocal(ExtractResult local, ExtractResult cloud) {
         if (local.facts().isEmpty()) {
             return cloud;
@@ -877,24 +881,88 @@ public final class ExtractService {
         if (cloud.facts().isEmpty()) {
             return local;
         }
-        Set<String> keys = new HashSet<>();
+        List<FactCandidate> facts = new ArrayList<>();
+        List<Citation> citations = new ArrayList<>();
         for (FactCandidate fact : local.facts()) {
-            if (fact.key() != null) {
-                keys.add(fact.key());
-            }
-        }
-        List<FactCandidate> facts = new ArrayList<>(local.facts());
-        List<Citation> citations = new ArrayList<>(local.citations());
-        for (FactCandidate fact : cloud.facts()) {
-            if (fact.key() != null && keys.contains(fact.key())) {
+            if (restated(fact, cloud.facts()) || flattened(fact, cloud.facts())) {
                 continue;
             }
             facts.add(fact);
             citations.addAll(fact.citations());
         }
+        Set<String> kept = new HashSet<>();
+        for (FactCandidate fact : facts) {
+            if (fact.key() != null) {
+                kept.add(fact.key());
+            }
+        }
+        for (FactCandidate fact : cloud.facts()) {
+            if (fact.key() != null && kept.contains(fact.key())
+                    && fact.lineKey() == null && fact.period() == null
+                    && !restated(localFact(local.facts(), fact.key()), List.of(fact))) {
+                continue;
+            }
+            facts.add(fact);
+            citations.addAll(fact.citations());
+            if (fact.key() != null) {
+                kept.add(fact.key());
+            }
+        }
         return new ExtractResult(cloud.extractorId(),
                 cloud.payload() != null ? cloud.payload() : local.payload(),
                 facts, citations, cloud.stats());
+    }
+
+    /** The cloud fact cites the same words the local fact stored. */
+    private static boolean restated(FactCandidate local, List<FactCandidate> cloudFacts) {
+        if (local == null || local.key() == null) {
+            return false;
+        }
+        for (FactCandidate cloud : cloudFacts) {
+            if (!local.key().equals(cloud.key())) {
+                continue;
+            }
+            for (Citation left : local.citations()) {
+                for (Citation right : cloud.citations()) {
+                    if (overlaps(left.verbatim(), right.verbatim())) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /** A table row from the cloud covers the scalar the local pass kept for one year. */
+    private static boolean flattened(FactCandidate local, List<FactCandidate> cloudFacts) {
+        if (local == null || local.key() == null || local.lineKey() != null || local.period() != null) {
+            return false;
+        }
+        for (FactCandidate cloud : cloudFacts) {
+            if (local.key().equals(cloud.key())
+                    && (cloud.lineKey() != null || cloud.period() != null)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static FactCandidate localFact(List<FactCandidate> facts, String key) {
+        for (FactCandidate fact : facts) {
+            if (key.equals(fact.key())) {
+                return fact;
+            }
+        }
+        return null;
+    }
+
+    private static boolean overlaps(String left, String right) {
+        if (left == null || right == null) {
+            return false;
+        }
+        String a = left.trim().toLowerCase(Locale.ROOT);
+        String b = right.trim().toLowerCase(Locale.ROOT);
+        return !a.isEmpty() && !b.isEmpty() && (a.contains(b) || b.contains(a));
     }
 
     /**

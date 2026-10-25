@@ -386,12 +386,26 @@ final class LayoutExtractBridge {
         joinContinuedSentences(blocks, facts, citations);
         storeUnexplainedFigures(blocks, facts, citations);
         Set<String> consumed = quotesOf(facts);
+        Set<String> repeated = new HashSet<>();
         for (BlockLine line : blocks) {
             if (consumed.contains(line.text()) || line.text().indexOf(':') >= 0) {
                 continue;
             }
-            if (readUnlabeled(line.text(), line.page(), labels, facts, citations)) {
+            if (readUnlabeled(line.text(), line.page(), labels, facts, citations, repeated)) {
                 consumed.add(line.text());
+            }
+        }
+        if (!repeated.isEmpty()) {
+            List<FactCandidate> dropped = new ArrayList<>();
+            facts.removeIf(fact -> {
+                if (repeated.contains(fact.key())) {
+                    dropped.add(fact);
+                    return true;
+                }
+                return false;
+            });
+            for (FactCandidate fact : dropped) {
+                citations.removeAll(fact.citations());
             }
         }
         List<TableSpec> tables = tables(pack);
@@ -454,7 +468,7 @@ final class LayoutExtractBridge {
 
     /** Longest pack label that opens the line; the remainder is the value. */
     private static boolean readUnlabeled(String line, int page, List<Label> labels,
-            List<FactCandidate> facts, List<Citation> citations) {
+            List<FactCandidate> facts, List<Citation> citations, Set<String> repeated) {
         String folded = norm(line);
         for (Label label : labels) {
             String name = label.norm();
@@ -475,6 +489,7 @@ final class LayoutExtractBridge {
             }
             for (FactCandidate existing : facts) {
                 if (existing.key().equals(label.key())) {
+                    repeated.add(label.key());
                     return false;
                 }
             }

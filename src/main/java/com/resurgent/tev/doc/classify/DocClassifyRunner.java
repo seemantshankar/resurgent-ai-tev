@@ -3,7 +3,6 @@ package com.resurgent.tev.doc.classify;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.induce.DocInduceRunner;
 import com.resurgent.tev.doc.induce.PackStore;
-import com.resurgent.tev.doc.induce.SpineCatalog;
 import com.resurgent.tev.doc.ingest.BlobStore;
 import com.resurgent.tev.doc.llm.DocLlmClient;
 import com.resurgent.tev.doc.llm.DocLlmEnvironment;
@@ -268,8 +267,9 @@ public final class DocClassifyRunner {
     }
 
     /**
-     * True when the body states at least two labeled values a new type could be
-     * learned from. A heading alone, or one borrowed figure, does not.
+     * True when the body states at least two values a new type could be learned
+     * from: a colon label with a value, or a number written among words. A heading
+     * alone, or one borrowed figure, does not. Known pack labels are not required.
      */
     private static boolean statesInducibleContents(Connection connection, long versionId)
             throws Exception {
@@ -285,26 +285,58 @@ public final class DocClassifyRunner {
                 while (rs.next()) {
                     String kind = rs.getString(1);
                     String text = rs.getString(2);
-                    if (text == null || text.isBlank() || "heading".equalsIgnoreCase(kind)) {
+                    if (text == null || text.isBlank() || "heading".equalsIgnoreCase(kind)
+                            || "table".equalsIgnoreCase(kind)) {
                         continue;
                     }
-                    String trimmed = text.trim();
-                    if (!trimmed.contains(":") && !trimmed.chars().anyMatch(Character::isDigit)) {
-                        continue;
-                    }
-                    String label = trimmed;
-                    int colon = trimmed.indexOf(':');
-                    if (colon > 0) {
-                        label = trimmed.substring(0, colon).trim();
-                    }
-                    if (SpineCatalog.matchLabel(label).isPresent()
-                            || SpineCatalog.matchLabel(trimmed).isPresent()) {
+                    if (valueBearing(text.trim())) {
                         stated++;
                     }
                 }
             }
         }
+        stated += valueBearingRows(connection, versionId);
         return stated >= 2;
+    }
+
+    /** Each table row is its own line. A grid stored as one block still counts per row. */
+    private static int valueBearingRows(Connection connection, long versionId) throws Exception {
+        int stated = 0;
+        try (var ps = connection.prepareStatement(
+                "SELECT group_concat(tc.text_raw, ' ')"
+                        + " FROM table_cell tc"
+                        + " JOIN table_grid tg ON tg.table_grid_id = tc.table_grid_id"
+                        + " JOIN block b ON b.block_id = tg.block_id"
+                        + " JOIN page p ON p.page_id = b.page_id"
+                        + " WHERE p.document_version_id = ?"
+                        + " GROUP BY tg.table_grid_id, tc.row_index")) {
+            ps.setLong(1, versionId);
+            try (var rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String text = rs.getString(1);
+                    if (text != null && valueBearing(text.trim())) {
+                        stated++;
+                    }
+                }
+            }
+        }
+        return stated;
+    }
+
+    /** A colon label with a remainder, or a number written among words. */
+    private static boolean valueBearing(String trimmed) {
+        int colon = trimmed.indexOf(':');
+        if (colon > 0 && colon < trimmed.length() - 1) {
+            return !trimmed.substring(colon + 1).trim().isEmpty();
+        }
+        boolean digit = false;
+        boolean letter = false;
+        for (int i = 0; i < trimmed.length(); i++) {
+            char c = trimmed.charAt(i);
+            digit = digit || Character.isDigit(c);
+            letter = letter || Character.isLetter(c);
+        }
+        return digit && letter;
     }
 
     /**

@@ -27,7 +27,9 @@ import java.util.Set;
  * <p>The type is read from the contents the pages state: pack field synonyms, passage
  * terms, and table names. A heading, a title, or a filename that only names a type
  * does not assign one. A phrase that more than one type states does not assign one
- * either. One stated content is not enough unless the pages also name that type.
+ * either. Two distinct fields are enough; one field is enough only when the pages
+ * also name that type. Synonyms of the same field count once. A word inside a title
+ * does not count unless that line states it as a label or a sentence.
  * Two candidate types that state the same amount of contents go to {@link ClassifyTieBreak};
  * the offline default declines and the document stays {@code unknown}. A pack is never
  * invented here.
@@ -234,24 +236,36 @@ public final class DocTypeClassifier {
         }
 
         Set<String> sharedNoted = new HashSet<>();
-        for (int i = 0; i < pageWords.size(); ) {
-            PhraseHit hit = longest(phrases, pageWords, i);
-            if (hit == null) {
-                i++;
+        for (String line : request.page1Text().split("\\R", -1)) {
+            if (line.isBlank()) {
                 continue;
             }
-            if (hit.packCodes().size() == 1) {
-                String code = hit.packCodes().iterator().next();
-                for (PackReading reading : readings) {
-                    if (reading.pack.code().equals(code)) {
-                        reading.matched.add(hit.display());
-                    }
+            List<String> lineWords = words(fold(line));
+            int colon = line.indexOf(':');
+            boolean bareTitle = colon < 0 && !hasCopula(lineWords) && !hasDigit(line);
+            for (int i = 0; i < lineWords.size(); ) {
+                PhraseHit hit = longest(phrases, lineWords, i);
+                if (hit == null) {
+                    i++;
+                    continue;
                 }
-            } else if (sharedNoted.add(hit.folded())) {
-                reasons.add("\"" + hit.folded() + "\" is stated by more than one document type"
-                        + " and does not assign one");
+                // "Vendor Proposal" merely starts with a field word. A label, a
+                // sentence, or a word further along the line still states the field.
+                boolean statedLine = !(bareTitle && i == 0 && hit.length() < lineWords.size());
+                if (statedLine && hit.packCodes().size() == 1) {
+                    String code = hit.packCodes().iterator().next();
+                    for (PackReading reading : readings) {
+                        if (reading.pack.code().equals(code)) {
+                            reading.matched.add(hit.display());
+                            reading.fields.addAll(hit.fieldKeys());
+                        }
+                    }
+                } else if (statedLine && sharedNoted.add(hit.folded())) {
+                    reasons.add("\"" + hit.folded() + "\" is stated by more than one document type"
+                            + " and does not assign one");
+                }
+                i += hit.length();
             }
-            i += hit.length();
         }
 
         for (PackReading reading : readings) {
@@ -289,19 +303,19 @@ public final class DocTypeClassifier {
             reasons.add("no document type is stated by the page contents");
             return new Score(ClassifyResult.unknown(reasons, "deterministic"), codes, stated);
         }
-        eligible.sort(Comparator.comparingInt((PackReading reading) -> reading.matched.size())
+        eligible.sort(Comparator.comparingInt((PackReading reading) -> reading.fields.size())
                 .reversed()
                 .thenComparing(reading -> reading.pack.code()));
         PackReading top = eligible.get(0);
         List<PackReading> tied = new ArrayList<>();
         for (PackReading reading : eligible) {
-            if (reading.matched.size() == top.matched.size()) {
+            if (reading.fields.size() == top.fields.size()) {
                 tied.add(reading);
             }
         }
         if (tied.size() == 1) {
             reasons.add("contents state " + top.pack.code());
-            return new Score(classified(top, reasons, "deterministic", confidence(top.matched.size())),
+            return new Score(classified(top, reasons, "deterministic", confidence(top.fields.size())),
                     codes, stated);
         }
 
@@ -314,7 +328,7 @@ public final class DocTypeClassifier {
                 tied.stream()
                         .map(reading -> new ClassifyTieBreak.ScoredPack(
                                 reading.pack.code(), reading.pack.version(),
-                                reading.matched.size(), List.copyOf(reading.matched),
+                                reading.fields.size(), List.copyOf(reading.matched),
                                 reading.pack.identitySignals()))
                         .toList());
         Optional<ClassifyTieBreak.TieBreakChoice> choice = tieBreak.resolve(context);
@@ -347,9 +361,27 @@ public final class DocTypeClassifier {
                 confidence, reasons, ClassifyResult.Status.CLASSIFIED, classifier);
     }
 
-    /** Two contents, or one content the pages also name, is enough to be that document. */
-    private static boolean eligible(int contents, boolean named) {
-        return contents >= 2 || (contents >= 1 && named);
+    /**
+     * Two distinct fields, or one field on a page that also names the document,
+     * is enough. Synonyms of one field count once, so tenor and term together do
+     * not become a power purchase agreement.
+     */
+    private static boolean eligible(int fields, boolean named) {
+        return fields >= 2 || (fields >= 1 && named);
+    }
+
+    /** A sentence that states a value, rather than a title that merely contains a word. */
+    private static boolean hasCopula(List<String> lineWords) {
+        return lineWords.contains("is") || lineWords.contains("are");
+    }
+
+    private static boolean hasDigit(String line) {
+        for (int i = 0; i < line.length(); i++) {
+            if (Character.isDigit(line.charAt(i))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static double confidence(int contents) {
@@ -364,29 +396,30 @@ public final class DocTypeClassifier {
         Set<String> seen = new HashSet<>();
         for (PackField field : pack.fields()) {
             if (field.synonyms().isEmpty()) {
-                addPhrase(phrases, seen, pack.code(), field.key().replace('_', ' '));
+                addPhrase(phrases, seen, pack.code(), field.key().replace('_', ' '), field.key());
             } else {
                 for (String synonym : field.synonyms()) {
-                    addPhrase(phrases, seen, pack.code(), synonym);
+                    addPhrase(phrases, seen, pack.code(), synonym, field.key());
                 }
             }
         }
         for (PackPassage passage : pack.passages()) {
             for (String term : passage.headingTerms()) {
-                addPhrase(phrases, seen, pack.code(), term);
+                addPhrase(phrases, seen, pack.code(), term, "passage:" + term);
             }
         }
         for (java.util.Map<String, Object> table : pack.tables()) {
             Object name = table.get("name");
             if (name != null) {
-                addPhrase(phrases, seen, pack.code(), String.valueOf(name).replace('_', ' '));
+                addPhrase(phrases, seen, pack.code(), String.valueOf(name).replace('_', ' '),
+                        "table:" + name);
             }
         }
         return phrases;
     }
 
     private static void addPhrase(List<ContentPhrase> phrases, Set<String> seen,
-            String packCode, String raw) {
+            String packCode, String raw, String fieldKey) {
         if (raw == null || raw.isBlank()) {
             return;
         }
@@ -398,7 +431,7 @@ public final class DocTypeClassifier {
         if (!seen.add(folded)) {
             return;
         }
-        phrases.add(new ContentPhrase(packCode, tokens, raw.trim(), folded));
+        phrases.add(new ContentPhrase(packCode, tokens, raw.trim(), folded, fieldKey));
     }
 
     private static List<String> matchedIdentity(DocTypePack pack, List<String> pageWords) {
@@ -435,11 +468,14 @@ public final class DocTypeClassifier {
             return null;
         }
         Set<String> codes = new LinkedHashSet<>();
+        Set<String> fieldKeys = new LinkedHashSet<>();
         for (ContentPhrase phrase : found) {
             codes.add(phrase.packCode());
+            fieldKeys.add(phrase.fieldKey());
         }
         ContentPhrase first = found.get(0);
-        return new PhraseHit(codes, first.display(), first.folded(), first.tokens().size());
+        return new PhraseHit(codes, first.display(), first.folded(), first.tokens().size(),
+                fieldKeys);
     }
 
     private static boolean containsAt(List<String> page, int at, List<String> needle) {
@@ -611,6 +647,7 @@ public final class DocTypeClassifier {
     private static final class PackReading {
         private final DocTypePack pack;
         private final Set<String> matched = new LinkedHashSet<>();
+        private final Set<String> fields = new LinkedHashSet<>();
         private final List<String> named = new ArrayList<>();
 
         private PackReading(DocTypePack pack) {
@@ -618,11 +655,13 @@ public final class DocTypeClassifier {
         }
 
         private boolean eligible() {
-            return DocTypeClassifier.eligible(matched.size(), !named.isEmpty());
+            return DocTypeClassifier.eligible(fields.size(), !named.isEmpty());
         }
     }
 
-    private record ContentPhrase(String packCode, List<String> tokens, String display, String folded) {}
+    private record ContentPhrase(String packCode, List<String> tokens, String display,
+            String folded, String fieldKey) {}
 
-    private record PhraseHit(Set<String> packCodes, String display, String folded, int length) {}
+    private record PhraseHit(Set<String> packCodes, String display, String folded, int length,
+            Set<String> fieldKeys) {}
 }

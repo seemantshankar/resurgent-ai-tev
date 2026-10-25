@@ -606,6 +606,11 @@ public final class ChecklistAssessor {
     }
 
     private static boolean better(FactEvidenceRow candidate, FactEvidenceRow current) {
+        boolean candidateResolved = "resolved".equals(candidate.resolution());
+        boolean currentResolved = "resolved".equals(current.resolution());
+        if (candidateResolved != currentResolved) {
+            return candidateResolved;
+        }
         double candidateConfidence = candidate.confidence() == null ? -1 : candidate.confidence();
         double currentConfidence = current.confidence() == null ? -1 : current.confidence();
         if (candidateConfidence != currentConfidence) {
@@ -613,11 +618,6 @@ public final class ChecklistAssessor {
         }
         if ((candidate.pageIndex() != null) != (current.pageIndex() != null)) {
             return candidate.pageIndex() != null;
-        }
-        boolean candidateResolved = "resolved".equals(candidate.resolution());
-        boolean currentResolved = "resolved".equals(current.resolution());
-        if (candidateResolved != currentResolved) {
-            return candidateResolved;
         }
         return false;
     }

@@ -273,8 +273,41 @@ public final class SiteScan {
         double best = 0.0;
         for (String name : names) {
             best = Math.max(best, Comparisons.site(window, name).score());
+            if (nameContains(window, name)) {
+                best = Math.max(best, Comparisons.SITE_MATCH_SCORE);
+            }
         }
         return best;
+    }
+
+    /**
+     * A page that says "Jaisingh Pura" mentions the site "Village Jaisingh Pura".
+     * The shorter spelling has to be at least two words, so a single shared word
+     * does not attach the document.
+     */
+    private static boolean nameContains(String window, String name) {
+        List<String> left = nameTokens(window);
+        List<String> right = nameTokens(name);
+        if (left.size() < 2 || right.size() < 2) {
+            return false;
+        }
+        List<String> shorter = left.size() <= right.size() ? left : right;
+        List<String> longer = left.size() <= right.size() ? right : left;
+        for (int i = 0; i + shorter.size() <= longer.size(); i++) {
+            if (longer.subList(i, i + shorter.size()).equals(shorter)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<String> nameTokens(String text) {
+        List<String> tokens = new ArrayList<>();
+        Matcher matcher = TOKEN.matcher(text == null ? "" : text.toLowerCase(Locale.ROOT));
+        while (matcher.find()) {
+            tokens.add(matcher.group());
+        }
+        return tokens;
     }
 
     /** Alnum tokens of a text with their source offsets, preserving the stated spelling. */
