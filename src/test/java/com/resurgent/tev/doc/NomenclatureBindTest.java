@@ -159,6 +159,70 @@ class NomenclatureBindTest {
     }
 
     @Test
+    void aBatchThatNamesTheSameSiblingTwiceKeepsOneSoftLeaf() throws Exception {
+        // Issue #158: one call places both labels, against a catalog that has neither yet.
+        FakeDocLlmClient llm = new FakeDocLlmClient("""
+                {"assignments": [
+                  {"key": "assets_total",
+                   "path": "Project Cost > Plant & Machinery > Freight & Forwarding",
+                   "reasoning": "inward freight on the certificate"},
+                  {"key": "liabilities_total",
+                   "path": "Project Cost > Plant & Machinery > Forwarding and Freight",
+                   "reasoning": "the same freight stated the other way"}]}
+                """);
+
+        new PackPathBinder().bind(dbPath, parseRunId, MANDATE, pack, llm);
+
+        String assets = fact("assets_total").ontologyPath();
+        String liabilities = fact("liabilities_total").ontologyPath();
+        assertThat(assets).isEqualTo(liabilities);
+        assertThat(assets).isIn(
+                "economic > Project Cost > Plant & Machinery > Freight & Forwarding",
+                "economic > Project Cost > Plant & Machinery > Forwarding and Freight");
+        assertThat(List.of(
+                fact("assets_total").nomenclatureReason(),
+                fact("liabilities_total").nomenclatureReason()))
+                .anySatisfy(reason -> assertThat(reason).contains("mandate_soft"))
+                .anySatisfy(reason -> assertThat(reason).contains("near-duplicate"));
+        assertThat(stat("soft_leaves_added")).isEqualTo(1.0);
+        assertThat(stat("llm_calls")).isEqualTo(1.0);
+
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            var slice = new NomenclatureCatalog(new WorkspaceRepository(db.connection()))
+                    .sliceForMandate(MANDATE);
+            boolean ampersand = slice.node(
+                    "Project Cost > Plant & Machinery > Freight & Forwarding").isPresent();
+            boolean reordered = slice.node(
+                    "Project Cost > Plant & Machinery > Forwarding and Freight").isPresent();
+            assertThat(ampersand).isNotEqualTo(reordered);
+        }
+    }
+
+    @Test
+    void aShortEquipmentNameFollowsTheSpineLeafInsteadOfMinting() throws Exception {
+        FakeDocLlmClient llm = new FakeDocLlmClient("""
+                {"assignments": [
+                  {"key": "assets_total",
+                   "path": "Project Cost > Plant & Machinery > Inverter",
+                   "reasoning": "the inverter line of the certificate"}]}
+                """);
+
+        new PackPathBinder().bind(dbPath, parseRunId, MANDATE, pack, llm);
+
+        FactRow assets = fact("assets_total");
+        assertThat(assets.nomenclatureStatus()).isEqualTo("bound");
+        assertThat(assets.ontologyPath())
+                .isEqualTo("economic > Project Cost > Plant & Machinery > Inverters / PCU");
+        assertThat(assets.nomenclatureReason()).contains("alias");
+        assertThat(stat("soft_leaves_added")).isZero();
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            assertThat(new NomenclatureCatalog(new WorkspaceRepository(db.connection()))
+                    .sliceForMandate(MANDATE)
+                    .node("Project Cost > Plant & Machinery > Inverter")).isEmpty();
+        }
+    }
+
+    @Test
     void aLeafThatCopiesItsRowIsRefusedAndNeverStagedIntoTheOntology() throws Exception {
         // ADR 0022 §2: "Supplier - Kone Brothers" is the row, not a category. The name
         // differs per mandate, so a leaf of it could never match again — it must not

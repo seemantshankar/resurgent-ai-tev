@@ -50,5 +50,9 @@ the premise.
    (`llmCalls = 1` at `PackPathBinder.java:167, 177`) against a frozen snapshot, and Excel
    classify runs regions in parallel within a round (`ClassifyService.java:1443-1444, 1456, 1518`).
    Without an in-flight duplicate guard or controlled vocabulary, canonical naming can produce
-   sibling synonyms. A near-duplicate guard on minting and widening the shared spine are
-   deferred to epic #128's M4 note.
+   sibling synonyms. Issue #158 adds that guard: a proposed soft leaf under a parent that
+   already has a sibling differing only by {@code &}/{@code and}, plural form, punctuation
+   or word order binds to the sibling instead of minting, including across regions of one
+   Excel round and labels of one document batch. The same issue widens the frozen spine
+   with freight, solar equipment and operating-expense heads so those lines are offered
+   before a mandate leaf is grown.
