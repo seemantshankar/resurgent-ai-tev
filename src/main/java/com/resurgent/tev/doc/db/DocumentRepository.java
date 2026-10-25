@@ -369,6 +369,63 @@ public final class DocumentRepository {
     }
 
     /**
+     * Active documents in a mandate, one row per version. A document whose
+     * pages were not recorded has an empty {@link #pageIndexesOf(long)} list.
+     *
+     * @param mandateId mandate scope
+     * @return documents in id order
+     * @throws SQLException if the lookup fails
+     */
+    public List<HeldDocument> documentsIn(long mandateId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT d.document_id, dv.document_version_id, d.doc_type_code"
+                        + " FROM document d"
+                        + " JOIN document_version dv ON dv.document_id = d.document_id"
+                        + " WHERE d.mandate_id = ? AND d.status != 'deleted_by_analyst'"
+                        + " ORDER BY d.document_id, dv.document_version_id")) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<HeldDocument> rows = new ArrayList<>();
+                while (rs.next()) {
+                    rows.add(new HeldDocument(
+                            rs.getLong("document_id"),
+                            rs.getLong("document_version_id"),
+                            rs.getString("doc_type_code")));
+                }
+                return rows;
+            }
+        }
+    }
+
+    /**
+     * Replaces the file pages recorded for a document. An empty list leaves the
+     * document with no pages.
+     *
+     * @param documentId logical document
+     * @param pageIds pages of the file, in any order
+     * @throws SQLException if the write fails
+     */
+    public void replaceMemberPages(long documentId, List<Long> pageIds) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM document_page WHERE document_id = ?")) {
+            ps.setLong(1, documentId);
+            ps.executeUpdate();
+        }
+        if (pageIds == null || pageIds.isEmpty()) {
+            return;
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO document_page (document_id, page_id) VALUES (?, ?)")) {
+            for (Long pageId : pageIds) {
+                ps.setLong(1, documentId);
+                ps.setLong(2, pageId);
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
+    }
+
+    /**
      * File pages recorded as belonging to this document, in page order.
      * Empty when the file was not stored as that document.
      *
@@ -960,6 +1017,15 @@ public final class DocumentRepository {
             ps.setLong(index, value);
         }
     }
+
+    /**
+     * One stored document version in a mandate.
+     *
+     * @param documentId logical document
+     * @param documentVersionId version that carries the classification and the facts
+     * @param docTypeCode pack code, {@code unknown}, or null before classification
+     */
+    public record HeldDocument(long documentId, long documentVersionId, String docTypeCode) {}
 
     public record DocumentVersionRow(
             long documentVersionId,

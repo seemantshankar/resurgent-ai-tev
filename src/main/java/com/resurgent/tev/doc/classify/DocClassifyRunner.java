@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * CLI facade for classification. Delegates to {@link DocTypeClassifier} and, when a
@@ -77,6 +78,7 @@ public final class DocClassifyRunner {
                     docs.findVersion(documentVersionId).orElseThrow(
                             () -> new IllegalArgumentException(
                                     "unknown document_version " + documentVersionId));
+            DocTypeClassifier classifier = new DocTypeClassifier(tieBreak);
             String pageText = DocTypeClassifier.loadContents(connection, documentVersionId);
             ClassifyRequest request = new ClassifyRequest(
                     documentVersionId,
@@ -88,7 +90,24 @@ public final class DocClassifyRunner {
                     force);
             connection.setAutoCommit(false);
             try {
-                DocTypeClassifier classifier = new DocTypeClassifier(tieBreak);
+                boolean split = force || docs.findClassificationCode(documentVersionId).isEmpty();
+                if (split) {
+                    Optional<ClassifyResult> separated = FileDocuments.separate(
+                            connection, docs, version, mandateId, industryTag, packs, classifier);
+                    if (separated.isPresent()) {
+                        recordUsage(connection, version, mandateId, industryTag, usage);
+                        connection.commit();
+                        ClassifyResult held = separated.get();
+                        return new Result(
+                                held.docTypeCode(),
+                                held.packCode(),
+                                held.packVersion(),
+                                held.confidence(),
+                                held.reasons(),
+                                held.classifier(),
+                                client != null);
+                    }
+                }
                 ClassifyResult result = classifier.classify(request, connection);
                 if (autoInduce && unknown(result)
                         && statesInducibleContents(connection, documentVersionId)) {

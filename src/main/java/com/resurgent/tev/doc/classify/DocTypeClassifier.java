@@ -83,13 +83,32 @@ public final class DocTypeClassifier {
             }
         }
 
-        ClassifyResult result = score(request);
+        ClassifyResult result = score(request).result();
 
         if (persist) {
             write(connection, request, result);
         }
         return result;
     }
+
+    /**
+     * Scores one stretch of layout text without writing. {@link PageRead#contentCodes()}
+     * names every pack whose own contents the text states, including a single phrase
+     * that is not yet enough to be that document.
+     *
+     * @param request score-only or version request (required)
+     * @return the decision and the packs the contents support
+     */
+    PageRead read(ClassifyRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request is required");
+        }
+        Score scored = score(request);
+        return new PageRead(scored.result(), scored.contentCodes());
+    }
+
+    /** A classification together with the packs whose contents the text states. */
+    record PageRead(ClassifyResult result, List<String> contentCodes) {}
 
     /**
      * Gathers whitespace-normalized page-1 block text in reading order, headings
@@ -193,7 +212,7 @@ public final class DocTypeClassifier {
         write(connection, request, result);
     }
 
-    private ClassifyResult score(ClassifyRequest request) {
+    private Score score(ClassifyRequest request) {
         List<String> reasons = new ArrayList<>();
         String fileRole = request.fileRole() == null ? "" : request.fileRole().trim();
         reasons.add("file_role=" + (fileRole.isEmpty() ? "(none)" : fileRole)
@@ -202,7 +221,7 @@ public final class DocTypeClassifier {
 
         if (request.candidatePacks().isEmpty()) {
             reasons.add("no candidate packs");
-            return ClassifyResult.unknown(reasons, "deterministic");
+            return new Score(ClassifyResult.unknown(reasons, "deterministic"), List.of());
         }
 
         List<String> pageWords = words(fold(request.page1Text()));
@@ -246,6 +265,14 @@ public final class DocTypeClassifier {
             }
         }
 
+        List<String> contentCodes = new ArrayList<>();
+        for (PackReading reading : readings) {
+            if (!reading.matched.isEmpty()) {
+                contentCodes.add(reading.pack.code());
+            }
+        }
+        List<String> codes = List.copyOf(contentCodes);
+
         List<PackReading> eligible = new ArrayList<>();
         for (PackReading reading : readings) {
             if (reading.eligible()) {
@@ -254,7 +281,7 @@ public final class DocTypeClassifier {
         }
         if (eligible.isEmpty()) {
             reasons.add("no document type is stated by the page contents");
-            return ClassifyResult.unknown(reasons, "deterministic");
+            return new Score(ClassifyResult.unknown(reasons, "deterministic"), codes);
         }
         eligible.sort(Comparator.comparingInt((PackReading reading) -> reading.matched.size())
                 .reversed()
@@ -268,7 +295,8 @@ public final class DocTypeClassifier {
         }
         if (tied.size() == 1) {
             reasons.add("contents state " + top.pack.code());
-            return classified(top, reasons, "deterministic", confidence(top.matched.size()));
+            return new Score(classified(top, reasons, "deterministic", confidence(top.matched.size())),
+                    codes);
         }
 
         reasons.add("equal contents — requesting tie-break");
@@ -286,7 +314,7 @@ public final class DocTypeClassifier {
         Optional<ClassifyTieBreak.TieBreakChoice> choice = tieBreak.resolve(context);
         if (choice.isEmpty()) {
             reasons.add("tie-break declined — staying unknown (never invent a pack)");
-            return ClassifyResult.unknown(reasons, "tie-break");
+            return new Score(ClassifyResult.unknown(reasons, "tie-break"), codes);
         }
         ClassifyTieBreak.TieBreakChoice won = choice.get();
         PackReading chosen = null;
@@ -299,11 +327,13 @@ public final class DocTypeClassifier {
         if (chosen == null) {
             reasons.add("tie-break chose '" + won.packCode()
                     + "' which these contents do not state — staying unknown");
-            return ClassifyResult.unknown(reasons, "tie-break");
+            return new Score(ClassifyResult.unknown(reasons, "tie-break"), codes);
         }
         reasons.add("tie-break chose " + chosen.pack.code() + ": " + won.reason());
-        return classified(chosen, reasons, "tie-break", won.confidence());
+        return new Score(classified(chosen, reasons, "tie-break", won.confidence()), codes);
     }
+
+    private record Score(ClassifyResult result, List<String> contentCodes) {}
 
     private static ClassifyResult classified(PackReading reading, List<String> reasons,
             String classifier, double confidence) {
