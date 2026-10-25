@@ -21,11 +21,13 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * M2 extract orchestration (S2.5, S2.7): parse_run identity, schema-guided
@@ -51,6 +53,65 @@ public final class ExtractService {
             int derivedCount,
             int lineItemCount,
             String message) {}
+
+    /**
+     * Reads one document on the file pages recorded for it. Labeled lines are taken
+     * first; a second local pass then takes the lines and tables that pass missed.
+     * A cloud model is asked only when residency allows it, and only for lines
+     * still unread.
+     *
+     * @param dbPath workspace database
+     * @param documentId document whose {@code document_page} rows are read
+     * @param mandateId mandate scope
+     * @param pack doc type pack for that document
+     * @param client cloud extractor, unused when residency is local only
+     * @param extractorBundleVersion extractor bundle version (part of config_hash)
+     * @return outcome with status {@code success} | {@code partial} | {@code failed}
+     * @throws Exception on workspace or persistence failure
+     */
+    public ExtractOutcome read(Path dbPath, long documentId, long mandateId,
+            DocTypePack pack, ExtractClient client, String extractorBundleVersion)
+            throws Exception {
+        long versionId;
+        List<Integer> pages;
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            DocumentRepository docs = new DocumentRepository(db.connection());
+            pages = docs.pageIndexesOf(documentId);
+            versionId = versionHolding(db.connection(), documentId);
+        }
+        return extract(dbPath, versionId, mandateId, pack, client, extractorBundleVersion,
+                null, null, pages, documentId);
+    }
+
+    /**
+     * File version that holds this document's pages, or the document's own version
+     * when membership has not been recorded.
+     */
+    private static long versionHolding(java.sql.Connection connection, long documentId)
+            throws java.sql.SQLException {
+        try (java.sql.PreparedStatement ps = connection.prepareStatement(
+                "SELECT p.document_version_id FROM document_page dp"
+                        + " JOIN page p ON p.page_id = dp.page_id"
+                        + " WHERE dp.document_id = ? ORDER BY p.page_index LIMIT 1")) {
+            ps.setLong(1, documentId);
+            try (java.sql.ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+            }
+        }
+        try (java.sql.PreparedStatement ps = connection.prepareStatement(
+                "SELECT document_version_id FROM document_version WHERE document_id = ?"
+                        + " ORDER BY document_version_id LIMIT 1")) {
+            ps.setLong(1, documentId);
+            try (java.sql.ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+            }
+        }
+        throw new IllegalArgumentException("document " + documentId + " has no file pages");
+    }
 
     /**
      * Extracts pack fields for a document version and replaces its fact set.
@@ -100,6 +161,19 @@ public final class ExtractService {
             DocTypePack pack, ExtractClient client, String extractorBundleVersion,
             String instructions, Map<String, String> options, List<Integer> pageIndices)
             throws Exception {
+        return extract(dbPath, documentVersionId, mandateId, pack, client,
+                extractorBundleVersion, instructions, options, pageIndices, null);
+    }
+
+    /**
+     * Same as {@link #extract(Path, long, long, DocTypePack, ExtractClient, String, String, Map, List)}
+     * reading {@code readingDocumentId} when a file holds more than one document.
+     * Null stores facts on the version's own document.
+     */
+    private ExtractOutcome extract(Path dbPath, long documentVersionId, long mandateId,
+            DocTypePack pack, ExtractClient client, String extractorBundleVersion,
+            String instructions, Map<String, String> options, List<Integer> pageIndices,
+            Long readingDocumentId) throws Exception {
         String configHash = "extract:" + pack.code() + "@" + pack.version() + ":"
                 + extractorBundleVersion;
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
@@ -117,6 +191,8 @@ public final class ExtractService {
             }
 
             List<Integer> pages = resolvePages(version.pageCount(), pageIndices);
+            long factDocumentId = readingDocumentId != null
+                    ? readingDocumentId : version.documentId();
 
             long parseRunId = ensureExtractRun(repo, version.sourceFileId(), mandateId, configHash);
 
@@ -135,27 +211,55 @@ public final class ExtractService {
             ExtractRequest request =
                     buildRequest(dbPath, version, pack, instructions, requestOptions, pages);
 
-            ExtractResult result;
-            try {
-                result = client.extractFieldSchema(request, schema);
-            } catch (ExtractException e) {
-                markRunFailed(repo, parseRunId, e.getMessage());
-                return new ExtractOutcome(parseRunId, documentVersionId, "failed",
-                        0, 0, 0, 0, 0, e.getMessage());
-            }
-
             boolean pageBacked = FixtureExtractClient.ID.equals(client.id())
                     || DocLlmExtractClient.ID.equals(client.id());
             if (pageBacked) {
                 LayoutExtractBridge.materializeParseIfAbsent(
                         db.connection(), documentVersionId, pack);
-                if (result.facts().isEmpty()) {
-                    ExtractResult fromLayout = LayoutExtractBridge.fromLayout(
-                            db.connection(), documentVersionId, pack, result);
-                    if (!fromLayout.facts().isEmpty()) {
-                        result = fromLayout;
+            }
+            Set<Integer> scope = pages.isEmpty() ? null : Set.copyOf(pages);
+            LayoutExtractBridge.LocalReading local = LayoutExtractBridge.readLocal(
+                    db.connection(), documentVersionId, pack, scope);
+
+            ExtractResult result;
+            if (localOnly) {
+                if (!local.result().facts().isEmpty() || !localExtractor(client)) {
+                    result = local.result();
+                } else {
+                    try {
+                        result = client.extractFieldSchema(request, schema);
+                    } catch (ExtractException e) {
+                        markRunFailed(repo, parseRunId, e.getMessage());
+                        return new ExtractOutcome(parseRunId, documentVersionId, "failed",
+                                0, 0, 0, 0, 0, e.getMessage());
+                    }
+                    if (result.facts().isEmpty()) {
+                        result = local.result();
                     }
                 }
+            } else if (!local.unread().isEmpty()) {
+                try {
+                    ExtractResult cloud = client.extractFieldSchema(
+                            remainderRequest(request, local.unread()), schema);
+                    result = mergeLocal(local.result(), cloud);
+                } catch (ExtractException e) {
+                    if (local.result().facts().isEmpty()) {
+                        markRunFailed(repo, parseRunId, e.getMessage());
+                        return new ExtractOutcome(parseRunId, documentVersionId, "failed",
+                                0, 0, 0, 0, 0, e.getMessage());
+                    }
+                    result = local.result();
+                }
+            } else if (local.result().facts().isEmpty()) {
+                try {
+                    result = client.extractFieldSchema(request, schema);
+                } catch (ExtractException e) {
+                    markRunFailed(repo, parseRunId, e.getMessage());
+                    return new ExtractOutcome(parseRunId, documentVersionId, "failed",
+                            0, 0, 0, 0, 0, e.getMessage());
+                }
+            } else {
+                result = local.result();
             }
 
             // Money context from the parsed pages (Excel treatment: figures stay
@@ -191,7 +295,7 @@ public final class ExtractService {
                 // model or stat the new run did not produce does not linger.
                 repo.deleteStageStats(parseRunId, "doc-extract");
                 FactRepository.ReplaceStats stats =
-                        facts.replaceFacts(parseRunId, documentVersionId, writes);
+                        facts.replaceFacts(parseRunId, documentVersionId, factDocumentId, writes);
                 MarkEvidenceLinker.attach(db.connection(), documentVersionId);
                 if (localOnly) {
                     OcrAmbiguity.apply(db.connection(), documentVersionId, parseRunId);
@@ -777,6 +881,49 @@ public final class ExtractService {
                         + ". Return exact quotes from the source.");
         return new ExtractRequest(bundleDir, original, pageIndices, null, pack.code(),
                 instructionsText, options);
+    }
+
+    /** Fixture and page assembly stay on this machine. Every other client is a cloud model. */
+    private static boolean localExtractor(ExtractClient client) {
+        return FixtureExtractClient.ID.equals(client.id())
+                || DocLlmExtractClient.ID.equals(client.id());
+    }
+
+    /** Cloud request limited to the lines neither local pass could read. */
+    private static ExtractRequest remainderRequest(ExtractRequest request, List<String> unread) {
+        Map<String, String> options = new LinkedHashMap<>(request.options());
+        String lines = String.join("\n", unread);
+        options.put(ExtractRequest.REMAINDER_LINES, lines);
+        return new ExtractRequest(request.pageBundleDir(), request.originalFile(),
+                request.pageIndices(), request.langHint(), request.docTypeCode(), lines, options);
+    }
+
+    /** Local facts stay. Cloud facts are added only for fields the local pass did not store. */
+    private static ExtractResult mergeLocal(ExtractResult local, ExtractResult cloud) {
+        if (local.facts().isEmpty()) {
+            return cloud;
+        }
+        if (cloud.facts().isEmpty()) {
+            return local;
+        }
+        Set<String> keys = new HashSet<>();
+        for (FactCandidate fact : local.facts()) {
+            if (fact.key() != null) {
+                keys.add(fact.key());
+            }
+        }
+        List<FactCandidate> facts = new ArrayList<>(local.facts());
+        List<Citation> citations = new ArrayList<>(local.citations());
+        for (FactCandidate fact : cloud.facts()) {
+            if (fact.key() != null && keys.contains(fact.key())) {
+                continue;
+            }
+            facts.add(fact);
+            citations.addAll(fact.citations());
+        }
+        return new ExtractResult(cloud.extractorId(),
+                cloud.payload() != null ? cloud.payload() : local.payload(),
+                facts, citations, cloud.stats());
     }
 
     /**

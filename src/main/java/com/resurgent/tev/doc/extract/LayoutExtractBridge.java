@@ -94,15 +94,45 @@ final class LayoutExtractBridge {
         pages.replacePages(documentVersionId, "local-layout", "local", markdownPages, textPages);
     }
 
+    /**
+     * Label pass, then the key-value lines it missed. {@code pages} null reads every
+     * page of the version; a set reads only those file pages.
+     */
+    static LocalReading readLocal(Connection connection, long documentVersionId,
+            DocTypePack pack, Set<Integer> pages) throws SQLException {
+        ExtractResult labeled = fromLayout(connection, documentVersionId, pack,
+                new ExtractResult(pack.code(), null, List.of(), List.of(), null), pages);
+        return appendMissed(connection, documentVersionId, pack, labeled, pages);
+    }
+
+    /** Lines still unread after both local passes, in reading order. */
+    record LocalReading(ExtractResult result, List<String> unread) {}
+
     /** Layout-derived facts, or {@code original} when the layout has nothing to read. */
     static ExtractResult fromLayout(Connection connection, long documentVersionId,
             DocTypePack pack, ExtractResult original) throws SQLException {
+        return fromLayout(connection, documentVersionId, pack, original, null);
+    }
+
+    /** Layout-derived facts on {@code pages} only. Null reads every page. */
+    static ExtractResult fromLayout(Connection connection, long documentVersionId,
+            DocTypePack pack, ExtractResult original, Set<Integer> pages) throws SQLException {
         List<Label> labels = labels(pack);
         List<TableSpec> tables = tables(pack);
         List<FactCandidate> facts = new ArrayList<>();
         List<Citation> citations = new ArrayList<>();
-        List<BlockLine> blocks = loadBlocks(connection, documentVersionId);
-        List<Grid> grids = loadGrids(connection, documentVersionId);
+        List<BlockLine> blocks = new ArrayList<>();
+        for (BlockLine line : loadBlocks(connection, documentVersionId)) {
+            if (pages == null || pages.contains(line.page())) {
+                blocks.add(line);
+            }
+        }
+        List<Grid> grids = new ArrayList<>();
+        for (Grid grid : loadGrids(connection, documentVersionId)) {
+            if (pages == null || pages.contains(grid.page())) {
+                grids.add(grid);
+            }
+        }
         Set<Integer> gridPages = new HashSet<>();
         Set<Integer> blockPages = new HashSet<>();
         for (Grid grid : grids) {
@@ -113,7 +143,7 @@ final class LayoutExtractBridge {
         }
         readTextLines(blocks, gridPages, tables, labels, pack, facts, citations);
         readCloudLines(connection, documentVersionId, blockPages, gridPages, tables, labels,
-                pack, facts, citations);
+                pack, facts, citations, pages);
         for (Grid grid : grids) {
             readGrid(grid, tables, labels, pack, facts, citations);
         }
@@ -158,11 +188,14 @@ final class LayoutExtractBridge {
     private static void readCloudLines(Connection connection, long documentVersionId,
             Set<Integer> blockPages, Set<Integer> gridPages, List<TableSpec> tables,
             List<Label> labels, DocTypePack pack, List<FactCandidate> facts,
-            List<Citation> citations) throws SQLException {
+            List<Citation> citations, Set<Integer> onlyPages) throws SQLException {
         List<PassageRepository.ParsePage> pages = new PassageRepository(connection)
                 .parsePages(documentVersionId);
         List<BlockLine> lines = new ArrayList<>();
         for (PassageRepository.ParsePage page : pages) {
+            if (onlyPages != null && !onlyPages.contains(page.pageIndex())) {
+                continue;
+            }
             if (blockPages.contains(page.pageIndex()) || page.text() == null) {
                 continue;
             }
@@ -321,6 +354,259 @@ final class LayoutExtractBridge {
             citations.add(citation);
         }
         facts.add(candidate);
+    }
+
+    /**
+     * Key-value lines the label pass left behind, including a line with no colon.
+     * A fact already stored skips only that field; the rest of the page is still read.
+     */
+    private static LocalReading appendMissed(Connection connection, long documentVersionId,
+            DocTypePack pack, ExtractResult labeled, Set<Integer> pages) throws SQLException {
+        List<Label> labels = labels(pack);
+        List<FactCandidate> facts = new ArrayList<>(labeled.facts());
+        List<Citation> citations = new ArrayList<>(labeled.citations());
+        List<BlockLine> blocks = new ArrayList<>();
+        for (BlockLine line : loadBlocks(connection, documentVersionId)) {
+            if (pages == null || pages.contains(line.page())) {
+                blocks.add(line);
+            }
+        }
+        Set<String> consumed = quotesOf(facts);
+        for (BlockLine line : blocks) {
+            if (consumed.contains(line.text()) || line.text().indexOf(':') >= 0) {
+                continue;
+            }
+            if (readUnlabeled(line.text(), line.page(), labels, facts, citations)) {
+                consumed.add(line.text());
+            }
+        }
+        List<TableSpec> tables = tables(pack);
+        List<Grid> grids = new ArrayList<>();
+        for (Grid grid : loadGrids(connection, documentVersionId)) {
+            if (pages == null || pages.contains(grid.page())) {
+                grids.add(grid);
+            }
+        }
+        Set<Grid> readGrids = new HashSet<>();
+        for (Grid grid : grids) {
+            if (matchedStrict(grid, tables)) {
+                readGrids.add(grid);
+                continue;
+            }
+            if (expandLoose(grid, tables, pack, facts, citations)) {
+                readGrids.add(grid);
+            }
+        }
+        List<String> unread = new ArrayList<>();
+        Set<String> quotes = quotesOf(facts);
+        for (BlockLine line : blocks) {
+            if (!quotes.contains(line.text())) {
+                unread.add(line.text());
+            }
+        }
+        for (Grid grid : grids) {
+            if (readGrids.contains(grid)) {
+                continue;
+            }
+            for (List<Cell> row : grid.cells()) {
+                String joined = row.stream().map(Cell::text).filter(text -> !text.isBlank())
+                        .reduce((a, b) -> a + " | " + b).orElse("");
+                if (!joined.isBlank() && !quotes.contains(joined)) {
+                    unread.add(joined);
+                }
+            }
+        }
+        return new LocalReading(new ExtractResult(labeled.extractorId(), labeled.payload(),
+                facts, citations, labeled.stats()), List.copyOf(unread));
+    }
+
+    /** Longest pack label that opens the line; the remainder is the value. */
+    private static boolean readUnlabeled(String line, int page, List<Label> labels,
+            List<FactCandidate> facts, List<Citation> citations) {
+        String folded = norm(line);
+        for (Label label : labels) {
+            String name = label.norm();
+            if (name.length() < 3) {
+                continue;
+            }
+            boolean exact = folded.equals(name);
+            boolean prefix = folded.startsWith(name + " ");
+            if (!exact && !prefix) {
+                continue;
+            }
+            if (exact) {
+                return false;
+            }
+            String value = remainderAfter(line, name.split(" ").length);
+            if (value.isBlank()) {
+                return false;
+            }
+            for (FactCandidate existing : facts) {
+                if (existing.key().equals(label.key())) {
+                    return false;
+                }
+            }
+            FactCandidate candidate = new FactCandidate(label.key(), label.kind())
+                    .valueText(value)
+                    .confidence(0.9)
+                    .extractionMethod("deterministic");
+            if (page >= 1) {
+                Citation citation = Citation.of(page, line);
+                candidate.addCitation(citation);
+                citations.add(citation);
+            }
+            facts.add(candidate);
+            return true;
+        }
+        return false;
+    }
+
+    private static String remainderAfter(String line, int tokens) {
+        int index = 0;
+        int seen = 0;
+        while (index < line.length() && seen < tokens) {
+            while (index < line.length() && !Character.isLetterOrDigit(line.charAt(index))) {
+                index++;
+            }
+            if (index >= line.length()) {
+                break;
+            }
+            while (index < line.length() && Character.isLetterOrDigit(line.charAt(index))) {
+                index++;
+            }
+            seen++;
+        }
+        return line.substring(Math.min(index, line.length())).trim();
+    }
+
+    /** A header the column keys missed, matched from the column name or its prompt. */
+    private static boolean expandLoose(Grid grid, List<TableSpec> tables, DocTypePack pack,
+            List<FactCandidate> facts, List<Citation> citations) {
+        List<List<Cell>> rows = grid.cells();
+        int headerAt = -1;
+        TableSpec matched = null;
+        Map<Integer, String> columns = Map.of();
+        for (int i = 0; i < rows.size(); i++) {
+            for (TableSpec table : tables) {
+                Map<Integer, String> mapped = mapHeaderLoose(rows.get(i), table, pack);
+                if (mapped != null) {
+                    headerAt = i;
+                    matched = table;
+                    columns = mapped;
+                    break;
+                }
+            }
+            if (headerAt >= 0) {
+                break;
+            }
+        }
+        if (matched == null) {
+            return false;
+        }
+        for (int i = headerAt + 1; i < rows.size(); i++) {
+            expandRow(matched, columns, rows.get(i), pack, facts, citations);
+        }
+        return true;
+    }
+
+    private static boolean matchedStrict(Grid grid, List<TableSpec> tables) {
+        for (List<Cell> row : grid.cells()) {
+            for (TableSpec table : tables) {
+                if (mapHeader(row, table) != null) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static Map<Integer, String> mapHeaderLoose(List<Cell> row, TableSpec table,
+            DocTypePack pack) {
+        Map<String, String> hints = columnHints(pack, table.name());
+        Map<Integer, String> mapped = new LinkedHashMap<>();
+        Set<String> used = new HashSet<>();
+        boolean anchor = false;
+        String anchorColumn = table.keyColumn() != null ? table.keyColumn() : table.periodColumn();
+        for (int i = 0; i < row.size(); i++) {
+            String column = columnForHeader(row.get(i).text(), table.columns(), hints, used);
+            if (column == null) {
+                continue;
+            }
+            used.add(column);
+            mapped.put(i, column);
+            if (column.equals(anchorColumn)) {
+                anchor = true;
+            }
+        }
+        if (anchorColumn == null || !anchor
+                || mapped.size() < Math.min(2, table.columns().size())) {
+            return null;
+        }
+        return mapped;
+    }
+
+    private static String columnForHeader(String header, List<String> columns,
+            Map<String, String> hints, Set<String> used) {
+        String folded = norm(header);
+        if (folded.isEmpty()) {
+            return null;
+        }
+        for (String column : columns) {
+            if (used.contains(column)) {
+                continue;
+            }
+            String key = column.replace('_', ' ');
+            if (folded.equals(key) || (key.length() >= 3 && folded.startsWith(key))) {
+                return column;
+            }
+            String hint = hints.get(column);
+            if (hint == null) {
+                continue;
+            }
+            String hintNorm = norm(hint);
+            if (hintNorm.equals(folded) || (folded.length() >= 4 && hintNorm.startsWith(folded + " "))) {
+                return column;
+            }
+            for (String token : hintNorm.split(" ")) {
+                if (token.length() >= 5 && token.equals(folded)) {
+                    return column;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static Map<String, String> columnHints(DocTypePack pack, String tableName) {
+        Map<String, String> hints = new LinkedHashMap<>();
+        for (Map<String, Object> table : pack.tables()) {
+            if (!tableName.equals(String.valueOf(table.get("name")))) {
+                continue;
+            }
+            Object fields = table.get("fields");
+            if (!(fields instanceof List<?> list)) {
+                continue;
+            }
+            for (Object raw : list) {
+                if (raw instanceof Map<?, ?> column && column.get("key") != null
+                        && column.get("prompt_hint") != null) {
+                    hints.put(String.valueOf(column.get("key")),
+                            String.valueOf(column.get("prompt_hint")));
+                }
+            }
+        }
+        return hints;
+    }
+
+    private static Set<String> quotesOf(List<FactCandidate> facts) {
+        Set<String> quotes = new HashSet<>();
+        for (FactCandidate fact : facts) {
+            for (Citation citation : fact.citations()) {
+                if (citation.verbatim() != null && !citation.verbatim().isBlank()) {
+                    quotes.add(citation.verbatim().trim());
+                }
+            }
+        }
+        return quotes;
     }
 
     private static Label match(String left, List<Label> labels) {

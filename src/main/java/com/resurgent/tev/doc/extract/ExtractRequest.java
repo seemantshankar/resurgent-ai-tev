@@ -23,6 +23,12 @@ public record ExtractRequest(
         String instructions,
         Map<String, String> options) {
 
+    /**
+     * Option whose value is the source lines the local passes could not read,
+     * joined by newlines. Present only when a cloud model is asked for that remainder.
+     */
+    public static final String REMAINDER_LINES = "remainder_lines";
+
     public ExtractRequest {
         Objects.requireNonNull(pageBundleDir, "pageBundleDir");
         pageIndices = pageIndices == null ? List.of() : List.copyOf(pageIndices);

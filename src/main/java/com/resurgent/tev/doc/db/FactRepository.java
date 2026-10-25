@@ -314,6 +314,16 @@ public final class FactRepository {
      */
     public ReplaceStats replaceFacts(long parseRunId, long documentVersionId, List<FactWrite> facts)
             throws SQLException {
+        return replaceFacts(parseRunId, documentVersionId, null, facts);
+    }
+
+    /**
+     * Same as {@link #replaceFacts(long, long, List)} with the document the facts
+     * were read from. Null keeps the version's own document.
+     */
+    public ReplaceStats replaceFacts(long parseRunId, long documentVersionId, Long documentId,
+            List<FactWrite> facts) throws SQLException {
+        Long owner = documentId != null ? documentId : documentIdOf(documentVersionId);
         deleteFactsForParseRun(parseRunId);
         if (facts == null || facts.isEmpty()) {
             return new ReplaceStats(0, 0, 0, 0, 0);
@@ -328,9 +338,10 @@ public final class FactRepository {
                         + " value_number, value_date, unit, currency, scale, absolute_amount,"
                         + " lang_source, extraction_method, extractor_id, confidence,"
                         + " nomenclature_status, unbound_reason, stated_or_derived, line_key,"
-                        + " group_keys_json, valid_from, valid_to, is_current, created_at, site_id)"
+                        + " group_keys_json, valid_from, valid_to, is_current, created_at, site_id,"
+                        + " document_id)"
                         + " VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-                        + " 'unbound', NULL, ?, ?, ?, NULL, NULL, 1, ?, ?)",
+                        + " 'unbound', NULL, ?, ?, ?, NULL, NULL, 1, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             for (FactWrite f : facts) {
                 ps.setLong(1, parseRunId);
@@ -359,6 +370,11 @@ public final class FactRepository {
                     ps.setNull(23, java.sql.Types.INTEGER);
                 } else {
                     ps.setLong(23, f.siteId());
+                }
+                if (owner == null) {
+                    ps.setNull(24, java.sql.Types.INTEGER);
+                } else {
+                    ps.setLong(24, owner);
                 }
                 ps.executeUpdate();
                 long factId = generatedId(ps);
@@ -743,7 +759,7 @@ public final class FactRepository {
             params.add(query.mandateId());
         }
         if (query.documentId() != null) {
-            sql.append(" AND d.document_id = ?");
+            sql.append(" AND COALESCE(f.document_id, d.document_id) = ?");
             params.add(query.documentId());
         }
         if (query.documentVersionId() != null) {
@@ -1196,6 +1212,16 @@ public final class FactRepository {
             return n.doubleValue();
         }
         return Double.valueOf(value.toString());
+    }
+
+    private Long documentIdOf(long documentVersionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT document_id FROM document_version WHERE document_version_id = ?")) {
+            ps.setLong(1, documentVersionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : null;
+            }
+        }
     }
 
     private Long findPageId(long documentVersionId, int pageIndex) throws SQLException {
