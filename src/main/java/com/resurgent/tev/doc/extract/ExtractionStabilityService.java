@@ -48,11 +48,13 @@ public final class ExtractionStabilityService {
             ExtractClient client) throws Exception {
         ExtractService service = new ExtractService();
         String baseBundle = client.id();
+        CloudJobProgress.note("Stability pass A: extract (" + pack.code() + ", " + baseBundle + ")…");
         ExtractService.ExtractOutcome a = service.extract(
                 dbPath, documentVersionId, mandateId, pack, client, baseBundle + PASS_A_SUFFIX);
         if ("failed".equals(a.status())) {
             throw new IllegalStateException("stability pass A failed: " + a.message());
         }
+        CloudJobProgress.note("Stability pass B: extract (" + pack.code() + ", " + baseBundle + ")…");
         ExtractService.ExtractOutcome b = service.extract(
                 dbPath, documentVersionId, mandateId, pack, client, baseBundle + PASS_B_SUFFIX);
         if ("failed".equals(b.status())) {

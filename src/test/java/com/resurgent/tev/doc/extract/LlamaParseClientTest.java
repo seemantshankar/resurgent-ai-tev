@@ -115,7 +115,7 @@ class LlamaParseClientTest {
         Path pdf = temp.resolve("doc.pdf");
         Files.writeString(pdf, "%PDF-1.4");
         client().parse(pdf, ParseTier.FAST, List.of(2, 3, 5));
-        assertThat(lastConfig.get()).contains("\"target_pages\":\"2-3,5\"");
+        assertThat(lastConfig.get()).contains("\"page_ranges\":{\"target_pages\":\"2-3,5\"}");
     }
 
     @Test

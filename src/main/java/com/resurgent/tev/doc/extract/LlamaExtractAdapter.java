@@ -278,6 +278,8 @@ public final class LlamaExtractAdapter implements ExtractClient {
             }
             String jobId = createExtractJob(client, fileId, schema, req.instructions(),
                     tierWire, PageSelection.wire(pageIndices), timeoutMs);
+            CloudJobProgress.note("LlamaExtract job " + jobId + " submitted (tier " + tierWire
+                    + "); polling until complete…");
             JsonNode job = pollJob(client, jobId, timeoutMs, startNanos);
             String status = job.path("status").asText("");
             if (!"COMPLETED".equals(status)) {
@@ -398,6 +400,8 @@ public final class LlamaExtractAdapter implements ExtractClient {
             if ("COMPLETED".equals(status) || "FAILED".equals(status) || "CANCELLED".equals(status)) {
                 return job;
             }
+            CloudJobProgress.pollStatus("LlamaExtract", jobId, status,
+                    (System.nanoTime() - startNanos) / 1_000_000L);
             if (System.nanoTime() >= deadline) {
                 throw new ExtractException("LlamaExtract job " + jobId
                         + " still " + status + " after " + timeoutMs + " ms");
