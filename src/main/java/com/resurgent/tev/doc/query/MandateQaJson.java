@@ -273,6 +273,9 @@ public final class MandateQaJson {
             n.put("site_name", row.siteName());
             n.put("status", row.status());
             n.put("reason", row.reason());
+            if (row.reason() != null && row.reason().contains("unstable_across_runs")) {
+                n.put("unstable_across_runs", true);
+            }
             if (row.documentVersionId() != null) {
                 n.put("document_version_id", row.documentVersionId());
             }

@@ -527,6 +527,9 @@ public final class ChecklistAssessor {
      * ticket's bar. Everything weaker is Unclear, which is never counted as provided.
      */
     private static boolean isProvided(FactEvidenceRow fact) {
+        if (fact.unstableAcrossRuns()) {
+            return false;
+        }
         return fact.confidence() != null
                 && fact.confidence() >= MIN_EVIDENCE_CONFIDENCE
                 && "resolved".equals(fact.resolution())
@@ -535,6 +538,9 @@ public final class ChecklistAssessor {
 
     /** Why evidence below the provided bar is unclear, phrased for the analyst. */
     private static String whyUnclear(FactEvidenceRow fact) {
+        if (fact.unstableAcrossRuns()) {
+            return "the reading is unstable_across_runs (two extract passes disagreed on this field)";
+        }
         if (fact.confidence() == null || fact.confidence() < MIN_EVIDENCE_CONFIDENCE) {
             return "its evidence confidence " + confidenceText(fact.confidence())
                     + " is below the " + thresholdText() + " threshold";

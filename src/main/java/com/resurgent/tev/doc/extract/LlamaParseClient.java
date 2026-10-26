@@ -142,6 +142,10 @@ public final class LlamaParseClient implements PageParseClient {
                 .build();
         try {
             String jobId = uploadAndCreate(client, file, tierWire, pagesWire);
+            String pagesHint = pagesWire == null || pagesWire.isBlank() ? "all pages"
+                    : "pages " + pagesWire;
+            CloudJobProgress.note("LlamaParse upload ok; job " + jobId + " (" + tierWire + ", "
+                    + pagesHint + "); polling until complete…");
             JsonNode job = poll(client, jobId, start);
             String status = statusOf(job);
             if (!"COMPLETED".equals(status)) {
@@ -258,6 +262,8 @@ public final class LlamaParseClient implements PageParseClient {
             if ("COMPLETED".equals(status) || "FAILED".equals(status) || "CANCELLED".equals(status)) {
                 return job;
             }
+            CloudJobProgress.pollStatus("LlamaParse", jobId, status,
+                    (System.nanoTime() - startNanos) / 1_000_000L);
             if (System.nanoTime() >= deadline) {
                 throw new ExtractException("LlamaParse job " + jobId
                         + " still " + status + " after " + timeoutMs + " ms");
@@ -347,9 +353,10 @@ public final class LlamaParseClient implements PageParseClient {
             throws IOException {
         String name = file.getFileName() == null ? "document" : file.getFileName().toString();
         byte[] bytes = Files.readAllBytes(file);
+        // v2 nests page selection under page_ranges (top-level target_pages → HTTP 400).
         String configuration = "{\"tier\":\"" + tierWire + "\",\"version\":\"" + version + "\"";
         if (pagesWire != null && !pagesWire.isBlank()) {
-            configuration += ",\"target_pages\":\"" + pagesWire + "\"";
+            configuration += ",\"page_ranges\":{\"target_pages\":\"" + pagesWire + "\"}";
         }
         configuration += "}";
         ByteArrayOutputStream out = new ByteArrayOutputStream();

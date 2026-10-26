@@ -194,9 +194,19 @@ public final class ParseService {
                 throw new ExtractException(
                         "LlamaParseClient blocked: data residency is local_only");
             }
+            String pageRange = PageSelection.wire(failing);
+            CloudJobProgress.note(String.format(Locale.ROOT,
+                    "Page triage: escalating %d of %d page(s) to LlamaParse (tier %s, %s)…",
+                    failing.size(), decisions.size(), tier.wireName(), pageRange));
             long startNanos = System.nanoTime();
             job = client.parse(original, tier, List.copyOf(failing));
             latencyMs = (System.nanoTime() - startNanos) / 1_000_000L;
+            if (job != null) {
+                CloudJobProgress.note(String.format(Locale.ROOT,
+                        "LlamaParse finished job %s in %d ms (%d cloud page(s) merged)",
+                        job.jobId(), latencyMs,
+                        job.pageMarkdown() == null ? 0 : job.pageMarkdown().size()));
+            }
         }
         List<String> markdown = merge(decisions, failing, job == null ? null : job.pageMarkdown());
         List<String> text = merge(decisions, failing, job == null ? null : job.pageText());

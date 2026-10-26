@@ -93,6 +93,10 @@ public final class DocParseCommand implements Callable<Integer> {
                 return 0;
             }
 
+            ParseTier planned = override != null ? override : ParseService.selectTier(db, documentVersionId);
+            outStream.printf("Parsing document_version %d (tier %s); cloud jobs log progress on stderr…%n",
+                    documentVersionId, planned.wireName());
+            outStream.flush();
             ParseService.ParseOutcome result =
                     ParseService.parse(db, documentVersionId, override, client, blobs,
                             System.getenv(), platform);

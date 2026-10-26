@@ -1,6 +1,7 @@
 package com.resurgent.tev.doc.layout;
 
 import com.resurgent.tev.doc.db.DocumentRepository;
+import com.resurgent.tev.doc.extract.CloudJobProgress;
 import com.resurgent.tev.doc.ingest.BlobStore;
 import com.resurgent.tev.doc.layout.ocr.ImageRasterDecoder;
 import com.resurgent.tev.doc.layout.ocr.LocalOcrClient;
@@ -87,6 +88,28 @@ public final class DocumentLayoutService {
             // (ocr_required and no ocr_engine) is upgraded in place.
             boolean upgrade = docs.needsLocalOcrUpgrade(documentVersionId);
             if (docs.hasLayout(documentVersionId) && !upgrade) {
+                if (docs.countBlocks(documentVersionId) == 0
+                        && CloudParseLayoutHydrator.hasCloudText(db.connection(), documentVersionId)) {
+                    var conn = db.connection();
+                    conn.setAutoCommit(false);
+                    try {
+                        CloudParseLayoutHydrator.HydrateCounts hydrated =
+                                CloudParseLayoutHydrator.hydratePagesWithoutBlocks(
+                                        docs, documentVersionId, conn);
+                        conn.commit();
+                        if (hydrated.blocks() > 0) {
+                            CloudJobProgress.note("Layout: local OCR graph empty; "
+                                    + CloudParseLayoutHydrator.summary(Locale.ROOT, hydrated,
+                                    CloudParseLayoutHydrator.cloudPageIndexes(db.connection(),
+                                            documentVersionId).size()));
+                        }
+                    } catch (Exception e) {
+                        conn.rollback();
+                        throw e;
+                    } finally {
+                        conn.setAutoCommit(true);
+                    }
+                }
                 return existingResult(docs, version);
             }
 
@@ -167,9 +190,17 @@ public final class DocumentLayoutService {
                 tables = rs.getInt(1);
             }
         }
-        String extractor = version.ocrRequired() && blocks == 0
-                ? "pdf-scan-page-raster"
-                : (blocks == 0 ? "image-placeholder" : PdfLayoutExtractor.EXTRACTOR_ID);
+        String extractor;
+        if (blocks == 0 && version.ocrRequired()) {
+            extractor = CloudParseLayoutHydrator.hasCloudText(docs.connection(),
+                    version.documentVersionId())
+                    ? CloudParseLayoutHydrator.EXTRACTOR_ID
+                    : "pdf-scan-page-raster";
+        } else if (blocks == 0) {
+            extractor = "image-placeholder";
+        } else {
+            extractor = PdfLayoutExtractor.EXTRACTOR_ID;
+        }
         return new LayoutResult(version.documentVersionId(), pages, blocks, spans, tables,
                 version.ocrRequired(), extractor);
     }
@@ -235,6 +266,19 @@ public final class DocumentLayoutService {
         String extractorId = !anyPageNeedsOcr
                 ? PdfLayoutExtractor.EXTRACTOR_ID
                 : (extraction.anyText() ? PdfLayoutExtractor.EXTRACTOR_ID : OcrGraphWriter.EXTRACTOR_ID);
+        CloudParseLayoutHydrator.HydrateCounts hydrated = CloudParseLayoutHydrator
+                .hydratePagesWithoutBlocks(docs, versionId, docs.connection());
+        blocks += hydrated.blocks();
+        spans += hydrated.spans();
+        if (hydrated.blocks() > 0 && blocks == hydrated.blocks()) {
+            extractorId = CloudParseLayoutHydrator.EXTRACTOR_ID;
+        } else if (hydrated.blocks() > 0) {
+            extractorId = extractorId + "+" + CloudParseLayoutHydrator.EXTRACTOR_ID;
+        }
+        if (hydrated.blocks() > 0) {
+            CloudJobProgress.note("Layout: hydrated " + hydrated.blocks() + " block(s) from cloud"
+                    + " parse text (local OCR had no usable graph on those pages)");
+        }
         docs.updateVersionPageCount(versionId, extraction.pageCount(), ocrRequired);
         docs.updateVersionIngestStatus(versionId, "layout_ok");
         recordLayoutRun(docs, repo, version, extraction.pageCount(), blocks, spans, tables,

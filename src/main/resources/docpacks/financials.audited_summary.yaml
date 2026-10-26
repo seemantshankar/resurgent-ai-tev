@@ -67,7 +67,7 @@ fields:
     value_kind: money
     required: true
     slots: [currency, scale]
-    prompt_hint: "Total borrowings / debt outstanding at year end"
+    prompt_hint: "Total borrowings line for the statement year (not section subtotals)"
     synonyms: ["Total Borrowings", "Borrowings", "Total Debt"]
 # One row per financial year; every column except the period column becomes one
 # fact for that year, tagged with the row's financial year as its period.
@@ -91,7 +91,7 @@ tables:
         prompt_hint: "Net worth as reported for the year"
       - key: total_borrowings
         value_kind: money
-        prompt_hint: "Total borrowings / debt outstanding at year end"
+        prompt_hint: "Total borrowings for this financial year row (not section subtotals)"
 checklist: []
 document_date:
   kind: report

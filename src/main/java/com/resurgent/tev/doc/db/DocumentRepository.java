@@ -505,7 +505,9 @@ public final class DocumentRepository {
      * @throws SQLException if any deletion fails
      */
     public void deleteLayoutForVersion(long documentVersionId) throws SQLException {
-        // provenance_doc → spans/tables → blocks → pages. FKs are ON, so children first.
+        // M2/M3 rows may cite layout provenance (fact_evidence, passages, …). Drop those
+        // anchors before provenance_doc so re-layout after extract does not hit FK errors.
+        deleteProvenanceDependentsForVersion(documentVersionId);
         try (PreparedStatement ps = connection.prepareStatement(
                 "DELETE FROM provenance_doc WHERE document_version_id = ?")) {
             ps.setLong(1, documentVersionId);
@@ -820,20 +822,11 @@ public final class DocumentRepository {
      * The page row itself stays so a placeholder can be upgraded in place.
      */
     public void clearPageGraph(long pageId) throws SQLException {
+        String provenanceOnPage = provenanceOnPageSql();
+        deleteProvenanceDependentsIn(provenanceOnPage, pageId);
         try (PreparedStatement ps = connection.prepareStatement(
-                "DELETE FROM fact_evidence WHERE provenance_id IN ("
-                        + " SELECT provenance_id FROM provenance_doc"
-                        + " WHERE page_id = ? OR block_id IN"
-                        + " (SELECT block_id FROM block WHERE page_id = ?))")) {
-            ps.setLong(1, pageId);
-            ps.setLong(2, pageId);
-            ps.executeUpdate();
-        }
-        try (PreparedStatement ps = connection.prepareStatement(
-                "DELETE FROM provenance_doc WHERE page_id = ? OR block_id IN"
-                        + " (SELECT block_id FROM block WHERE page_id = ?)")) {
-            ps.setLong(1, pageId);
-            ps.setLong(2, pageId);
+                "DELETE FROM provenance_doc WHERE provenance_id IN (" + provenanceOnPage + ")")) {
+            bindProvenanceOnPage(ps, pageId);
             ps.executeUpdate();
         }
         try (PreparedStatement ps = connection.prepareStatement(
@@ -1055,6 +1048,66 @@ public final class DocumentRepository {
             ps.setObject(index, null);
         } else {
             ps.setLong(index, value);
+        }
+    }
+
+    private static final String PROVENANCE_FOR_VERSION =
+            "SELECT provenance_id FROM provenance_doc WHERE document_version_id = ?";
+
+    private void deleteProvenanceDependentsForVersion(long documentVersionId) throws SQLException {
+        deleteWhereProvenanceInVersion("fact_evidence", "provenance_id", documentVersionId);
+        deleteWhereProvenanceInVersion("passage", "provenance_id", documentVersionId);
+        deleteWhereProvenanceInVersion("clause", "provenance_id", documentVersionId);
+        deleteWhereProvenanceInVersion("entity_alias", "provenance_id", documentVersionId);
+        deleteWhereProvenanceInVersion("mandate_industry_record", "provenance_id", documentVersionId);
+        deleteWhereProvenanceInVersion("mandate_country_record", "provenance_id", documentVersionId);
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE document_version SET date_provenance_id = NULL"
+                        + " WHERE document_version_id = ? AND date_provenance_id IN ("
+                        + PROVENANCE_FOR_VERSION + ")")) {
+            ps.setLong(1, documentVersionId);
+            ps.setLong(2, documentVersionId);
+            ps.executeUpdate();
+        }
+    }
+
+    private void deleteWhereProvenanceInVersion(String table, String column, long documentVersionId)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM " + table + " WHERE " + column + " IN (" + PROVENANCE_FOR_VERSION + ")")) {
+            ps.setLong(1, documentVersionId);
+            ps.executeUpdate();
+        }
+    }
+
+    private static String provenanceOnPageSql() {
+        return "SELECT provenance_id FROM provenance_doc"
+                + " WHERE page_id = ?"
+                + " OR block_id IN (SELECT block_id FROM block WHERE page_id = ?)"
+                + " OR span_id IN (SELECT s.span_id FROM span s"
+                + "  JOIN block b ON b.block_id = s.block_id WHERE b.page_id = ?)"
+                + " OR table_cell_id IN (SELECT tc.table_cell_id FROM table_cell tc"
+                + "  JOIN table_grid tg ON tg.table_grid_id = tc.table_grid_id"
+                + "  JOIN block b ON b.block_id = tg.block_id WHERE b.page_id = ?)";
+    }
+
+    private static void bindProvenanceOnPage(PreparedStatement ps, long pageId)
+            throws SQLException {
+        ps.setLong(1, pageId);
+        ps.setLong(2, pageId);
+        ps.setLong(3, pageId);
+        ps.setLong(4, pageId);
+    }
+
+    private void deleteProvenanceDependentsIn(String provenanceIdSubquery, long pageId)
+            throws SQLException {
+        for (String table : List.of("fact_evidence", "passage", "clause", "entity_alias",
+                "mandate_industry_record", "mandate_country_record")) {
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "DELETE FROM " + table + " WHERE provenance_id IN (" + provenanceIdSubquery + ")")) {
+                bindProvenanceOnPage(ps, pageId);
+                ps.executeUpdate();
+            }
         }
     }
 

@@ -26,9 +26,15 @@ class PackInducerTest {
     private static PackMiningClient.MinedField field(
             String key, String path, String pathRoot, String kind,
             boolean required, List<String> docIds, List<String> labels) {
+        return field(key, path, pathRoot, kind, required, "hint for " + key, docIds, labels);
+    }
+
+    private static PackMiningClient.MinedField field(
+            String key, String path, String pathRoot, String kind,
+            boolean required, String hint, List<String> docIds, List<String> labels) {
         return new PackMiningClient.MinedField(
                 key, path, pathRoot, kind, required,
-                "hint for " + key, List.of(), labels, docIds, List.of("sample"));
+                hint, List.of(), labels, docIds, List.of("sample"));
     }
 
     private PackMiningClient goodMining() {
@@ -74,6 +80,38 @@ class PackInducerTest {
 
         // published YAML is readable via PackStore
         assertThat(store.latest("solar_power", "agreement.ppa")).isPresent();
+    }
+
+    @Test
+    void rejectsPackWithBareTotalInstruction() throws Exception {
+        PackMiningClient vagueTotal = new OfflinePackMiningClient(new PackMiningClient.MiningResult(
+                "quotation.vendor",
+                "quotation",
+                List.of("Quotation"),
+                List.of(
+                        field("vendor_name", "identity > Legal Name", "identity", "text",
+                                true, List.of("d1"), List.of("Vendor")),
+                        field("gross_total", "economic > Project Cost > Quoted Gross", "economic",
+                                "money", true, "Total", List.of("d1"), List.of("Total")),
+                        field("validity_date", "commercial > Offtake term > Validity", "commercial",
+                                "date", true, List.of("d1"), List.of("Valid until")))));
+        PackInducer.InduceRequest request = new PackInducer.InduceRequest(
+                List.of(doc("d1", "quotation", "Quotation")),
+                "general",
+                "quotation",
+                "quotation.vendor",
+                "quotation",
+                vagueTotal,
+                new PackStore(tempDir.resolve("packs-vague")),
+                0.6,
+                1,
+                false);
+        PackInducer.InduceResult result = new PackInducer().induce(request);
+        assertThat(result.published()).isFalse();
+        assertThat(result.gates()).anySatisfy(g -> {
+            assertThat(g.name()).isEqualTo("row_disambiguation");
+            assertThat(g.passed()).isFalse();
+        });
     }
 
     @Test
