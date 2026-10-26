@@ -37,6 +37,10 @@ public final class DocClassifyCommand implements Callable<Integer> {
             description = "Leave an unknown document unknown instead of inducing a pack")
     boolean noAutoInduce;
 
+    @Option(names = "--platform",
+            description = "Platform registry. Created when this path is new.")
+    Path platform;
+
     @Option(names = "--blob-root", description = "Blob store root (default: <db-parent>/blobs)")
     Path blobRoot;
 
@@ -54,7 +58,7 @@ public final class DocClassifyCommand implements Callable<Integer> {
                     : BlobStore.besideDatabase(db);
             var result = com.resurgent.tev.doc.classify.DocClassifyRunner.run(
                     mandateId, documentVersionId, db, blobs, packDir, industry, force,
-                    !noAutoInduce);
+                    !noAutoInduce, platform);
             String llm = result.liveModel() ? " (LLM tie-break available)" : "";
             if ("unknown".equals(result.docTypeCode())) {
                 out.printf("Classified version %d as unknown (confidence %.2f, %s)%s.%n",

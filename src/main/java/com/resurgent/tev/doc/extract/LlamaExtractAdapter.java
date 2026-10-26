@@ -126,6 +126,7 @@ public final class LlamaExtractAdapter implements ExtractClient {
      *     {@code extract.timeout_ms} / {@code extract.max_usd_per_document}
      */
     public LlamaExtractAdapter(Map<String, String> env) {
+        com.resurgent.tev.doc.platform.CloudClientConstruction.constructed("LlamaExtractAdapter");
         Objects.requireNonNull(env, "env");
         this.apiKey = resolveApiKey(env);
         this.residency = env.get(DataResidency.ENV);
@@ -264,6 +265,15 @@ public final class LlamaExtractAdapter implements ExtractClient {
             int creditsPerPage = ParseTier.fromWire(tierWire).creditsPerPage();
             double estimatedCredits = (double) pages * creditsPerPage;
             double estimatedUsd = estimatedCredits * usdPerCredit;
+            Double ceiling = resolveDouble(req.options(),
+                    com.resurgent.tev.doc.platform.SpendCeiling.CEILING_OPTION, null);
+            Double spent = resolveDouble(req.options(),
+                    com.resurgent.tev.doc.platform.SpendCeiling.SPENT_OPTION, null);
+            if (ceiling != null && !com.resurgent.tev.doc.platform.SpendCeiling.allows(
+                    ceiling, spent == null ? 0 : spent, estimatedUsd)) {
+                throw new ExtractException(
+                        "LlamaExtractAdapter blocked: spend ceiling");
+            }
             if (maxUsd != null && estimatedUsd > maxUsd) {
                 throw new ExtractException("LlamaExtract estimated spend " + estimatedCredits
                         + " credits (" + pages + " pages × " + creditsPerPage

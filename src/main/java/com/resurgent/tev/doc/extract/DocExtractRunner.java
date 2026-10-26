@@ -66,30 +66,50 @@ public final class DocExtractRunner {
     public static Result run(long mandateId, long documentVersionId, Path db, BlobStore blobs,
             String packCode, String extractorId, String pages, String tier, boolean noParse,
             boolean autoInduce) throws Exception {
+        return run(mandateId, documentVersionId, db, blobs, packCode, extractorId, pages, tier,
+                noParse, autoInduce, null);
+    }
+
+    /**
+     * Same as {@link #run(long, long, Path, BlobStore, String, String, String, String, boolean, boolean)},
+     * and when {@code platform} is set the platform default spend ceiling applies.
+     */
+    public static Result run(long mandateId, long documentVersionId, Path db, BlobStore blobs,
+            String packCode, String extractorId, String pages, String tier, boolean noParse,
+            boolean autoInduce, Path platform) throws Exception {
+        com.resurgent.tev.doc.platform.PlatformRegistry.recordIfNamed(platform, db, mandateId);
         if (autoInduce && (packCode == null || packCode.isBlank())) {
             String classified = classifiedPackCode(db, documentVersionId);
             if (classified == null || classified.isBlank() || "unknown".equalsIgnoreCase(classified)) {
                 com.resurgent.tev.doc.classify.DocClassifyRunner.run(
-                        mandateId, documentVersionId, db, blobs, null, "general", true, true);
+                        mandateId, documentVersionId, db, blobs, null, "general", true, true,
+                        platform);
             }
         }
-        DocTypePack pack = resolvePack(db, documentVersionId, packCode);
-        ExtractClient client = resolveClient(extractorId);
+        DocTypePack pack = resolvePack(db, documentVersionId, packCode, platform, mandateId);
+        ExtractClient client = resolveClient(extractorId,
+                com.resurgent.tev.doc.platform.SpendCeiling.forbidsCloud(db, mandateId));
         PageSelection pageSelection = PageSelection.parseOptional(pages);
         List<Integer> pageIndices = pageSelection == null ? null : pageSelection.indices();
 
         ParseTier override = tier == null || tier.isBlank() ? null : ParseTier.fromWire(tier);
         boolean localOnly = localOnly(db, mandateId);
-        if (localOnly && client instanceof LlamaExtractAdapter) {
-            throw new ExtractException(
-                    "LlamaExtractAdapter blocked: data residency is local_only");
+        double estimate = com.resurgent.tev.doc.platform.SpendCeiling.estimateUsd(
+                1, override);
+        boolean ceilingBlocks = com.resurgent.tev.doc.platform.SpendCeiling.blocks(
+                db, mandateId, platform, estimate);
+        // local_only and zero mandate ceiling select DocLlmExtractClient in resolveClient
+        // so the pipeline continues offline (#192, ADR 0033); do not fail-fast here.
+        if (ceilingBlocks && client instanceof LlamaExtractAdapter) {
+            client = new DocLlmExtractClient();
         }
         ParseTier effectiveTier;
         Map<String, String> options = null;
         if (client instanceof LlamaExtractAdapter && !noParse && !localOnly
                 && LlamaParseClient.hasApiKey()) {
             ParseService.ParseOutcome parsed = ParseService.parse(
-                    db, documentVersionId, override, new LlamaParseClient(), blobs);
+                    db, documentVersionId, override, new LlamaParseClient(), blobs,
+                    System.getenv(), platform);
             effectiveTier = parsed.tier();
             if (parsed.jobId() != null && parsed.fullCloudJob()) {
                 options = new LinkedHashMap<>();
@@ -112,13 +132,20 @@ public final class DocExtractRunner {
             }
         }
 
+        if (platform != null) {
+            if (options == null) {
+                options = new LinkedHashMap<>();
+            }
+            options.put(com.resurgent.tev.doc.platform.SpendCeiling.PLATFORM_OPTION,
+                    platform.toAbsolutePath().normalize().toString());
+        }
         ExtractService service = new ExtractService();
         ExtractService.ExtractOutcome outcome = service.extract(
                 db, documentVersionId, mandateId, pack, client, client.id(), null, options,
                 pageIndices);
         if (autoInduce && !"failed".equals(outcome.status())) {
             com.resurgent.tev.doc.bind.DocBindRunner.run(
-                    mandateId, outcome.parseRunId(), db, pack.code());
+                    mandateId, outcome.parseRunId(), db, pack.code(), platform);
         }
         int ambiguous = outcome.fieldsAmbiguous();
         return new Result(
@@ -147,9 +174,9 @@ public final class DocExtractRunner {
         }
     }
 
-    private static DocTypePack resolvePack(Path db, long documentVersionId, String packCode)
-            throws Exception {
-        List<DocTypePack> packs = loadAllPacks(db);
+    private static DocTypePack resolvePack(Path db, long documentVersionId, String packCode,
+            Path platform, long mandateId) throws Exception {
+        List<DocTypePack> packs = loadAllPacks(db, platform, mandateId);
         String code = packCode == null ? null : packCode.trim();
         if (code == null || code.isBlank()) {
             code = classifiedPackCode(db, documentVersionId);
@@ -167,23 +194,10 @@ public final class DocExtractRunner {
                 + packs.stream().map(DocTypePack::code).sorted().toList() + ")");
     }
 
-    private static List<DocTypePack> loadAllPacks(Path db) throws Exception {
-        Map<String, DocTypePack> byCode = new LinkedHashMap<>();
-        for (DocTypePack pack : PackLoader.loadSeedPacks()) {
-            byCode.put(pack.code(), pack);
-        }
-        Path root = db.toAbsolutePath().getParent() == null
-                ? Path.of("packs")
-                : db.toAbsolutePath().getParent().resolve("packs");
-        try {
-            for (DocTypePack pack : new com.resurgent.tev.doc.induce.PackStore(root).loadAll()) {
-                byCode.put(pack.code(), pack);
-            }
-        } catch (RuntimeException e) {
-            System.err.println("[doc-extract] ignoring pack store " + root + ": "
-                    + e.getMessage());
-        }
-        return List.copyOf(byCode.values());
+    private static List<DocTypePack> loadAllPacks(Path db, Path platform, long mandateId)
+            throws Exception {
+        return com.resurgent.tev.doc.classify.DocClassifyRunner.loadCandidatePacks(
+                db, null, platform, mandateId);
     }
 
     private static String classifiedPackCode(Path db, long documentVersionId) throws Exception {
@@ -195,14 +209,16 @@ public final class DocExtractRunner {
         }
     }
 
-    private static ExtractClient resolveClient(String extractorId) {
+    private static ExtractClient resolveClient(String extractorId, boolean cloudForbidden) {
         String id = extractorId == null || extractorId.isBlank()
                 ? defaultExtractor()
                 : extractorId.trim().toLowerCase(Locale.ROOT);
         return switch (id) {
             case "fixture", "fixture-extract" -> new FixtureExtractClient();
             case "doc-llm-extract", "doc-llm", "page" -> new DocLlmExtractClient();
-            case "llama-extract", "llama", "llama-extract-2.5-agentic" -> new LlamaExtractAdapter();
+            case "llama-extract", "llama", "llama-extract-2.5-agentic" -> cloudForbidden
+                    ? new DocLlmExtractClient()
+                    : new LlamaExtractAdapter();
             default -> throw new IllegalArgumentException(
                     "unknown extractor: " + extractorId
                             + " (use doc-llm-extract|fixture|llama-extract)");

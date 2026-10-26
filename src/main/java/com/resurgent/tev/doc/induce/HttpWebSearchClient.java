@@ -35,6 +35,7 @@ public final class HttpWebSearchClient implements WebSearchClient {
      */
     public HttpWebSearchClient(String endpoint, String residency,
             java.util.function.UnaryOperator<String> transport) {
+        com.resurgent.tev.doc.platform.CloudClientConstruction.constructed("HttpWebSearchClient");
         this.endpoint = endpoint == null ? "" : endpoint.trim();
         this.residency = residency;
         this.transport = transport;

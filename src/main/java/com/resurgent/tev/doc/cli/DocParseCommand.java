@@ -1,10 +1,14 @@
 package com.resurgent.tev.doc.cli;
 
+import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.extract.ExtractException;
 import com.resurgent.tev.doc.extract.LlamaParseClient;
+import com.resurgent.tev.doc.extract.PageParseClient;
 import com.resurgent.tev.doc.extract.ParseService;
 import com.resurgent.tev.doc.extract.ParseTier;
 import com.resurgent.tev.doc.ingest.BlobStore;
+import com.resurgent.tev.doc.platform.SpendCeiling;
+import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -39,8 +43,23 @@ public final class DocParseCommand implements Callable<Integer> {
     @Option(names = "--blob-root", description = "Blob store root (default: <db-parent>/blobs)")
     Path blobRoot;
 
+    @Option(names = "--platform",
+            description = "Platform registry. Created when this path is new.")
+    Path platform;
+
     @Spec
     CommandSpec spec;
+
+    private final PageParseClient clientOverride;
+
+    public DocParseCommand() {
+        this.clientOverride = null;
+    }
+
+    /** Test seam: a parse client that records calls and does not open a socket. */
+    public DocParseCommand(PageParseClient clientOverride) {
+        this.clientOverride = clientOverride;
+    }
 
     /** Runs parse and prints tier, job id, page count, and (optionally) writes pages. */
     @Override
@@ -48,15 +67,24 @@ public final class DocParseCommand implements Callable<Integer> {
         var outStream = spec.commandLine().getOut();
         var err = spec.commandLine().getErr();
         try {
-            LlamaParseClient client = new LlamaParseClient();
+            boolean cloudForbidden = clientOverride == null
+                    && cloudForbidden(db, documentVersionId);
+            PageParseClient client = clientOverride != null
+                    ? clientOverride
+                    : (cloudForbidden ? null : new LlamaParseClient());
             ParseTier override = tier == null || tier.isBlank() ? null : ParseTier.fromWire(tier);
             BlobStore blobs = blobRoot != null
                     ? new BlobStore(blobRoot)
                     : BlobStore.besideDatabase(db);
 
             if (jobId != null && !jobId.isBlank()) {
+                if (cloudForbidden) {
+                    throw new ExtractException("parse job refetch blocked: cloud is forbidden");
+                }
+                LlamaParseClient live = client instanceof LlamaParseClient llama
+                        ? llama : new LlamaParseClient();
                 ParseService.ParseOutcome outcome = ParseService.reFetch(
-                        db, documentVersionId, override, jobId.trim(), client);
+                        db, documentVersionId, override, jobId.trim(), live);
                 outStream.printf("Fetched parse job %s and persisted %d page(s) for version %d%n",
                         outcome.jobId(), outcome.pageMarkdown().size(), documentVersionId);
                 if (out != null) {
@@ -66,7 +94,8 @@ public final class DocParseCommand implements Callable<Integer> {
             }
 
             ParseService.ParseOutcome result =
-                    ParseService.parse(db, documentVersionId, override, client, blobs);
+                    ParseService.parse(db, documentVersionId, override, client, blobs,
+                            System.getenv(), platform);
             outStream.printf("Parsed version %d with tier %s (job %s), %d page(s)%n",
                     documentVersionId, result.tier().wireName(), result.jobId(),
                     result.pageMarkdown().size());
@@ -83,6 +112,18 @@ public final class DocParseCommand implements Callable<Integer> {
         } catch (Exception e) {
             err.println("parse failed: " + (e.getMessage() != null ? e.getMessage() : e));
             return 1;
+        }
+    }
+
+    /** Local-only residency or a mandate ceiling of zero: do not construct a cloud parser. */
+    private static boolean cloudForbidden(Path db, long documentVersionId) throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            DocumentRepository docs = new DocumentRepository(workspace.connection());
+            DocumentRepository.DocumentVersionRow version = docs.findVersion(documentVersionId)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "unknown document_version " + documentVersionId));
+            long mandateId = docs.findMandateId(version.documentId());
+            return SpendCeiling.forbidsCloud(workspace.connection(), mandateId);
         }
     }
 

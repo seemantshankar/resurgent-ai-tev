@@ -132,14 +132,14 @@ public final class IndustryScan {
     private static Map<String, DocTypePack> candidatePacks(Path dbPath) throws Exception {
         Map<String, DocTypePack> byCode = new LinkedHashMap<>();
         for (DocTypePack pack : PackLoader.loadSeedPacks()) {
-            byCode.put(pack.code(), pack);
+            PackStore.keepHighest(byCode, pack);
         }
         Path packsRoot = dbPath.toAbsolutePath().getParent() == null
                 ? Path.of("packs")
                 : dbPath.toAbsolutePath().getParent().resolve("packs");
         try {
             for (DocTypePack pack : new PackStore(packsRoot).loadAll()) {
-                byCode.put(pack.code(), pack);
+                PackStore.keepHighest(byCode, pack);
             }
         } catch (RuntimeException e) {
             // A broken induced-pack registry must not block the assessment.

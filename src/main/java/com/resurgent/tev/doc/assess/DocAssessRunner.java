@@ -35,7 +35,7 @@ public final class DocAssessRunner {
      * @throws Exception on runtime failure
      */
     public static Result run(long mandateId, Path db) throws Exception {
-        return run(mandateId, db, DocLlmEnvironment.clientOrNull(db, mandateId));
+        return run(mandateId, db, DocLlmEnvironment.clientOrNull(db, mandateId), null);
     }
 
     /**
@@ -48,11 +48,26 @@ public final class DocAssessRunner {
      * @throws Exception on runtime failure
      */
     public static Result run(long mandateId, Path db, DocLlmClient client) throws Exception {
+        return run(mandateId, db, client, null);
+    }
+
+    /**
+     * Same as {@link #run(long, Path, DocLlmClient)}, after copying published
+     * packs and checklists when a registry is named.
+     */
+    public static Result run(long mandateId, Path db, DocLlmClient client, Path platform)
+            throws Exception {
+        com.resurgent.tev.doc.platform.PlatformRegistry.recordIfNamed(platform, db, mandateId);
+        com.resurgent.tev.doc.platform.PublishedCopy.copyInto(db, platform, mandateId);
         List<AssessStage.StageResult> stages = new ArrayList<>();
-        for (AssessStage stage : STAGES) {
-            stages.add(stage.run(mandateId, db, client));
+        try {
+            for (AssessStage stage : STAGES) {
+                stages.add(stage.run(mandateId, db, client, platform));
+            }
+            return new Result(mandateId, List.copyOf(stages));
+        } finally {
+            com.resurgent.tev.doc.platform.PlatformRegistry.recordIfNamed(platform, db, mandateId);
         }
-        return new Result(mandateId, List.copyOf(stages));
     }
 
     /**

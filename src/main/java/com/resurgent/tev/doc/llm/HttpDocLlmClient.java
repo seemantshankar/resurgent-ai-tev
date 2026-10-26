@@ -41,6 +41,7 @@ public final class HttpDocLlmClient implements DocLlmClient {
      * @param timeoutMs per-call deadline in milliseconds
      */
     public HttpDocLlmClient(String apiKey, String model, String baseUrl, long timeoutMs) {
+        com.resurgent.tev.doc.platform.CloudClientConstruction.constructed("HttpDocLlmClient");
         this.apiKey = Objects.requireNonNull(apiKey, "apiKey");
         this.model = Objects.requireNonNull(model, "model");
         this.uri = URI.create(baseUrl == null || baseUrl.isBlank() ? DEFAULT_URL : baseUrl.trim());

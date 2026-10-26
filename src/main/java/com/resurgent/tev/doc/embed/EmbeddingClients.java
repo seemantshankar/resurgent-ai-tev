@@ -45,7 +45,21 @@ public final class EmbeddingClients {
      */
     public static EmbeddingClient forAssessment(Connection connection, long mandateId)
             throws SQLException {
+        return forAssessment(connection, mandateId, null);
+    }
+
+    /**
+     * Same as {@link #forAssessment(Connection, long)}. {@code platform} is the
+     * registry the command was given, so an unset mandate ceiling inherits the
+     * platform default. An embedding call has no page price, so the estimate
+     * is zero and a ceiling already reached still skips the remote client.
+     */
+    public static EmbeddingClient forAssessment(Connection connection, long mandateId,
+            java.nio.file.Path platform) throws SQLException {
         String row = new MandatePolicyRepository(connection).dataResidency(mandateId);
+        if (com.resurgent.tev.doc.platform.SpendCeiling.blocks(connection, mandateId, platform, 0)) {
+            return new LocalHashEmbeddingClient();
+        }
         return select(System.getenv(), null, row);
     }
 
