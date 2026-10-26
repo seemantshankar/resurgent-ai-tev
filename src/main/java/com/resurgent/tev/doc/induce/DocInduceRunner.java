@@ -65,6 +65,10 @@ public final class DocInduceRunner {
             documents = loadCorpus(workspace.connection(), mandateId, fileRole, docType, versions);
             mandateResidency = new com.resurgent.tev.doc.db.MandatePolicyRepository(
                     workspace.connection()).dataResidency(mandateId);
+            if (com.resurgent.tev.doc.platform.SpendCeiling.blocks(
+                    workspace.connection(), mandateId, null, 0)) {
+                mandateResidency = com.resurgent.tev.doc.residency.DataResidency.LOCAL_ONLY;
+            }
         }
         if (documents.isEmpty()) {
             throw new IllegalArgumentException(

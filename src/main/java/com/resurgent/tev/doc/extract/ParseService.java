@@ -118,7 +118,7 @@ public final class ParseService {
     public static ParseOutcome parse(Path dbPath, long documentVersionId, ParseTier tierOverride,
             LlamaParseClient client, BlobStore blobs) throws Exception {
         return parse(dbPath, documentVersionId, tierOverride, (PageParseClient) client, blobs,
-                System.getenv());
+                System.getenv(), null);
     }
 
     /**
@@ -130,6 +130,17 @@ public final class ParseService {
      */
     public static ParseOutcome parse(Path dbPath, long documentVersionId, ParseTier tierOverride,
             PageParseClient client, BlobStore blobs, Map<String, String> env) throws Exception {
+        return parse(dbPath, documentVersionId, tierOverride, client, blobs, env, null);
+    }
+
+    /**
+     * Same as {@link #parse(Path, long, ParseTier, PageParseClient, BlobStore, Map)}, and
+     * when {@code platform} is set, records the mandate there and applies that registry's
+     * default spend ceiling.
+     */
+    public static ParseOutcome parse(Path dbPath, long documentVersionId, ParseTier tierOverride,
+            PageParseClient client, BlobStore blobs, Map<String, String> env, Path platform)
+            throws Exception {
         DocumentRepository.DocumentVersionRow version = requireVersion(dbPath, documentVersionId);
         Path original = blobs.originalPath(version.fileHash(), version.fileExt());
         if (!Files.isRegularFile(original)) {
@@ -139,14 +150,25 @@ public final class ParseService {
         ParseTier tier = tierOverride != null ? tierOverride
                 : selectTier(dbPath, documentVersionId);
         Map<String, String> values = env == null ? Map.of() : env;
-        boolean localOnly;
+        boolean residencyLocal;
+        Double ceiling;
+        double spent;
         List<PageTriage.Decision> decisions;
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(dbPath)) {
             long mandateId = new DocumentRepository(workspace.connection())
                     .findMandateId(version.documentId());
             String row = new MandatePolicyRepository(workspace.connection()).dataResidency(mandateId);
-            localOnly = DataResidency.isLocalOnly(
+            residencyLocal = DataResidency.isLocalOnly(
                     DataResidency.effective(values.get(DataResidency.ENV), row));
+            com.resurgent.tev.doc.platform.PlatformRegistry.recordIfNamed(
+                    platform, dbPath, mandateId, workspace.connection());
+            Double mandateCeiling = new MandatePolicyRepository(workspace.connection())
+                    .spendCeiling(mandateId);
+            ceiling = com.resurgent.tev.doc.platform.SpendCeiling.effective(
+                    mandateCeiling,
+                    com.resurgent.tev.doc.platform.SpendCeiling.platformDefault(platform));
+            spent = com.resurgent.tev.doc.platform.SpendCeiling.spentUsd(
+                    workspace.connection(), mandateId);
             decisions = PageTriage.evaluate(workspace.connection(), documentVersionId, blobs);
         }
         List<Integer> failing = new ArrayList<>();
@@ -157,6 +179,11 @@ public final class ParseService {
         }
         LlamaParseClient.ParseJob job = null;
         long latencyMs = 0L;
+        double estimate = com.resurgent.tev.doc.platform.SpendCeiling.estimateUsd(
+                Math.max(failing.size(), 1), tier);
+        boolean ceilingBlocks = !com.resurgent.tev.doc.platform.SpendCeiling.allows(
+                ceiling, spent, failing.isEmpty() ? 0 : estimate);
+        boolean localOnly = residencyLocal || ceilingBlocks;
         boolean escalate = !failing.isEmpty() && !localOnly;
         if (escalate) {
             if (client == null) {

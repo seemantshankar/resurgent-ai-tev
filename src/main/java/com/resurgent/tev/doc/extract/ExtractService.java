@@ -169,7 +169,28 @@ public final class ExtractService {
 
             String residency = DataResidency.effective(System.getenv(DataResidency.ENV),
                     new MandatePolicyRepository(db.connection()).dataResidency(mandateId));
-            boolean localOnly = DataResidency.isLocalOnly(residency);
+            String platformRaw = options == null ? null
+                    : options.get(com.resurgent.tev.doc.platform.SpendCeiling.PLATFORM_OPTION);
+            java.nio.file.Path platform = platformRaw == null || platformRaw.isBlank()
+                    ? null : java.nio.file.Path.of(platformRaw);
+            int pricedPages = pages.isEmpty()
+                    ? Math.max(1, version.pageCount() == null ? 1 : version.pageCount())
+                    : pages.size();
+            com.resurgent.tev.doc.extract.ParseTier pricedTier = com.resurgent.tev.doc.extract.ParseTier
+                    .COST_EFFECTIVE;
+            if (options != null && options.get(LlamaExtractAdapter.KEY_PARSE_TIER) != null) {
+                try {
+                    pricedTier = com.resurgent.tev.doc.extract.ParseTier.fromWire(
+                            options.get(LlamaExtractAdapter.KEY_PARSE_TIER));
+                } catch (IllegalArgumentException ignored) {
+                    pricedTier = com.resurgent.tev.doc.extract.ParseTier.COST_EFFECTIVE;
+                }
+            }
+            double estimate = com.resurgent.tev.doc.platform.SpendCeiling.estimateUsd(
+                    pricedPages, pricedTier);
+            boolean ceilingBlocks = com.resurgent.tev.doc.platform.SpendCeiling.blocks(
+                    db.connection(), mandateId, platform, estimate);
+            boolean localOnly = DataResidency.isLocalOnly(residency) || ceilingBlocks;
             PageTriage.applyIfUnrouted(db.connection(), documentVersionId,
                     BlobStore.besideDatabase(dbPath), localOnly);
             Map<String, String> requestOptions = new LinkedHashMap<>();
@@ -177,6 +198,16 @@ public final class ExtractService {
                 requestOptions.putAll(options);
             }
             requestOptions.put(DataResidency.OPTION, residency);
+            Double effectiveCeiling = com.resurgent.tev.doc.platform.SpendCeiling.effective(
+                    new MandatePolicyRepository(db.connection()).spendCeiling(mandateId),
+                    com.resurgent.tev.doc.platform.SpendCeiling.platformDefault(platform));
+            if (effectiveCeiling != null) {
+                requestOptions.put(com.resurgent.tev.doc.platform.SpendCeiling.CEILING_OPTION,
+                        Double.toString(effectiveCeiling));
+                requestOptions.put(com.resurgent.tev.doc.platform.SpendCeiling.SPENT_OPTION,
+                        Double.toString(com.resurgent.tev.doc.platform.SpendCeiling.spentUsd(
+                                db.connection(), mandateId)));
+            }
 
             JsonNode schema = pack.toExtractSchema();
             ExtractRequest request =

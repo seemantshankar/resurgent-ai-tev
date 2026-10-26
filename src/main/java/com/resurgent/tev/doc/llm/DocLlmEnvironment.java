@@ -93,7 +93,9 @@ public final class DocLlmEnvironment {
     public static DocLlmClient clientOrNull(java.nio.file.Path db, long mandateId) {
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             String row = new MandatePolicyRepository(workspace.connection()).dataResidency(mandateId);
-            if (DataResidency.locked(row)) {
+            if (DataResidency.locked(row)
+                    || com.resurgent.tev.doc.platform.SpendCeiling.blocks(
+                            workspace.connection(), mandateId, null, 0)) {
                 return null;
             }
         } catch (Exception e) {

@@ -46,6 +46,9 @@ public final class EmbeddingClients {
     public static EmbeddingClient forAssessment(Connection connection, long mandateId)
             throws SQLException {
         String row = new MandatePolicyRepository(connection).dataResidency(mandateId);
+        if (com.resurgent.tev.doc.platform.SpendCeiling.blocks(connection, mandateId, null, 0)) {
+            return new LocalHashEmbeddingClient();
+        }
         return select(System.getenv(), null, row);
     }
 

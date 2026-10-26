@@ -264,6 +264,15 @@ public final class LlamaExtractAdapter implements ExtractClient {
             int creditsPerPage = ParseTier.fromWire(tierWire).creditsPerPage();
             double estimatedCredits = (double) pages * creditsPerPage;
             double estimatedUsd = estimatedCredits * usdPerCredit;
+            Double ceiling = resolveDouble(req.options(),
+                    com.resurgent.tev.doc.platform.SpendCeiling.CEILING_OPTION, null);
+            Double spent = resolveDouble(req.options(),
+                    com.resurgent.tev.doc.platform.SpendCeiling.SPENT_OPTION, null);
+            if (ceiling != null && !com.resurgent.tev.doc.platform.SpendCeiling.allows(
+                    ceiling, spent == null ? 0 : spent, estimatedUsd)) {
+                throw new ExtractException(
+                        "LlamaExtractAdapter blocked: spend ceiling");
+            }
             if (maxUsd != null && estimatedUsd > maxUsd) {
                 throw new ExtractException("LlamaExtract estimated spend " + estimatedCredits
                         + " credits (" + pages + " pages × " + creditsPerPage

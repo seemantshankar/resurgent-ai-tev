@@ -51,6 +51,10 @@ public final class DocExtractCommand implements Callable<Integer> {
     @Option(names = "--blob-root", description = "Blob store root (default: <db-parent>/blobs)")
     Path blobRoot;
 
+    @Option(names = "--platform",
+            description = "Platform registry. Created when this path is new.")
+    Path platform;
+
     @Spec
     CommandSpec spec;
 
@@ -65,7 +69,7 @@ public final class DocExtractCommand implements Callable<Integer> {
                     : BlobStore.besideDatabase(db);
             var result = com.resurgent.tev.doc.extract.DocExtractRunner.run(
                     mandateId, documentVersionId, db, blobs, pack, extractor, pages, tier,
-                    noParse, !noAutoInduce);
+                    noParse, !noAutoInduce, platform);
             out.printf("Extracted with pack %s via %s%n", result.packIdentity(), result.extractorId());
             if (result.parseTier() != null) {
                 out.printf("parse tier: %s%n", result.parseTier());
