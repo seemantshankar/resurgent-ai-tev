@@ -30,16 +30,16 @@ fields:
     value_kind: money
     required: true
     slots: [currency, scale]
-    prompt_hint: "Total assets of the subject"
-    synonyms: ["Total Assets", "Assets", "Gross Assets"]
+    prompt_hint: "Assets grand total row for the subject (not individual asset lines)"
+    synonyms: ["Total Assets", "Gross Assets"]
   - key: liabilities_total
     path: economic > Promoter Net Worth > Liabilities
     path_root: economic
     value_kind: money
     required: true
     slots: [currency, scale]
-    prompt_hint: "Total liabilities of the subject"
-    synonyms: ["Total Liabilities", "Liabilities", "Loans and Advances"]
+    prompt_hint: "Liabilities grand total row for the subject (not individual liability lines)"
+    synonyms: ["Total Liabilities", "Loans and Advances"]
   - key: net_worth
     path: economic > Promoter Net Worth > Net Worth
     path_root: economic

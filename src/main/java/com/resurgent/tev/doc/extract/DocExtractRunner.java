@@ -186,13 +186,19 @@ public final class DocExtractRunner {
         return List.copyOf(byCode.values());
     }
 
-    private static String classifiedPackCode(Path db, long documentVersionId) throws Exception {
+    /** Classified pack code for a version, or null when not classified. */
+    public static String classifiedPackCode(Path db, long documentVersionId) throws Exception {
         try (com.resurgent.tev.parser.db.WorkspaceDatabase workspace =
                 com.resurgent.tev.parser.db.WorkspaceDatabase.open(db)) {
             return new com.resurgent.tev.doc.db.DocumentRepository(workspace.connection())
                     .findClassificationCode(documentVersionId)
                     .orElse(null);
         }
+    }
+
+    /** Resolves the extractor adapter for CLI commands. */
+    public static ExtractClient resolveExtractor(String extractorId) {
+        return resolveClient(extractorId);
     }
 
     private static ExtractClient resolveClient(String extractorId) {

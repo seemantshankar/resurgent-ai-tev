@@ -113,7 +113,26 @@ public final class ChecklistRepository {
             String evidenceVerbatim,
             Integer pageIndex,
             String resolution,
-            Long evidenceProvenanceId) {}
+            Long evidenceProvenanceId,
+            boolean unstableAcrossRuns) {
+
+        public FactEvidenceRow(
+                long factId,
+                long documentVersionId,
+                String fieldKey,
+                String ontologyPath,
+                Long entityId,
+                Long siteId,
+                Double confidence,
+                String valueText,
+                String evidenceVerbatim,
+                Integer pageIndex,
+                String resolution,
+                Long evidenceProvenanceId) {
+            this(factId, documentVersionId, fieldKey, ontologyPath, entityId, siteId, confidence,
+                    valueText, evidenceVerbatim, pageIndex, resolution, evidenceProvenanceId, false);
+        }
+    }
 
     /**
      * Instantiated checklist items for re-run replacement and the checklist CLI.
@@ -497,8 +516,8 @@ public final class ChecklistRepository {
                         + "    WHERE owner.document_id = f.document_id), f.document_version_id)"
                         + " ELSE f.document_version_id END AS document_version_id,"
                         + " f.field_key, f.ontology_path,"
-                        + " f.entity_id, f.site_id, f.confidence, f.value_text, e.ordinal,"
-                        + " e.source_text, e.resolution, e.provenance_id, p.page_index"
+                        + " f.entity_id, f.site_id, f.confidence, f.value_text, f.unstable_across_runs,"
+                        + " e.ordinal, e.source_text, e.resolution, e.provenance_id, p.page_index"
                         + " FROM fact f"
                         + " JOIN document_version dv ON dv.document_version_id = f.document_version_id"
                         + " JOIN document d ON d.document_id = COALESCE(f.document_id, dv.document_id)"
@@ -529,7 +548,8 @@ public final class ChecklistRepository {
                             rs.getString("source_text"),
                             page,
                             resolution,
-                            provenanceId);
+                            provenanceId,
+                            rs.getInt("unstable_across_runs") == 1);
                     Double current = scores.get(factId);
                     if (current == null || score > current) {
                         scores.put(factId, score);

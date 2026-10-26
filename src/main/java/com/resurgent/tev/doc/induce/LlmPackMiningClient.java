@@ -49,6 +49,9 @@ public final class LlmPackMiningClient implements PackMiningClient {
             document type.
             - Read every heading, table header, and layout line you are shown. \
             Keep prompt_hint under 12 words. No prose.
+            - When a label repeats (Total, Sub Total, Grand Total), prompt_hint must \
+            name which row (e.g. final grand total of the statement, section subtotal \
+            excluding the grand total) — never a bare "Total" slot.
             Reply with JSON only, no prose:
             {"suggested_code":"family.name","family":"<root-ish family>",
              "identity_signals":["<printed phrases that identify this document type>"],

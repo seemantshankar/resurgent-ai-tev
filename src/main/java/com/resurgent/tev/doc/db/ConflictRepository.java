@@ -480,7 +480,9 @@ public final class ConflictRepository {
                         + " rdv.file_name AS right_file_name, c.right_page_index,"
                         + " c.right_value, c.right_quote, rpsg.heading AS right_passage_heading,"
                         + " c.settlement, c.chosen_side,"
-                        + " c.rule_id, c.rules_version, c.reasoning"
+                        + " c.rule_id, c.rules_version, c.reasoning,"
+                        + " COALESCE(lf.unstable_across_runs, 0) AS left_unstable,"
+                        + " COALESCE(rf.unstable_across_runs, 0) AS right_unstable"
                         + " FROM conflict c"
                         + " LEFT JOIN document_version ldv"
                         + "  ON ldv.document_version_id = c.left_document_version_id"
@@ -505,6 +507,15 @@ public final class ConflictRepository {
                     String rightValue = rs.getString("right_value");
                     boolean chosen = SETTLEMENT_RULE.equals(settlement)
                             || SETTLEMENT_AI.equals(settlement);
+                    String reasoning = rs.getString("reasoning");
+                    boolean leftUnstable = rs.getInt("left_unstable") == 1;
+                    boolean rightUnstable = rs.getInt("right_unstable") == 1;
+                    if (leftUnstable || rightUnstable) {
+                        reasoning = reasoning + " unstable_across_runs on "
+                                + (leftUnstable && rightUnstable ? "both sides"
+                                        : leftUnstable ? "left side" : "right side")
+                                + " — do not silently trust the reading";
+                    }
                     rows.add(new MandateQa.ConflictRow(
                             rs.getLong("conflict_id"),
                             rs.getString("kind"),
@@ -539,7 +550,7 @@ public final class ConflictRepository {
                             chosen ? ("left".equals(chosenSide) ? rightValue : leftValue) : null,
                             rs.getString("rule_id"),
                             rs.getString("rules_version"),
-                            rs.getString("reasoning")));
+                            reasoning));
                 }
                 return rows;
             }

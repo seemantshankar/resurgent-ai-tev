@@ -49,7 +49,7 @@ fields:
     value_kind: money
     required: false
     slots: [currency, scale]
-    prompt_hint: "Subtotal before tax and freight"
+    prompt_hint: "Section subtotal row before tax and freight, not the grand total"
   - key: tax
     path: economic > Project Cost > Tax
     path_root: economic
@@ -70,8 +70,8 @@ fields:
     value_kind: money
     required: true
     slots: [currency, scale]
-    prompt_hint: "Total quoted amount including tax and freight"
-    synonyms: ["Total", "Grand Total", "Net Payable"]
+    prompt_hint: "Final grand total row including tax and freight (not section subtotals)"
+    synonyms: ["Grand Total", "Net Payable", "Total quoted amount"]
   - key: payment_terms
     path: commercial > Offtake term > Payment
     path_root: commercial

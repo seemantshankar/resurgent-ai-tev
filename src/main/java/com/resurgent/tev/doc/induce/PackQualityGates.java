@@ -3,6 +3,7 @@ package com.resurgent.tev.doc.induce;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackField;
 import com.resurgent.tev.doc.pack.PackLoader;
+import com.resurgent.tev.doc.pack.RowDisambiguation;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -258,6 +259,17 @@ public final class PackQualityGates {
         gates.add(new GateResult("no_entity_in_keys", keysClean, keysDetail));
         if (!keysClean) {
             rejectReasons.add("no_entity_in_keys: " + keysDetail);
+        }
+
+        // Gate 6: repeated labels (Total, Grand Total, …) must name which row (#157)
+        List<String> ambiguous = RowDisambiguation.ambiguousSlots(pack);
+        boolean rowHintsOk = ambiguous.isEmpty();
+        String rowHintDetail = rowHintsOk
+                ? "field instructions disambiguate repeated labels"
+                : "ambiguous row instructions: " + ambiguous;
+        gates.add(new GateResult("row_disambiguation", rowHintsOk, rowHintDetail));
+        if (!rowHintsOk) {
+            rejectReasons.add("row_disambiguation: " + rowHintDetail);
         }
 
         boolean allPassed = gates.stream().allMatch(GateResult::passed)
