@@ -367,7 +367,7 @@ public final class PackPathBinder {
             unbind(facts, row.factId(), open.candidate(), open.candidateRoot(), reason);
             return reason;
         }
-        String stored = SiblingNearDuplicate.shaped(open.candidate() + " > " + leaf);
+        String stored = SiblingNearDuplicate.shaped(parent + OntologySlice.SEPARATOR + leaf);
         String near = SiblingNearDuplicate.prefer(stored, batchPaths);
         if (near != null) {
             stored = near;
@@ -380,8 +380,9 @@ public final class PackPathBinder {
         if (!batchPaths.contains(stored)) {
             batchPaths.add(stored);
         }
+        String bindPath = open.candidateRoot() + OntologySlice.SEPARATOR + stored;
         String reason = "model" + onPage(row.pageIndex()) + ": " + placement.reasoning();
-        facts.updateFactBinding(row.factId(), stored, open.candidateRoot(),
+        facts.updateFactBinding(row.factId(), bindPath, open.candidateRoot(),
                 "bound", null, reason);
         return null;
     }

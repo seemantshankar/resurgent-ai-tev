@@ -65,6 +65,16 @@ class SiblingNearDuplicateTest {
     }
 
     @Test
+    void nonAsciiLeavesKeepLettersWhenShapedAndDedupeBySignature() {
+        assertThat(SiblingNearDuplicate.shaped(PARENT + " > Électricité."))
+                .isEqualTo(PARENT + " > Électricité");
+        String cable = PARENT + " > Câbles";
+        assertThat(SiblingNearDuplicate.shaped(PARENT + " > Câbles.")).isEqualTo(cable);
+        assertThat(SiblingNearDuplicate.prefer(PARENT + " > Câbles.", List.of(cable)))
+                .isEqualTo(cable);
+    }
+
+    @Test
     void anAliasUnderTheSameParentWinsWhenTheWordsDiffer() {
         String inverters = PARENT + " > Inverters / PCU";
         Map<String, String> aliases = Map.of(OntologyVocabulary.norm("Inverter"), inverters);
