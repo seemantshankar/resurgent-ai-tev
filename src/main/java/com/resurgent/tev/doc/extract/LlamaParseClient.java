@@ -69,6 +69,7 @@ public final class LlamaParseClient implements PageParseClient {
      *     {@code LLAMA_PARSE_TIER}, {@code LLAMA_PARSE_VERSION}, {@code extract.timeout_ms}
      */
     public LlamaParseClient(Map<String, String> env) {
+        com.resurgent.tev.doc.platform.CloudClientConstruction.constructed("LlamaParseClient");
         Objects.requireNonNull(env, "env");
         this.apiKey = LlamaExtractAdapter.resolveApiKey(env);
         String base = env.get("LLAMA_EXTRACT_BASE_URL");

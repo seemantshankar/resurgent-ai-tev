@@ -126,6 +126,7 @@ public final class LlamaExtractAdapter implements ExtractClient {
      *     {@code extract.timeout_ms} / {@code extract.max_usd_per_document}
      */
     public LlamaExtractAdapter(Map<String, String> env) {
+        com.resurgent.tev.doc.platform.CloudClientConstruction.constructed("LlamaExtractAdapter");
         Objects.requireNonNull(env, "env");
         this.apiKey = resolveApiKey(env);
         this.residency = env.get(DataResidency.ENV);

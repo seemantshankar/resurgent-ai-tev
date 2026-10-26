@@ -30,6 +30,7 @@ public final class HttpEmbeddingClient implements EmbeddingClient {
      */
     public HttpEmbeddingClient(String baseUrl, String model, String apiKey, long timeoutMs,
             EmbeddingTransport transport) {
+        com.resurgent.tev.doc.platform.CloudClientConstruction.constructed("HttpEmbeddingClient");
         this.model = Objects.requireNonNull(model, "model");
         this.apiKey = apiKey == null ? "" : apiKey;
         this.uri = embeddingsUri(baseUrl);
