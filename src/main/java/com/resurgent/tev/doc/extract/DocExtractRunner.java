@@ -88,8 +88,7 @@ public final class DocExtractRunner {
         }
         DocTypePack pack = resolvePack(db, documentVersionId, packCode, platform, mandateId);
         ExtractClient client = resolveClient(extractorId,
-                com.resurgent.tev.doc.platform.SpendCeiling.mandateCeilingForbidsCloud(
-                        db, mandateId));
+                com.resurgent.tev.doc.platform.SpendCeiling.forbidsCloud(db, mandateId));
         PageSelection pageSelection = PageSelection.parseOptional(pages);
         List<Integer> pageIndices = pageSelection == null ? null : pageSelection.indices();
 
@@ -99,10 +98,8 @@ public final class DocExtractRunner {
                 1, override);
         boolean ceilingBlocks = com.resurgent.tev.doc.platform.SpendCeiling.blocks(
                 db, mandateId, platform, estimate);
-        if (localOnly && client instanceof LlamaExtractAdapter) {
-            throw new ExtractException(
-                    "LlamaExtractAdapter blocked: data residency is local_only");
-        }
+        // local_only and zero mandate ceiling select DocLlmExtractClient in resolveClient
+        // so the pipeline continues offline (#192, ADR 0033); do not fail-fast here.
         if (ceilingBlocks && client instanceof LlamaExtractAdapter) {
             client = new DocLlmExtractClient();
         }

@@ -97,23 +97,6 @@ public final class SpendCeiling {
         }
     }
 
-    /**
-     * True when the mandate spend ceiling is zero. Does not consider residency;
-     * callers that must fail fast on {@code local_only} keep a separate guard.
-     */
-    public static boolean mandateCeilingForbidsCloud(Connection connection, long mandateId)
-            throws SQLException {
-        Double ceiling = new MandatePolicyRepository(connection).spendCeiling(mandateId);
-        return ceiling != null && ceiling <= 0;
-    }
-
-    /** Opens the workspace and applies {@link #mandateCeilingForbidsCloud(Connection, long)}. */
-    public static boolean mandateCeilingForbidsCloud(Path db, long mandateId) throws SQLException {
-        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
-            return mandateCeilingForbidsCloud(workspace.connection(), mandateId);
-        }
-    }
-
     /** True when the next cloud call must be skipped. Opens the workspace to read the ceiling. */
     public static boolean blocks(Path db, long mandateId, Path platform, double estimatedUsd)
             throws SQLException {
