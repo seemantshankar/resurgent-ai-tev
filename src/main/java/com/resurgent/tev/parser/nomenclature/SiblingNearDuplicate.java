@@ -36,7 +36,7 @@ public final class SiblingNearDuplicate {
         if (head == null) {
             return proposedPath;
         }
-        String cleaned = head.leaf().replaceAll("[^A-Za-z0-9 /&'\\-]+", " ")
+        String cleaned = head.leaf().replaceAll("[^\\p{L}\\p{N} /&'\\-]+", " ")
                 .replaceAll("\\s+", " ")
                 .trim();
         if (cleaned.isEmpty() || cleaned.equals(head.leaf())) {
@@ -127,7 +127,7 @@ public final class SiblingNearDuplicate {
         if (leaf == null || leaf.isBlank()) {
             return "";
         }
-        String text = leaf.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", " ").trim();
+        String text = leaf.toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{N}]+", " ").trim();
         List<String> tokens = new ArrayList<>();
         for (String token : text.split(" ")) {
             if (token.isEmpty() || STOP.contains(token)) {

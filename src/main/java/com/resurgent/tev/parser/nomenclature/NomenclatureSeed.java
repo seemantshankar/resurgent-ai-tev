@@ -88,8 +88,6 @@ public final class NomenclatureSeed {
             new NomenclatureAlias("DETAILS OF PLANT & MACHINERIES",
                     "Project Cost > Plant & Machinery"),
             new NomenclatureAlias("Freight Charges", "Project Cost > Freight"),
-            new NomenclatureAlias("Transportation", "Project Cost > Freight"),
-            new NomenclatureAlias("Module", "Project Cost > Plant & Machinery > Solar PV Modules"),
             new NomenclatureAlias("Modules", "Project Cost > Plant & Machinery > Solar PV Modules"),
             new NomenclatureAlias("Solar Module", "Project Cost > Plant & Machinery > Solar PV Modules"),
             new NomenclatureAlias("Solar Modules", "Project Cost > Plant & Machinery > Solar PV Modules"),

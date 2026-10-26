@@ -57,12 +57,21 @@ class StatementSpineTest {
     }
 
     @Test
+    void unqualifiedTransportationAndModuleAreNotGlobalAliases() {
+        Map<String, String> aliases = com.resurgent.tev.parser.classify.LayerBBinderAccess.aliasIndex();
+        assertThat(aliases.get(com.resurgent.tev.parser.classify.LayerBBinderAccess.norm("Transportation")))
+                .isNull();
+        assertThat(aliases.get(com.resurgent.tev.parser.classify.LayerBBinderAccess.norm("Module")))
+                .isNull();
+    }
+
+    @Test
     void shortRenewableAndExpenseLabelsResolveToThoseHeads() {
         Map<String, String> aliases = com.resurgent.tev.parser.classify.LayerBBinderAccess.aliasIndex();
         Map<String, String> expected = Map.ofEntries(
                 Map.entry("Freight Charges", "Project Cost > Freight"),
-                Map.entry("Module", "Project Cost > Plant & Machinery > Solar PV Modules"),
                 Map.entry("Modules", "Project Cost > Plant & Machinery > Solar PV Modules"),
+                Map.entry("Solar Module", "Project Cost > Plant & Machinery > Solar PV Modules"),
                 Map.entry("Inverter", "Project Cost > Plant & Machinery > Inverters / PCU"),
                 Map.entry("Inverters", "Project Cost > Plant & Machinery > Inverters / PCU"),
                 Map.entry("PCU", "Project Cost > Plant & Machinery > Inverters / PCU"),
