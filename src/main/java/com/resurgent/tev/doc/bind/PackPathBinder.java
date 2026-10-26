@@ -14,6 +14,7 @@ import com.resurgent.tev.parser.nomenclature.NomenclatureCatalog;
 import com.resurgent.tev.parser.nomenclature.NomenclatureException;
 import com.resurgent.tev.parser.nomenclature.OntologySlice;
 import com.resurgent.tev.parser.nomenclature.OntologyVocabulary;
+import com.resurgent.tev.parser.nomenclature.SiblingNearDuplicate;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -192,12 +193,14 @@ public final class PackPathBinder {
             recordUsage(repo, parseRunId, result.usage());
         }
 
+        List<String> batchPaths = new ArrayList<>(living.paths());
         for (Unresolved open : unresolved) {
             FactRepository.FactBindRow row = open.row();
             String key = promptKey(row);
             LlmLeafAssignment.Assignment placement = placements.get(key);
             if (key.contains("|")) {
-                String reason = bindScheduleLine(facts, open, placement, client == null);
+                String reason = bindScheduleLine(
+                        facts, open, placement, client == null, living, batchPaths);
                 if (reason == null) {
                     bound++;
                 } else {
@@ -217,8 +220,16 @@ public final class PackPathBinder {
                 unbound++;
                 continue;
             }
-            String root = OntologyVocabulary.rootFor(placement.path());
-            if (!OntologyVocabulary.allowed(root, placement.path())) {
+            // One batch shares a frozen snapshot, so a later label can restate a
+            // sibling this same call is about to mint (#158). A punctuated restatement
+            // is not category-shaped, so the sibling is chosen before that gate.
+            String path = SiblingNearDuplicate.shaped(placement.path());
+            String preferred = SiblingNearDuplicate.prefer(path, batchPaths);
+            if (preferred != null) {
+                path = preferred;
+            }
+            String root = OntologyVocabulary.rootFor(path);
+            if (!OntologyVocabulary.allowed(root, path)) {
                 unbind(facts, row.factId(), open.candidate(), open.candidateRoot(),
                         "model_path_refused");
                 unbound++;
@@ -226,14 +237,17 @@ public final class PackPathBinder {
                 continue;
             }
             // The page is the pipeline's own provenance, not the model's prose.
-            String reason = "model" + onPage(row.pageIndex()) + ": " + placement.reasoning();
-            if (!living.contains(placement.path())) {
+            String reason = preferred == null
+                    ? "model" + onPage(row.pageIndex()) + ": " + placement.reasoning()
+                    : "near-duplicate of " + preferred + onPage(row.pageIndex())
+                            + ": " + placement.reasoning();
+            if (!living.contains(path)) {
                 // A genuinely new leaf hangs under a head the ontology already knows.
                 // An alias clash refuses the growth but not the placement: the fact
                 // keeps this path for the run, exactly as Layer B leaves it.
-                int sep = placement.path().lastIndexOf(OntologySlice.SEPARATOR);
-                String leaf = placement.path().substring(sep + OntologySlice.SEPARATOR.length());
-                String bindable = OntologyVocabulary.bindablePath(placement.path(), living.hardAliases());
+                int sep = path.lastIndexOf(OntologySlice.SEPARATOR);
+                String leaf = path.substring(sep + OntologySlice.SEPARATOR.length());
+                String bindable = OntologyVocabulary.bindablePath(path, living.hardAliases());
                 if (bindable == null) {
                     // ADR 0022 §2: the leaf copies its row, so it could never match again.
                     unbind(facts, row.factId(), open.candidate(), open.candidateRoot(),
@@ -242,7 +256,7 @@ public final class PackPathBinder {
                     transcribed++;
                     continue;
                 }
-                if (!bindable.equals(placement.path())) {
+                if (!bindable.equals(path)) {
                     // §2's escape hatch: the catalogue names one leaf for this transcription.
                     Resolved rescued = canonical(bindable, "alias: " + leaf);
                     facts.updateFactBinding(row.factId(), rescued.canonicalPath(),
@@ -250,20 +264,28 @@ public final class PackPathBinder {
                     bound++;
                     continue;
                 }
-                try {
-                    catalog.putSoftLeaf(mandateId,
-                            placement.path().substring(0, sep), leaf, List.of(leaf));
-                    living = living.withLeaf(placement.path(), leaf);
-                    softLeaves++;
-                    reason = "model leaf (mandate_soft)" + onPage(row.pageIndex()) + ": "
+                String known = SiblingNearDuplicate.aliasedSibling(path, living.aliases());
+                if (known != null) {
+                    path = known;
+                    reason = "alias: " + leaf + onPage(row.pageIndex()) + ": "
                             + placement.reasoning();
-                } catch (NomenclatureException e) {
-                    collisions++;
-                    reason = "model leaf (alias collision refused)" + onPage(row.pageIndex())
-                            + ": " + placement.reasoning();
+                } else {
+                    try {
+                        catalog.putSoftLeaf(mandateId,
+                                path.substring(0, sep), leaf, List.of(leaf));
+                    living = living.withLeaf(path, leaf);
+                    batchPaths.add(path);
+                    softLeaves++;
+                        reason = "model leaf (mandate_soft)" + onPage(row.pageIndex()) + ": "
+                                + placement.reasoning();
+                    } catch (NomenclatureException e) {
+                        collisions++;
+                        reason = "model leaf (alias collision refused)" + onPage(row.pageIndex())
+                                + ": " + placement.reasoning();
+                    }
                 }
             }
-            Resolved resolved = canonical(placement.path(), reason);
+            Resolved resolved = canonical(path, reason);
             facts.updateFactBinding(row.factId(), resolved.canonicalPath(),
                     resolved.pathRoot(), "bound", null, resolved.reason());
             bound++;
@@ -312,7 +334,8 @@ public final class PackPathBinder {
      * @return the unbound reason, or null when the fact was bound
      */
     private static String bindScheduleLine(FactRepository facts, Unresolved open,
-            LlmLeafAssignment.Assignment placement, boolean offline) throws SQLException {
+            LlmLeafAssignment.Assignment placement, boolean offline, LivingOntology living,
+            List<String> batchPaths) throws SQLException {
         FactRepository.FactBindRow row = open.row();
         if (placement == null) {
             String reason = offline ? "no_model" : "model_declined";
@@ -344,9 +367,22 @@ public final class PackPathBinder {
             unbind(facts, row.factId(), open.candidate(), open.candidateRoot(), reason);
             return reason;
         }
-        String stored = open.candidate() + " > " + leaf;
+        String stored = SiblingNearDuplicate.shaped(parent + OntologySlice.SEPARATOR + leaf);
+        String near = SiblingNearDuplicate.prefer(stored, batchPaths);
+        if (near != null) {
+            stored = near;
+        } else {
+            String known = SiblingNearDuplicate.aliasedSibling(stored, living.aliases());
+            if (known != null) {
+                stored = known;
+            }
+        }
+        if (!batchPaths.contains(stored)) {
+            batchPaths.add(stored);
+        }
+        String bindPath = open.candidateRoot() + OntologySlice.SEPARATOR + stored;
         String reason = "model" + onPage(row.pageIndex()) + ": " + placement.reasoning();
-        facts.updateFactBinding(row.factId(), stored, open.candidateRoot(),
+        facts.updateFactBinding(row.factId(), bindPath, open.candidateRoot(),
                 "bound", null, reason);
         return null;
     }

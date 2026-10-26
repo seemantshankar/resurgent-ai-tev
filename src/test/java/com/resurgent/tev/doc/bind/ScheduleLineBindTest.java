@@ -132,6 +132,28 @@ class ScheduleLineBindTest {
     }
 
     @Test
+    void twoScheduleLinesThatRestateEachOtherBindToOnePath() throws Exception {
+        FakeDocLlmClient llm = new FakeDocLlmClient("""
+                {"assignments": [
+                  {"key": "monthly_generation.glob_hor|soiling",
+                   "path": "Generation > Month > Freight & Forwarding",
+                   "reasoning": "inward freight"},
+                  {"key": "monthly_generation.glob_hor|total",
+                   "path": "Generation > Month > Forwarding and Freight",
+                   "reasoning": "the same freight"}]}
+                """);
+        new PackPathBinder().bind(dbPath, parseRunId, MANDATE, pack, llm);
+
+        FactRow jan = cell(facts(), "soiling", "Jan");
+        FactRow total = cell(facts(), "Total", "Jan");
+        assertThat(jan.nomenclatureStatus()).isEqualTo("bound");
+        assertThat(total.ontologyPath()).isEqualTo(jan.ontologyPath());
+        assertThat(jan.ontologyPath()).isIn(
+                "technical > Generation > Month > Freight & Forwarding",
+                "technical > Generation > Month > Forwarding and Freight");
+    }
+
+    @Test
     void aPathThatIsOnlyTheParentIsRefused() throws Exception {
         FakeDocLlmClient llm = new FakeDocLlmClient("""
                 {"assignments": [

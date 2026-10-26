@@ -18,6 +18,7 @@ import com.resurgent.tev.parser.nomenclature.LivingOntology;
 import com.resurgent.tev.parser.nomenclature.NomenclatureCatalog;
 import com.resurgent.tev.parser.nomenclature.OntologySlice;
 import com.resurgent.tev.parser.nomenclature.OntologyVocabulary;
+import com.resurgent.tev.parser.nomenclature.SiblingNearDuplicate;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
@@ -1496,7 +1497,7 @@ public final class ClassifyService {
                 Growth grown = absorbNewLeaves(living, catalog, mandateId, first);
                 living = grown.living();
                 transcribedRefused.addAll(grown.transcribedRefused());
-                mine.addAll(first);
+                mine.addAll(grown.assignments());
                 missing = LayerBBinder.unbound(job.cells(),
                         LayerBBinder.bind(job.cells(), mine, living.aliases(), living.hardAliases()));
             }
@@ -1528,7 +1529,7 @@ public final class ClassifyService {
             Growth grown = absorbNewLeaves(living, catalog, mandateId, outcomes.get(k).value());
             living = grown.living();
             transcribedRefused.addAll(grown.transcribedRefused());
-            assignments.get(i).addAll(outcomes.get(k).value());
+            assignments.get(i).addAll(grown.assignments());
         }
         List<BindResult> results = new ArrayList<>();
         for (int i = 0; i < jobs.size(); i++) {
@@ -1550,15 +1551,39 @@ public final class ClassifyService {
             List<LayerBAssignment> assignments) {
         LivingOntology next = living;
         Set<String> transcribed = new LinkedHashSet<>();
+        List<LayerBAssignment> rewritten = new ArrayList<>();
+        if (assignments == null) {
+            return new Growth(next, transcribed, List.of());
+        }
         for (LayerBAssignment assignment : assignments) {
-            if (assignment == null || assignment.path() == null || assignment.pathRoot() == null) {
+            if (assignment == null) {
                 continue;
             }
-            if (!"economic".equals(assignment.pathRoot()) && !"identity".equals(assignment.pathRoot())) {
+            if (assignment.path() == null || assignment.pathRoot() == null
+                    || (!"economic".equals(assignment.pathRoot())
+                            && !"identity".equals(assignment.pathRoot()))) {
+                rewritten.add(assignment);
                 continue;
             }
-            String path = assignment.path();
-            if (next.contains(path) || !LayerBBinder.allowed(assignment.pathRoot(), path)) {
+            String path = SiblingNearDuplicate.shaped(assignment.path());
+            assignment = path.equals(assignment.path())
+                    ? assignment
+                    : new LayerBAssignment(
+                            assignment.row(), assignment.coord(), assignment.pathRoot(), path);
+            if (next.contains(path)) {
+                rewritten.add(assignment);
+                continue;
+            }
+            // Regions in one round share a frozen catalog (#158). A sibling that
+            // differs by &/and, plural, punctuation or word order is the same leaf.
+            String preferred = SiblingNearDuplicate.prefer(path, next.paths());
+            if (preferred != null) {
+                rewritten.add(new LayerBAssignment(
+                        assignment.row(), assignment.coord(), assignment.pathRoot(), preferred));
+                continue;
+            }
+            if (!LayerBBinder.allowed(assignment.pathRoot(), path)) {
+                rewritten.add(assignment);
                 continue;
             }
             // ADR 0022 §2: a leaf that copies its row is never staged into the master set,
@@ -1566,13 +1591,24 @@ public final class ClassifyService {
             String bindable = OntologyVocabulary.bindablePath(path, next.hardAliases());
             if (bindable == null) {
                 transcribed.add(path);
+                rewritten.add(assignment);
                 continue;
             }
             if (!bindable.equals(path)) {
+                rewritten.add(new LayerBAssignment(
+                        assignment.row(), assignment.coord(),
+                        OntologyVocabulary.rootFor(bindable), bindable));
+                continue;
+            }
+            String known = SiblingNearDuplicate.aliasedSibling(path, next.aliases());
+            if (known != null) {
+                rewritten.add(new LayerBAssignment(
+                        assignment.row(), assignment.coord(), assignment.pathRoot(), known));
                 continue;
             }
             int sep = path.lastIndexOf(" > ");
             if (sep <= 0) {
+                rewritten.add(assignment);
                 continue;
             }
             String parent = path.substring(0, sep);
@@ -1585,12 +1621,14 @@ public final class ClassifyService {
                 // run when LayerBBinder.allowed already accepted it, without
                 // growing the master set.
             }
+            rewritten.add(assignment);
         }
-        return new Growth(next, transcribed);
+        return new Growth(next, transcribed, List.copyOf(rewritten));
     }
 
     /** The ontology after one round's leaves were staged, and how many transcriptions it refused. */
-    private record Growth(LivingOntology living, Set<String> transcribedRefused) {}
+    private record Growth(
+            LivingOntology living, Set<String> transcribedRefused, List<LayerBAssignment> assignments) {}
 
     private int applyCrossSheetHelpers(
             WorkspaceRepository repo,
