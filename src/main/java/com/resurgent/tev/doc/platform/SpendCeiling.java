@@ -3,6 +3,7 @@ package com.resurgent.tev.doc.platform;
 import com.resurgent.tev.doc.db.MandatePolicyRepository;
 import com.resurgent.tev.doc.extract.LlamaExtractAdapter;
 import com.resurgent.tev.doc.extract.ParseTier;
+import com.resurgent.tev.doc.residency.DataResidency;
 import com.resurgent.tev.parser.db.LlmUsageCosts;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import java.nio.file.Files;
@@ -72,6 +73,28 @@ public final class SpendCeiling {
         Double mandate = new MandatePolicyRepository(connection).spendCeiling(mandateId);
         Double ceiling = effective(mandate, platformDefault(platform));
         return !allows(ceiling, spentUsd(connection, mandateId), estimatedUsd);
+    }
+
+    /**
+     * True when this mandate must not construct a cloud client. Local-only
+     * residency forbids it, and so does a mandate ceiling of zero. An unset
+     * ceiling does not. A platform default is not consulted.
+     */
+    public static boolean forbidsCloud(Connection connection, long mandateId) throws SQLException {
+        MandatePolicyRepository policy = new MandatePolicyRepository(connection);
+        if (DataResidency.isLocalOnly(DataResidency.effective(
+                System.getenv(DataResidency.ENV), policy.dataResidency(mandateId)))) {
+            return true;
+        }
+        Double ceiling = policy.spendCeiling(mandateId);
+        return ceiling != null && ceiling <= 0;
+    }
+
+    /** Opens the workspace and applies {@link #forbidsCloud(Connection, long)}. */
+    public static boolean forbidsCloud(Path db, long mandateId) throws SQLException {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            return forbidsCloud(workspace.connection(), mandateId);
+        }
     }
 
     /** True when the next cloud call must be skipped. Opens the workspace to read the ceiling. */

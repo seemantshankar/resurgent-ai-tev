@@ -86,7 +86,8 @@ public final class DocExtractRunner {
             }
         }
         DocTypePack pack = resolvePack(db, documentVersionId, packCode, platform);
-        ExtractClient client = resolveClient(extractorId);
+        ExtractClient client = resolveClient(extractorId,
+                com.resurgent.tev.doc.platform.SpendCeiling.forbidsCloud(db, mandateId));
         PageSelection pageSelection = PageSelection.parseOptional(pages);
         List<Integer> pageIndices = pageSelection == null ? null : pageSelection.indices();
 
@@ -223,14 +224,16 @@ public final class DocExtractRunner {
         }
     }
 
-    private static ExtractClient resolveClient(String extractorId) {
+    private static ExtractClient resolveClient(String extractorId, boolean cloudForbidden) {
         String id = extractorId == null || extractorId.isBlank()
                 ? defaultExtractor()
                 : extractorId.trim().toLowerCase(Locale.ROOT);
         return switch (id) {
             case "fixture", "fixture-extract" -> new FixtureExtractClient();
             case "doc-llm-extract", "doc-llm", "page" -> new DocLlmExtractClient();
-            case "llama-extract", "llama", "llama-extract-2.5-agentic" -> new LlamaExtractAdapter();
+            case "llama-extract", "llama", "llama-extract-2.5-agentic" -> cloudForbidden
+                    ? new DocLlmExtractClient()
+                    : new LlamaExtractAdapter();
             default -> throw new IllegalArgumentException(
                     "unknown extractor: " + extractorId
                             + " (use doc-llm-extract|fixture|llama-extract)");

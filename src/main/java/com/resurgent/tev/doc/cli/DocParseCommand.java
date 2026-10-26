@@ -1,11 +1,14 @@
 package com.resurgent.tev.doc.cli;
 
+import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.extract.ExtractException;
 import com.resurgent.tev.doc.extract.LlamaParseClient;
 import com.resurgent.tev.doc.extract.PageParseClient;
 import com.resurgent.tev.doc.extract.ParseService;
 import com.resurgent.tev.doc.extract.ParseTier;
 import com.resurgent.tev.doc.ingest.BlobStore;
+import com.resurgent.tev.doc.platform.SpendCeiling;
+import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -64,14 +67,20 @@ public final class DocParseCommand implements Callable<Integer> {
         var outStream = spec.commandLine().getOut();
         var err = spec.commandLine().getErr();
         try {
+            boolean cloudForbidden = clientOverride == null
+                    && cloudForbidden(db, documentVersionId);
             PageParseClient client = clientOverride != null
-                    ? clientOverride : new LlamaParseClient();
+                    ? clientOverride
+                    : (cloudForbidden ? null : new LlamaParseClient());
             ParseTier override = tier == null || tier.isBlank() ? null : ParseTier.fromWire(tier);
             BlobStore blobs = blobRoot != null
                     ? new BlobStore(blobRoot)
                     : BlobStore.besideDatabase(db);
 
             if (jobId != null && !jobId.isBlank()) {
+                if (cloudForbidden) {
+                    throw new ExtractException("parse job refetch blocked: cloud is forbidden");
+                }
                 LlamaParseClient live = client instanceof LlamaParseClient llama
                         ? llama : new LlamaParseClient();
                 ParseService.ParseOutcome outcome = ParseService.reFetch(
@@ -103,6 +112,18 @@ public final class DocParseCommand implements Callable<Integer> {
         } catch (Exception e) {
             err.println("parse failed: " + (e.getMessage() != null ? e.getMessage() : e));
             return 1;
+        }
+    }
+
+    /** Local-only residency or a mandate ceiling of zero: do not construct a cloud parser. */
+    private static boolean cloudForbidden(Path db, long documentVersionId) throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            DocumentRepository docs = new DocumentRepository(workspace.connection());
+            DocumentRepository.DocumentVersionRow version = docs.findVersion(documentVersionId)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "unknown document_version " + documentVersionId));
+            long mandateId = docs.findMandateId(version.documentId());
+            return SpendCeiling.forbidsCloud(workspace.connection(), mandateId);
         }
     }
 
