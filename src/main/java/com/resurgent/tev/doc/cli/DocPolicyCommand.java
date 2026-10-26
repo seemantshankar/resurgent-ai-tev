@@ -72,39 +72,57 @@ public final class DocPolicyCommand implements Callable<Integer> {
                 throw new IllegalArgumentException(
                         "data residency must be cloud_allowed or local_only");
             }
-            if (spendCeilingSet && spendCeiling != null && spendCeiling < 0) {
-                throw new IllegalArgumentException("spend ceiling must be zero or greater");
-            }
-            if (platformCeilingSet && platformCeiling != null && platformCeiling < 0) {
+            if (spendCeilingSet && spendCeiling != null
+                    && (!Double.isFinite(spendCeiling) || spendCeiling < 0)) {
                 throw new IllegalArgumentException(
-                        "platform ceiling must be zero or greater");
+                        "spend ceiling must be finite and zero or greater");
+            }
+            if (platformCeilingSet && platformCeiling != null
+                    && (!Double.isFinite(platformCeiling) || platformCeiling < 0)) {
+                throw new IllegalArgumentException(
+                        "platform ceiling must be finite and zero or greater");
             }
             try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
-                MandatePolicyRepository policy =
-                        new MandatePolicyRepository(workspace.connection());
-                if (dataResidency != null) {
-                    policy.upsert(mandateId, dataResidency);
-                }
-                if (spendCeilingSet) {
-                    policy.setSpendCeiling(mandateId, spendCeiling);
-                }
-                String residency = policy.dataResidency(mandateId);
-                Double mandateCeiling = policy.spendCeiling(mandateId);
-                String industry = PlatformRegistry.industries(workspace.connection(), mandateId);
-                if (platform != null) {
-                    try (PlatformRegistry registry = PlatformRegistry.open(platform)) {
-                        if (platformCeilingSet) {
-                            registry.setDefaultCeiling(platformCeiling);
+                var connection = workspace.connection();
+                MandatePolicyRepository policy = new MandatePolicyRepository(connection);
+                boolean transaction = false;
+                try {
+                    connection.setAutoCommit(false);
+                    transaction = true;
+                    String industry = PlatformRegistry.industries(connection, mandateId);
+                    if (platform != null) {
+                        try (PlatformRegistry registry = PlatformRegistry.open(platform)) {
+                            applyWorkspacePolicy(policy);
+                            if (platformCeilingSet) {
+                                registry.setDefaultCeiling(platformCeiling);
+                            }
+                            registry.recordMandate(mandateId, db, industry);
+                            connection.commit();
+                            transaction = false;
+                            String residency = policy.dataResidency(mandateId);
+                            Double mandateCeiling = policy.spendCeiling(mandateId);
+                            PlatformRegistry.MandateView view =
+                                    registry.mandate(mandateId).orElseThrow();
+                            Double platformDefault = registry.defaultCeiling();
+                            print(out, view.mandateId(), view.workspacePath(), view.industry(),
+                                    view.status(), residency, mandateCeiling, platformDefault, true);
                         }
-                        registry.recordMandate(mandateId, db, industry);
-                        PlatformRegistry.MandateView view = registry.mandate(mandateId).orElseThrow();
-                        Double platformDefault = registry.defaultCeiling();
-                        print(out, view.mandateId(), view.workspacePath(), view.industry(),
-                                view.status(), residency, mandateCeiling, platformDefault, true);
+                    } else {
+                        applyWorkspacePolicy(policy);
+                        connection.commit();
+                        transaction = false;
+                        String residency = policy.dataResidency(mandateId);
+                        Double mandateCeiling = policy.spendCeiling(mandateId);
+                        print(out, mandateId, db.toAbsolutePath().normalize().toString(), industry,
+                                "open", residency, mandateCeiling, null, false);
                     }
-                } else {
-                    print(out, mandateId, db.toAbsolutePath().normalize().toString(), industry,
-                            "open", residency, mandateCeiling, null, false);
+                } catch (Exception e) {
+                    if (transaction) {
+                        connection.rollback();
+                    }
+                    throw e;
+                } finally {
+                    connection.setAutoCommit(true);
                 }
             }
             return 0;
@@ -131,6 +149,15 @@ public final class DocPolicyCommand implements Callable<Integer> {
         Double effective = SpendCeiling.effective(mandateCeiling,
                 namedRegistry ? platformCeiling : null);
         out.printf("effective spend ceiling %s%n", formatCeiling(effective));
+    }
+
+    private void applyWorkspacePolicy(MandatePolicyRepository policy) throws java.sql.SQLException {
+        if (dataResidency != null) {
+            policy.upsert(mandateId, dataResidency);
+        }
+        if (spendCeilingSet) {
+            policy.setSpendCeiling(mandateId, spendCeiling);
+        }
     }
 
     private static String formatCeiling(Double ceiling) {

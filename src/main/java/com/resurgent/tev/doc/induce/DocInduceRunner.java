@@ -247,10 +247,11 @@ public final class DocInduceRunner {
             String typeHint = docType == null || docType.isBlank()
                     ? clusterCode(byId.get(cluster.get(0).id()).original())
                     : docType;
+            List<DocLlmClient.Usage> clusterUsage = new ArrayList<>();
             try {
                 PackInducer.InduceResult result = new PackInducer().induce(new PackInducer.InduceRequest(
                         cluster, industryTag, fileRole, typeHint, null,
-                        miner(offline, live), null,
+                        miner(offline, live, clusterUsage::add), null,
                         PackQualityGates.DEFAULT_MIN_REQUIRED_COVERAGE,
                         Generalizer.DEFAULT_CONSENSUS_N,
                         true));
@@ -259,10 +260,10 @@ public final class DocInduceRunner {
                 if (!passed) {
                     blocked = true;
                 }
-                judged.add(new Judged(cluster, result, passed));
+                judged.add(new Judged(cluster, result, passed, clusterUsage));
             } catch (Exception e) {
                 blocked = true;
-                judged.add(new Judged(cluster, null, false));
+                judged.add(new Judged(cluster, null, false, clusterUsage));
                 System.err.printf("[doc-induce] cluster at %s skipped: %s%n",
                         cluster.get(0).id(), e.getMessage());
             }
@@ -283,6 +284,7 @@ public final class DocInduceRunner {
             String version = sharedVersion(stores, industryTag, item.result().pack());
             List<String> contributors = contributors(item.cluster(), byId);
             PackStore.PublishedPack installed = null;
+            boolean usageRecorded = false;
             for (int i = 0; i < workspaces.size(); i++) {
                 installed = stores.get(i).installCopy(new PackStore.PublishRequest(
                         item.result().pack(), industryTag, null, contributors,
@@ -299,9 +301,13 @@ public final class DocInduceRunner {
                         item.result().droppedFields(), item.result().rewrittenFields(),
                         industryTag, installed.version(), installed.yamlPath().toString(),
                         item.result().decisions());
+                List<DocLlmClient.Usage> usageForPersist = usageRecorded
+                        ? List.of()
+                        : List.copyOf(item.usage());
+                usageRecorded = usageRecorded || !usageForPersist.isEmpty();
                 persist(workspaces.get(i).dbPath(), stores.get(i).packsRoot(),
                         workspaces.get(i).mandateId(), industryTag,
-                        List.of(new Outcome(mine, recorded, List.of())), live != null);
+                        List.of(new Outcome(mine, recorded, usageForPersist)), live != null);
             }
             PackInducer.InduceResult summary = new PackInducer.InduceResult(
                     true, false, true, item.result().optionalHeavy(),
@@ -343,9 +349,10 @@ public final class DocInduceRunner {
     }
 
     private record Judged(List<PackInducer.InduceDocument> cluster, PackInducer.InduceResult result,
-            boolean passed) {}
+            boolean passed, List<DocLlmClient.Usage> usage) {}
 
-    private static PackMiningClient miner(boolean offline, DocLlmClient live) {
+    private static PackMiningClient miner(boolean offline, DocLlmClient live,
+            java.util.function.Consumer<DocLlmClient.Usage> usageSink) {
         if (offline || live == null) {
             return new OfflinePackMiningClient();
         }
@@ -353,7 +360,7 @@ public final class DocInduceRunner {
         WebSearchClient web = PackMiningClients.webSearchAllowed(env, null)
                 ? new HttpWebSearchClient(env.get(PackMiningClients.WEB_SEARCH_URL), null, null)
                 : null;
-        return PackMiningClients.select(env, live, web, null, null);
+        return PackMiningClients.select(env, live, web, usageSink, null);
     }
 
     /** Page price when layout stored pages; otherwise no estimate. */

@@ -11,6 +11,8 @@ import com.resurgent.tev.doc.classify.DocTypeClassifier;
 import com.resurgent.tev.doc.cli.DocFactsCommand;
 import com.resurgent.tev.doc.cli.DocParseCommand;
 import com.resurgent.tev.doc.db.DocumentRepository;
+import com.resurgent.tev.doc.db.MandatePolicyRepository;
+import com.resurgent.tev.doc.residency.DataResidency;
 import com.resurgent.tev.doc.extract.ExtractException;
 import com.resurgent.tev.doc.extract.ExtractService;
 import com.resurgent.tev.doc.extract.FixtureExtractClient;
@@ -219,6 +221,30 @@ class PlatformPolicyTest {
     }
 
     @Test
+    void policyDoesNotChangeResidencyWhenTheRegistryCannotOpen() throws Exception {
+        Path db = tempDir.resolve("workspace.db");
+        Path registryPath = tempDir.resolve("registry-is-a-directory");
+        Files.createDirectory(registryPath);
+        open(db);
+        policy(db, null, "--data-residency", "local_only");
+
+        int exit = policyExit(db, registryPath, "--data-residency", "cloud_allowed");
+        assertThat(exit).isNotZero();
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            assertThat(new MandatePolicyRepository(workspace.connection()).dataResidency(MANDATE))
+                    .isEqualTo(DataResidency.LOCAL_ONLY);
+        }
+    }
+
+    @Test
+    void policyRejectsNonFiniteSpendCeilings() throws Exception {
+        Path db = tempDir.resolve("workspace.db");
+        open(db);
+        assertThat(policyExit(db, null, "--spend-ceiling", "Infinity")).isEqualTo(3);
+        assertThat(policyExit(db, null, "--spend-ceiling", "NaN")).isEqualTo(3);
+    }
+
+    @Test
     void aFactAlreadyReadStaysWhenALaterCallIsSkipped() throws Exception {
         Scan scan = scan();
         DocTypePack pack = PackLoader.loadClasspath("docpacks/quotation.vendor.yaml");
@@ -258,6 +284,21 @@ class PlatformPolicyTest {
         CommandLine cli = TevDocMain.commandLine();
         cli.setOut(new PrintWriter(out, true));
         cli.setErr(new PrintWriter(err, true));
+        assertThat(cli.execute(policyArgs(db, platform, extra).toArray(String[]::new)))
+                .as(err.toString())
+                .isZero();
+        return out.toString();
+    }
+
+    private int policyExit(Path db, Path platform, String... extra) {
+        StringWriter err = new StringWriter();
+        CommandLine cli = TevDocMain.commandLine();
+        cli.setOut(new PrintWriter(new StringWriter(), true));
+        cli.setErr(new PrintWriter(err, true));
+        return cli.execute(policyArgs(db, platform, extra).toArray(String[]::new));
+    }
+
+    private static List<String> policyArgs(Path db, Path platform, String... extra) {
         List<String> args = new ArrayList<>();
         args.add("policy");
         args.add("--mandate");
@@ -269,8 +310,7 @@ class PlatformPolicyTest {
             args.add(platform.toString());
         }
         args.addAll(List.of(extra));
-        assertThat(cli.execute(args.toArray(String[]::new))).as(err.toString()).isZero();
-        return out.toString();
+        return args;
     }
 
     private static RecordingParseClient parse(Path db, long versionId, Path platform) {

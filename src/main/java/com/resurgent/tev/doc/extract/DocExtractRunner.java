@@ -88,7 +88,8 @@ public final class DocExtractRunner {
         }
         DocTypePack pack = resolvePack(db, documentVersionId, packCode, platform, mandateId);
         ExtractClient client = resolveClient(extractorId,
-                com.resurgent.tev.doc.platform.SpendCeiling.forbidsCloud(db, mandateId));
+                com.resurgent.tev.doc.platform.SpendCeiling.mandateCeilingForbidsCloud(
+                        db, mandateId));
         PageSelection pageSelection = PageSelection.parseOptional(pages);
         List<Integer> pageIndices = pageSelection == null ? null : pageSelection.indices();
 
