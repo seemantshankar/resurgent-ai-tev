@@ -160,6 +160,115 @@ public final class PackStore {
     }
 
     /**
+     * Copies one already judged version into this store. The same version file
+     * is never rewritten; a path that already exists is left as it is.
+     */
+    public synchronized PublishedPack installCopy(PublishRequest request, String version)
+            throws IOException {
+        Objects.requireNonNull(request, "request");
+        String industryTag = normalizeTag(request.industryTag());
+        String resolved = version == null || version.isBlank() ? "1.0.0" : version;
+        DocTypePack versioned = withVersion(request.pack(), resolved);
+        Path industryDir = packsRoot.resolve(industryTag);
+        Path yamlPath = industryDir.resolve(versioned.code() + "@" + resolved + ".yaml");
+        if (Files.isRegularFile(yamlPath)) {
+            byte[] existing = Files.readAllBytes(yamlPath);
+            return new PublishedPack(versioned, industryTag, resolved, yamlPath,
+                    sha256Hex(existing), null);
+        }
+        byte[] yaml = PackYamlWriter.writeBytes(versioned);
+        String fileHash = request.fileHash() != null && !request.fileHash().isBlank()
+                ? request.fileHash()
+                : sha256Hex(yaml);
+        Files.createDirectories(industryDir);
+        Files.write(yamlPath, yaml);
+        PackRegistryEntry entry = new PackRegistryEntry(
+                versioned.code(),
+                resolved,
+                versioned.family(),
+                versioned.fileRole(),
+                industryTag,
+                fileHash,
+                packsRoot.relativize(yamlPath).toString().replace('\\', '/'),
+                request.sourceMandates(),
+                request.inductionRunId(),
+                "published",
+                Instant.now().toString(),
+                request.sourceDocuments());
+        List<PackRegistryEntry> entries = new ArrayList<>(entries());
+        entries.add(entry);
+        writeRegistry(entries);
+        return new PublishedPack(versioned, industryTag, resolved, yamlPath, fileHash, entry);
+    }
+
+    /**
+     * Writes published YAML bytes into this store when that version file is absent.
+     * An existing file is left untouched, bytes and all.
+     */
+    public synchronized void installBytes(String industryTag, byte[] yaml) throws IOException {
+        DocTypePack pack;
+        try {
+            pack = PackLoader.load(new java.io.ByteArrayInputStream(yaml), "published-copy");
+        } catch (PackLoader.PackValidationException e) {
+            throw new IOException("published pack is not readable: " + e.getMessage(), e);
+        }
+        String tag = normalizeTag(industryTag == null || industryTag.isBlank()
+                ? (pack.industryTags().isEmpty() ? "general" : pack.industryTags().get(0))
+                : industryTag);
+        Path industryDir = packsRoot.resolve(tag);
+        Path yamlPath = industryDir.resolve(pack.code() + "@" + pack.version() + ".yaml");
+        if (Files.isRegularFile(yamlPath)) {
+            return;
+        }
+        Files.createDirectories(industryDir);
+        Files.write(yamlPath, yaml);
+        PackRegistryEntry entry = new PackRegistryEntry(
+                pack.code(),
+                pack.version(),
+                pack.family(),
+                pack.fileRole(),
+                tag,
+                sha256Hex(yaml),
+                packsRoot.relativize(yamlPath).toString().replace('\\', '/'),
+                List.of(),
+                "published-copy",
+                "published",
+                Instant.now().toString(),
+                List.of());
+        List<PackRegistryEntry> entries = new ArrayList<>(entries());
+        entries.add(entry);
+        writeRegistry(entries);
+    }
+
+    /** Highest semver first. Missing versions compare as {@code 0.0.0}. */
+    public static int compareVersions(String left, String right) {
+        int[] a = parseSemver(left);
+        int[] b = parseSemver(right);
+        for (int i = 0; i < 3; i++) {
+            int cmp = Integer.compare(a[i], b[i]);
+            if (cmp != 0) {
+                return cmp;
+            }
+        }
+        return 0;
+    }
+
+    /**
+     * Next version after {@code current}. A blank current is the first publish,
+     * {@code 1.0.0}. A required-field change bumps the major; otherwise the minor.
+     */
+    public static String bumpVersion(String current, boolean requiredFieldsChanged) {
+        if (current == null || current.isBlank()) {
+            return "1.0.0";
+        }
+        int[] parts = parseSemver(current);
+        if (requiredFieldsChanged) {
+            return (parts[0] + 1) + ".0.0";
+        }
+        return parts[0] + "." + (parts[1] + 1) + ".0";
+    }
+
+    /**
      * Computes the next semver for {@code (industryTag, code)}.
      * First publish → {@code 1.0.0}; required-field change → major; else minor.
      */

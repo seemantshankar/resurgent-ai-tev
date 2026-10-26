@@ -81,10 +81,11 @@ public final class DocExtractRunner {
             String classified = classifiedPackCode(db, documentVersionId);
             if (classified == null || classified.isBlank() || "unknown".equalsIgnoreCase(classified)) {
                 com.resurgent.tev.doc.classify.DocClassifyRunner.run(
-                        mandateId, documentVersionId, db, blobs, null, "general", true, true);
+                        mandateId, documentVersionId, db, blobs, null, "general", true, true,
+                        platform);
             }
         }
-        DocTypePack pack = resolvePack(db, documentVersionId, packCode);
+        DocTypePack pack = resolvePack(db, documentVersionId, packCode, platform);
         ExtractClient client = resolveClient(extractorId);
         PageSelection pageSelection = PageSelection.parseOptional(pages);
         List<Integer> pageIndices = pageSelection == null ? null : pageSelection.indices();
@@ -173,9 +174,9 @@ public final class DocExtractRunner {
         }
     }
 
-    private static DocTypePack resolvePack(Path db, long documentVersionId, String packCode)
-            throws Exception {
-        List<DocTypePack> packs = loadAllPacks(db);
+    private static DocTypePack resolvePack(Path db, long documentVersionId, String packCode,
+            Path platform) throws Exception {
+        List<DocTypePack> packs = loadAllPacks(db, platform);
         String code = packCode == null ? null : packCode.trim();
         if (code == null || code.isBlank()) {
             code = classifiedPackCode(db, documentVersionId);
@@ -193,7 +194,8 @@ public final class DocExtractRunner {
                 + packs.stream().map(DocTypePack::code).sorted().toList() + ")");
     }
 
-    private static List<DocTypePack> loadAllPacks(Path db) throws Exception {
+    private static List<DocTypePack> loadAllPacks(Path db, Path platform) throws Exception {
+        com.resurgent.tev.doc.platform.PublishedCopy.copyPacks(db, platform);
         Map<String, DocTypePack> byCode = new LinkedHashMap<>();
         for (DocTypePack pack : PackLoader.loadSeedPacks()) {
             byCode.put(pack.code(), pack);

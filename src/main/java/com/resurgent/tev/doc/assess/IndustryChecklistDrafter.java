@@ -137,7 +137,7 @@ public final class IndustryChecklistDrafter {
     }
 
     /** The definition code of a drafted industry checklist, e.g. {@code in.green_hydrogen}. */
-    static String codeFor(String countryCode, String industryKey) {
+    public static String codeFor(String countryCode, String industryKey) {
         return countryCode.toLowerCase(Locale.ROOT) + "."
                 + industryKey.replaceAll("[^a-z0-9]+", "_");
     }

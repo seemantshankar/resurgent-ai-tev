@@ -4,17 +4,21 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.resurgent.tev.doc.assess.ChecklistAssessor;
+import com.resurgent.tev.doc.assess.IndustryChecklistDrafter;
 import com.resurgent.tev.doc.checklist.ChecklistDefinition;
+import com.resurgent.tev.doc.checklist.ChecklistItemDef;
 import com.resurgent.tev.doc.checklist.ChecklistLoader;
 import com.resurgent.tev.doc.checklist.ChecklistStore;
 import com.resurgent.tev.doc.db.AssessmentRepository;
 import com.resurgent.tev.doc.db.ChecklistRepository;
 import com.resurgent.tev.doc.llm.DocLlmClient;
+import com.resurgent.tev.doc.platform.PlatformRegistry;
 import com.resurgent.tev.doc.query.MandateQa;
 import com.resurgent.tev.parser.db.Timestamps;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import com.resurgent.tev.parser.db.CostUnit;
 import com.resurgent.tev.parser.db.WorkspaceRepository;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.util.ArrayList;
@@ -23,6 +27,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Checklist learning from client document sets (M3-15, issue #148): reads one or
@@ -68,17 +73,20 @@ public final class DocInduceChecklistsRunner {
      * @param updates one update per definition that changed
      * @param judgements the project-type judgements made (empty when none were needed)
      * @param publishedFiles the versioned files written, one per update per store
+     * @param registrations operator lines for a named platform registry; empty when none was named
      */
     public record Result(
             int mandatesRead,
             List<ChecklistLearner.DefinitionUpdate> updates,
             List<ProjectTypeIndependenceJudge.Judgement> judgements,
-            List<Path> publishedFiles) {
+            List<Path> publishedFiles,
+            List<String> registrations) {
 
         public Result {
             updates = updates == null ? List.of() : List.copyOf(updates);
             judgements = judgements == null ? List.of() : List.copyOf(judgements);
             publishedFiles = publishedFiles == null ? List.of() : List.copyOf(publishedFiles);
+            registrations = registrations == null ? List.of() : List.copyOf(registrations);
         }
     }
 
@@ -95,6 +103,17 @@ public final class DocInduceChecklistsRunner {
      */
     public static Result run(List<MandateWorkspace> workspaces, DocLlmClient client,
             ChecklistLearner.Config config) throws Exception {
+        return run(workspaces, client, config, null);
+    }
+
+    /**
+     * Same as {@link #run(List, DocLlmClient, ChecklistLearner.Config)}, and when
+     * {@code platform} is set, registers each published industry checklist there.
+     * The country spine is written locally when learning changes it and is never
+     * registered. A null platform does not create a registry file.
+     */
+    public static Result run(List<MandateWorkspace> workspaces, DocLlmClient client,
+            ChecklistLearner.Config config, Path platform) throws Exception {
         if (workspaces.isEmpty()) {
             throw new IllegalArgumentException("checklist learning needs at least one workspace");
         }
@@ -108,6 +127,10 @@ public final class DocInduceChecklistsRunner {
         workspaces = List.copyOf(distinct);
         List<ChecklistLearner.MandateObservation> observations = readObservations(workspaces);
         Map<String, ChecklistDefinition> catalog = loadCatalog(workspaces);
+        List<ChecklistLearner.DefinitionUpdate> drafts = draftMissing(observations, catalog);
+        for (ChecklistLearner.DefinitionUpdate draft : drafts) {
+            catalog.put(draft.code(), draft.definition());
+        }
 
         List<DocLlmClient.Usage> usage = new ArrayList<>();
         ProjectTypeIndependenceJudge judge = client == null
@@ -118,10 +141,145 @@ public final class DocInduceChecklistsRunner {
         ChecklistLearner.Outcome outcome = ChecklistLearner.learn(
                 new ChecklistLearner.Inputs(observations, List.copyOf(catalog.values())),
                 judge, config);
-        List<Path> published = publish(workspaces, outcome.updates());
+        List<ChecklistLearner.DefinitionUpdate> updates = new ArrayList<>(outcome.updates());
+        Set<String> learned = new LinkedHashSet<>();
+        for (ChecklistLearner.DefinitionUpdate update : updates) {
+            learned.add(update.code());
+        }
+        for (ChecklistLearner.DefinitionUpdate draft : drafts) {
+            if (learned.add(draft.code())) {
+                updates.add(draft);
+            }
+        }
+        List<Path> published = publish(workspaces, updates);
+        List<String> registrations = platform == null
+                ? List.of()
+                : register(platform, workspaces, updates, published);
+        ChecklistLearner.Outcome persisted = new ChecklistLearner.Outcome(updates, outcome.judgements());
 
-        persist(workspaces, outcome, published, usage, client != null, config);
-        return new Result(workspaces.size(), outcome.updates(), outcome.judgements(), published);
+        persist(workspaces, persisted, published, usage, client != null, config);
+        return new Result(workspaces.size(), updates, outcome.judgements(), published, registrations);
+    }
+
+    /**
+     * A first checklist for an industry the catalog does not cover. One mandate is
+     * enough: the items are the document types that mandate's client set provided.
+     */
+    private static List<ChecklistLearner.DefinitionUpdate> draftMissing(
+            List<ChecklistLearner.MandateObservation> observations,
+            Map<String, ChecklistDefinition> catalog) {
+        Map<String, DraftGroup> groups = new LinkedHashMap<>();
+        for (ChecklistLearner.MandateObservation observation : observations) {
+            if (observation.country() == null || observation.country().isBlank()) {
+                continue;
+            }
+            for (String industry : observation.industries()) {
+                if (industry == null || industry.isBlank()) {
+                    continue;
+                }
+                String folded = ChecklistAssessor.normaliseIndustry(industry);
+                if (folded.isEmpty() || covered(catalog, folded, observation.country())) {
+                    continue;
+                }
+                String key = observation.country().toUpperCase(java.util.Locale.ROOT) + "|" + folded;
+                DraftGroup group = groups.computeIfAbsent(key,
+                        ignored -> new DraftGroup(observation.country(), folded));
+                group.types.addAll(observation.documentTypes());
+            }
+        }
+        List<ChecklistLearner.DefinitionUpdate> drafts = new ArrayList<>();
+        for (DraftGroup group : groups.values()) {
+            List<ChecklistItemDef> items = new ArrayList<>();
+            Set<String> keys = new LinkedHashSet<>();
+            for (String type : group.types) {
+                String itemKey = ChecklistLearner.sanitizeKey(type);
+                if (itemKey.isEmpty() || !keys.add(itemKey)) {
+                    continue;
+                }
+                items.add(new ChecklistItemDef(itemKey, type, "document", "mandate", null, type,
+                        null, null, true, "observed", "observed in the client document set",
+                        "observed", "Please share the {item}.", null));
+            }
+            if (items.isEmpty()) {
+                continue;
+            }
+            String code = IndustryChecklistDrafter.codeFor(group.country, group.industry);
+            ChecklistDefinition definition = new ChecklistDefinition(code, "1.0.0", "industry",
+                    group.country, List.of(group.industry), items,
+                    IndustryChecklistDrafter.NEW_INDUSTRY_NOTE);
+            drafts.add(new ChecklistLearner.DefinitionUpdate("industry", code, "none", "1.0.0",
+                    definition, List.of()));
+        }
+        return drafts;
+    }
+
+    private static boolean covered(Map<String, ChecklistDefinition> catalog, String industry,
+            String country) {
+        for (ChecklistDefinition definition : catalog.values()) {
+            if (definition.isSpine() || definition.country() == null
+                    || !definition.country().equalsIgnoreCase(country)) {
+                continue;
+            }
+            for (String known : definition.industries()) {
+                if (industry.equals(ChecklistAssessor.normaliseIndustry(known))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private record DraftGroup(String country, String industry, Set<String> types) {
+        private DraftGroup(String country, String industry) {
+            this(country, industry, new TreeSet<>());
+        }
+    }
+
+    /** Registers industry checklists only. The shipped country spine is not a published checklist. */
+    private static List<String> register(Path platform, List<MandateWorkspace> workspaces,
+            List<ChecklistLearner.DefinitionUpdate> updates, List<Path> published) throws Exception {
+        List<String> contributors = new ArrayList<>();
+        for (MandateWorkspace workspace : workspaces) {
+            contributors.add(workspace.dbPath().toAbsolutePath().normalize()
+                    + "#" + workspace.mandateId());
+        }
+        List<String> lines = new ArrayList<>();
+        try (PlatformRegistry registry = PlatformRegistry.open(platform)) {
+            for (MandateWorkspace workspace : workspaces) {
+                try (WorkspaceDatabase opened = WorkspaceDatabase.open(workspace.dbPath())) {
+                    registry.recordMandate(workspace.mandateId(), workspace.dbPath(),
+                            PlatformRegistry.industries(opened.connection(), workspace.mandateId()));
+                }
+            }
+            for (ChecklistLearner.DefinitionUpdate update : updates) {
+                if (update.definition().isSpine() || "in.spine".equals(update.code())) {
+                    continue;
+                }
+                Path file = null;
+                String prefix = update.code() + "@" + update.newVersion();
+                for (Path publishedFile : published) {
+                    String name = publishedFile.getFileName().toString();
+                    if (name.equals(prefix + ".yaml") || name.equals(prefix + ".yml")) {
+                        file = publishedFile;
+                        break;
+                    }
+                }
+                if (file == null) {
+                    continue;
+                }
+                byte[] yaml = Files.readAllBytes(file);
+                String hash = PackStore.sha256Hex(yaml);
+                String industry = String.join(", ", update.definition().industries());
+                registry.publishChecklist(update.code(), update.newVersion(), hash,
+                        update.definition().country(), industry, contributors, yaml);
+                lines.add("registered checklist " + update.code() + "@" + update.newVersion()
+                        + " country " + update.definition().country()
+                        + " industry " + industry
+                        + " hash " + hash
+                        + " mandates " + String.join(", ", contributors));
+            }
+        }
+        return lines;
     }
 
     /** One observation per workspace: the country, industries and client-set types. */

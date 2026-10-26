@@ -37,6 +37,10 @@ public final class DocInduceChecklistsCommand implements Callable<Integer> {
     @Option(names = "--min-industries-for-spine", description = "Minimum distinct industries before LLM independence judgement (default: 2, minimum: 2)")
     int minIndustries = ChecklistLearner.DEFAULT_MIN_INDUSTRIES_FOR_SPINE;
 
+    @Option(names = "--platform",
+            description = "Platform registry. Created when this path is new.")
+    Path platform;
+
     @Spec CommandSpec spec;
     private final DocLlmClient forcedClient;
     private final boolean clientForced;
@@ -72,7 +76,7 @@ public final class DocInduceChecklistsCommand implements Callable<Integer> {
                     }
                 }
             }
-            var result = DocInduceChecklistsRunner.run(inputs, client, config);
+            var result = DocInduceChecklistsRunner.run(inputs, client, config, platform);
             var out = spec.commandLine().getOut();
             for (var update : result.updates()) {
                 out.printf("learned %s@%s (%s -> %s)%n", update.code(), update.newVersion(),
@@ -83,6 +87,9 @@ public final class DocInduceChecklistsCommand implements Callable<Integer> {
             }
             out.printf("checklist learning: %d mandates, %d definitions updated%n",
                     result.mandatesRead(), result.updates().size());
+            for (String registration : result.registrations()) {
+                out.println(registration);
+            }
             return 0;
         } catch (IllegalArgumentException e) {
             spec.commandLine().getErr().println("induce-checklists rejected: " + e.getMessage());

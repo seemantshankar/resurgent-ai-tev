@@ -60,7 +60,19 @@ public final class DocClassifyRunner {
      */
     public static Result run(long mandateId, long documentVersionId, Path db, BlobStore blobs,
             Path packDir, String industry, boolean force, boolean autoInduce) throws Exception {
-        List<DocTypePack> packs = loadCandidatePacks(db, packDir);
+        return run(mandateId, documentVersionId, db, blobs, packDir, industry, force, autoInduce,
+                null);
+    }
+
+    /**
+     * Same as {@link #run(long, long, Path, BlobStore, Path, String, boolean, boolean)}.
+     * When {@code platform} names an existing registry, the highest published pack
+     * is copied into the mandate folder before classification.
+     */
+    public static Result run(long mandateId, long documentVersionId, Path db, BlobStore blobs,
+            Path packDir, String industry, boolean force, boolean autoInduce, Path platform)
+            throws Exception {
+        List<DocTypePack> packs = loadCandidatePacks(db, packDir, platform);
         String industryTag = industry == null || "auto".equalsIgnoreCase(industry)
                 ? null
                 : industry;
@@ -360,6 +372,16 @@ public final class DocClassifyRunner {
      * re-implementing it.
      */
     public static List<DocTypePack> loadCandidatePacks(Path db, Path packDir) throws Exception {
+        return loadCandidatePacks(db, packDir, null);
+    }
+
+    /**
+     * Same as {@link #loadCandidatePacks(Path, Path)}, after copying a newer
+     * published pack into the mandate folder when a registry is named.
+     */
+    public static List<DocTypePack> loadCandidatePacks(Path db, Path packDir, Path platform)
+            throws Exception {
+        com.resurgent.tev.doc.platform.PublishedCopy.copyPacks(db, platform);
         Map<String, DocTypePack> byCode = new LinkedHashMap<>();
         for (DocTypePack pack : PackLoader.loadSeedPacks()) {
             byCode.put(pack.code(), pack);

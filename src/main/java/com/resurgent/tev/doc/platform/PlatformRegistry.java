@@ -184,6 +184,113 @@ public final class PlatformRegistry implements AutoCloseable {
                     + " singleton INTEGER PRIMARY KEY CHECK (singleton = 1),"
                     + " spend_ceiling_usd REAL"
                     + ")");
+            statement.execute("CREATE TABLE IF NOT EXISTS published_pack ("
+                    + " industry TEXT NOT NULL,"
+                    + " code TEXT NOT NULL,"
+                    + " version TEXT NOT NULL,"
+                    + " file_hash TEXT NOT NULL,"
+                    + " status TEXT NOT NULL DEFAULT 'published'"
+                    + " CHECK (status IN ('published', 'withdrawn')),"
+                    + " contributing_mandates TEXT NOT NULL,"
+                    + " yaml BLOB NOT NULL,"
+                    + " PRIMARY KEY (industry, code, version)"
+                    + ")");
+            statement.execute("CREATE TABLE IF NOT EXISTS published_checklist ("
+                    + " code TEXT NOT NULL,"
+                    + " version TEXT NOT NULL,"
+                    + " file_hash TEXT NOT NULL,"
+                    + " country TEXT,"
+                    + " industry TEXT,"
+                    + " status TEXT NOT NULL DEFAULT 'published'"
+                    + " CHECK (status IN ('published', 'withdrawn')),"
+                    + " contributing_mandates TEXT NOT NULL,"
+                    + " yaml BLOB NOT NULL,"
+                    + " PRIMARY KEY (code, version)"
+                    + ")");
         }
+    }
+
+    /**
+     * Records one published pack version. An existing version row is left in place.
+     * Status of a new row is {@code published}.
+     */
+    public void publishPack(String code, String version, String fileHash, String industry,
+            List<String> contributingMandates, byte[] yaml) throws SQLException {
+        String mandates = contributingMandates == null ? "" : String.join(", ", contributingMandates);
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO published_pack (industry, code, version, file_hash, status,"
+                        + " contributing_mandates, yaml)"
+                        + " VALUES (?, ?, ?, ?, 'published', ?, ?)"
+                        + " ON CONFLICT(industry, code, version) DO NOTHING")) {
+            ps.setString(1, industry);
+            ps.setString(2, code);
+            ps.setString(3, version);
+            ps.setString(4, fileHash);
+            ps.setString(5, mandates);
+            ps.setBytes(6, yaml);
+            ps.executeUpdate();
+        }
+    }
+
+    /**
+     * Records one published industry checklist. The country spine is not a
+     * published checklist and is ignored. An existing version row is left in place.
+     */
+    public void publishChecklist(String code, String version, String fileHash, String country,
+            String industry, List<String> contributingMandates, byte[] yaml) throws SQLException {
+        if (code == null || "in.spine".equals(code)) {
+            return;
+        }
+        String mandates = contributingMandates == null ? "" : String.join(", ", contributingMandates);
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO published_checklist (code, version, file_hash, country, industry,"
+                        + " status, contributing_mandates, yaml)"
+                        + " VALUES (?, ?, ?, ?, ?, 'published', ?, ?)"
+                        + " ON CONFLICT(code, version) DO NOTHING")) {
+            ps.setString(1, code);
+            ps.setString(2, version);
+            ps.setString(3, fileHash);
+            ps.setString(4, country);
+            ps.setString(5, industry);
+            ps.setString(6, mandates);
+            ps.setBytes(7, yaml);
+            ps.executeUpdate();
+        }
+    }
+
+    /** A published pack or checklist the registry can still copy. */
+    public record PublishedAsset(String code, String version, String fileHash, String industry,
+            String country, byte[] yaml) {}
+
+    /** Pack versions whose status is published, highest version not implied. */
+    public List<PublishedAsset> visiblePacks() throws SQLException {
+        List<PublishedAsset> assets = new ArrayList<>();
+        try (Statement statement = connection.createStatement();
+                ResultSet rs = statement.executeQuery(
+                        "SELECT code, version, file_hash, industry, yaml FROM published_pack"
+                                + " WHERE status = 'published'")) {
+            while (rs.next()) {
+                assets.add(new PublishedAsset(rs.getString("code"), rs.getString("version"),
+                        rs.getString("file_hash"), rs.getString("industry"), null,
+                        rs.getBytes("yaml")));
+            }
+        }
+        return assets;
+    }
+
+    /** Industry checklists whose status is published. The spine is not one of these. */
+    public List<PublishedAsset> visibleChecklists() throws SQLException {
+        List<PublishedAsset> assets = new ArrayList<>();
+        try (Statement statement = connection.createStatement();
+                ResultSet rs = statement.executeQuery(
+                        "SELECT code, version, file_hash, country, industry, yaml"
+                                + " FROM published_checklist WHERE status = 'published'")) {
+            while (rs.next()) {
+                assets.add(new PublishedAsset(rs.getString("code"), rs.getString("version"),
+                        rs.getString("file_hash"), rs.getString("industry"),
+                        rs.getString("country"), rs.getBytes("yaml")));
+            }
+        }
+        return assets;
     }
 }

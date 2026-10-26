@@ -1,5 +1,6 @@
 package com.resurgent.tev.doc.cli;
 
+import com.resurgent.tev.doc.llm.DocLlmEnvironment;
 import java.nio.file.Path;
 import java.util.concurrent.Callable;
 import picocli.CommandLine.Command;
@@ -21,6 +22,10 @@ public final class DocAssessCommand implements Callable<Integer> {
     @Option(names = "--db", required = true, description = "Path to the SQLite workspace database")
     Path db;
 
+    @Option(names = "--platform",
+            description = "Platform registry. Used only when this file already exists.")
+    Path platform;
+
     @Spec
     CommandSpec spec;
 
@@ -30,7 +35,8 @@ public final class DocAssessCommand implements Callable<Integer> {
         var out = spec.commandLine().getOut();
         var err = spec.commandLine().getErr();
         try {
-            var result = com.resurgent.tev.doc.assess.DocAssessRunner.run(mandateId, db);
+            var result = com.resurgent.tev.doc.assess.DocAssessRunner.run(mandateId, db,
+                    DocLlmEnvironment.clientOrNull(db, mandateId), platform);
             for (String line : result.summaryLines()) {
                 out.println(line);
             }
