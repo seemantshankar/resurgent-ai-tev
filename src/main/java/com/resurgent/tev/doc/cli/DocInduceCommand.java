@@ -1,7 +1,10 @@
 package com.resurgent.tev.doc.cli;
 
+import com.resurgent.tev.doc.induce.DocInduceRunner;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.Callable;
+import picocli.CommandLine.ArgGroup;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Option;
@@ -14,11 +17,16 @@ import picocli.CommandLine.Spec;
         description = "Induce an industry-generic doc type pack from sample documents")
 public final class DocInduceCommand implements Callable<Integer> {
 
-    @Option(names = "--mandate", required = true, description = "Mandate id")
-    long mandateId;
+    static final class WorkspaceOptions {
+        @Option(names = "--mandate", required = true, description = "Mandate id in the paired database")
+        long mandateId;
 
-    @Option(names = "--db", required = true, description = "Path to the SQLite workspace database")
-    Path db;
+        @Option(names = "--db", required = true, description = "Path to the SQLite workspace database")
+        Path db;
+    }
+
+    @ArgGroup(exclusive = false, multiplicity = "1..*")
+    List<WorkspaceOptions> workspaces;
 
     @Option(names = "--industry", description = "auto|<tag>")
     String industry;
@@ -36,6 +44,10 @@ public final class DocInduceCommand implements Callable<Integer> {
     @Option(names = "--dry-run", description = "Print proposed pack + gates without publishing")
     boolean dryRun;
 
+    @Option(names = "--platform",
+            description = "Platform registry. Created when this path is new.")
+    Path platform;
+
     @Spec
     CommandSpec spec;
 
@@ -45,8 +57,11 @@ public final class DocInduceCommand implements Callable<Integer> {
         var out = spec.commandLine().getOut();
         var err = spec.commandLine().getErr();
         try {
-            var results = com.resurgent.tev.doc.induce.DocInduceRunner.run(
-                    mandateId, db, industry, fileRole, docType, versions, dryRun);
+            var inputs = workspaces.stream()
+                    .map(w -> new DocInduceRunner.MandateWorkspace(w.mandateId, w.db))
+                    .toList();
+            var results = DocInduceRunner.run(
+                    inputs, industry, fileRole, docType, versions, dryRun, platform);
             for (var result : results) {
                 if (dryRun) {
                     out.printf("dry-run pack %s@%s (gates %d/%d):%n",
@@ -66,6 +81,9 @@ public final class DocInduceCommand implements Callable<Integer> {
                 }
                 for (String gate : result.gateMessages()) {
                     out.printf("  gate: %s%n", gate);
+                }
+                for (String notice : result.notices()) {
+                    out.println(notice);
                 }
             }
             return 0;

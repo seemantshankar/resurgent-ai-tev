@@ -49,4 +49,47 @@ public final class MandatePolicyRepository {
             ps.executeUpdate();
         }
     }
+
+    /**
+     * The stored spend ceiling in USD, or null when this mandate has no ceiling.
+     * Zero is a ceiling that allows no cloud call.
+     */
+    public Double spendCeiling(long mandateId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT spend_ceiling_usd FROM mandate_policy WHERE mandate_id = ?")) {
+            ps.setLong(1, mandateId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next() || rs.getObject("spend_ceiling_usd") == null) {
+                    return null;
+                }
+                return rs.getDouble("spend_ceiling_usd");
+            }
+        }
+    }
+
+    /**
+     * Sets the mandate ceiling. Null clears it. A missing policy row is inserted
+     * with {@code cloud_allowed} residency. Does not change a residency already stored.
+     */
+    public void setSpendCeiling(long mandateId, Double usd) throws SQLException {
+        if (usd != null && usd < 0) {
+            throw new IllegalArgumentException("spend ceiling must be zero or greater");
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO mandate_policy (mandate_id, data_residency, spend_ceiling_usd, updated_at)"
+                        + " VALUES (?, ?, ?, ?)"
+                        + " ON CONFLICT(mandate_id) DO UPDATE SET"
+                        + " spend_ceiling_usd = excluded.spend_ceiling_usd,"
+                        + " updated_at = excluded.updated_at")) {
+            ps.setLong(1, mandateId);
+            ps.setString(2, DataResidency.CLOUD_ALLOWED);
+            if (usd == null) {
+                ps.setNull(3, java.sql.Types.REAL);
+            } else {
+                ps.setDouble(3, usd);
+            }
+            ps.setString(4, Timestamps.now());
+            ps.executeUpdate();
+        }
+    }
 }

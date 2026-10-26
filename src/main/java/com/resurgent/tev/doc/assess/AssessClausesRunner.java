@@ -59,11 +59,17 @@ public final class AssessClausesRunner implements AssessStage {
 
     @Override
     public StageResult run(long mandateId, Path dbPath, DocLlmClient client) throws Exception {
+        return run(mandateId, dbPath, client, null);
+    }
+
+    @Override
+    public StageResult run(long mandateId, Path dbPath, DocLlmClient client, Path platform)
+            throws Exception {
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(dbPath)) {
             Connection connection = workspace.connection();
             connection.setAutoCommit(false);
             try {
-                StageResult result = assess(connection, mandateId, dbPath, client);
+                StageResult result = assess(connection, mandateId, dbPath, client, platform);
                 connection.commit();
                 return result;
             } catch (Exception e) {
@@ -84,11 +90,11 @@ public final class AssessClausesRunner implements AssessStage {
     }
 
     private StageResult assess(Connection connection, long mandateId, Path dbPath,
-            DocLlmClient client) throws Exception {
+            DocLlmClient client, Path platform) throws Exception {
         AssessmentRepository assessment = new AssessmentRepository(connection);
         ClauseRepository clauses = new ClauseRepository(connection);
         EmbeddingRepository embeddings = new EmbeddingRepository(connection);
-        EmbeddingClient embedder = EmbeddingClients.forAssessment(connection, mandateId);
+        EmbeddingClient embedder = EmbeddingClients.forAssessment(connection, mandateId, platform);
         DocumentRepository docs = new DocumentRepository(connection);
         WorkspaceRepository repo = new WorkspaceRepository(connection);
         Map<String, DocTypePack> packsByCode = loadPacks(dbPath);
@@ -272,14 +278,14 @@ public final class AssessClausesRunner implements AssessStage {
     private static Map<String, DocTypePack> loadPacks(Path dbPath) throws Exception {
         Map<String, DocTypePack> packs = new LinkedHashMap<>();
         for (DocTypePack pack : PackLoader.loadSeedPacks()) {
-            packs.put(pack.code(), pack);
+            PackStore.keepHighest(packs, pack);
         }
         Path packsRoot = dbPath.toAbsolutePath().getParent() == null
                 ? Path.of("packs")
                 : dbPath.toAbsolutePath().getParent().resolve("packs");
         try {
             for (DocTypePack pack : new PackStore(packsRoot).loadAll()) {
-                packs.put(pack.code(), pack);
+                PackStore.keepHighest(packs, pack);
             }
         } catch (RuntimeException e) {
             // A broken induced-pack registry must not block the assessment.

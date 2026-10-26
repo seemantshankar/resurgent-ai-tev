@@ -27,13 +27,22 @@ public final class DocBindRunner {
      */
     public static Result run(long mandateId, long parseRunId, Path db, String packCode)
             throws Exception {
+        return run(mandateId, parseRunId, db, packCode, null);
+    }
+
+    /**
+     * Same as {@link #run(long, long, Path, String)}. {@code platform} is the
+     * registry the command was given, so the document model honours that ceiling.
+     */
+    public static Result run(long mandateId, long parseRunId, Path db, String packCode,
+            Path platform) throws Exception {
         if (packCode == null || packCode.isBlank()) {
             throw new IllegalArgumentException("--pack is required for bind");
         }
         DocTypePack pack = resolvePack(db, packCode);
         PackPathBinder binder = new PackPathBinder();
         PackPathBinder.BindOutcome outcome = binder.bind(db, parseRunId, mandateId, pack,
-                DocLlmEnvironment.clientOrNull(db, mandateId));
+                DocLlmEnvironment.clientOrNull(db, mandateId, platform, 0));
         List<String> paths = new ArrayList<>();
         for (PackField path : pack.fields()) {
             paths.add(path.path());

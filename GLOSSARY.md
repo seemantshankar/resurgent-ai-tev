@@ -274,6 +274,30 @@ _Avoid_: manual pack authoring, failing on unknown document types, dropping sing
 The recorded record of why a candidate document field, table, clause type, or checklist item was promoted, rewritten, downgraded, or dropped during automatic learning, together with the web-research rationale, documents, similarity evidence, and quality gates that supported or rejected it.
 _Avoid_: human promotion queue, silent schema drop
 
+**Platform registry**:
+The shared record of mandates and published packs, kept apart from any one mandate's workspace. A mandate's facts, soft leaves, aliases, and open clause types stay in that mandate.
+_Avoid_: shared workspace, mega-database, second document database
+
+**Published pack**:
+A document-type pack that has passed the quality gates and is on the platform registry, so a later mandate can load it without inducing it again.
+_Avoid_: seed pack, hand-authored pack
+
+**Published checklist**:
+An industry checklist on the platform registry, so a later mandate in that country and industry can load it. The country spine is not one of these; it ships with the product.
+_Avoid_: spine checklist, hand-authored checklist
+
+**Withdrawn version**:
+A published pack or checklist version that later mandates do not copy. A mandate that already has the file keeps it. The version stays on the registry.
+_Avoid_: deleted pack, unpublished
+
+**Spend ceiling**:
+The amount a mandate may spend on cloud calls. Under the ceiling, routing stays as it is. At the ceiling, the run makes no further cloud calls and continues locally, with unverified pages and Unclear checklist items.
+_Avoid_: cost dashboard, token budget
+
+**Offline drill**:
+An automated run of the document pipeline with cloud forbidden, proving the pipeline finishes and records what it could not verify.
+_Avoid_: runbook, manual fallback test
+
 ## Phase 1 (current scope)
 
 - **FM Loader**: file adapters (xlsx / xls / csv), safety limits, SQLite persistence, ingest QA (cell / reference / formula reconciliation). Cell contract: coord, typed values, formula text + `formula_normalized` + cached value, merges, hidden flags, `style_id` → shared cell style (bold, `number_format`, fill FG + pattern, per-side borders), reference edges, and the formula graph (precedents and dependents) at ingest — no quantity parsing, header labels, font name/size, or fill background (ADR 0013, ADR 0024).

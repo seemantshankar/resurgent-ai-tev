@@ -191,20 +191,23 @@ public final class AssessProfileRunner implements AssessStage {
     /** Pack-code → date kind for seed packs plus packs published beside the workspace. */
     private static Map<String, String> loadDateKinds(Path dbPath) throws Exception {
         Map<String, String> kinds = new LinkedHashMap<>();
+        Map<String, DocTypePack> packs = new LinkedHashMap<>();
         for (DocTypePack pack : PackLoader.loadSeedPacks()) {
-            putDateKind(kinds, pack);
+            PackStore.keepHighest(packs, pack);
         }
         Path packsRoot = dbPath.toAbsolutePath().getParent() == null
                 ? Path.of("packs")
                 : dbPath.toAbsolutePath().getParent().resolve("packs");
         try {
             for (DocTypePack pack : new PackStore(packsRoot).loadAll()) {
-                putDateKind(kinds, pack);
+                PackStore.keepHighest(packs, pack);
             }
         } catch (RuntimeException e) {
-            // A broken induced-pack registry must not block the assessment.
             System.err.println("[doc-assess] ignoring pack store " + packsRoot + ": "
                     + e.getMessage());
+        }
+        for (DocTypePack pack : packs.values()) {
+            putDateKind(kinds, pack);
         }
         return kinds;
     }

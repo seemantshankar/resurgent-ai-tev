@@ -5,6 +5,7 @@ import com.resurgent.tev.doc.induce.ChecklistLearner;
 import com.resurgent.tev.doc.induce.DocInduceChecklistsRunner;
 import com.resurgent.tev.doc.llm.DocLlmClient;
 import com.resurgent.tev.doc.llm.DocLlmEnvironment;
+import com.resurgent.tev.doc.platform.SpendCeiling;
 import com.resurgent.tev.doc.residency.DataResidency;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
 import java.nio.file.Path;
@@ -37,6 +38,10 @@ public final class DocInduceChecklistsCommand implements Callable<Integer> {
     @Option(names = "--min-industries-for-spine", description = "Minimum distinct industries before LLM independence judgement (default: 2, minimum: 2)")
     int minIndustries = ChecklistLearner.DEFAULT_MIN_INDUSTRIES_FOR_SPINE;
 
+    @Option(names = "--platform",
+            description = "Platform registry. Created when this path is new.")
+    Path platform;
+
     @Spec CommandSpec spec;
     private final DocLlmClient forcedClient;
     private final boolean clientForced;
@@ -58,21 +63,29 @@ public final class DocInduceChecklistsCommand implements Callable<Integer> {
             var config = new ChecklistLearner.Config(minObserved, minMissing, minIndustries);
             var inputs = workspaces.stream().map(w ->
                     new DocInduceChecklistsRunner.MandateWorkspace(w.mandateId, w.db)).toList();
-            DocLlmClient client = clientForced ? forcedClient : DocLlmEnvironment.clientOrNull();
-            if (!clientForced && client != null) {
+            DocLlmClient client = clientForced ? forcedClient : null;
+            if (!clientForced) {
+                boolean blocked = false;
                 for (WorkspaceOptions workspace : workspaces) {
                     try (WorkspaceDatabase db = WorkspaceDatabase.open(workspace.db)) {
                         String row = new MandatePolicyRepository(db.connection())
                                 .dataResidency(workspace.mandateId);
                         if (DataResidency.isLocalOnly(DataResidency.effective(
-                                System.getenv(DataResidency.ENV), row))) {
-                            client = null;
+                                System.getenv(DataResidency.ENV), row))
+                                || SpendCeiling.blocks(
+                                        db.connection(), workspace.mandateId, platform, 0)) {
+                            blocked = true;
                             break;
                         }
                     }
                 }
+                if (!blocked) {
+                    WorkspaceOptions first = workspaces.get(0);
+                    client = DocLlmEnvironment.clientOrNull(
+                            first.db, first.mandateId, platform, 0);
+                }
             }
-            var result = DocInduceChecklistsRunner.run(inputs, client, config);
+            var result = DocInduceChecklistsRunner.run(inputs, client, config, platform);
             var out = spec.commandLine().getOut();
             for (var update : result.updates()) {
                 out.printf("learned %s@%s (%s -> %s)%n", update.code(), update.newVersion(),
@@ -83,6 +96,9 @@ public final class DocInduceChecklistsCommand implements Callable<Integer> {
             }
             out.printf("checklist learning: %d mandates, %d definitions updated%n",
                     result.mandatesRead(), result.updates().size());
+            for (String registration : result.registrations()) {
+                out.println(registration);
+            }
             return 0;
         } catch (IllegalArgumentException e) {
             spec.commandLine().getErr().println("induce-checklists rejected: " + e.getMessage());
