@@ -262,6 +262,50 @@ public final class PlatformRegistry implements AutoCloseable {
     public record PublishedAsset(String code, String version, String fileHash, String industry,
             String country, byte[] yaml) {}
 
+    /**
+     * Marks one published pack version withdrawn. The row stays, and its stored
+     * bytes are not rewritten.
+     */
+    public void withdrawPack(String industry, String code, String version) throws SQLException {
+        if (industry == null || industry.isBlank() || code == null || code.isBlank()
+                || version == null || version.isBlank()) {
+            throw new IllegalArgumentException("pack must name an industry and code@version");
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE published_pack SET status = 'withdrawn'"
+                        + " WHERE industry = ? AND code = ? AND version = ?"
+                        + " AND status = 'published'")) {
+            ps.setString(1, industry);
+            ps.setString(2, code);
+            ps.setString(3, version);
+            if (ps.executeUpdate() != 1) {
+                throw new IllegalArgumentException("no published pack " + code + "@" + version
+                        + " industry " + industry);
+            }
+        }
+    }
+
+    /**
+     * Marks one published checklist version withdrawn. The row stays, and its
+     * stored bytes are not rewritten. The country spine is not a published checklist.
+     */
+    public void withdrawChecklist(String code, String version) throws SQLException {
+        if (code == null || code.isBlank() || "in.spine".equals(code)
+                || version == null || version.isBlank()) {
+            throw new IllegalArgumentException("checklist must name a published code@version");
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE published_checklist SET status = 'withdrawn'"
+                        + " WHERE code = ? AND version = ? AND status = 'published'")) {
+            ps.setString(1, code);
+            ps.setString(2, version);
+            if (ps.executeUpdate() != 1) {
+                throw new IllegalArgumentException(
+                        "no published checklist " + code + "@" + version);
+            }
+        }
+    }
+
     /** Pack versions whose status is published, highest version not implied. */
     public List<PublishedAsset> visiblePacks() throws SQLException {
         List<PublishedAsset> assets = new ArrayList<>();
