@@ -52,6 +52,17 @@ public final class DocInduceRunner {
      */
     public static List<Result> run(long mandateId, Path db, String industry, String fileRole,
             String docType, List<Long> versions, boolean dryRun) throws Exception {
+        return run(mandateId, db, industry, fileRole, docType, versions, dryRun, null);
+    }
+
+    /**
+     * Same as {@link #run(long, Path, String, String, String, List, boolean)}.
+     * When {@code platform} is set, the mandate is recorded even if nothing is
+     * published, and an unset mandate ceiling inherits the platform default.
+     */
+    public static List<Result> run(long mandateId, Path db, String industry, String fileRole,
+            String docType, List<Long> versions, boolean dryRun, Path platform) throws Exception {
+        com.resurgent.tev.doc.platform.PlatformRegistry.recordIfNamed(platform, db, mandateId);
         String industryTag = industry == null || "auto".equalsIgnoreCase(industry)
                 ? "general"
                 : industry;
@@ -62,12 +73,14 @@ public final class DocInduceRunner {
 
         List<PackInducer.InduceDocument> documents;
         String mandateResidency = null;
+        double estimate = 0;
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             documents = loadCorpus(workspace.connection(), mandateId, fileRole, docType, versions);
+            estimate = pageEstimate(documents);
             mandateResidency = new com.resurgent.tev.doc.db.MandatePolicyRepository(
                     workspace.connection()).dataResidency(mandateId);
             if (com.resurgent.tev.doc.platform.SpendCeiling.blocks(
-                    workspace.connection(), mandateId, null, 0)) {
+                    workspace.connection(), mandateId, platform, estimate)) {
                 mandateResidency = com.resurgent.tev.doc.residency.DataResidency.LOCAL_ONLY;
             }
         }
@@ -77,7 +90,7 @@ public final class DocInduceRunner {
                             + (fileRole == null ? " (unknown/unclassified only)" : ""));
         }
 
-        DocLlmClient live = DocLlmEnvironment.clientOrNull(db, mandateId);
+        DocLlmClient live = DocLlmEnvironment.clientOrNull(db, mandateId, platform, estimate);
         List<List<PackInducer.InduceDocument>> clusters;
         if (docType != null && !docType.isBlank()) {
             clusters = List.of(documents);
@@ -150,24 +163,38 @@ public final class DocInduceRunner {
         if (workspaces == null || workspaces.isEmpty()) {
             throw new IllegalArgumentException("induction needs at least one workspace");
         }
-        String industryTag = industry == null || "auto".equalsIgnoreCase(industry)
-                ? "general"
-                : industry;
-        List<Sourced> sourced = new ArrayList<>();
-        boolean offline = false;
-        int index = 0;
         for (MandateWorkspace workspace : workspaces) {
             if (workspace.mandateId() <= 0 || !java.nio.file.Files.isRegularFile(workspace.dbPath())) {
                 throw new IllegalArgumentException(
                         "expected an existing mandate workspace: " + workspace.dbPath());
             }
+            com.resurgent.tev.doc.platform.PlatformRegistry.recordIfNamed(
+                    platform, workspace.dbPath(), workspace.mandateId());
+        }
+        String industryTag = industry == null || "auto".equalsIgnoreCase(industry)
+                ? "general"
+                : industry;
+        List<Sourced> sourced = new ArrayList<>();
+        boolean offline = false;
+        int pages = 0;
+        boolean pagesKnown = false;
+        int index = 0;
+        for (MandateWorkspace workspace : workspaces) {
             try (WorkspaceDatabase opened = WorkspaceDatabase.open(workspace.dbPath())) {
                 List<PackInducer.InduceDocument> documents = loadCorpus(
                         opened.connection(), workspace.mandateId(), fileRole, docType, versions);
+                int counted = countedPages(documents);
+                if (counted > 0) {
+                    pagesKnown = true;
+                    pages += counted;
+                }
                 String residency = new com.resurgent.tev.doc.db.MandatePolicyRepository(
                         opened.connection()).dataResidency(workspace.mandateId());
+                double estimate = counted > 0
+                        ? com.resurgent.tev.doc.platform.SpendCeiling.estimateUsd(counted, null)
+                        : 0;
                 if (com.resurgent.tev.doc.platform.SpendCeiling.blocks(
-                        opened.connection(), workspace.mandateId(), null, 0)
+                        opened.connection(), workspace.mandateId(), platform, estimate)
                         || com.resurgent.tev.doc.residency.DataResidency.isLocalOnly(
                                 com.resurgent.tev.doc.residency.DataResidency.effective(
                                         System.getenv(com.resurgent.tev.doc.residency.DataResidency.ENV),
@@ -204,9 +231,13 @@ public final class DocInduceRunner {
         for (MandateWorkspace workspace : workspaces) {
             stores.add(new PackStore(packsRoot(workspace.dbPath())));
         }
+        double estimate = pagesKnown
+                ? com.resurgent.tev.doc.platform.SpendCeiling.estimateUsd(pages, null)
+                : 0;
         DocLlmClient live = offline
                 ? null
-                : DocLlmEnvironment.clientOrNull(workspaces.get(0).dbPath(), workspaces.get(0).mandateId());
+                : DocLlmEnvironment.clientOrNull(workspaces.get(0).dbPath(),
+                        workspaces.get(0).mandateId(), platform, estimate);
         List<Judged> judged = new ArrayList<>();
         boolean blocked = false;
         for (List<PackInducer.InduceDocument> cluster : clusters) {
@@ -219,7 +250,7 @@ public final class DocInduceRunner {
             try {
                 PackInducer.InduceResult result = new PackInducer().induce(new PackInducer.InduceRequest(
                         cluster, industryTag, fileRole, typeHint, null,
-                        miner(offline, live, workspaces.get(0)), null,
+                        miner(offline, live), null,
                         PackQualityGates.DEFAULT_MIN_REQUIRED_COVERAGE,
                         Generalizer.DEFAULT_CONSENSUS_N,
                         true));
@@ -296,15 +327,12 @@ public final class DocInduceRunner {
             String industryTag, List<String> contributors, PackStore.PublishedPack installed)
             throws Exception {
         byte[] yaml = java.nio.file.Files.readAllBytes(installed.yamlPath());
+        for (MandateWorkspace workspace : workspaces) {
+            com.resurgent.tev.doc.platform.PlatformRegistry.recordIfNamed(
+                    platform, workspace.dbPath(), workspace.mandateId());
+        }
         try (com.resurgent.tev.doc.platform.PlatformRegistry registry =
                 com.resurgent.tev.doc.platform.PlatformRegistry.open(platform)) {
-            for (MandateWorkspace workspace : workspaces) {
-                try (WorkspaceDatabase opened = WorkspaceDatabase.open(workspace.dbPath())) {
-                    registry.recordMandate(workspace.mandateId(), workspace.dbPath(),
-                            com.resurgent.tev.doc.platform.PlatformRegistry.industries(
-                                    opened.connection(), workspace.mandateId()));
-                }
-            }
             registry.publishPack(installed.pack().code(), installed.version(), installed.fileHash(),
                     industryTag, contributors, yaml);
         }
@@ -317,7 +345,7 @@ public final class DocInduceRunner {
     private record Judged(List<PackInducer.InduceDocument> cluster, PackInducer.InduceResult result,
             boolean passed) {}
 
-    private static PackMiningClient miner(boolean offline, DocLlmClient live, MandateWorkspace workspace) {
+    private static PackMiningClient miner(boolean offline, DocLlmClient live) {
         if (offline || live == null) {
             return new OfflinePackMiningClient();
         }
@@ -326,6 +354,25 @@ public final class DocInduceRunner {
                 ? new HttpWebSearchClient(env.get(PackMiningClients.WEB_SEARCH_URL), null, null)
                 : null;
         return PackMiningClients.select(env, live, web, null, null);
+    }
+
+    /** Page price when layout stored pages; otherwise no estimate. */
+    private static double pageEstimate(List<PackInducer.InduceDocument> documents) {
+        int pages = countedPages(documents);
+        return pages > 0
+                ? com.resurgent.tev.doc.platform.SpendCeiling.estimateUsd(pages, null)
+                : 0;
+    }
+
+    private static int countedPages(List<PackInducer.InduceDocument> documents) {
+        int pages = 0;
+        if (documents == null) {
+            return 0;
+        }
+        for (PackInducer.InduceDocument document : documents) {
+            pages += document.layoutText().size();
+        }
+        return pages;
     }
 
     private static Path packsRoot(Path db) {

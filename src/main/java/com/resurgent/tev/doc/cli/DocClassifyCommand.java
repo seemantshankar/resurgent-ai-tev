@@ -38,7 +38,7 @@ public final class DocClassifyCommand implements Callable<Integer> {
     boolean noAutoInduce;
 
     @Option(names = "--platform",
-            description = "Platform registry. Used only when this file already exists.")
+            description = "Platform registry. Created when this path is new.")
     Path platform;
 
     @Option(names = "--blob-root", description = "Blob store root (default: <db-parent>/blobs)")

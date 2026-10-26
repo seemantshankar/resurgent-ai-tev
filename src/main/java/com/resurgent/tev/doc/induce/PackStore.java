@@ -16,6 +16,7 @@ import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -215,29 +216,8 @@ public final class PackStore {
         String tag = normalizeTag(industryTag == null || industryTag.isBlank()
                 ? (pack.industryTags().isEmpty() ? "general" : pack.industryTags().get(0))
                 : industryTag);
-        Path industryDir = packsRoot.resolve(tag);
-        Path yamlPath = industryDir.resolve(pack.code() + "@" + pack.version() + ".yaml");
-        if (Files.isRegularFile(yamlPath)) {
-            return;
-        }
-        Files.createDirectories(industryDir);
-        Files.write(yamlPath, yaml);
-        PackRegistryEntry entry = new PackRegistryEntry(
-                pack.code(),
-                pack.version(),
-                pack.family(),
-                pack.fileRole(),
-                tag,
-                sha256Hex(yaml),
-                packsRoot.relativize(yamlPath).toString().replace('\\', '/'),
-                List.of(),
-                "published-copy",
-                "published",
-                Instant.now().toString(),
-                List.of());
-        List<PackRegistryEntry> entries = new ArrayList<>(entries());
-        entries.add(entry);
-        writeRegistry(entries);
+        installCopy(new PublishRequest(pack, tag, sha256Hex(yaml), List.of(), "published-copy"),
+                pack.version());
     }
 
     /** Highest semver first. Missing versions compare as {@code 0.0.0}. */
@@ -274,15 +254,22 @@ public final class PackStore {
      */
     public String nextVersion(String industryTag, String code, boolean requiredFieldsChanged) {
         String tag = normalizeTag(industryTag);
-        Optional<PackRegistryEntry> latest = latestEntry(tag, code);
-        if (latest.isEmpty()) {
-            return "1.0.0";
+        return bumpVersion(latestEntry(tag, code).map(PackRegistryEntry::version).orElse(null),
+                requiredFieldsChanged);
+    }
+
+    /**
+     * Keeps the higher version of a code. The same version keeps the later
+     * pack, and an older local file does not hide a newer seed.
+     */
+    public static void keepHighest(Map<String, DocTypePack> packs, DocTypePack pack) {
+        if (pack == null || pack.code() == null) {
+            return;
         }
-        int[] parts = parseSemver(latest.get().version());
-        if (requiredFieldsChanged) {
-            return (parts[0] + 1) + ".0.0";
+        DocTypePack current = packs.get(pack.code());
+        if (current == null || compareVersions(pack.version(), current.version()) >= 0) {
+            packs.put(pack.code(), pack);
         }
-        return parts[0] + "." + (parts[1] + 1) + ".0";
     }
 
     /**

@@ -125,6 +125,9 @@ public final class DocInduceChecklistsRunner {
             distinct.add(new MandateWorkspace(workspace.mandateId(), workspace.dbPath().toRealPath()));
         }
         workspaces = List.copyOf(distinct);
+        for (MandateWorkspace workspace : workspaces) {
+            PlatformRegistry.recordIfNamed(platform, workspace.dbPath(), workspace.mandateId());
+        }
         List<ChecklistLearner.MandateObservation> observations = readObservations(workspaces);
         Map<String, ChecklistDefinition> catalog = loadCatalog(workspaces);
         List<ChecklistLearner.DefinitionUpdate> drafts = draftMissing(observations, catalog);
@@ -244,15 +247,13 @@ public final class DocInduceChecklistsRunner {
                     + "#" + workspace.mandateId());
         }
         List<String> lines = new ArrayList<>();
+        for (MandateWorkspace workspace : workspaces) {
+            PlatformRegistry.recordIfNamed(platform, workspace.dbPath(), workspace.mandateId());
+        }
         try (PlatformRegistry registry = PlatformRegistry.open(platform)) {
-            for (MandateWorkspace workspace : workspaces) {
-                try (WorkspaceDatabase opened = WorkspaceDatabase.open(workspace.dbPath())) {
-                    registry.recordMandate(workspace.mandateId(), workspace.dbPath(),
-                            PlatformRegistry.industries(opened.connection(), workspace.mandateId()));
-                }
-            }
             for (ChecklistLearner.DefinitionUpdate update : updates) {
-                if (update.definition().isSpine() || "in.spine".equals(update.code())) {
+                if (update.definition().isSpine()
+                        || ChecklistDefinition.isSpineCode(update.code())) {
                     continue;
                 }
                 Path file = null;

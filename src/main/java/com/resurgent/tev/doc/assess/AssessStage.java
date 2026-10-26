@@ -26,6 +26,15 @@ public interface AssessStage {
     StageResult run(long mandateId, Path dbPath, DocLlmClient client) throws Exception;
 
     /**
+     * Same as {@link #run(long, Path, DocLlmClient)}. {@code platform} is the
+     * registry the command was given. Stages that do not call the cloud ignore it.
+     */
+    default StageResult run(long mandateId, Path dbPath, DocLlmClient client, Path platform)
+            throws Exception {
+        return run(mandateId, dbPath, client);
+    }
+
+    /**
      * Stage summary for the CLI.
      *
      * @param stage stage name ({@code assess_profile}/…)

@@ -42,6 +42,14 @@ public record ChecklistDefinition(
         return "spine".equals(scope);
     }
 
+    /**
+     * True for the shipped country-spine code. A published checklist never uses
+     * it. When a definition is already loaded, {@link #isSpine()} is the check.
+     */
+    public static boolean isSpineCode(String code) {
+        return "in.spine".equals(code);
+    }
+
     /** True when this definition applies to the given industry. */
     public boolean coversIndustry(String industry) {
         return industry != null && industries.contains(industry);

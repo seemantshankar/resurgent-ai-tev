@@ -167,6 +167,21 @@ public final class PlatformRegistry implements AutoCloseable {
         }
     }
 
+    /**
+     * Same as {@link #recordIfNamed(Path, Path, long, Connection)}, opening the
+     * workspace to read an industry this command has already detected.
+     */
+    public static void recordIfNamed(Path platform, Path workspaceDb, long mandateId)
+            throws SQLException {
+        if (platform == null) {
+            return;
+        }
+        try (com.resurgent.tev.parser.db.WorkspaceDatabase workspace =
+                com.resurgent.tev.parser.db.WorkspaceDatabase.open(workspaceDb)) {
+            recordIfNamed(platform, workspaceDb, mandateId, workspace.connection());
+        }
+    }
+
     @Override
     public void close() throws SQLException {
         connection.close();
@@ -238,7 +253,7 @@ public final class PlatformRegistry implements AutoCloseable {
      */
     public void publishChecklist(String code, String version, String fileHash, String country,
             String industry, List<String> contributingMandates, byte[] yaml) throws SQLException {
-        if (code == null || "in.spine".equals(code)) {
+        if (code == null || com.resurgent.tev.doc.checklist.ChecklistDefinition.isSpineCode(code)) {
             return;
         }
         String mandates = contributingMandates == null ? "" : String.join(", ", contributingMandates);
@@ -258,8 +273,8 @@ public final class PlatformRegistry implements AutoCloseable {
         }
     }
 
-    /** A published pack or checklist the registry can still copy. */
-    public record PublishedAsset(String code, String version, String fileHash, String industry,
+    /** One published pack or checklist version the registry can still copy. */
+    public record PublishedVersion(String code, String version, String fileHash, String industry,
             String country, byte[] yaml) {}
 
     /**
@@ -290,7 +305,8 @@ public final class PlatformRegistry implements AutoCloseable {
      * stored bytes are not rewritten. The country spine is not a published checklist.
      */
     public void withdrawChecklist(String code, String version) throws SQLException {
-        if (code == null || code.isBlank() || "in.spine".equals(code)
+        if (code == null || code.isBlank()
+                || com.resurgent.tev.doc.checklist.ChecklistDefinition.isSpineCode(code)
                 || version == null || version.isBlank()) {
             throw new IllegalArgumentException("checklist must name a published code@version");
         }
@@ -307,34 +323,34 @@ public final class PlatformRegistry implements AutoCloseable {
     }
 
     /** Pack versions whose status is published, highest version not implied. */
-    public List<PublishedAsset> visiblePacks() throws SQLException {
-        List<PublishedAsset> assets = new ArrayList<>();
+    public List<PublishedVersion> publishedPacks() throws SQLException {
+        List<PublishedVersion> versions = new ArrayList<>();
         try (Statement statement = connection.createStatement();
                 ResultSet rs = statement.executeQuery(
                         "SELECT code, version, file_hash, industry, yaml FROM published_pack"
                                 + " WHERE status = 'published'")) {
             while (rs.next()) {
-                assets.add(new PublishedAsset(rs.getString("code"), rs.getString("version"),
+                versions.add(new PublishedVersion(rs.getString("code"), rs.getString("version"),
                         rs.getString("file_hash"), rs.getString("industry"), null,
                         rs.getBytes("yaml")));
             }
         }
-        return assets;
+        return versions;
     }
 
     /** Industry checklists whose status is published. The spine is not one of these. */
-    public List<PublishedAsset> visibleChecklists() throws SQLException {
-        List<PublishedAsset> assets = new ArrayList<>();
+    public List<PublishedVersion> publishedChecklists() throws SQLException {
+        List<PublishedVersion> versions = new ArrayList<>();
         try (Statement statement = connection.createStatement();
                 ResultSet rs = statement.executeQuery(
                         "SELECT code, version, file_hash, country, industry, yaml"
                                 + " FROM published_checklist WHERE status = 'published'")) {
             while (rs.next()) {
-                assets.add(new PublishedAsset(rs.getString("code"), rs.getString("version"),
+                versions.add(new PublishedVersion(rs.getString("code"), rs.getString("version"),
                         rs.getString("file_hash"), rs.getString("industry"),
                         rs.getString("country"), rs.getBytes("yaml")));
             }
         }
-        return assets;
+        return versions;
     }
 }

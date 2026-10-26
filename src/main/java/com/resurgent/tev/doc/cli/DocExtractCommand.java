@@ -83,7 +83,7 @@ public final class DocExtractCommand implements Callable<Integer> {
             int exit = exitCode(result.status());
             if (exit == 0) {
                 // Processing new documents ends by re-running the assessment (M3-01).
-                reassess(mandateId, db, out, err);
+                reassess(mandateId, db, platform, out, err);
             }
             return exit;
         } catch (IllegalArgumentException e) {
@@ -99,10 +99,12 @@ public final class DocExtractCommand implements Callable<Integer> {
      * Re-runs the mandate assessment after a successful extract. A failed assessment is
      * a warning, not an extract failure: the extracted facts are already persisted.
      */
-    private static void reassess(long mandateId, java.nio.file.Path db,
+    private static void reassess(long mandateId, java.nio.file.Path db, java.nio.file.Path platform,
             java.io.PrintWriter out, java.io.PrintWriter err) {
         try {
-            var assessment = com.resurgent.tev.doc.assess.DocAssessRunner.run(mandateId, db);
+            var assessment = com.resurgent.tev.doc.assess.DocAssessRunner.run(mandateId, db,
+                    com.resurgent.tev.doc.llm.DocLlmEnvironment.clientOrNull(db, mandateId, platform, 0),
+                    platform);
             for (String line : assessment.summaryLines()) {
                 out.println("assessment: " + line);
             }

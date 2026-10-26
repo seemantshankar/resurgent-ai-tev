@@ -72,11 +72,13 @@ public final class DocClassifyRunner {
     public static Result run(long mandateId, long documentVersionId, Path db, BlobStore blobs,
             Path packDir, String industry, boolean force, boolean autoInduce, Path platform)
             throws Exception {
-        List<DocTypePack> packs = loadCandidatePacks(db, packDir, platform);
+        com.resurgent.tev.doc.platform.PlatformRegistry.recordIfNamed(platform, db, mandateId);
+        List<DocTypePack> packs = loadCandidatePacks(db, packDir, platform, mandateId);
         String industryTag = industry == null || "auto".equalsIgnoreCase(industry)
                 ? null
                 : industry;
-        DocLlmClient client = DocLlmEnvironment.clientOrNull(db, mandateId);
+        DocLlmClient client = DocLlmEnvironment.clientOrNull(
+                db, mandateId, platform, pageEstimate(db, documentVersionId));
         List<DocLlmClient.Usage> usage = new ArrayList<>();
         ClassifyTieBreak tieBreak = client == null
                 ? ClassifyTieBreak.offline()
@@ -109,7 +111,7 @@ public final class DocClassifyRunner {
                         recordUsage(connection, version, mandateId, industryTag, usage);
                         connection.commit();
                         if (autoInduce) {
-                            keepInduced(mandateId, db, industryTag);
+                            keepInduced(mandateId, db, industryTag, platform);
                         }
                         ClassifyResult held = separated.get();
                         return new Result(
@@ -130,7 +132,7 @@ public final class DocClassifyRunner {
                     connection.commit();
                     connection.setAutoCommit(true);
                     DocInduceRunner.Result kept = publishedFor(
-                            induceUnknown(mandateId, db, industry), documentVersionId);
+                            induceUnknown(mandateId, db, industry, platform), documentVersionId);
                     connection.setAutoCommit(false);
                     if (kept != null) {
                         String packVersion = kept.packVersion() == null
@@ -182,9 +184,10 @@ public final class DocClassifyRunner {
      * A work that fit no known type was stored unknown. Induce it on the existing
      * path and keep the published type. The file's known works are left as they are.
      */
-    private static void keepInduced(long mandateId, Path db, String industryTag) throws Exception {
+    private static void keepInduced(long mandateId, Path db, String industryTag, Path platform)
+            throws Exception {
         List<DocInduceRunner.Result> induced = induceUnknown(mandateId, db,
-                industryTag == null || industryTag.isBlank() ? "auto" : industryTag);
+                industryTag == null || industryTag.isBlank() ? "auto" : industryTag, platform);
         if (induced == null || induced.stream().noneMatch(DocClassifyRunner::published)) {
             return;
         }
@@ -248,12 +251,12 @@ public final class DocClassifyRunner {
 
     /** Induces every still-unknown document in the mandate and publishes the packs. */
     private static List<DocInduceRunner.Result> induceUnknown(long mandateId, Path db,
-            String industry) throws Exception {
+            String industry, Path platform) throws Exception {
         String tag = industry == null || industry.isBlank() || "auto".equalsIgnoreCase(industry)
                 ? "general"
                 : industry;
         try {
-            return DocInduceRunner.run(mandateId, db, tag, null, null, null, false);
+            return DocInduceRunner.run(mandateId, db, tag, null, null, null, false, platform);
         } catch (IllegalArgumentException e) {
             if (e.getMessage() == null || !e.getMessage().contains("no matching documents")) {
                 throw e;
@@ -367,9 +370,9 @@ public final class DocClassifyRunner {
     /**
      * Seed packs, any {@code --pack-dir} packs, plus every pack published under
      * {@code {db-parent}/packs} so a pack induced after the last classify is visible.
-     * Later layers win on a duplicate code (induced over seed). Public so on-demand
-     * harnesses (the live benchmark) reuse production candidate assembly instead of
-     * re-implementing it.
+     * The highest version of a code wins, so an older local file does not hide a
+     * newer seed. Public so on-demand harnesses (the live benchmark) reuse
+     * production candidate assembly instead of re-implementing it.
      */
     public static List<DocTypePack> loadCandidatePacks(Path db, Path packDir) throws Exception {
         return loadCandidatePacks(db, packDir, null);
@@ -381,14 +384,23 @@ public final class DocClassifyRunner {
      */
     public static List<DocTypePack> loadCandidatePacks(Path db, Path packDir, Path platform)
             throws Exception {
-        com.resurgent.tev.doc.platform.PublishedCopy.copyPacks(db, platform);
+        return loadCandidatePacks(db, packDir, platform, 0L);
+    }
+
+    /**
+     * Same as {@link #loadCandidatePacks(Path, Path, Path)} for one mandate, so a
+     * published pack is copied only for that mandate's industries.
+     */
+    public static List<DocTypePack> loadCandidatePacks(Path db, Path packDir, Path platform,
+            long mandateId) throws Exception {
+        com.resurgent.tev.doc.platform.PublishedCopy.copyPacks(db, platform, mandateId);
         Map<String, DocTypePack> byCode = new LinkedHashMap<>();
         for (DocTypePack pack : PackLoader.loadSeedPacks()) {
-            byCode.put(pack.code(), pack);
+            PackStore.keepHighest(byCode, pack);
         }
         if (packDir != null) {
             for (DocTypePack pack : PackLoader.loadDirectory(packDir)) {
-                byCode.put(pack.code(), pack);
+                PackStore.keepHighest(byCode, pack);
             }
         }
         Path packsRoot = db.toAbsolutePath().getParent() == null
@@ -396,7 +408,7 @@ public final class DocClassifyRunner {
                 : db.toAbsolutePath().getParent().resolve("packs");
         try {
             for (DocTypePack pack : new PackStore(packsRoot).loadAll()) {
-                byCode.put(pack.code(), pack);
+                PackStore.keepHighest(byCode, pack);
             }
         } catch (RuntimeException e) {
             // A broken induced-pack registry must not block classification.
@@ -404,6 +416,22 @@ public final class DocClassifyRunner {
                     + e.getMessage());
         }
         return List.copyOf(byCode.values());
+    }
+
+    /** Page price when the version's page count is known; otherwise no estimate. */
+    private static double pageEstimate(Path db, long documentVersionId) {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
+            var version = new DocumentRepository(workspace.connection())
+                    .findVersion(documentVersionId);
+            if (version.isEmpty() || version.get().pageCount() == null
+                    || version.get().pageCount() <= 0) {
+                return 0;
+            }
+            return com.resurgent.tev.doc.platform.SpendCeiling.estimateUsd(
+                    version.get().pageCount(), null);
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     /**

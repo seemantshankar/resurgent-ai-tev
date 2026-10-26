@@ -26,12 +26,15 @@ import com.resurgent.tev.doc.layout.ocr.LocalOcrClient.OcrWord;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.parser.db.WorkspaceDatabase;
+import java.io.InputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
@@ -174,6 +177,48 @@ class PlatformPolicyTest {
     }
 
     @Test
+    void anUnsetMandateCeilingInheritsThePlatformDefaultForSearchEmbeddingsAndTheDocumentModel()
+            throws Exception {
+        Scan scan = agreement();
+        Path registry = tempDir.resolve("cloud-ceiling.db");
+        policy(scan.db, registry, "--platform-ceiling", "0");
+        String classified = run("classify",
+                "--mandate", Long.toString(MANDATE),
+                "--version", Long.toString(scan.versionId),
+                "--db", scan.db.toString(),
+                "--no-auto-induce");
+        assertThat(classified).contains("agreement.ppa");
+
+        CommandResult reclassified = commandWithCloudEndpoints("classify",
+                "--mandate", Long.toString(MANDATE),
+                "--version", Long.toString(scan.versionId),
+                "--db", scan.db.toString(),
+                "--platform", registry.toString(),
+                "--force",
+                "--no-auto-induce");
+        assertThat(reclassified.exit()).as(reclassified.err()).isZero();
+        assertThat(reclassified.out()).doesNotContain("LLM tie-break available");
+
+        CommandResult induced = commandWithCloudEndpoints("induce",
+                "--industry", "solar_power",
+                "--doc-type", "agreement.ppa",
+                "--platform", registry.toString(),
+                "--mandate", Long.toString(MANDATE),
+                "--db", scan.db.toString());
+        assertThat(induced.exit()).as(induced.err()).isZero();
+        assertThat(induced.out()).doesNotContain("mining failed");
+        assertThat(induced.err()).doesNotContain("LLM request failed");
+
+        CommandResult assessed = commandWithCloudEndpoints("assess",
+                "--mandate", Long.toString(MANDATE),
+                "--db", scan.db.toString(),
+                "--platform", registry.toString());
+        assertThat(assessed.exit()).as(assessed.err()).isZero();
+        assertThat(assessed.out()).contains("assess_checklist");
+        assertThat(assessed.err()).doesNotContain("embeddings request failed");
+    }
+
+    @Test
     void aFactAlreadyReadStaysWhenALaterCallIsSkipped() throws Exception {
         Scan scan = scan();
         DocTypePack pack = PackLoader.loadClasspath("docpacks/quotation.vendor.yaml");
@@ -242,6 +287,77 @@ class PlatformPolicyTest {
         }
         assertThat(cli.execute(args.toArray(String[]::new))).as(err.toString()).isZero();
         return cloud;
+    }
+
+    private static String run(String... args) {
+        StringWriter out = new StringWriter();
+        StringWriter err = new StringWriter();
+        CommandLine cli = TevDocMain.commandLine();
+        cli.setOut(new PrintWriter(out, true));
+        cli.setErr(new PrintWriter(err, true));
+        assertThat(cli.execute(args)).as(err.toString()).isZero();
+        return out.toString();
+    }
+
+    /**
+     * Runs one document command in a fresh process whose cloud endpoints are set.
+     * The in-process suite has no key, so it cannot show that a platform ceiling
+     * of zero skips those calls.
+     */
+    private static CommandResult commandWithCloudEndpoints(String... args) throws Exception {
+        List<String> command = new ArrayList<>();
+        command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
+        command.add("-Djava.awt.headless=true");
+        command.add("-cp");
+        command.add(System.getProperty("java.class.path"));
+        command.add(TevDocMain.class.getName());
+        command.addAll(List.of(args));
+        ProcessBuilder builder = new ProcessBuilder(command);
+        builder.environment().put("OPENROUTER_API_KEY", "test-key");
+        builder.environment().put("DOC_LLM_MODEL", "test-model");
+        builder.environment().put("DOC_LLM_BASE_URL", "http://127.0.0.1:9");
+        builder.environment().put("DOC_LLM_TIMEOUT_MS", "200");
+        builder.environment().put("DOC_EMBEDDING_BASE_URL", "http://127.0.0.1:9");
+        builder.environment().put("TEV_WEB_SEARCH_URL", "http://127.0.0.1:9");
+        Process process = builder.start();
+        StringWriter out = new StringWriter();
+        StringWriter err = new StringWriter();
+        Thread stdout = Thread.startVirtualThread(() -> copy(process.getInputStream(), out));
+        Thread stderr = Thread.startVirtualThread(() -> copy(process.getErrorStream(), err));
+        assertThat(process.waitFor(2, TimeUnit.MINUTES)).isTrue();
+        stdout.join();
+        stderr.join();
+        return new CommandResult(process.exitValue(), out.toString(), err.toString());
+    }
+
+    private static void copy(InputStream input, StringWriter into) {
+        try {
+            into.write(new String(input.readAllBytes(), StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            into.write(e.toString());
+        }
+    }
+
+    private Scan agreement() throws Exception {
+        Path pdf = tempDir.resolve("agreement-" + System.nanoTime() + ".pdf");
+        try (org.apache.pdfbox.pdmodel.PDDocument doc = new org.apache.pdfbox.pdmodel.PDDocument()) {
+            doc.addPage(new PDPage(PDRectangle.LETTER));
+            doc.save(pdf.toFile());
+        }
+        Path db = tempDir.resolve("ws-" + System.nanoTime() + ".db");
+        BlobStore blobs = BlobStore.besideDatabase(db);
+        long versionId = new DocumentIngestService().ingest(
+                new DocumentIngestService.IngestRequest(
+                        pdf, MANDATE, "Power Purchase Agreement", "v1", "agreement", "agreement"),
+                db, blobs).documentVersionId();
+        new DocumentLayoutService((image, widthPx, heightPx) -> {
+            List<OcrWord> words = new ArrayList<>();
+            words.addAll(line("Power Purchase Agreement", 40, 0.95));
+            words.addAll(line("12. TERMINATION", 80, 0.95));
+            words.addAll(line("The seller may terminate.", 120, 0.95));
+            return new OcrPage(words);
+        }).layout(versionId, db, blobs);
+        return new Scan(db, versionId);
     }
 
     private Scan scan() throws Exception {
@@ -315,6 +431,8 @@ class PlatformPolicyTest {
     }
 
     private record Scan(Path db, long versionId) {}
+
+    private record CommandResult(int exit, String out, String err) {}
 
     private static final class RecordingParseClient implements PageParseClient {
         private final List<List<Integer>> asked = new ArrayList<>();

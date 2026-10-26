@@ -91,11 +91,22 @@ public final class DocLlmEnvironment {
      * or no key is configured. Callers then stay on their offline path.
      */
     public static DocLlmClient clientOrNull(java.nio.file.Path db, long mandateId) {
+        return clientOrNull(db, mandateId, null, 0);
+    }
+
+    /**
+     * Live client, or null when residency or the spend ceiling forbids a cloud
+     * call. {@code platform} is the registry the command was given, so an unset
+     * mandate ceiling inherits the platform default. {@code estimatedUsd} is
+     * zero when this call has no page price.
+     */
+    public static DocLlmClient clientOrNull(java.nio.file.Path db, long mandateId,
+            java.nio.file.Path platform, double estimatedUsd) {
         try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db)) {
             String row = new MandatePolicyRepository(workspace.connection()).dataResidency(mandateId);
             if (DataResidency.locked(row)
                     || com.resurgent.tev.doc.platform.SpendCeiling.blocks(
-                            workspace.connection(), mandateId, null, 0)) {
+                            workspace.connection(), mandateId, platform, estimatedUsd)) {
                 return null;
             }
         } catch (Exception e) {

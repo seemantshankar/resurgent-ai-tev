@@ -77,6 +77,7 @@ public final class DocExtractRunner {
     public static Result run(long mandateId, long documentVersionId, Path db, BlobStore blobs,
             String packCode, String extractorId, String pages, String tier, boolean noParse,
             boolean autoInduce, Path platform) throws Exception {
+        com.resurgent.tev.doc.platform.PlatformRegistry.recordIfNamed(platform, db, mandateId);
         if (autoInduce && (packCode == null || packCode.isBlank())) {
             String classified = classifiedPackCode(db, documentVersionId);
             if (classified == null || classified.isBlank() || "unknown".equalsIgnoreCase(classified)) {
@@ -85,7 +86,7 @@ public final class DocExtractRunner {
                         platform);
             }
         }
-        DocTypePack pack = resolvePack(db, documentVersionId, packCode, platform);
+        DocTypePack pack = resolvePack(db, documentVersionId, packCode, platform, mandateId);
         ExtractClient client = resolveClient(extractorId,
                 com.resurgent.tev.doc.platform.SpendCeiling.forbidsCloud(db, mandateId));
         PageSelection pageSelection = PageSelection.parseOptional(pages);
@@ -146,7 +147,7 @@ public final class DocExtractRunner {
                 pageIndices);
         if (autoInduce && !"failed".equals(outcome.status())) {
             com.resurgent.tev.doc.bind.DocBindRunner.run(
-                    mandateId, outcome.parseRunId(), db, pack.code());
+                    mandateId, outcome.parseRunId(), db, pack.code(), platform);
         }
         int ambiguous = outcome.fieldsAmbiguous();
         return new Result(
@@ -176,8 +177,8 @@ public final class DocExtractRunner {
     }
 
     private static DocTypePack resolvePack(Path db, long documentVersionId, String packCode,
-            Path platform) throws Exception {
-        List<DocTypePack> packs = loadAllPacks(db, platform);
+            Path platform, long mandateId) throws Exception {
+        List<DocTypePack> packs = loadAllPacks(db, platform, mandateId);
         String code = packCode == null ? null : packCode.trim();
         if (code == null || code.isBlank()) {
             code = classifiedPackCode(db, documentVersionId);
@@ -195,24 +196,10 @@ public final class DocExtractRunner {
                 + packs.stream().map(DocTypePack::code).sorted().toList() + ")");
     }
 
-    private static List<DocTypePack> loadAllPacks(Path db, Path platform) throws Exception {
-        com.resurgent.tev.doc.platform.PublishedCopy.copyPacks(db, platform);
-        Map<String, DocTypePack> byCode = new LinkedHashMap<>();
-        for (DocTypePack pack : PackLoader.loadSeedPacks()) {
-            byCode.put(pack.code(), pack);
-        }
-        Path root = db.toAbsolutePath().getParent() == null
-                ? Path.of("packs")
-                : db.toAbsolutePath().getParent().resolve("packs");
-        try {
-            for (DocTypePack pack : new com.resurgent.tev.doc.induce.PackStore(root).loadAll()) {
-                byCode.put(pack.code(), pack);
-            }
-        } catch (RuntimeException e) {
-            System.err.println("[doc-extract] ignoring pack store " + root + ": "
-                    + e.getMessage());
-        }
-        return List.copyOf(byCode.values());
+    private static List<DocTypePack> loadAllPacks(Path db, Path platform, long mandateId)
+            throws Exception {
+        return com.resurgent.tev.doc.classify.DocClassifyRunner.loadCandidatePacks(
+                db, null, platform, mandateId);
     }
 
     private static String classifiedPackCode(Path db, long documentVersionId) throws Exception {

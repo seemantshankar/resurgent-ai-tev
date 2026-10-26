@@ -23,7 +23,7 @@ public final class DocAssessCommand implements Callable<Integer> {
     Path db;
 
     @Option(names = "--platform",
-            description = "Platform registry. Used only when this file already exists.")
+            description = "Platform registry. Created when this path is new.")
     Path platform;
 
     @Spec
@@ -36,7 +36,7 @@ public final class DocAssessCommand implements Callable<Integer> {
         var err = spec.commandLine().getErr();
         try {
             var result = com.resurgent.tev.doc.assess.DocAssessRunner.run(mandateId, db,
-                    DocLlmEnvironment.clientOrNull(db, mandateId), platform);
+                    DocLlmEnvironment.clientOrNull(db, mandateId, platform, 0), platform);
             for (String line : result.summaryLines()) {
                 out.println(line);
             }

@@ -57,12 +57,17 @@ public final class DocAssessRunner {
      */
     public static Result run(long mandateId, Path db, DocLlmClient client, Path platform)
             throws Exception {
-        com.resurgent.tev.doc.platform.PublishedCopy.copyInto(db, platform);
+        com.resurgent.tev.doc.platform.PlatformRegistry.recordIfNamed(platform, db, mandateId);
+        com.resurgent.tev.doc.platform.PublishedCopy.copyInto(db, platform, mandateId);
         List<AssessStage.StageResult> stages = new ArrayList<>();
-        for (AssessStage stage : STAGES) {
-            stages.add(stage.run(mandateId, db, client));
+        try {
+            for (AssessStage stage : STAGES) {
+                stages.add(stage.run(mandateId, db, client, platform));
+            }
+            return new Result(mandateId, List.copyOf(stages));
+        } finally {
+            com.resurgent.tev.doc.platform.PlatformRegistry.recordIfNamed(platform, db, mandateId);
         }
-        return new Result(mandateId, List.copyOf(stages));
     }
 
     /**

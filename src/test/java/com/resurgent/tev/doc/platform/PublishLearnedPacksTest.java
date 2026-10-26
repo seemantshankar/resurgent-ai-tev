@@ -10,6 +10,7 @@ import com.resurgent.tev.doc.induce.PackStore;
 import com.resurgent.tev.doc.ingest.BlobStore;
 import com.resurgent.tev.doc.ingest.DocumentIngestService;
 import com.resurgent.tev.doc.layout.DocumentLayoutService;
+import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.doc.residency.DataResidency;
 import com.resurgent.tev.parser.db.Timestamps;
@@ -432,6 +433,175 @@ class PublishLearnedPacksTest {
     }
 
     @Test
+    void aCommandPointedAtANewRegistryRecordsTheMandate() throws Exception {
+        Workspace workspace = workspace("record");
+        long version = ingest(workspace, "ppa.pdf", AGREEMENT);
+        rememberIndustry(workspace.db(), "solar_power");
+        Path absent = tempDir.resolve("classify-without-platform.db");
+
+        CommandResult plain = classify(workspace, version, null);
+        assertThat(plain.exit()).as(plain.err()).isZero();
+        assertThat(Files.exists(absent)).isFalse();
+
+        Path classifiedRegistry = tempDir.resolve("from-classify.db");
+        CommandResult classified = classify(workspace, version, classifiedRegistry);
+        assertThat(classified.exit()).as(classified.err()).isZero();
+        assertThat(Files.isRegularFile(classifiedRegistry)).isTrue();
+        forgetIndustry(workspace.db());
+        assertThat(policy(workspace, classifiedRegistry).out())
+                .contains("mandate 1 path " + workspace.db().toAbsolutePath().normalize()
+                        + " industry solar_power status open");
+
+        Path extractedRegistry = tempDir.resolve("from-extract.db");
+        rememberIndustry(workspace.db(), "solar_power");
+        CommandResult extracted = command("extract",
+                "--mandate", Long.toString(MANDATE),
+                "--version", Long.toString(version),
+                "--db", workspace.db().toString(),
+                "--pack", "agreement.ppa",
+                "--extractor", "fixture",
+                "--no-parse",
+                "--no-auto-induce",
+                "--platform", extractedRegistry.toString());
+        assertThat(extracted.exit()).as(extracted.err()).isZero();
+        assertThat(Files.isRegularFile(extractedRegistry)).isTrue();
+        forgetIndustry(workspace.db());
+        assertThat(policy(workspace, extractedRegistry).out())
+                .contains("mandate 1 path " + workspace.db().toAbsolutePath().normalize()
+                        + " industry solar_power status open");
+
+        Workspace detected = workspace("detected");
+        ingest(detected, "solar.pdf", List.of(
+                "Solar capacity note",
+                "Capacity: 10 MW",
+                "Registered office: Jaipur, India"));
+        Path assessedRegistry = tempDir.resolve("from-assess.db");
+        CommandResult assessed = command("assess",
+                "--mandate", Long.toString(MANDATE),
+                "--db", detected.db().toString(),
+                "--platform", assessedRegistry.toString());
+        assertThat(assessed.exit()).as(assessed.err()).isZero();
+        assertThat(Files.isRegularFile(assessedRegistry)).isTrue();
+        forgetIndustry(detected.db());
+        assertThat(policy(detected, assessedRegistry).out())
+                .contains("mandate 1 path " + detected.db().toAbsolutePath().normalize())
+                .contains("industry solar power")
+                .contains("status open");
+    }
+
+    @Test
+    void aFailedInductionStillRecordsTheMandateWhenNothingIsPublished() throws Exception {
+        Workspace first = workspace("fail-a");
+        Workspace second = workspace("fail-b");
+        ingest(first, "ppa-a.pdf", AGREEMENT);
+        ingest(second, "ppa-b.pdf", AGREEMENT);
+        CommandResult induced = command("induce", "--industry", "solar_power",
+                "--mandate", Long.toString(MANDATE), "--db", first.db().toString(),
+                "--mandate", Long.toString(MANDATE), "--db", second.db().toString());
+        assertThat(induced.exit()).as(induced.err()).isZero();
+        ingest(first, "menu-a.pdf", List.of("Cafeteria Menu", "Tuesday special is lentil soup"));
+        ingest(second, "menu-b.pdf", List.of("Cafeteria Menu", "Tuesday special is lentil soup"));
+        rememberIndustry(first.db(), "solar_power");
+        rememberIndustry(second.db(), "solar_power");
+        Path registry = tempDir.resolve("failed-induce.db");
+
+        CommandResult failed = command("induce", "--industry", "solar_power",
+                "--platform", registry.toString(),
+                "--mandate", Long.toString(MANDATE), "--db", first.db().toString(),
+                "--mandate", Long.toString(MANDATE), "--db", second.db().toString());
+        assertThat(failed.exit()).as(failed.err()).isZero();
+        assertThat(failed.out()).doesNotContain("published pack");
+        assertThat(failed.out()).doesNotContain("registered pack");
+        assertThat(Files.isRegularFile(registry)).isTrue();
+        forgetIndustry(first.db());
+        forgetIndustry(second.db());
+        assertThat(policy(first, registry).out())
+                .contains("mandate 1 path " + first.db().toAbsolutePath().normalize()
+                        + " industry solar_power status open");
+        assertThat(policy(second, registry).out())
+                .contains("mandate 1 path " + second.db().toAbsolutePath().normalize()
+                        + " industry solar_power status open");
+    }
+
+    @Test
+    void aLaterMandateLoadsItsOwnIndustryPackNotAHigherPackFromAnotherIndustry() throws Exception {
+        Workspace solarA = workspace("solar-a");
+        Workspace solarB = workspace("solar-b");
+        ingest(solarA, "ppa-a.pdf", AGREEMENT);
+        ingest(solarB, "ppa-b.pdf", AGREEMENT);
+        Path registry = tempDir.resolve("platform.db");
+        String[] solar = {"induce", "--industry", "solar_power", "--doc-type", "agreement.ppa",
+                "--platform", registry.toString(),
+                "--mandate", Long.toString(MANDATE), "--db", solarA.db().toString(),
+                "--mandate", Long.toString(MANDATE), "--db", solarB.db().toString()};
+        assertThat(command(solar).exit()).isZero();
+        CommandResult solarPass = command(solar);
+        assertThat(solarPass.exit()).as(solarPass.err()).isZero();
+        String solarPack = publishedPacks(solarPass.out()).get(0);
+
+        Workspace hotelA = workspace("hotel-a");
+        Workspace hotelB = workspace("hotel-b");
+        ingest(hotelA, "ppa-c.pdf", AGREEMENT);
+        ingest(hotelB, "ppa-d.pdf", AGREEMENT);
+        String[] hotels = {"induce", "--industry", "hotels", "--doc-type", "agreement.ppa",
+                "--platform", registry.toString(),
+                "--mandate", Long.toString(MANDATE), "--db", hotelA.db().toString(),
+                "--mandate", Long.toString(MANDATE), "--db", hotelB.db().toString()};
+        assertThat(command(hotels).exit()).isZero();
+        assertThat(command(hotels).exit()).isZero();
+        CommandResult hotelPass = command(hotels);
+        assertThat(hotelPass.exit()).as(hotelPass.err()).isZero();
+        String hotelPack = publishedPacks(hotelPass.out()).get(0);
+        assertThat(codeOf(hotelPack)).isEqualTo(codeOf(solarPack));
+        assertThat(PackStore.compareVersions(versionOf(hotelPack), versionOf(solarPack))).isPositive();
+
+        Workspace later = workspace("later-solar");
+        long version = ingest(later, "ppa-later.pdf", AGREEMENT);
+        rememberIndustry(later.db(), "solar_power");
+        CommandResult classified = classify(later, version, registry);
+        assertThat(classified.exit()).as(classified.err()).isZero();
+        assertThat(classified.out()).contains("pack " + solarPack);
+        assertThat(classified.out()).doesNotContain("pack " + hotelPack);
+        assertThat(Files.isRegularFile(packFile(later, "solar_power", solarPack))).isTrue();
+        assertThat(Files.exists(packFile(later, "hotels", hotelPack))).isFalse();
+    }
+
+    @Test
+    void anOlderLocalPackDoesNotHideANewerSeed() throws Exception {
+        Workspace workspace = workspace("older-local");
+        DocTypePack seed = PackLoader.loadClasspath("docpacks/quotation.vendor.yaml");
+        new PackStore(workspace.db().getParent().resolve("packs")).installCopy(
+                new PackStore.PublishRequest(seed, "general", null, List.of(), "older-local"),
+                "0.9.0");
+        Path older = workspace.db().getParent().resolve("packs").resolve("general")
+                .resolve("quotation.vendor@0.9.0.yaml");
+        assertThat(older).exists();
+        String olderHash = sha256(older);
+        long version = ingestQuotation(workspace);
+
+        CommandResult classified = classify(workspace, version, null);
+        assertThat(classified.exit()).as(classified.err()).isZero();
+        assertThat(classified.out()).contains("pack quotation.vendor@1.0.0");
+        assertThat(classified.out()).doesNotContain("pack quotation.vendor@0.9.0");
+        CommandResult extracted = command("extract",
+                "--mandate", Long.toString(MANDATE),
+                "--version", Long.toString(version),
+                "--db", workspace.db().toString(),
+                "--pack", "quotation.vendor",
+                "--extractor", "fixture",
+                "--no-parse",
+                "--no-auto-induce");
+        assertThat(extracted.exit()).as(extracted.err()).isZero();
+        assertThat(extracted.out()).contains("Extracted with pack quotation.vendor@1.0.0");
+        assertThat(extracted.out()).doesNotContain("quotation.vendor@0.9.0");
+        CommandResult assessed = command("assess",
+                "--mandate", Long.toString(MANDATE),
+                "--db", workspace.db().toString());
+        assertThat(assessed.exit()).as(assessed.err()).isZero();
+        assertThat(sha256(older)).isEqualTo(olderHash);
+    }
+
+    @Test
     void softLeavesAliasesAndOpenClauseTypesStayInTheMandateWorkspace() throws Exception {
         Workspace first = workspace("mandate-a");
         Workspace second = workspace("mandate-b");
@@ -471,6 +641,51 @@ class PublishLearnedPacksTest {
                     .isEmpty();
             assertThat(openClauseCount(db.connection(), "private_open_clause")).isZero();
         }
+    }
+
+    private static void rememberIndustry(Path db, String key) throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db);
+                PreparedStatement ps = workspace.connection().prepareStatement(
+                        "INSERT INTO mandate_industry_record"
+                                + " (mandate_id, industry, industry_key, is_new_industry, reason, created_at)"
+                                + " VALUES (?, ?, ?, 0, ?, ?)")) {
+            ps.setLong(1, MANDATE);
+            ps.setString(2, key);
+            ps.setString(3, key);
+            ps.setString(4, "already detected");
+            ps.setString(5, "2026-10-26T00:00:00Z");
+            ps.executeUpdate();
+        }
+    }
+
+    private static void forgetIndustry(Path db) throws Exception {
+        try (WorkspaceDatabase workspace = WorkspaceDatabase.open(db);
+                PreparedStatement ps = workspace.connection().prepareStatement(
+                        "DELETE FROM mandate_industry_record WHERE mandate_id = ?")) {
+            ps.setLong(1, MANDATE);
+            ps.executeUpdate();
+        }
+    }
+
+    private CommandResult policy(Workspace workspace, Path registry) {
+        return command("policy",
+                "--mandate", Long.toString(MANDATE),
+                "--db", workspace.db().toString(),
+                "--platform", registry.toString());
+    }
+
+    private long ingestQuotation(Workspace workspace) throws Exception {
+        Path pdf = workspace.db().getParent().resolve("quotation.pdf");
+        writePdf(pdf, List.of(
+                "Quotation for the supply of project equipment",
+                "Grand Total Rs 1000"));
+        DocumentIngestService.IngestResult ingested = new DocumentIngestService().ingest(
+                new DocumentIngestService.IngestRequest(
+                        pdf, MANDATE, "Vendor quotation", "v1", "quotation", "quotation"),
+                workspace.db(), workspace.blobs());
+        new DocumentLayoutService().layout(
+                ingested.documentVersionId(), workspace.db(), workspace.blobs());
+        return ingested.documentVersionId();
     }
 
     private CommandResult classify(Workspace workspace, long version, Path platform) {
