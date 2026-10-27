@@ -81,6 +81,51 @@ class SchedulePackSchemaTest {
     }
 
     @Test
+    void omittedColumnValueKindIsInferredFromJsonTypeAndMoneyCues() throws Exception {
+        String yaml = """
+                code: demo.inferred
+                version: 1.0.0
+                family: legal
+                file_role: land_document
+                fields:
+                  - key: grantor
+                    path: identity > Legal Name
+                    path_root: identity
+                    value_kind: text
+                    required: true
+                tables:
+                  - name: parcels
+                    path: technical > Site > Parcel
+                    path_root: technical
+                    key_column: survey_no
+                    fields:
+                      - key: survey_no
+                        value_kind: text
+                      - key: area
+                        type: number
+                      - key: consideration
+                        type: number
+                        currency: true
+                      - key: titled
+                        type: boolean
+                      - key: note
+                        type: string
+                """;
+        DocTypePack pack = PackLoader.load(
+                new ByteArrayInputStream(yaml.getBytes(StandardCharsets.UTF_8)),
+                "inferred-pack");
+        JsonNode cols = pack.toExtractSchema().path("properties")
+                .path("parcels").path("items").path("properties");
+        assertThat(cols.path("area").path("type").asText()).isEqualTo("number");
+        assertThat(cols.path("area").path("value_kind").asText()).isEqualTo("quantity");
+        assertThat(cols.path("consideration").path("value_kind").asText()).isEqualTo("money");
+        assertThat(cols.path("consideration").path("type").asText()).isEqualTo("number");
+        assertThat(cols.path("titled").path("value_kind").asText()).isEqualTo("boolean");
+        assertThat(cols.path("note").path("value_kind").asText()).isEqualTo("text");
+        assertThat(cols.path("survey_no").path("value_kind").asText()).isEqualTo("text");
+    }
+
+    @Test
     void keyColumnThatNamesNoColumnFailsAtLoad() {
         String yaml = SCHEDULE_PACK.replace("key_column: survey_no", "key_column: khasra");
         assertThatThrownBy(() -> PackLoader.load(

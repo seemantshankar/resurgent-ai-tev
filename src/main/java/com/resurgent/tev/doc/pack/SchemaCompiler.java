@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.resurgent.tev.doc.extract.SchemaLeafKinds;
 import com.resurgent.tev.doc.extract.ValueKind;
 import java.util.HashSet;
 import java.util.List;
@@ -158,16 +159,7 @@ public final class SchemaCompiler {
                 if (raw instanceof Map<?, ?> f) {
                     String key = String.valueOf(f.get("key"));
                     ObjectNode col = itemProps.putObject(key);
-                    Object kind = f.get("value_kind");
-                    if (kind != null) {
-                        try {
-                            putValueKind(col, ValueKind.fromWire(String.valueOf(kind)));
-                        } catch (IllegalArgumentException ignored) {
-                            col.put("type", "string");
-                        }
-                    } else {
-                        col.put("type", "string");
-                    }
+                    putColumnKind(col, f);
                     if (f.get("prompt_hint") != null) {
                         col.put("description", String.valueOf(f.get("prompt_hint")));
                     }
@@ -185,6 +177,39 @@ public final class SchemaCompiler {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Explicit pack {@code value_kind} wins; otherwise JSON {@code type} and
+     * money-slot flags fill the compiled leaf so extract mapping sees one policy.
+     */
+    private static void putColumnKind(ObjectNode col, Map<?, ?> field) {
+        Object kind = field.get("value_kind");
+        if (kind != null) {
+            try {
+                putValueKind(col, ValueKind.fromWire(String.valueOf(kind)));
+                return;
+            } catch (IllegalArgumentException ignored) {
+                // fall through to type inference
+            }
+        }
+        if (field.get("type") != null) {
+            col.put("type", String.valueOf(field.get("type")));
+        }
+        if (field.get("format") != null) {
+            col.put("format", String.valueOf(field.get("format")));
+        }
+        putFlag(col, field, "currency");
+        putFlag(col, field, "scale");
+        putFlag(col, field, "money");
+        putValueKind(col, SchemaLeafKinds.of(col));
+    }
+
+    private static void putFlag(ObjectNode col, Map<?, ?> field, String name) {
+        Object value = field.get(name);
+        if (value instanceof Boolean flag && flag) {
+            col.put(name, true);
         }
     }
 

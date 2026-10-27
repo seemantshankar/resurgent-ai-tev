@@ -128,17 +128,7 @@ public final class ScheduleCells {
     }
 
     private static ValueKind kindOf(JsonNode props, String key) {
-        if (props != null && props.has(key)) {
-            String kind = props.path(key).path("value_kind").asText(null);
-            if (kind != null) {
-                try {
-                    return ValueKind.fromWire(kind);
-                } catch (IllegalArgumentException ignored) {
-                    return ValueKind.TEXT;
-                }
-            }
-        }
-        return ValueKind.TEXT;
+        return SchemaLeafKinds.of(props, key);
     }
 
     private static String textOf(JsonNode row, String column) {

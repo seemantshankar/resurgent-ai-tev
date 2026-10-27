@@ -159,6 +159,73 @@ class ScheduleLineExtractTest {
     }
 
     @Test
+    void omittedColumnKindsPersistAsInferredValueKindsWithNormalizedSlots() throws Exception {
+        DocTypePack inferred = PackLoader.load(
+                new ByteArrayInputStream("""
+                        code: demo.inferred
+                        version: 1.0.0
+                        family: legal
+                        file_role: land_document
+                        fields:
+                          - key: grantor
+                            path: identity > Legal Name
+                            path_root: identity
+                            value_kind: text
+                            required: false
+                        tables:
+                          - name: parcels
+                            path: technical > Site > Parcel
+                            path_root: technical
+                            key_column: survey_no
+                            fields:
+                              - key: survey_no
+                                value_kind: text
+                              - key: area
+                                type: number
+                              - key: consideration
+                                type: number
+                                currency: true
+                              - key: active
+                                type: boolean
+                        """.getBytes(StandardCharsets.UTF_8)),
+                "inferred-pack");
+        FixtureExtractClient client = new FixtureExtractClient();
+        client.putFixture("demo.inferred", MAPPER.readTree("""
+                {
+                  "doc_type_code": "demo.inferred",
+                  "tables": {
+                    "parcels": [
+                      {"survey_no": "12/1",
+                       "area": {"value": "4.5 acre", "quote": "12/1 area 4.5 acre", "page": 2},
+                       "consideration": {"value": "Rs 10 lakh", "quote": "12/1 price 10 lakh", "page": 2},
+                       "active": {"value": "true", "quote": "active", "page": 2}}
+                    ]
+                  }
+                }
+                """));
+
+        ExtractService.ExtractOutcome outcome = new ExtractService().extract(
+                dbPath, documentVersionId, MANDATE, inferred, client, "test");
+        assertThat(outcome.status()).isEqualTo("success");
+
+        List<FactRow> facts = facts();
+        FactRow area = cell(facts, "parcels.area", "12/1");
+        assertThat(area.valueKind()).isEqualTo("quantity");
+        assertThat(area.valueNumber()).isEqualTo(4.5);
+        assertThat(area.unit()).isEqualTo("acre");
+        assertThat(area.scale()).isEqualTo("unit");
+
+        FactRow price = cell(facts, "parcels.consideration", "12/1");
+        assertThat(price.valueKind()).isEqualTo("money");
+        assertThat(price.currency()).isEqualTo("INR");
+        assertThat(price.scale()).isEqualTo("lakh");
+
+        FactRow active = cell(facts, "parcels.active", "12/1");
+        assertThat(active.valueKind()).isEqualTo("boolean");
+        assertThat(active.valueText()).isEqualTo("true");
+    }
+
+    @Test
     void eachRowKeepsItsOwnEntityAndSite() throws Exception {
         FixtureExtractClient client = new FixtureExtractClient();
         client.putFixture("demo.schedule", MAPPER.readTree("""
