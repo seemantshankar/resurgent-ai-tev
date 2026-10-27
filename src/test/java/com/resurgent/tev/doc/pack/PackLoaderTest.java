@@ -201,4 +201,87 @@ class PackLoaderTest {
                 .hasMessageContaining("value_kind")
                 .hasMessageContaining("crypto");
     }
+
+    @Test
+    void missingFieldValueKindFailsWithFieldKey() {
+        String yaml = """
+                code: demo.sample
+                version: 1.0.0
+                family: certificate
+                file_role: certificate
+                identity_signals:
+                  any_of: ["Net Worth"]
+                fields:
+                  - key: net_worth
+                    path: economic > Promoter Net Worth > Net Worth
+                    path_root: economic
+                    required: true
+                """;
+        assertThatThrownBy(() -> loadYaml(yaml))
+                .isInstanceOf(PackLoader.PackValidationException.class)
+                .hasMessageContaining("net_worth")
+                .hasMessageContaining("value_kind");
+    }
+
+    @Test
+    void tableColumnMissingValueKindFailsWithTableColumn() {
+        String yaml = MINIMAL_VALID + """
+                tables:
+                  - name: line_items
+                    path: economic > Project Cost > Line Item
+                    path_root: economic
+                    key_column: description
+                    fields:
+                      - key: description
+                        value_kind: text
+                      - key: amount
+                """;
+        assertThatThrownBy(() -> loadYaml(yaml))
+                .isInstanceOf(PackLoader.PackValidationException.class)
+                .hasMessageContaining("line_items.amount")
+                .hasMessageContaining("value_kind");
+    }
+
+    @Test
+    void blankTableColumnValueKindFailsWithTableColumn() {
+        String yaml = MINIMAL_VALID + """
+                tables:
+                  - name: line_items
+                    path: economic > Project Cost > Line Item
+                    path_root: economic
+                    key_column: description
+                    fields:
+                      - key: description
+                        value_kind: text
+                      - key: amount
+                        value_kind: ""
+                """;
+        assertThatThrownBy(() -> loadYaml(yaml))
+                .isInstanceOf(PackLoader.PackValidationException.class)
+                .hasMessageContaining("line_items.amount")
+                .hasMessageContaining("value_kind");
+    }
+
+    @Test
+    void seedPackTableColumnsDeclareValueKind() throws Exception {
+        for (DocTypePack pack : PackLoader.loadSeedPacks()) {
+            pack.toExtractSchema();
+            for (Map<String, Object> table : pack.tables()) {
+                Object fieldsObj = table.get("fields");
+                if (!(fieldsObj instanceof List<?> columns)) {
+                    continue;
+                }
+                for (Object raw : columns) {
+                    if (raw instanceof Map<?, ?> column) {
+                        assertThat(column.get("value_kind"))
+                                .as("%s.%s", table.get("name"), column.get("key"))
+                                .isNotNull();
+                        assertThat(String.valueOf(column.get("value_kind")))
+                                .as("%s.%s", table.get("name"), column.get("key"))
+                                .isNotBlank();
+                    }
+                }
+            }
+        }
+    }
 }

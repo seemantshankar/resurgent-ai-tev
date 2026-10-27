@@ -148,11 +148,15 @@ public final class PackLoader {
                 throw new PackValidationException(where + ": " + e.getMessage());
             }
             ValueKind kind;
-            String kindWire = requireText(f, "value_kind", where);
+            JsonNode kindNode = f.get("value_kind");
+            if (kindNode == null || kindNode.isNull() || kindNode.asText().isBlank()) {
+                throw new PackValidationException(where + ": " + key + ": missing value_kind");
+            }
+            String kindWire = kindNode.asText().trim();
             try {
                 kind = ValueKind.fromWire(kindWire);
             } catch (IllegalArgumentException e) {
-                throw new PackValidationException(where + ": value_kind '" + kindWire
+                throw new PackValidationException(where + ": " + key + ": value_kind '" + kindWire
                         + "' is not in the closed set");
             }
             boolean required = f.path("required").asBoolean(false);
@@ -179,7 +183,9 @@ public final class PackLoader {
             for (JsonNode t : tablesNode) {
                 tableIndex++;
                 Map<String, Object> table = jsonToMap(t);
-                validateTableRoles(table, source + ": tables[" + tableIndex + "]");
+                String tableWhere = source + ": tables[" + tableIndex + "]";
+                validateTableRoles(table, tableWhere);
+                validateTableColumnKinds(table, tableWhere);
                 tables.add(table);
             }
         }
@@ -464,6 +470,42 @@ public final class PackLoader {
             if (!columns.contains(column)) {
                 throw new PackValidationException(where + ": " + role + " '" + column
                         + "' is not a column of the table");
+            }
+        }
+    }
+
+    /**
+     * Every table column, including key columns, must declare a closed-set
+     * {@code value_kind}. Messages name {@code table.column}.
+     */
+    private static void validateTableColumnKinds(Map<String, Object> table, String where)
+            throws PackValidationException {
+        Object nameObj = table.get("name");
+        String tableName = nameObj == null || String.valueOf(nameObj).isBlank()
+                ? "table" : String.valueOf(nameObj);
+        Object fieldsObj = table.get("fields");
+        if (!(fieldsObj instanceof List<?> list)) {
+            return;
+        }
+        int index = 0;
+        for (Object raw : list) {
+            index++;
+            if (!(raw instanceof Map<?, ?> column)) {
+                continue;
+            }
+            Object keyObj = column.get("key");
+            String colKey = keyObj == null || String.valueOf(keyObj).isBlank()
+                    ? "fields[" + index + "]" : String.valueOf(keyObj);
+            String slot = tableName + "." + colKey;
+            Object kindObj = column.get("value_kind");
+            if (kindObj == null || String.valueOf(kindObj).isBlank()) {
+                throw new PackValidationException(where + ": " + slot + ": missing value_kind");
+            }
+            try {
+                ValueKind.fromWire(String.valueOf(kindObj).trim());
+            } catch (IllegalArgumentException e) {
+                throw new PackValidationException(where + ": " + slot + ": value_kind '"
+                        + kindObj + "' is not in the closed set");
             }
         }
     }

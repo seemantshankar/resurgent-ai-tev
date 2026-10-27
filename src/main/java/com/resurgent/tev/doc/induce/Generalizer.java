@@ -226,7 +226,7 @@ public final class Generalizer {
                 notes.add(rawKey + ": industry leaf under " + pathRoot + " (layer=industry)");
             }
 
-            ValueKind kind = parseKind(f.valueKind());
+            ValueKind kind = declaredKind(f.valueKind());
 
             // --- 3. cross-document consensus ---
             List<String> docIds = f.docIds() == null ? List.of() : f.docIds().stream()
@@ -408,7 +408,10 @@ public final class Generalizer {
                 }
                 Map<String, Object> col = new LinkedHashMap<>();
                 col.put("key", key);
-                col.put("value_kind", parseKind(column.valueKind()).wireName());
+                String columnKind = column.valueKind();
+                if (columnKind != null && !columnKind.isBlank()) {
+                    col.put("value_kind", parseKind(columnKind).wireName());
+                }
                 columns.add(col);
             }
             if (columns.isEmpty()) {
@@ -652,7 +655,10 @@ public final class Generalizer {
         return List.copyOf(out);
     }
 
-    /** Maps a mined value_kind wire name; unknown kinds become {@code text}. */
+    /**
+     * Maps a mined value_kind wire name. Blank or missing kinds stay undeclared
+     * so quality gates can reject the pack; unknown names still become {@code text}.
+     */
     public static ValueKind parseKind(String wire) {
         if (wire == null || wire.isBlank()) {
             return ValueKind.TEXT;
@@ -662,6 +668,14 @@ public final class Generalizer {
         } catch (IllegalArgumentException e) {
             return ValueKind.TEXT;
         }
+    }
+
+    /** {@code null} when mining omitted {@code value_kind}; otherwise {@link #parseKind}. */
+    static ValueKind declaredKind(String wire) {
+        if (wire == null || wire.isBlank()) {
+            return null;
+        }
+        return parseKind(wire);
     }
 
     private static String leafNameOf(String pathLabelSource, String cleanKey) {
@@ -693,6 +707,9 @@ public final class Generalizer {
     }
 
     private static List<String> slotsFor(ValueKind kind) {
+        if (kind == null) {
+            return List.of();
+        }
         return switch (kind) {
             case MONEY -> List.of("currency", "scale");
             case QUANTITY -> List.of("unit");
