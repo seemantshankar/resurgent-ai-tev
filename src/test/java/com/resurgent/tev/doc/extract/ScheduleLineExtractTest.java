@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.pack.DocTypePack;
+import com.resurgent.tev.doc.pack.PackField;
 import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.doc.query.FactQuery;
 import com.resurgent.tev.doc.query.FactRow;
@@ -15,6 +16,7 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -160,35 +162,22 @@ class ScheduleLineExtractTest {
 
     @Test
     void omittedColumnKindsPersistAsInferredValueKindsWithNormalizedSlots() throws Exception {
-        DocTypePack inferred = PackLoader.load(
-                new ByteArrayInputStream("""
-                        code: demo.inferred
-                        version: 1.0.0
-                        family: legal
-                        file_role: land_document
-                        fields:
-                          - key: grantor
-                            path: identity > Legal Name
-                            path_root: identity
-                            value_kind: text
-                            required: false
-                        tables:
-                          - name: parcels
-                            path: technical > Site > Parcel
-                            path_root: technical
-                            key_column: survey_no
-                            fields:
-                              - key: survey_no
-                                value_kind: text
-                              - key: area
-                                type: number
-                              - key: consideration
-                                type: number
-                                currency: true
-                              - key: active
-                                type: boolean
-                        """.getBytes(StandardCharsets.UTF_8)),
-                "inferred-pack");
+        DocTypePack inferred = new DocTypePack(
+                "demo.inferred", "1.0.0", "legal", "land_document",
+                List.of(), List.of(),
+                List.of(PackField.optional("grantor", "identity > Legal Name",
+                        "identity", ValueKind.TEXT)),
+                List.of(Map.of(
+                        "name", "parcels",
+                        "path", "technical > Site > Parcel",
+                        "path_root", "technical",
+                        "key_column", "survey_no",
+                        "fields", List.of(
+                                Map.of("key", "survey_no", "value_kind", "text"),
+                                Map.of("key", "area", "type", "number"),
+                                Map.of("key", "consideration", "type", "number", "currency", true),
+                                Map.of("key", "active", "type", "boolean")))),
+                List.of(), List.of());
         FixtureExtractClient client = new FixtureExtractClient();
         client.putFixture("demo.inferred", MAPPER.readTree("""
                 {
