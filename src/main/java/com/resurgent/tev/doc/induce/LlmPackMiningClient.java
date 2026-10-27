@@ -217,18 +217,26 @@ public final class LlmPackMiningClient implements PackMiningClient {
                 String path = text(f, "path");
                 List<String> phrases = detectionPhrases(key, labels, synonyms, path);
                 List<String> docIds = attributeDocs(phrases, docs);
+                String pathRoot = text(f, "path_root");
+                String valueKind = text(f, "value_kind");
+                Boolean required = f.hasNonNull("required") ? f.get("required").asBoolean() : null;
+                String promptHint = text(f, "prompt_hint");
+                List<String> sampleValues = stringArray(f.get("sample_values"));
+                boolean domainStandard = flag(f, "domain_standard");
                 fields.add(new MinedField(
                         key,
                         path,
-                        text(f, "path_root"),
-                        text(f, "value_kind"),
-                        f.hasNonNull("required") ? f.get("required").asBoolean() : null,
-                        text(f, "prompt_hint"),
+                        pathRoot,
+                        valueKind,
+                        required,
+                        promptHint,
                         synonyms,
                         labels,
                         docIds,
-                        stringArray(f.get("sample_values")),
-                        flag(f, "domain_standard")));
+                        sampleValues,
+                        domainStandard));
+                addNestedRowFields(fields, f, key, path, pathRoot, required, docIds,
+                        domainStandard, docs);
             }
         }
         List<MinedTable> tables = tables(root.get("tables"), docs);
@@ -237,6 +245,151 @@ public final class LlmPackMiningClient implements PackMiningClient {
         String dateKind = documentDateKind(root.get("document_date"));
         return new MiningResult(suggestedCode, family, identitySignals, fields, tables, clauses,
                 passages, dateKind, null, text(root, "domain_rationale"));
+    }
+
+    /**
+     * Carries Shape 1 nested row objects as dotted child fields so the generalizer
+     * can rewrite them into pack tables. Does not invent money from column names:
+     * a JSON number without {@code value_kind} becomes quantity.
+     */
+    private static void addNestedRowFields(
+            List<MinedField> fields,
+            JsonNode parent,
+            String parentKey,
+            String parentPath,
+            String pathRoot,
+            Boolean required,
+            List<String> docIds,
+            boolean domainStandard,
+            List<MiningDocument> docs) {
+        if (!isRowArray(parent)) {
+            return;
+        }
+        LinkedHashSet<String> seen = new LinkedHashSet<>();
+        for (MinedField existing : fields) {
+            seen.add(existing.key());
+        }
+        JsonNode properties = nestedProperties(parent);
+        if (properties != null && properties.isObject()) {
+            properties.fields().forEachRemaining(entry -> addNestedColumn(
+                    fields, seen, parentKey, parentPath, pathRoot, required, docIds,
+                    domainStandard, docs, entry.getKey(), entry.getValue()));
+        }
+        JsonNode columns = parent.get("columns");
+        if (columns == null) {
+            columns = parent.has("items") ? null : parent.get("fields");
+        }
+        if (columns != null && columns.isArray()) {
+            for (JsonNode column : columns) {
+                String key = text(column, "key");
+                if (key != null) {
+                    addNestedColumn(fields, seen, parentKey, parentPath, pathRoot, required,
+                            docIds, domainStandard, docs, key, column);
+                }
+            }
+        }
+    }
+
+    private static boolean isRowArray(JsonNode parent) {
+        String kind = text(parent, "value_kind");
+        if ("list".equalsIgnoreCase(kind)) {
+            return true;
+        }
+        String type = text(parent, "type");
+        if ("array".equalsIgnoreCase(type)) {
+            return true;
+        }
+        JsonNode items = parent.get("items");
+        return items != null && items.isObject();
+    }
+
+    private static JsonNode nestedProperties(JsonNode parent) {
+        JsonNode items = parent.get("items");
+        if (items != null && items.isObject()) {
+            JsonNode properties = items.get("properties");
+            if (properties != null && properties.isObject()) {
+                return properties;
+            }
+        }
+        JsonNode properties = parent.get("properties");
+        return properties != null && properties.isObject() ? properties : null;
+    }
+
+    private static void addNestedColumn(
+            List<MinedField> fields,
+            Set<String> seen,
+            String parentKey,
+            String parentPath,
+            String pathRoot,
+            Boolean required,
+            List<String> parentDocIds,
+            boolean domainStandard,
+            List<MiningDocument> docs,
+            String columnKey,
+            JsonNode column) {
+        if (columnKey == null || columnKey.isBlank()) {
+            return;
+        }
+        String childKey = parentKey + "." + columnKey.trim();
+        if (!seen.add(childKey)) {
+            return;
+        }
+        String kind = kindFromProperty(column);
+        if ("list".equals(kind)) {
+            return;
+        }
+        List<String> labels = stringArray(column.get("labels"));
+        if (labels.isEmpty()) {
+            labels = List.of(columnKey.replace('_', ' '));
+        }
+        String path = text(column, "path");
+        if (path == null) {
+            path = nestedPath(parentPath, columnKey);
+        }
+        List<String> phrases = detectionPhrases(childKey, labels, List.of(), path);
+        List<String> docIds = docs == null || docs.isEmpty()
+                ? parentDocIds
+                : attributeDocs(phrases, docs);
+        if (docIds.isEmpty()) {
+            docIds = parentDocIds;
+        }
+        fields.add(new MinedField(
+                childKey,
+                path,
+                text(column, "path_root") == null ? pathRoot : text(column, "path_root"),
+                kind,
+                required,
+                text(column, "prompt_hint"),
+                stringArray(column.get("synonyms")),
+                labels,
+                docIds,
+                stringArray(column.get("sample_values")),
+                domainStandard || flag(column, "domain_standard")));
+    }
+
+    private static String kindFromProperty(JsonNode node) {
+        String kind = text(node, "value_kind");
+        if (kind != null) {
+            return kind;
+        }
+        String type = text(node, "type");
+        if (type == null) {
+            return null;
+        }
+        return switch (type.toLowerCase(java.util.Locale.ROOT)) {
+            case "number", "integer" -> "quantity";
+            case "boolean" -> "boolean";
+            case "array" -> "list";
+            default -> "text";
+        };
+    }
+
+    private static String nestedPath(String parentPath, String columnKey) {
+        String leaf = columnKey.replace('_', ' ').trim();
+        if (parentPath == null || parentPath.isBlank()) {
+            return leaf;
+        }
+        return parentPath + " > " + leaf;
     }
 
     private static List<MinedTable> tables(JsonNode node, List<MiningDocument> docs) {
