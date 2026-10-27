@@ -124,6 +124,7 @@ public final class Generalizer {
         List<String> rewritten = new ArrayList<>();
         List<String> notes = new ArrayList<>();
         List<DecisionNote> decisions = new ArrayList<>();
+        mined = NestedScheduleNormalizer.rewrite(mined, decisions, dropped);
         Map<String, GeneralizedField> kept = new LinkedHashMap<>();
 
         for (PackMiningClient.MinedField f : mined.fields()) {
