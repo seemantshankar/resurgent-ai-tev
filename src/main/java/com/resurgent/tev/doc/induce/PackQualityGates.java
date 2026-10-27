@@ -1,5 +1,6 @@
 package com.resurgent.tev.doc.induce;
 
+import com.resurgent.tev.doc.extract.ValueKind;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackField;
 import com.resurgent.tev.doc.pack.PackLoader;
@@ -208,6 +209,10 @@ public final class PackQualityGates {
                 requiredOk = false;
             }
         }
+        for (String problem : tableColumnKindProblems(pack)) {
+            requiredProblems.add(problem);
+            requiredOk = false;
+        }
         String requiredDetail = requiredOk
                 ? required.size() + " required field(s), each with path + value_kind"
                 : String.join("; ", requiredProblems);
@@ -282,6 +287,43 @@ public final class PackQualityGates {
         }
 
         return new GateReport(gates, coverage, optionalHeavy, allPassed, rejectReasons);
+    }
+
+    /**
+     * Every table column that would publish must declare a closed-set {@code value_kind}.
+     * Messages name {@code table.column} so a missing kind is actionable.
+     */
+    private static List<String> tableColumnKindProblems(DocTypePack pack) {
+        List<String> problems = new ArrayList<>();
+        for (Map<String, Object> table : pack.tables()) {
+            Object nameObj = table.get("name");
+            String tableName = nameObj == null || String.valueOf(nameObj).isBlank()
+                    ? "table" : String.valueOf(nameObj);
+            Object fieldsObj = table.get("fields");
+            if (!(fieldsObj instanceof List<?> columns)) {
+                continue;
+            }
+            for (Object raw : columns) {
+                if (!(raw instanceof Map<?, ?> column)) {
+                    continue;
+                }
+                Object keyObj = column.get("key");
+                String colKey = keyObj == null || String.valueOf(keyObj).isBlank()
+                        ? "(unnamed)" : String.valueOf(keyObj);
+                String slot = tableName + "." + colKey;
+                Object kindObj = column.get("value_kind");
+                if (kindObj == null || String.valueOf(kindObj).isBlank()) {
+                    problems.add(slot + ": missing value_kind");
+                    continue;
+                }
+                try {
+                    ValueKind.fromWire(String.valueOf(kindObj));
+                } catch (IllegalArgumentException e) {
+                    problems.add(slot + ": value_kind '" + kindObj + "' is not in the closed set");
+                }
+            }
+        }
+        return problems;
     }
 
     /**
