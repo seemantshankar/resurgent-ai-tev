@@ -37,10 +37,16 @@ public final class LlmPackMiningClient implements PackMiningClient {
             Do not refuse a document because it is the only sample, and do not stop at a \
             fixed field count.
             - value_kind must be one of: money, quantity, rate, percent, date, duration, \
-            text, enum, boolean, list.
+            text, enum, boolean, list. Every field and every table column MUST include \
+            value_kind.
             - path_root must be one of: identity, economic, technical, commercial, legal, \
             regulatory, frame. Use an industry leaf under a known root only when no spine \
             leaf fits.
+            - Schedule-like content (repeating line items, matrices, keyed rows) MUST be \
+            tables[] of row objects, not nested object fields. Columns use generic roles \
+            where they fit: description, amount, period, unit. Amount columns are money \
+            or quantity; mark period_key on the period column. This table shape applies \
+            to any document type.
             - Also return schedule tables (record schedules with key_column, and period \
             matrices with key_column and period_key), clauses, passages, and \
             document_date.kind (execution, signing, issue, report, offer, or date).
@@ -61,9 +67,12 @@ public final class LlmPackMiningClient implements PackMiningClient {
                         "labels":["printed label variant","alias"],"sample_values":["<value seen>"],
                         "domain_standard":false}],
              "tables":[{"name":"snake_name","path":"root > Leaf","path_root":"root",
-                        "key_column":"line","entity_key":"borrower","site_key":"site",
-                        "period_key":"month","domain_standard":true,
-                        "columns":[{"key":"line","value_kind":"text"}]}],
+                        "key_column":"description","entity_key":"entity","site_key":"site",
+                        "period_key":"period","domain_standard":true,
+                        "columns":[{"key":"description","value_kind":"text"},
+                                   {"key":"amount","value_kind":"money"},
+                                   {"key":"period","value_kind":"date"},
+                                   {"key":"unit","value_kind":"text"}]}],
              "clauses":[{"key":"snake_name","label":"Label","parent_family":"family",
                          "aliases":["printed heading"],"domain_standard":true}],
              "passages":[{"topic":"snake_name","heading_terms":["heading"],
@@ -144,6 +153,10 @@ public final class LlmPackMiningClient implements PackMiningClient {
     private static String userPrompt(MiningRequest request, String snippets) {
         EntityTokenFilter filter = new EntityTokenFilter(sampleTokens(request));
         StringBuilder sb = new StringBuilder();
+        sb.append("Author a reusable document-type schema. Put schedule-like content in ")
+                .append("tables[] as row objects with description, amount, period, and unit ")
+                .append("columns where they fit. Include value_kind on every field and every ")
+                .append("table column.\n");
         sb.append("Industry: ")
                 .append(request.industryTag() == null || request.industryTag().isBlank()
                         ? "general" : filter.redact(request.industryTag()))
