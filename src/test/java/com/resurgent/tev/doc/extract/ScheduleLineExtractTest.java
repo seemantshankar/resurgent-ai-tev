@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.pack.DocTypePack;
+import com.resurgent.tev.doc.pack.PackField;
 import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.doc.query.FactQuery;
 import com.resurgent.tev.doc.query.FactRow;
@@ -15,6 +16,7 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -156,6 +158,60 @@ class ScheduleLineExtractTest {
         assertThat(jan.ontologyPath()).isEqualTo("technical > Generation > Month");
         assertThat(facts.stream().filter(f -> "monthly_generation.glob_hor".equals(f.fieldKey())
                 && "soiling".equals(f.lineKey())).count()).isEqualTo(2);
+    }
+
+    @Test
+    void omittedColumnKindsPersistAsInferredValueKindsWithNormalizedSlots() throws Exception {
+        DocTypePack inferred = new DocTypePack(
+                "demo.inferred", "1.0.0", "legal", "land_document",
+                List.of(), List.of(),
+                List.of(PackField.optional("grantor", "identity > Legal Name",
+                        "identity", ValueKind.TEXT)),
+                List.of(Map.of(
+                        "name", "parcels",
+                        "path", "technical > Site > Parcel",
+                        "path_root", "technical",
+                        "key_column", "survey_no",
+                        "fields", List.of(
+                                Map.of("key", "survey_no", "value_kind", "text"),
+                                Map.of("key", "area", "type", "number"),
+                                Map.of("key", "consideration", "type", "number", "currency", true),
+                                Map.of("key", "active", "type", "boolean")))),
+                List.of(), List.of());
+        FixtureExtractClient client = new FixtureExtractClient();
+        client.putFixture("demo.inferred", MAPPER.readTree("""
+                {
+                  "doc_type_code": "demo.inferred",
+                  "tables": {
+                    "parcels": [
+                      {"survey_no": "12/1",
+                       "area": {"value": "4.5 acre", "quote": "12/1 area 4.5 acre", "page": 2},
+                       "consideration": {"value": "Rs 10 lakh", "quote": "12/1 price 10 lakh", "page": 2},
+                       "active": {"value": "true", "quote": "active", "page": 2}}
+                    ]
+                  }
+                }
+                """));
+
+        ExtractService.ExtractOutcome outcome = new ExtractService().extract(
+                dbPath, documentVersionId, MANDATE, inferred, client, "test");
+        assertThat(outcome.status()).isEqualTo("success");
+
+        List<FactRow> facts = facts();
+        FactRow area = cell(facts, "parcels.area", "12/1");
+        assertThat(area.valueKind()).isEqualTo("quantity");
+        assertThat(area.valueNumber()).isEqualTo(4.5);
+        assertThat(area.unit()).isEqualTo("acre");
+        assertThat(area.scale()).isEqualTo("unit");
+
+        FactRow price = cell(facts, "parcels.consideration", "12/1");
+        assertThat(price.valueKind()).isEqualTo("money");
+        assertThat(price.currency()).isEqualTo("INR");
+        assertThat(price.scale()).isEqualTo("lakh");
+
+        FactRow active = cell(facts, "parcels.active", "12/1");
+        assertThat(active.valueKind()).isEqualTo("boolean");
+        assertThat(active.valueText()).isEqualTo("true");
     }
 
     @Test

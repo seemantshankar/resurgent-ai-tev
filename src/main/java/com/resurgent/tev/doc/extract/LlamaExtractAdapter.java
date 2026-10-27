@@ -646,18 +646,7 @@ public final class LlamaExtractAdapter implements ExtractClient {
     }
 
     private static ValueKind kindFor(JsonNode props, String key) {
-        JsonNode leaf = props != null ? props.path(key) : null;
-        if (leaf != null && leaf.isObject()) {
-            String kind = leaf.path("value_kind").asText(null);
-            if (kind != null) {
-                try {
-                    return ValueKind.fromWire(kind);
-                } catch (IllegalArgumentException ignored) {
-                    // fall through
-                }
-            }
-        }
-        return ValueKind.TEXT;
+        return SchemaLeafKinds.of(props, key);
     }
 
     /**
