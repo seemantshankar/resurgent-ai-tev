@@ -258,6 +258,84 @@ class PackInducerTest {
     }
 
     @Test
+    void induceRejectsTableColumnMissingValueKind() throws Exception {
+        PackMiningClient mining = new OfflinePackMiningClient(new PackMiningClient.MiningResult(
+                "quotation.vendor_supply",
+                "quotation",
+                List.of("Quotation"),
+                List.of(
+                        field("vendor_name", "identity > Legal Name", "identity", "text",
+                                true, List.of("d1"), List.of("Vendor")),
+                        field("gross_total", "economic > Project Cost > Quoted Gross", "economic",
+                                "money", true, "Final grand total row including tax",
+                                List.of("d1"), List.of("Grand Total"))),
+                List.of(new PackMiningClient.MinedTable(
+                        "line_items",
+                        "economic > Project Cost > Line Item",
+                        "economic",
+                        "description",
+                        null,
+                        null,
+                        null,
+                        List.of(
+                                new PackMiningClient.MinedColumn("description", "text"),
+                                new PackMiningClient.MinedColumn("amount", null)),
+                        List.of("d1"),
+                        true)),
+                List.of(),
+                List.of(),
+                null,
+                null,
+                null));
+
+        PackInducer.InduceResult result = new PackInducer().induce(new PackInducer.InduceRequest(
+                List.of(doc("d1", "quotation", "Quotation")),
+                "general",
+                "quotation",
+                "quotation.vendor_supply",
+                "quotation",
+                mining,
+                new PackStore(tempDir.resolve("packs-missing-col-kind")),
+                0.6,
+                1,
+                false));
+
+        assertThat(result.published()).isFalse();
+        assertThat(result.rejectReasons()).anyMatch(reason ->
+                reason.contains("line_items.amount") && reason.contains("value_kind"));
+    }
+
+    @Test
+    void induceRejectsFieldMissingValueKind() throws Exception {
+        PackMiningClient mining = new OfflinePackMiningClient(new PackMiningClient.MiningResult(
+                "quotation.vendor_supply",
+                "quotation",
+                List.of("Quotation"),
+                List.of(
+                        field("vendor_name", "identity > Legal Name", "identity", "",
+                                true, List.of("d1"), List.of("Vendor")),
+                        field("gross_total", "economic > Project Cost > Quoted Gross", "economic",
+                                "money", true, "Final grand total row including tax",
+                                List.of("d1"), List.of("Grand Total")))));
+
+        PackInducer.InduceResult result = new PackInducer().induce(new PackInducer.InduceRequest(
+                List.of(doc("d1", "quotation", "Quotation")),
+                "general",
+                "quotation",
+                "quotation.vendor_supply",
+                "quotation",
+                mining,
+                new PackStore(tempDir.resolve("packs-missing-field-kind")),
+                0.6,
+                1,
+                false));
+
+        assertThat(result.published()).isFalse();
+        assertThat(result.rejectReasons()).anyMatch(reason ->
+                reason.contains("vendor_name") && reason.contains("value_kind"));
+    }
+
+    @Test
     void publishWithoutStoreRequiresDryRun() {
         PackInducer.InduceRequest request = new PackInducer.InduceRequest(
                 List.of(doc("d1", "agreement", "Power Purchase Agreement"),

@@ -122,6 +122,9 @@ public final class SchemaCompiler {
 
     /** Leaf schema for one pack field, shared by {@link #compile} and {@link #compileForFields}. */
     private static void putFieldProps(ObjectNode parent, PackField field) {
+        if (field.valueKind() == null) {
+            throw new IllegalArgumentException(field.key() + ": missing value_kind");
+        }
         ObjectNode leaf = parent.putObject(field.key());
         putValueKind(leaf, field.valueKind());
         leaf.put("description", field.promptHint() != null ? field.promptHint() : field.path());
