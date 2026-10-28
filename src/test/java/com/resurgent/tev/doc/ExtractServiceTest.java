@@ -47,6 +47,7 @@ class ExtractServiceTest {
 
     private Path dbPath;
     private long documentVersionId;
+    private long pageId;
     private final long mandateId = 1L;
 
     /** Minimal offline extractor controlled per test. */
@@ -156,11 +157,25 @@ class ExtractServiceTest {
             long documentId = docs.insertDocument(mandateId, "NW", "certificate", null);
             documentVersionId = docs.insertDocumentVersion(documentId, "v1", "nw.pdf",
                     "hash-nw", ".pdf", "certificate", 1, false, sourceFileId, null);
+            pageId = docs.insertPage(documentVersionId, 1, 600, 800, "hash-nw/pages/p001.png");
         }
         client = new FakeExtractClient();
     }
 
-    private void givenNetWorthWithoutStatedNet() {
+    private void insertLayout(String text) throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            DocumentRepository docs = new DocumentRepository(db.connection());
+            long blockId = docs.insertBlock(pageId, 0, "paragraph",
+                    72.0, 600.0, 500.0, 640.0, text, text, 0, "test");
+            docs.insertSpan(blockId, 0, text, 72.0, 600.0, 500.0, 620.0, 0.99);
+            new CloudParsePageRepository(db.connection())
+                    .replacePages(documentVersionId, "pjb-layout", "agentic",
+                            List.of(text), List.of(text));
+        }
+    }
+
+    private void givenNetWorthWithoutStatedNet() throws Exception {
+        insertLayout("Name: Ramesh Sharma Total Assets Rs. 1,00,00,000 Total Liabilities Rs. 25,00,000");
         client.facts.add(new FactCandidate("subject_name", ValueKind.TEXT)
                 .valueText("Ramesh Sharma").confidence(0.95)
                 .extractionMethod("llm_field")
@@ -290,6 +305,7 @@ class ExtractServiceTest {
         client.facts.add(new FactCandidate("gross_total", ValueKind.MONEY)
                 .valueText("Rs. 12,000").confidence(0.9)
                 .extractionMethod("llm_field"));
+        insertLayout("Solar panels 10kW");
         client.facts.add(new FactCandidate("line_items", ValueKind.TEXT)
                 .valueText("Solar panels 10kW")
                 .lineKey("Solar panels 10kW")
@@ -454,6 +470,35 @@ class ExtractServiceTest {
     }
 
     @Test
+    void extractIsPartialWhenFallbackQuoteIsMissingFromLayout() throws Exception {
+        insertLayout("This certificate states the position of the subject.");
+        client.facts.add(new FactCandidate("net_worth", ValueKind.MONEY)
+                .valueText("16000000")
+                .valueNumber(16000000.0)
+                .confidence(0.9)
+                .extractionMethod("llm_field")
+                .addCitation(Citation.of(1, "16000000")));
+
+        ExtractService.ExtractOutcome outcome = new ExtractService().extract(
+                dbPath, documentVersionId, mandateId, netWorthPack(), client, "1");
+        assertThat(outcome.status()).isEqualTo("partial");
+        assertThat(outcome.message()).contains("quotes missing");
+
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            FactRepository facts = new FactRepository(db.connection());
+            List<FactRow> rows = facts.query(FactQuery.forMandate(mandateId)
+                    .withVersion(documentVersionId));
+            FactRow netWorth = rows.stream()
+                    .filter(r -> "net_worth".equals(r.fieldKey())).findFirst().orElseThrow();
+            assertThat(netWorth.evidence()).anySatisfy(e -> {
+                assertThat(e.role()).isEqualTo("verbatim_quote");
+                assertThat(e.verbatim()).isEqualTo("16000000");
+                assertThat(e.resolution()).isEqualTo("missing");
+            });
+        }
+    }
+
+    @Test
     void emptyExtractIsPartialAndDoesNotMarkVersionExtracted() throws Exception {
         ExtractService.ExtractOutcome outcome = new ExtractService().extract(
                 dbPath, documentVersionId, mandateId, netWorthPack(), client, "1");
@@ -608,8 +653,6 @@ class ExtractServiceTest {
                     .replacePages(documentVersionId, "pjb-basis", "agentic",
                             List.of("Project Cost (Rs. In Lakhs)\nDC Capacity 1200 kWp\nTotal Capex 45.00"),
                             List.of("Project Cost (Rs. In Lakhs)\nDC Capacity 1200 kWp\nTotal Capex 45.00"));
-            new DocumentRepository(db.connection())
-                    .insertPage(documentVersionId, 1, 600, 800, "pages/p1.png");
         }
 
         DocTypePack pack = new DocTypePack(

@@ -1,9 +1,11 @@
 package com.resurgent.tev.doc.induce;
 
+import com.resurgent.tev.doc.extract.ValueKind;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackField;
 import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.doc.pack.RowDisambiguation;
+import com.resurgent.tev.doc.pack.TableColumnKinds;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -208,6 +210,10 @@ public final class PackQualityGates {
                 requiredOk = false;
             }
         }
+        for (String problem : tableColumnKindProblems(pack)) {
+            requiredProblems.add(problem);
+            requiredOk = false;
+        }
         String requiredDetail = requiredOk
                 ? required.size() + " required field(s), each with path + value_kind"
                 : String.join("; ", requiredProblems);
@@ -272,6 +278,22 @@ public final class PackQualityGates {
             rejectReasons.add("row_disambiguation: " + rowHintDetail);
         }
 
+        // Gate 7: leftover dotted field keys mean Shape 1 nested rows were not rewritten
+        List<String> nestedLeftovers = new ArrayList<>();
+        for (PackField f : pack.fields()) {
+            if (f.key() != null && f.key().indexOf('.') >= 0) {
+                nestedLeftovers.add(f.key());
+            }
+        }
+        boolean nestedOk = nestedLeftovers.isEmpty();
+        String nestedDetail = nestedOk
+                ? "no leftover nested row fields"
+                : "unsupported nested row shape: " + nestedLeftovers;
+        gates.add(new GateResult("nested_schedule_shape", nestedOk, nestedDetail));
+        if (!nestedOk) {
+            rejectReasons.add("nested_schedule_shape: " + nestedDetail);
+        }
+
         boolean allPassed = gates.stream().allMatch(GateResult::passed)
                 && rejectReasons.isEmpty();
         // optional-heavy still passes overall (spec: publish as optional-heavy)
@@ -282,6 +304,14 @@ public final class PackQualityGates {
         }
 
         return new GateReport(gates, coverage, optionalHeavy, allPassed, rejectReasons);
+    }
+
+    /**
+     * Every table column that would publish must declare a closed-set {@code value_kind}.
+     * Messages name {@code table.column} so a missing kind is actionable.
+     */
+    private static List<String> tableColumnKindProblems(DocTypePack pack) {
+        return TableColumnKinds.problems(pack.tables());
     }
 
     /**

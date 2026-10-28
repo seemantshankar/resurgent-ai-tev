@@ -148,11 +148,15 @@ public final class PackLoader {
                 throw new PackValidationException(where + ": " + e.getMessage());
             }
             ValueKind kind;
-            String kindWire = requireText(f, "value_kind", where);
+            JsonNode kindNode = f.get("value_kind");
+            if (kindNode == null || kindNode.isNull() || kindNode.asText().isBlank()) {
+                throw new PackValidationException(where + ": " + key + ": missing value_kind");
+            }
+            String kindWire = kindNode.asText().trim();
             try {
                 kind = ValueKind.fromWire(kindWire);
             } catch (IllegalArgumentException e) {
-                throw new PackValidationException(where + ": value_kind '" + kindWire
+                throw new PackValidationException(where + ": " + key + ": value_kind '" + kindWire
                         + "' is not in the closed set");
             }
             boolean required = f.path("required").asBoolean(false);
@@ -179,7 +183,9 @@ public final class PackLoader {
             for (JsonNode t : tablesNode) {
                 tableIndex++;
                 Map<String, Object> table = jsonToMap(t);
-                validateTableRoles(table, source + ": tables[" + tableIndex + "]");
+                String tableWhere = source + ": tables[" + tableIndex + "]";
+                validateTableRoles(table, tableWhere);
+                validateTableColumnKinds(table, tableWhere);
                 tables.add(table);
             }
         }
@@ -465,6 +471,17 @@ public final class PackLoader {
                 throw new PackValidationException(where + ": " + role + " '" + column
                         + "' is not a column of the table");
             }
+        }
+    }
+
+    /**
+     * Every table column, including key columns, must declare a closed-set
+     * {@code value_kind}. Messages name {@code table.column}.
+     */
+    private static void validateTableColumnKinds(Map<String, Object> table, String where)
+            throws PackValidationException {
+        for (String problem : TableColumnKinds.problems(table)) {
+            throw new PackValidationException(where + ": " + problem);
         }
     }
 

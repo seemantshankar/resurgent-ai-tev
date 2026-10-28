@@ -54,6 +54,33 @@ class LlmPackMiningClientTest {
               ]
             }""";
 
+    /**
+     * Recorded mining JSON for a schedule-like cluster: table row objects with
+     * description / amount / period / unit columns and value_kind on every leaf.
+     * Synthetic labels only — no client names or amounts.
+     */
+    private static final String SCHEDULE_JSON = """
+            {
+              "suggested_code": "economic.line_schedule",
+              "family": "economic",
+              "identity_signals": ["Line Schedule"],
+              "fields": [
+                {"key":"statement_date","path":"frame > Document Title > Date","path_root":"frame",
+                 "value_kind":"date","required":true,"prompt_hint":"statement date",
+                 "labels":["Statement Date"],"sample_values":["<date>"]}
+              ],
+              "tables": [
+                {"name":"line_schedule","path":"economic > Line Item","path_root":"economic",
+                 "key_column":"description","period_key":"period","domain_standard":true,
+                 "columns":[
+                   {"key":"description","value_kind":"text"},
+                   {"key":"amount","value_kind":"money"},
+                   {"key":"period","value_kind":"date"},
+                   {"key":"unit","value_kind":"text"}
+                 ]}
+              ]
+            }""";
+
     private static PackMiningClient.MiningRequest request() {
         return new PackMiningClient.MiningRequest("solar", "identity", "identity.kyc",
                 List.of(
@@ -79,6 +106,68 @@ class LlmPackMiningClientTest {
         // the prompt carries printed labels/layout, never a full document body
         assertThat(llm.lastUser()).contains("GSTIN").contains("Legal Name");
         assertThat(llm.lastSystem()).contains("identity > PAN");
+    }
+
+    @Test
+    void systemPromptRequiresTableShapedSchedulesAndValueKindOnEveryLeaf() throws Exception {
+        FakeDocLlmClient llm = new FakeDocLlmClient(MINING_JSON);
+        new LlmPackMiningClient(llm, null).mine(request());
+
+        String system = llm.lastSystem();
+        assertThat(system).contains("value_kind");
+        assertThat(system.toLowerCase()).contains("every field");
+        assertThat(system.toLowerCase()).contains("every table column");
+        assertThat(system.toLowerCase()).contains("row objects");
+        assertThat(system).contains("tables[]");
+        assertThat(system.toLowerCase()).contains("description");
+        assertThat(system.toLowerCase()).contains("unit");
+        assertThat(system).contains("\"name\":\"snake_name\"");
+        assertThat(system).contains("\"key\":\"description\"");
+        assertThat(system).contains("\"key\":\"amount\"");
+        assertThat(system).contains("\"key\":\"period\"");
+        assertThat(system).contains("\"key\":\"unit\"");
+        assertThat(system.toLowerCase()).doesNotContain("tax audit");
+        assertThat(system.toLowerCase()).doesNotContain("pvsyst");
+    }
+
+    @Test
+    void parsesScheduleTableWithValueKindOnEveryColumn() throws Exception {
+        FakeDocLlmClient llm = new FakeDocLlmClient(SCHEDULE_JSON);
+        PackMiningClient.MiningResult result = new LlmPackMiningClient(llm, null).mine(request());
+
+        PackMiningClient.MinedTable table = result.tables().stream()
+                .filter(t -> "line_schedule".equals(t.name()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("missing mined table line_schedule"));
+        assertThat(table.keyColumn()).isEqualTo("description");
+        assertThat(table.periodKey()).isEqualTo("period");
+        assertThat(table.columns()).extracting(PackMiningClient.MinedColumn::key)
+                .containsExactly("description", "amount", "period", "unit");
+        assertThat(table.columns()).extracting(PackMiningClient.MinedColumn::valueKind)
+                .containsExactly("text", "money", "date", "text");
+        assertThat(field(result, "statement_date").valueKind()).isEqualTo("date");
+    }
+
+    @Test
+    void nestedNumberWithoutValueKindStaysUndeclared() throws Exception {
+        PackMiningClient.MiningResult result = LlmPackMiningClient.interpret("""
+                {
+                  "suggested_code": "demo.schedule",
+                  "family": "legal",
+                  "identity_signals": ["Site Schedule"],
+                  "fields": [
+                    {"key":"line_items","path":"economic > Line Item","path_root":"economic",
+                     "value_kind":"list","required":true,"labels":["Line Items"],
+                     "items":{"type":"object","properties":{
+                       "description":{"value_kind":"text"},
+                       "amount":{"type":"number"}
+                     }}}
+                  ]
+                }
+                """, request());
+        PackMiningClient.MinedField amount = field(result, "line_items.amount");
+        assertThat(amount.valueKind()).isNull();
+        assertThat(field(result, "line_items.description").valueKind()).isEqualTo("text");
     }
 
     @Test

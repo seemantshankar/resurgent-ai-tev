@@ -4,8 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.resurgent.tev.doc.extract.ValueKind;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -78,6 +81,38 @@ class SchedulePackSchemaTest {
         assertThat(monthCols.path("month").path("period").asBoolean()).isTrue();
         assertThat(monthCols.path("glob_hor").path("value_kind").asText()).isEqualTo("quantity");
         assertThat(props.has("grantor")).isTrue();
+    }
+
+    @Test
+    void omittedColumnValueKindIsInferredFromJsonTypeAndMoneyCues() {
+        // In-memory tables can still omit value_kind (induction before publish).
+        // PackLoader YAML now rejects that (#199); SchemaCompiler still fills it.
+        DocTypePack pack = new DocTypePack(
+                "demo.inferred", "1.0.0", "legal", "land_document",
+                List.of(), List.of(),
+                List.of(PackField.required("grantor", "identity > Legal Name",
+                        "identity", ValueKind.TEXT)),
+                List.of(Map.of(
+                        "name", "parcels",
+                        "path", "technical > Site > Parcel",
+                        "path_root", "technical",
+                        "key_column", "survey_no",
+                        "fields", List.of(
+                                Map.of("key", "survey_no", "value_kind", "text"),
+                                Map.of("key", "area", "type", "number"),
+                                Map.of("key", "consideration", "type", "number", "currency", true),
+                                Map.of("key", "titled", "type", "boolean"),
+                                Map.of("key", "note", "type", "string")))),
+                List.of(), List.of());
+        JsonNode cols = pack.toExtractSchema().path("properties")
+                .path("parcels").path("items").path("properties");
+        assertThat(cols.path("area").path("type").asText()).isEqualTo("number");
+        assertThat(cols.path("area").path("value_kind").asText()).isEqualTo("quantity");
+        assertThat(cols.path("consideration").path("value_kind").asText()).isEqualTo("money");
+        assertThat(cols.path("consideration").path("type").asText()).isEqualTo("number");
+        assertThat(cols.path("titled").path("value_kind").asText()).isEqualTo("boolean");
+        assertThat(cols.path("note").path("value_kind").asText()).isEqualTo("text");
+        assertThat(cols.path("survey_no").path("value_kind").asText()).isEqualTo("text");
     }
 
     @Test

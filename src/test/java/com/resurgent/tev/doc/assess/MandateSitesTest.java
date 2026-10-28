@@ -124,7 +124,7 @@ class MandateSitesTest {
         ObjectNode fixture = fixture("agreement.ppa");
         ObjectNode fields = fixture.putObject("fields");
         addField(fields, "seller_name", "Bhagyanagar Solar Power Pvt Ltd",
-                "Seller: Bhagyanagar Solar Power Pvt Ltd");
+                "between the Seller and the Buyer.");
         addField(fields, "tariff", "Rs. 4.50 per kWh", "Tariff: Rs. 4.50 per kWh");
         addField(fields, "capacity_mw", "5.00 MW", "Contract Capacity: 5.00 MW");
         extract(versionId, ppaPack, fixture);

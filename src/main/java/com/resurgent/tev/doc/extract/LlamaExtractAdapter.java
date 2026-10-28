@@ -611,6 +611,10 @@ public final class LlamaExtractAdapter implements ExtractClient {
         facts.add(candidate);
     }
 
+    /**
+     * Maps vendor citations onto {@link Citation}. Path-shaped {@code matching_text}
+     * is discarded in favour of extracted value text (ADR 0035).
+     */
     private static void addCitations(JsonNode meta, FactCandidate candidate,
             List<Citation> citations) {
         JsonNode citationArray = meta.path("citation");
@@ -619,10 +623,8 @@ public final class LlamaExtractAdapter implements ExtractClient {
         }
         for (JsonNode c : citationArray) {
             int page = c.path("page").asInt(1);
-            String quote = c.path("matching_text").asText(null);
-            if (quote == null || quote.isBlank()) {
-                quote = candidate.valueText();
-            }
+            String quote = SchemaPathQuote.quoteOrFallback(
+                    c.path("matching_text").asText(null), candidate.valueText());
             if (quote == null || quote.isBlank()) {
                 continue;
             }
@@ -644,18 +646,7 @@ public final class LlamaExtractAdapter implements ExtractClient {
     }
 
     private static ValueKind kindFor(JsonNode props, String key) {
-        JsonNode leaf = props != null ? props.path(key) : null;
-        if (leaf != null && leaf.isObject()) {
-            String kind = leaf.path("value_kind").asText(null);
-            if (kind != null) {
-                try {
-                    return ValueKind.fromWire(kind);
-                } catch (IllegalArgumentException ignored) {
-                    // fall through
-                }
-            }
-        }
-        return ValueKind.TEXT;
+        return SchemaLeafKinds.of(props, key);
     }
 
     /**

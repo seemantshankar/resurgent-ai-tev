@@ -212,21 +212,7 @@ public final class FixtureExtractClient implements ExtractClient {
 
     private static ValueKind kindFor(JsonNode schema, String key) {
         JsonNode props = schema != null ? schema.path("properties") : null;
-        return kindOf(props, key);
-    }
-
-    private static ValueKind kindOf(JsonNode props, String key) {
-        if (props != null && props.has(key)) {
-            String kind = props.path(key).path("value_kind").asText(null);
-            if (kind != null) {
-                try {
-                    return ValueKind.fromWire(kind);
-                } catch (IllegalArgumentException ignored) {
-                    // fall through to text
-                }
-            }
-        }
-        return ValueKind.TEXT;
+        return SchemaLeafKinds.of(props, key);
     }
 
     /**

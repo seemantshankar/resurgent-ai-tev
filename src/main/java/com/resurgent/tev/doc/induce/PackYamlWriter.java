@@ -52,7 +52,9 @@ public final class PackYamlWriter {
             n.put("key", f.key());
             n.put("path", f.path());
             n.put("path_root", f.pathRootWire());
-            n.put("value_kind", f.valueKind().wireName());
+            if (f.valueKind() != null) {
+                n.put("value_kind", f.valueKind().wireName());
+            }
             n.put("required", f.required());
             if (!f.slots().isEmpty()) {
                 ArrayNode slots = n.putArray("slots");

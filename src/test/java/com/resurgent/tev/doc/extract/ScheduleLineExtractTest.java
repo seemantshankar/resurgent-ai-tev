@@ -3,9 +3,11 @@ package com.resurgent.tev.doc.extract;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.resurgent.tev.doc.db.CloudParsePageRepository;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.pack.DocTypePack;
+import com.resurgent.tev.doc.pack.PackField;
 import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.doc.query.FactQuery;
 import com.resurgent.tev.doc.query.FactRow;
@@ -15,6 +17,7 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -89,11 +92,30 @@ class ScheduleLineExtractTest {
                     "2026-01-01T00:00:00Z", "0.1.0", null);
             long documentId = docs.insertDocument(MANDATE, "Deed", "land_document", null);
             documentVersionId = docs.insertDocumentVersion(documentId, "v1", "deed.pdf",
-                    "hash-deed", ".pdf", "land_document", 1, false, sourceFileId, null);
+                    "hash-deed", ".pdf", "land_document", 4, false, sourceFileId, null);
         }
         pack = PackLoader.load(
                 new ByteArrayInputStream(PACK_YAML.getBytes(StandardCharsets.UTF_8)),
                 "schedule-pack");
+        insertLayout("12/1 area 4.5 acre 12/1 price 10 lakh 13/2 area 2 guntha 13/2 price 3 lakh "
+                + "Total area 99 acre Total price 99 lakh soiling Jan 4.1 soiling Feb 4.4 "
+                + "Total Jan 9.9 active Rs acre guntha lakh");
+    }
+
+    private void insertLayout(String text) throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            DocumentRepository docs = new DocumentRepository(db.connection());
+            List<String> pages = List.of(text, text, text, text);
+            for (int i = 1; i <= 4; i++) {
+                long pageId = docs.insertPage(documentVersionId, i, 600, 800,
+                        "hash-deed/pages/p00" + i + ".png");
+                long blockId = docs.insertBlock(pageId, 0, "paragraph",
+                        72.0, 600.0, 500.0, 640.0, text, text, 0, "test");
+                docs.insertSpan(blockId, 0, text, 72.0, 600.0, 500.0, 620.0, 0.99);
+            }
+            new CloudParsePageRepository(db.connection())
+                    .replacePages(documentVersionId, "pjb-layout", "agentic", pages, pages);
+        }
     }
 
     @Test
@@ -156,6 +178,60 @@ class ScheduleLineExtractTest {
         assertThat(jan.ontologyPath()).isEqualTo("technical > Generation > Month");
         assertThat(facts.stream().filter(f -> "monthly_generation.glob_hor".equals(f.fieldKey())
                 && "soiling".equals(f.lineKey())).count()).isEqualTo(2);
+    }
+
+    @Test
+    void omittedColumnKindsPersistAsInferredValueKindsWithNormalizedSlots() throws Exception {
+        DocTypePack inferred = new DocTypePack(
+                "demo.inferred", "1.0.0", "legal", "land_document",
+                List.of(), List.of(),
+                List.of(PackField.optional("grantor", "identity > Legal Name",
+                        "identity", ValueKind.TEXT)),
+                List.of(Map.of(
+                        "name", "parcels",
+                        "path", "technical > Site > Parcel",
+                        "path_root", "technical",
+                        "key_column", "survey_no",
+                        "fields", List.of(
+                                Map.of("key", "survey_no", "value_kind", "text"),
+                                Map.of("key", "area", "type", "number"),
+                                Map.of("key", "consideration", "type", "number", "currency", true),
+                                Map.of("key", "active", "type", "boolean")))),
+                List.of(), List.of());
+        FixtureExtractClient client = new FixtureExtractClient();
+        client.putFixture("demo.inferred", MAPPER.readTree("""
+                {
+                  "doc_type_code": "demo.inferred",
+                  "tables": {
+                    "parcels": [
+                      {"survey_no": "12/1",
+                       "area": {"value": "4.5 acre", "quote": "12/1 area 4.5 acre", "page": 2},
+                       "consideration": {"value": "Rs 10 lakh", "quote": "12/1 price 10 lakh", "page": 2},
+                       "active": {"value": "true", "quote": "active", "page": 2}}
+                    ]
+                  }
+                }
+                """));
+
+        ExtractService.ExtractOutcome outcome = new ExtractService().extract(
+                dbPath, documentVersionId, MANDATE, inferred, client, "test");
+        assertThat(outcome.status()).isEqualTo("success");
+
+        List<FactRow> facts = facts();
+        FactRow area = cell(facts, "parcels.area", "12/1");
+        assertThat(area.valueKind()).isEqualTo("quantity");
+        assertThat(area.valueNumber()).isEqualTo(4.5);
+        assertThat(area.unit()).isEqualTo("acre");
+        assertThat(area.scale()).isEqualTo("unit");
+
+        FactRow price = cell(facts, "parcels.consideration", "12/1");
+        assertThat(price.valueKind()).isEqualTo("money");
+        assertThat(price.currency()).isEqualTo("INR");
+        assertThat(price.scale()).isEqualTo("lakh");
+
+        FactRow active = cell(facts, "parcels.active", "12/1");
+        assertThat(active.valueKind()).isEqualTo("boolean");
+        assertThat(active.valueText()).isEqualTo("true");
     }
 
     @Test

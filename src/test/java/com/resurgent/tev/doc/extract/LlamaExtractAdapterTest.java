@@ -183,6 +183,137 @@ class LlamaExtractAdapterTest {
     }
 
     @Test
+    void pathShapedMatchingTextFallsBackToExtractedValueText() throws Exception {
+        ObjectNode result = MAPPER.createObjectNode();
+        result.put("subject_name", "Ramesh Kumar Sharma");
+        ObjectNode meta = MAPPER.createObjectNode();
+        ObjectNode fieldMeta = meta.putObject("field_metadata");
+        ObjectNode docMeta = fieldMeta.putObject("document_metadata");
+        ObjectNode nameMeta = docMeta.putObject("subject_name");
+        ArrayNode nameCites = nameMeta.putArray("citation");
+        ObjectNode nameCite = nameCites.addObject();
+        nameCite.put("page", 1);
+        nameCite.put("matching_text",
+                "profit_and_loss_account.0.sections.2.items.12.label");
+
+        ObjectNode job = MAPPER.createObjectNode();
+        job.put("id", "ext-test");
+        job.put("status", "COMPLETED");
+        job.set("extract_result", result);
+        job.set("extract_metadata", meta);
+        getResponse = job.toString();
+
+        ExtractResult out = adapter().extractFieldSchema(request(writeOriginal()), sampleSchema());
+        FactCandidate name = out.facts().stream()
+                .filter(f -> f.key().equals("subject_name")).findFirst().orElseThrow();
+        assertThat(name.citations()).hasSize(1);
+        assertThat(name.citations().get(0).verbatim()).isEqualTo("Ramesh Kumar Sharma");
+    }
+
+    @Test
+    void pathShapedMatchingTextOnANumberFallsBackToPlainFigureText() throws Exception {
+        ObjectNode result = MAPPER.createObjectNode();
+        result.put("net_worth", 16000000);
+        ObjectNode meta = MAPPER.createObjectNode();
+        ObjectNode docMeta = meta.putObject("field_metadata").putObject("document_metadata");
+        ObjectNode nwMeta = docMeta.putObject("net_worth");
+        ObjectNode nwCite = nwMeta.putArray("citation").addObject();
+        nwCite.put("page", 1);
+        nwCite.put("matching_text", "headline_figures.0.sections.2.items.12.value");
+        ObjectNode box = nwCite.putArray("bounding_boxes").addObject();
+        box.put("x", 72).put("y", 100).put("w", 200).put("h", 12);
+
+        ObjectNode job = MAPPER.createObjectNode();
+        job.put("status", "COMPLETED");
+        job.set("extract_result", result);
+        job.set("extract_metadata", meta);
+        getResponse = job.toString();
+
+        ExtractResult out = adapter().extractFieldSchema(request(writeOriginal()), sampleSchema());
+        FactCandidate nw = out.facts().stream()
+                .filter(f -> f.key().equals("net_worth")).findFirst().orElseThrow();
+        assertThat(nw.valueText()).isEqualTo("16000000");
+        assertThat(nw.citations()).hasSize(1);
+        assertThat(nw.citations().get(0).verbatim()).isEqualTo("16000000");
+        assertThat(nw.citations().get(0).hasBbox()).isTrue();
+        assertThat(nw.citations().get(0).bboxX1()).isEqualTo(272.0);
+    }
+
+    @Test
+    void pathShapedMatchingTextWithNoValueOmitsTheCitation() throws Exception {
+        ObjectNode result = MAPPER.createObjectNode();
+        result.put("subject_name", "");
+        ObjectNode meta = MAPPER.createObjectNode();
+        ObjectNode docMeta = meta.putObject("field_metadata").putObject("document_metadata");
+        ObjectNode nameCite = docMeta.putObject("subject_name").putArray("citation").addObject();
+        nameCite.put("page", 1);
+        nameCite.put("matching_text", "identity_block.0.fields.3.label");
+
+        ObjectNode job = MAPPER.createObjectNode();
+        job.put("status", "COMPLETED");
+        job.set("extract_result", result);
+        job.set("extract_metadata", meta);
+        getResponse = job.toString();
+
+        ExtractResult out = adapter().extractFieldSchema(request(writeOriginal()), sampleSchema());
+        FactCandidate name = out.facts().stream()
+                .filter(f -> f.key().equals("subject_name")).findFirst().orElseThrow();
+        assertThat(name.citations()).isEmpty();
+        assertThat(out.citations()).isEmpty();
+    }
+
+    @Test
+    void schedulePathsFromDifferentPackFamiliesFallBackWithoutTypeSwitches() throws Exception {
+        ObjectNode result = MAPPER.createObjectNode();
+        result.put("subject_name", "Certificate holder");
+        result.put("net_worth", 2500000);
+        ObjectNode amount = MAPPER.createObjectNode();
+        amount.put("type", "number");
+        amount.put("value_kind", "quantity");
+        ObjectNode schema = MAPPER.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode props = schema.putObject("properties");
+        props.set("subject_name", sampleSchema().path("properties").path("subject_name"));
+        props.set("net_worth", sampleSchema().path("properties").path("net_worth"));
+        ObjectNode yield = props.putObject("specific_yield");
+        yield.put("type", "number");
+        yield.put("value_kind", "quantity");
+        ObjectNode area = props.putObject("total_area");
+        area.put("type", "number");
+        area.put("value_kind", "quantity");
+        result.put("specific_yield", 1842.5);
+        result.put("total_area", 4.5);
+
+        ObjectNode docMeta = MAPPER.createObjectNode();
+        cite(docMeta, "subject_name", "assets.0.amount", 1);
+        cite(docMeta, "net_worth", "assets.0.amount", 1);
+        cite(docMeta, "specific_yield", "monthly_generation.0.e_grid", 1);
+        cite(docMeta, "total_area", "parcels.0.area", 1);
+
+        ObjectNode job = MAPPER.createObjectNode();
+        job.put("status", "COMPLETED");
+        job.set("extract_result", result);
+        ObjectNode meta = MAPPER.createObjectNode();
+        meta.putObject("field_metadata").set("document_metadata", docMeta);
+        job.set("extract_metadata", meta);
+        getResponse = job.toString();
+
+        ExtractResult out = adapter().extractFieldSchema(request(writeOriginal()), schema);
+        assertThat(verbatimOf(out, "subject_name")).isEqualTo("Certificate holder");
+        assertThat(verbatimOf(out, "net_worth")).isEqualTo("2500000");
+        assertThat(verbatimOf(out, "specific_yield")).isEqualTo("1842.5");
+        assertThat(verbatimOf(out, "total_area")).isEqualTo("4.5");
+        for (FactCandidate fact : out.facts()) {
+            for (Citation citation : fact.citations()) {
+                assertThat(citation.verbatim())
+                        .doesNotContain("assets.0.amount")
+                        .doesNotContain("monthly_generation.0.e_grid")
+                        .doesNotContain("parcels.0.area");
+            }
+        }
+    }
+
+    @Test
     void numberFactsKeepPlainFigureTextNotScientificNotation() throws Exception {
         ObjectNode result = MAPPER.createObjectNode();
         result.put("net_worth", 571178252.43);
@@ -528,6 +659,19 @@ class LlamaExtractAdapterTest {
     private ExtractRequest requestPages(Path original, List<Integer> pages) {
         return new ExtractRequest(temp, original, pages, "en", "identity.promoter_net_worth",
                 "Extract net worth fields", Map.of());
+    }
+
+    private static void cite(ObjectNode docMeta, String field, String matchingText, int page) {
+        ObjectNode cite = docMeta.putObject(field).putArray("citation").addObject();
+        cite.put("page", page);
+        cite.put("matching_text", matchingText);
+    }
+
+    private static String verbatimOf(ExtractResult out, String key) {
+        FactCandidate fact = out.facts().stream()
+                .filter(f -> f.key().equals(key)).findFirst().orElseThrow();
+        assertThat(fact.citations()).isNotEmpty();
+        return fact.citations().get(0).verbatim();
     }
 
     @Test

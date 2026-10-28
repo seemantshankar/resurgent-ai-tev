@@ -283,8 +283,15 @@ public final class ExtractService {
                     .filter(w -> w.lineKey() != null || "line_items".equals(w.fieldKey())).count();
 
             boolean empty = writes.isEmpty();
-            String status = empty ? "partial" : "success";
-            String message = empty ? "extractor returned no fields" : "ok";
+            String status;
+            String message;
+            if (empty) {
+                status = "partial";
+                message = "extractor returned no fields";
+            } else {
+                status = "success";
+                message = "ok";
+            }
             // S2.3: the adapter reported empty text and no fields — nothing was extracted
             // to cite (citations only ride on facts), so the run is partial and flagged
             // for operational review instead of inventing values.
@@ -298,6 +305,10 @@ public final class ExtractService {
                 repo.deleteStageStats(parseRunId, "doc-extract");
                 FactRepository.ReplaceStats stats =
                         facts.replaceFacts(parseRunId, documentVersionId, factDocumentId, writes);
+                if (!empty && stats.quotesMissing() > 0) {
+                    status = "partial";
+                    message = "quotes missing after fallback";
+                }
                 MarkEvidenceLinker.attach(db.connection(), documentVersionId);
                 if (localOnly) {
                     OcrAmbiguity.apply(db.connection(), documentVersionId, parseRunId);
