@@ -349,7 +349,7 @@ class IndustryChecklistTest {
         ObjectNode fixture = fixture("agreement.ppa");
         ObjectNode fields = fixture.putObject("fields");
         addField(fields, "seller_name", "Bhagyanagar Solar Power Pvt Ltd",
-                "Seller: Bhagyanagar Solar Power Pvt Ltd");
+                "between the Seller and the Buyer.");
         addField(fields, "tariff", "Rs. 4.50 per kWh", "Tariff: Rs. 4.50 per kWh");
         extract(versionId, ppaPack, fixture);
         return versionId;

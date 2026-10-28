@@ -3,6 +3,7 @@ package com.resurgent.tev.doc.extract;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.resurgent.tev.doc.db.CloudParsePageRepository;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.pack.DocTypePack;
@@ -91,11 +92,30 @@ class ScheduleLineExtractTest {
                     "2026-01-01T00:00:00Z", "0.1.0", null);
             long documentId = docs.insertDocument(MANDATE, "Deed", "land_document", null);
             documentVersionId = docs.insertDocumentVersion(documentId, "v1", "deed.pdf",
-                    "hash-deed", ".pdf", "land_document", 1, false, sourceFileId, null);
+                    "hash-deed", ".pdf", "land_document", 4, false, sourceFileId, null);
         }
         pack = PackLoader.load(
                 new ByteArrayInputStream(PACK_YAML.getBytes(StandardCharsets.UTF_8)),
                 "schedule-pack");
+        insertLayout("12/1 area 4.5 acre 12/1 price 10 lakh 13/2 area 2 guntha 13/2 price 3 lakh "
+                + "Total area 99 acre Total price 99 lakh soiling Jan 4.1 soiling Feb 4.4 "
+                + "Total Jan 9.9 active Rs acre guntha lakh");
+    }
+
+    private void insertLayout(String text) throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            DocumentRepository docs = new DocumentRepository(db.connection());
+            List<String> pages = List.of(text, text, text, text);
+            for (int i = 1; i <= 4; i++) {
+                long pageId = docs.insertPage(documentVersionId, i, 600, 800,
+                        "hash-deed/pages/p00" + i + ".png");
+                long blockId = docs.insertBlock(pageId, 0, "paragraph",
+                        72.0, 600.0, 500.0, 640.0, text, text, 0, "test");
+                docs.insertSpan(blockId, 0, text, 72.0, 600.0, 500.0, 620.0, 0.99);
+            }
+            new CloudParsePageRepository(db.connection())
+                    .replacePages(documentVersionId, "pjb-layout", "agentic", pages, pages);
+        }
     }
 
     @Test

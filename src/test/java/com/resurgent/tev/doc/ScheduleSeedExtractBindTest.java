@@ -10,6 +10,7 @@ import com.resurgent.tev.doc.extract.ExtractService;
 import com.resurgent.tev.doc.extract.FixtureExtractClient;
 import com.resurgent.tev.doc.ingest.BlobStore;
 import com.resurgent.tev.doc.ingest.DocumentIngestService;
+import com.resurgent.tev.doc.layout.DocumentLayoutService;
 import com.resurgent.tev.doc.llm.FakeDocLlmClient;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackLoader;
@@ -83,7 +84,10 @@ class ScheduleSeedExtractBindTest {
     @Test
     void schedulePacksExtractAndBindEachLine() throws Exception {
         long pv = ingest("pvsyst.pdf", "PVsyst - Site A", "technical_report",
-                "PVsyst Grid-Connected System", "Jan GlobHor 4.1 kWh/m2", "Soiling loss 120 kWh");
+                "PVsyst Grid-Connected System", "1450 kWh/kWp",
+                "Jan 4.1", "4.1 kWh/m2", "Jan 120 MWh",
+                "Feb 4.4", "4.4 kWh/m2", "Feb 130 MWh",
+                "soiling 120 kWh", "Total 400 kWh");
         bind(extract(pv, "technical.pvsyst_report", """
                 {
                   "doc_type_code": "technical.pvsyst_report",
@@ -132,7 +136,8 @@ class ScheduleSeedExtractBindTest {
         assertThat(totalLoss.ontologyPath()).isNotEqualTo(soiling.ontologyPath());
 
         long deed = ingest("deed.pdf", "Sale Deed - Jaisalmer", "land_document",
-                "Sale Deed", "Survey 12/1 owner Ram Sharma village Jaisalmer area 4.5 acre");
+                "Sale Deed", "Survey 12/1 owner Ram Sharma village Jaisalmer area 4.5 acre",
+                "12/1 area 4.5 acre", "Total area 4.5 acre");
         bind(extract(deed, "legal.land_deed", """
                 {
                   "doc_type_code": "legal.land_deed",
@@ -163,7 +168,10 @@ class ScheduleSeedExtractBindTest {
         assertThat(parcel.nomenclatureStatus()).isEqualTo("bound");
 
         long nw = ingest("nw.pdf", "Net Worth - Ram Sharma", "certificate",
-                "Certificate of Net Worth", "Land Rs 12 lakh", "Total assets Rs 20 lakh");
+                "Certificate of Net Worth", "Ram Sharma", "as on 31 March 2025",
+                "Land Rs 12 lakh", "Land 12 lakh", "Total assets Rs 20 lakh",
+                "Total assets 20 lakh", "Total liabilities 5 lakh", "Net worth 15 lakh",
+                "Term loan 5 lakh");
         bind(extract(nw, "identity.promoter_net_worth", """
                 {
                   "doc_type_code": "identity.promoter_net_worth",
@@ -215,7 +223,8 @@ class ScheduleSeedExtractBindTest {
     @Test
     void auditedSummaryAndDprStillExtractAndBind() throws Exception {
         long audited = ingest("audited.pdf", "Audited Financials - ABC", "audited_financials",
-                "Audited Financials", "Revenue Rs 40.2 crore");
+                "Audited Financials", "ABC Pvt Ltd", "Revenue Rs 40.2 crore",
+                "Revenue 40.2", "PAT 4.1");
         long parseRun = extract(audited, "financials.audited_summary", """
                 {
                   "doc_type_code": "financials.audited_summary",
@@ -240,7 +249,8 @@ class ScheduleSeedExtractBindTest {
         assertThat(revenue.nomenclatureStatus()).isEqualTo("bound");
 
         long dpr = ingest("dpr.pdf", "DPR - Bhagyanagar", "dpr",
-                "Detailed Project Report", "Inverter 10 nos", "Project cost Rs 48 crore");
+                "Detailed Project Report", "Bhagyanagar Solar", "Inverter 10 nos",
+                "Total 11 nos", "Project cost Rs 48 crore", "Project cost 48 crore");
         bind(extract(dpr, "report.dpr", """
                 {
                   "doc_type_code": "report.dpr",
@@ -313,10 +323,12 @@ class ScheduleSeedExtractBindTest {
             }
             doc.save(pdf.toFile());
         }
-        return new DocumentIngestService().ingest(
+        long versionId = new DocumentIngestService().ingest(
                 new DocumentIngestService.IngestRequest(
                         pdf, MANDATE, logicalName, "v1", fileRole, null),
                 dbPath, blobs).documentVersionId();
+        new DocumentLayoutService().layout(versionId, dbPath, blobs);
+        return versionId;
     }
 
     private long extract(long versionId, String code, String fixture) throws Exception {
