@@ -262,8 +262,9 @@ public final class LlmPackMiningClient implements PackMiningClient {
 
     /**
      * Carries Shape 1 nested row objects as dotted child fields so the generalizer
-     * can rewrite them into pack tables. Does not invent money from column names:
-     * a JSON number without {@code value_kind} becomes quantity.
+     * can rewrite them into pack tables. Does not invent {@code value_kind} from
+     * JSON Schema {@code type}; extract infers later, and quality gates reject
+     * a blank kind on a published column.
      */
     private static void addNestedRowFields(
             List<MinedField> fields,
@@ -347,8 +348,8 @@ public final class LlmPackMiningClient implements PackMiningClient {
         if (!seen.add(childKey)) {
             return;
         }
-        String kind = kindFromProperty(column);
-        if ("list".equals(kind)) {
+        String kind = declaredKind(column);
+        if ("list".equalsIgnoreCase(kind)) {
             return;
         }
         List<String> labels = stringArray(column.get("labels"));
@@ -380,21 +381,17 @@ public final class LlmPackMiningClient implements PackMiningClient {
                 domainStandard || flag(column, "domain_standard")));
     }
 
-    private static String kindFromProperty(JsonNode node) {
+    /** Declared {@code value_kind} only — JSON {@code type} is not a mining kind. */
+    private static String declaredKind(JsonNode node) {
         String kind = text(node, "value_kind");
         if (kind != null) {
             return kind;
         }
         String type = text(node, "type");
-        if (type == null) {
-            return null;
+        if (type != null && "array".equalsIgnoreCase(type)) {
+            return "list";
         }
-        return switch (type.toLowerCase(java.util.Locale.ROOT)) {
-            case "number", "integer" -> "quantity";
-            case "boolean" -> "boolean";
-            case "array" -> "list";
-            default -> "text";
-        };
+        return null;
     }
 
     private static String nestedPath(String parentPath, String columnKey) {

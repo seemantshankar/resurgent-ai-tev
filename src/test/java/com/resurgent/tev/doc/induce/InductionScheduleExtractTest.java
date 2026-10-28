@@ -32,9 +32,10 @@ class InductionScheduleExtractTest {
     private static final long MANDATE = 1L;
 
     /**
-     * Nested Shape 1 mining JSON. {@code amount} omits {@code value_kind} so
-     * #198 infers quantity from JSON number; {@code consideration} is explicit
-     * money. #200 must rewrite the nested row array into pack {@code tables[]}.
+     * Nested Shape 1 mining JSON. Every leaf declares {@code value_kind} so
+     * quality gates pass; #200 must rewrite the nested row array into pack
+     * {@code tables[]}. Omitted-kind inference is covered by
+     * {@code InferredValueKindExtractTest}.
      */
     private static final String NESTED_SHAPE1_JSON = """
             {
@@ -50,9 +51,38 @@ class InductionScheduleExtractTest {
                  "labels":["Line Items"],"domain_standard":true,
                  "items":{"type":"object","properties":{
                    "description":{"value_kind":"text"},
-                   "amount":{"type":"number"},
+                   "amount":{"value_kind":"quantity"},
                    "consideration":{"value_kind":"money"}
                  }}}
+              ]
+            }
+            """;
+
+    private static final String MONEY_HEAVY_JSON = """
+            {
+              "suggested_code": "demo.net_worth",
+              "family": "identity",
+              "identity_signals": ["Net Worth Certificate"],
+              "fields": [
+                {"key":"subject_name","path":"identity > Legal Name","path_root":"identity",
+                 "value_kind":"text","required":true,"labels":["Subject"],
+                 "domain_standard":true},
+                {"key":"net_worth","path":"economic > Promoter Net Worth > Net Worth",
+                 "path_root":"economic","value_kind":"money","required":true,
+                 "labels":["Net Worth"],"domain_standard":true}
+              ]
+            }
+            """;
+
+    private static final String QUANTITY_RATE_JSON = """
+            {
+              "suggested_code": "demo.yield",
+              "family": "technical",
+              "identity_signals": ["Generation Report"],
+              "fields": [
+                {"key":"specific_yield","path":"technical > Energy Yield > Specific Yield",
+                 "path_root":"technical","value_kind":"quantity","required":true,
+                 "labels":["Specific Yield"],"domain_standard":true}
               ]
             }
             """;
@@ -62,6 +92,7 @@ class InductionScheduleExtractTest {
 
     private Path dbPath;
     private long documentVersionId;
+    private long pageId;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -74,7 +105,19 @@ class InductionScheduleExtractTest {
             long documentId = docs.insertDocument(MANDATE, "Site Schedule", "land_document", null);
             documentVersionId = docs.insertDocumentVersion(documentId, "v1", "schedule.pdf",
                     "hash-schedule", ".pdf", "land_document", 1, false, sourceFileId, null);
-            docs.insertPage(documentVersionId, 1, 600, 800, "hash-schedule/pages/p001.png");
+            pageId = docs.insertPage(documentVersionId, 1, 600, 800, "hash-schedule/pages/p001.png");
+        }
+    }
+
+    private void insertLayout(String text) throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            DocumentRepository docs = new DocumentRepository(db.connection());
+            long blockId = docs.insertBlock(pageId, 0, "paragraph",
+                    72.0, 600.0, 500.0, 640.0, text, text, 0, "test");
+            docs.insertSpan(blockId, 0, text, 72.0, 600.0, 500.0, 620.0, 0.99);
+            new com.resurgent.tev.doc.db.CloudParsePageRepository(db.connection())
+                    .replacePages(documentVersionId, "pjb-layout", "agentic",
+                            List.of(text), List.of(text));
         }
     }
 
@@ -121,18 +164,19 @@ class InductionScheduleExtractTest {
         assertThat(columns.path("amount").path("value_kind").asText()).isEqualTo("quantity");
         assertThat(columns.path("consideration").path("value_kind").asText()).isEqualTo("money");
 
+        insertLayout("Widget 4.5 acre Widget price Rs 10 lakh Gadget 2 guntha Gadget price Rs 3 lakh");
         FixtureExtractClient client = new FixtureExtractClient();
-        client.putFixture("demo.schedule", MAPPER.readTree("""
+        client.putFixture(pack.code(), MAPPER.readTree("""
                 {
                   "doc_type_code": "demo.schedule",
                   "tables": {
                     "line_items": [
                       {"description": "Widget",
                        "amount": {"value": "4.5 acre", "quote": "Widget 4.5 acre", "page": 1},
-                       "consideration": {"value": "Rs 10 lakh", "quote": "Widget price 10 lakh", "page": 1}},
+                       "consideration": {"value": "Rs 10 lakh", "quote": "Widget price Rs 10 lakh", "page": 1}},
                       {"description": "Gadget",
                        "amount": {"value": "2 guntha", "quote": "Gadget 2 guntha", "page": 1},
-                       "consideration": {"value": "Rs 3 lakh", "quote": "Gadget price 3 lakh", "page": 1}}
+                       "consideration": {"value": "Rs 3 lakh", "quote": "Gadget price Rs 3 lakh", "page": 1}}
                     ]
                   }
                 }
@@ -163,6 +207,118 @@ class InductionScheduleExtractTest {
         FactRow otherAmount = cell(facts, "line_items.amount", "Gadget");
         assertThat(otherAmount.valueKind()).isEqualTo("quantity");
         assertThat(otherAmount.valueText()).isEqualTo("2 guntha");
+    }
+
+    @Test
+    void omittedNestedColumnKindFailsPublishGates() throws Exception {
+        String omitted = NESTED_SHAPE1_JSON.replace(
+                "\"amount\":{\"value_kind\":\"quantity\"}",
+                "\"amount\":{\"type\":\"number\"}");
+        PackInducer.InduceResult induced = induce("demo.schedule", "legal", "land_document",
+                "Site Schedule", omitted, List.of("Site Schedule", "Grantor", "Amount"));
+        assertThat(induced.allGatesPassed()).isFalse();
+        assertThat(failedGates(induced)).contains("value_kind");
+    }
+
+    @Test
+    void moneyHeavyMiningFixtureExtractsNetWorth() throws Exception {
+        PackInducer.InduceResult induced = induce("demo.net_worth", "identity", "certificate",
+                "Net Worth Certificate", MONEY_HEAVY_JSON, List.of("Net Worth Certificate",
+                        "Subject", "Net Worth"));
+        assertThat(induced.allGatesPassed())
+                .withFailMessage("induction gates failed: %s", failedGates(induced))
+                .isTrue();
+        assertThat(induced.pack().fields()).extracting(f -> f.key() + ":" + f.valueKind().wireName())
+                .contains("net_worth:money");
+
+        insertLayout("Certificate holder Net Worth Rs 10 lakh");
+        FixtureExtractClient client = new FixtureExtractClient();
+        client.putFixture(induced.pack().code(), MAPPER.readTree("""
+                {
+                  "doc_type_code": "demo.net_worth",
+                  "fields": {
+                    "subject_name": {"value": "Certificate holder", "quote": "Certificate holder", "page": 1},
+                    "net_worth": {"value": "Rs 10 lakh", "quote": "Net Worth Rs 10 lakh", "page": 1}
+                  }
+                }
+                """));
+        ExtractService.ExtractOutcome outcome = new ExtractService().extract(
+                dbPath, documentVersionId, MANDATE, induced.pack(), client, "test");
+        assertThat(outcome.status()).isEqualTo("success");
+        FactRow worth = facts().stream()
+                .filter(f -> "net_worth".equals(f.fieldKey()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(worth.valueKind()).isEqualTo("money");
+        assertThat(worth.currency()).isEqualTo("INR");
+        assertThat(worth.scale()).isEqualTo("lakh");
+    }
+
+    @Test
+    void quantityRateMiningFixtureExtractsSpecificYield() throws Exception {
+        PackInducer.InduceResult induced = induce("demo.yield", "technical", "report",
+                "Generation Report", QUANTITY_RATE_JSON,
+                List.of("Generation Report", "Specific Yield"));
+        assertThat(induced.allGatesPassed())
+                .withFailMessage("induction gates failed: %s", failedGates(induced))
+                .isTrue();
+        assertThat(induced.pack().fields()).extracting(f -> f.key() + ":" + f.valueKind().wireName())
+                .contains("specific_yield:quantity");
+
+        insertLayout("Specific Yield 1842.5 kWh/kWp");
+        FixtureExtractClient client = new FixtureExtractClient();
+        client.putFixture(induced.pack().code(), MAPPER.readTree("""
+                {
+                  "doc_type_code": "demo.yield",
+                  "fields": {
+                    "specific_yield": {"value": "1842.5 kWh/kWp", "quote": "Specific Yield 1842.5 kWh/kWp", "page": 1}
+                  }
+                }
+                """));
+        ExtractService.ExtractOutcome outcome = new ExtractService().extract(
+                dbPath, documentVersionId, MANDATE, induced.pack(), client, "test");
+        assertThat(outcome.status()).isEqualTo("success");
+        FactRow yield = facts().stream()
+                .filter(f -> "specific_yield".equals(f.fieldKey()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(yield.valueKind()).isEqualTo("quantity");
+        assertThat(yield.valueNumber()).isEqualTo(1842.5);
+    }
+
+    private PackInducer.InduceResult induce(
+            String suggestedCode,
+            String family,
+            String fileRole,
+            String title,
+            String miningJson,
+            List<String> snippets) throws Exception {
+        return new PackInducer().induce(new PackInducer.InduceRequest(
+                List.of(new PackInducer.InduceDocument(
+                        "d1", fileRole, title, snippets, Set.of())),
+                "general",
+                fileRole,
+                suggestedCode,
+                family,
+                mining(miningJson),
+                new PackStore(tempDir.resolve("packs-" + suggestedCode)),
+                0.6,
+                1,
+                true));
+    }
+
+    private static PackMiningClient mining(String json) {
+        return new PackMiningClient() {
+            @Override
+            public String id() {
+                return "fixture-mining";
+            }
+
+            @Override
+            public MiningResult mine(MiningRequest request) {
+                return LlmPackMiningClient.interpret(json, request);
+            }
+        };
     }
 
     private static PackMiningClient nestedMining() {

@@ -6,7 +6,8 @@ import com.fasterxml.jackson.databind.JsonNode;
  * Resolves a schema leaf's {@link ValueKind} for extract mapping. Explicit pack
  * {@code value_kind} wins; otherwise JSON Schema {@code type} fills the gap
  * (issue #198). Numbers default to quantity. Money is never inferred from
- * field names or LlamaExtract response meta.
+ * field names or LlamaExtract response meta. Pack {@code unit} flags are
+ * quantity metadata, not a money cue.
  */
 public final class SchemaLeafKinds {
 

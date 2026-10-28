@@ -149,6 +149,28 @@ class LlmPackMiningClientTest {
     }
 
     @Test
+    void nestedNumberWithoutValueKindStaysUndeclared() throws Exception {
+        PackMiningClient.MiningResult result = LlmPackMiningClient.interpret("""
+                {
+                  "suggested_code": "demo.schedule",
+                  "family": "legal",
+                  "identity_signals": ["Site Schedule"],
+                  "fields": [
+                    {"key":"line_items","path":"economic > Line Item","path_root":"economic",
+                     "value_kind":"list","required":true,"labels":["Line Items"],
+                     "items":{"type":"object","properties":{
+                       "description":{"value_kind":"text"},
+                       "amount":{"type":"number"}
+                     }}}
+                  ]
+                }
+                """, request());
+        PackMiningClient.MinedField amount = field(result, "line_items.amount");
+        assertThat(amount.valueKind()).isNull();
+        assertThat(field(result, "line_items.description").valueKind()).isEqualTo("text");
+    }
+
+    @Test
     void generalizerStripsEntityNamesAndOneOffFieldsBeforePublishing() throws Exception {
         PackStore store = new PackStore(tempDir.resolve("packs"));
         FakeDocLlmClient llm = new FakeDocLlmClient(MINING_JSON);

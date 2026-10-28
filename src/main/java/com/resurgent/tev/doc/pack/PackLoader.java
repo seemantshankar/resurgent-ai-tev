@@ -480,33 +480,8 @@ public final class PackLoader {
      */
     private static void validateTableColumnKinds(Map<String, Object> table, String where)
             throws PackValidationException {
-        Object nameObj = table.get("name");
-        String tableName = nameObj == null || String.valueOf(nameObj).isBlank()
-                ? "table" : String.valueOf(nameObj);
-        Object fieldsObj = table.get("fields");
-        if (!(fieldsObj instanceof List<?> list)) {
-            return;
-        }
-        int index = 0;
-        for (Object raw : list) {
-            index++;
-            if (!(raw instanceof Map<?, ?> column)) {
-                continue;
-            }
-            Object keyObj = column.get("key");
-            String colKey = keyObj == null || String.valueOf(keyObj).isBlank()
-                    ? "fields[" + index + "]" : String.valueOf(keyObj);
-            String slot = tableName + "." + colKey;
-            Object kindObj = column.get("value_kind");
-            if (kindObj == null || String.valueOf(kindObj).isBlank()) {
-                throw new PackValidationException(where + ": " + slot + ": missing value_kind");
-            }
-            try {
-                ValueKind.fromWire(String.valueOf(kindObj).trim());
-            } catch (IllegalArgumentException e) {
-                throw new PackValidationException(where + ": " + slot + ": value_kind '"
-                        + kindObj + "' is not in the closed set");
-            }
+        for (String problem : TableColumnKinds.problems(table)) {
+            throw new PackValidationException(where + ": " + problem);
         }
     }
 

@@ -128,9 +128,20 @@ class VerbatimQuoteRepairTest {
 
     @Test
     void sanitizerSourceHasNoDocumentTypeSchemaKeyNames() throws Exception {
-        Path helper = Path.of("src/main/java/com/resurgent/tev/doc/extract/SchemaPathQuote.java");
-        assertThat(helper).exists();
-        String source = Files.readString(helper);
+        Path extractDir = Path.of("src/main/java/com/resurgent/tev/doc/extract");
+        assertThat(extractDir).isDirectory();
+        StringBuilder sources = new StringBuilder();
+        try (var files = Files.walk(extractDir)) {
+            files.filter(path -> path.toString().endsWith(".java"))
+                    .forEach(path -> {
+                        try {
+                            sources.append(Files.readString(path)).append('\n');
+                        } catch (IOException e) {
+                            throw new RuntimeException(path.toString(), e);
+                        }
+                    });
+        }
+        String source = sources.toString();
         assertThat(source)
                 .doesNotContain("profit_and_loss")
                 .doesNotContain("pvsyst")

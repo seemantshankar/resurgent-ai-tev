@@ -138,7 +138,7 @@ class NestedScheduleGeneralizerTest {
         assertThat(columns).extracting(column -> column.get("key"))
                 .containsExactly("description", "amount");
         assertThat(columns).extracting(column -> column.get("value_kind"))
-                .containsExactly("text", "quantity");
+                .containsExactly("text", null);
         assertThat(result.packFields()).extracting(PackField::key)
                 .contains("grantor")
                 .doesNotContain("line_items");

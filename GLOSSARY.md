@@ -186,6 +186,18 @@ _Avoid_: matching_text (alone), field path, ontology path
 The slot name from the extract schema (pack-compiled, induced, or ad-hoc) that identifies which leaf was filled — for example a pack field or a nested key such as a schedule row column. It disambiguates rows and columns before **document nomenclature** bind. It is not the fact's meaning on the shared nomenclature spine until bind succeeds.
 _Avoid_: ontology path, field_key (code column name alone)
 
+**Shape 1**:
+A nested extract schema: repeating rows as object arrays under a parent field, not pack **tables[]**. Mining may emit this; **autonomous pack induction** rewrites it before publish.
+_Avoid_: nested blob as the product schema, flattened JSON path as a field key
+
+**Shape 2**:
+The product extract schema: pack **tables[]** of row objects (key column, amount, period) so facts use **schema field key** `table.column` and a **schedule line** `line_key`.
+_Avoid_: nested object graph as the published pack
+
+**Unit slot**:
+Pack metadata on a **quantity** or **rate** leaf — the unit the figure is counted in. It is not a money cue; money uses currency and scale.
+_Avoid_: treating `unit: true` as money
+
 **Entity**:
 A company or person a mandate's documents are about: the borrower, its promoters, or a group company, identified from documents such as the MOA/AOA, the DPR and the mandate letter.
 _Avoid_: party, subject, company (alone)

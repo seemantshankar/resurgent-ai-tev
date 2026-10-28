@@ -233,6 +233,9 @@ final class NestedScheduleNormalizer {
     }
 
     private static boolean isTextLike(String wire) {
+        if (wire == null || wire.isBlank()) {
+            return false;
+        }
         ValueKind kind = Generalizer.parseKind(wire);
         return kind == ValueKind.TEXT || kind == ValueKind.ENUM;
     }
