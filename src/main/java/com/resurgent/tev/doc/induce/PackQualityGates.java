@@ -278,6 +278,22 @@ public final class PackQualityGates {
             rejectReasons.add("row_disambiguation: " + rowHintDetail);
         }
 
+        // Gate 7: leftover dotted field keys mean Shape 1 nested rows were not rewritten
+        List<String> nestedLeftovers = new ArrayList<>();
+        for (PackField f : pack.fields()) {
+            if (f.key() != null && f.key().indexOf('.') >= 0) {
+                nestedLeftovers.add(f.key());
+            }
+        }
+        boolean nestedOk = nestedLeftovers.isEmpty();
+        String nestedDetail = nestedOk
+                ? "no leftover nested row fields"
+                : "unsupported nested row shape: " + nestedLeftovers;
+        gates.add(new GateResult("nested_schedule_shape", nestedOk, nestedDetail));
+        if (!nestedOk) {
+            rejectReasons.add("nested_schedule_shape: " + nestedDetail);
+        }
+
         boolean allPassed = gates.stream().allMatch(GateResult::passed)
                 && rejectReasons.isEmpty();
         // optional-heavy still passes overall (spec: publish as optional-heavy)

@@ -130,6 +130,38 @@ class PackQualityGatesTest {
     }
 
     @Test
+    void leftoverDottedNestedFieldFailsShapeGate() {
+        DocTypePack pack = new DocTypePack(
+                "quotation.vendor_supply",
+                "0.0.0",
+                "quotation",
+                "quotation",
+                List.of("general"),
+                List.of("Quotation"),
+                List.of(
+                        PackField.required(
+                                "vendor_name",
+                                "identity > Legal Name",
+                                "identity",
+                                ValueKind.TEXT),
+                        PackField.required(
+                                "line_items.amount",
+                                "economic > Project Cost > Line Item > Amount",
+                                "economic",
+                                ValueKind.QUANTITY)),
+                List.of(),
+                List.of(),
+                List.of());
+
+        PackQualityGates.GateReport report = evaluate(pack);
+
+        assertThat(report.gate("nested_schedule_shape").value().passed()).isFalse();
+        assertThat(report.allPassed()).isFalse();
+        assertThat(report.rejectReasons()).anyMatch(reason ->
+                reason.contains("line_items.amount") && reason.contains("nested"));
+    }
+
+    @Test
     void packThatDoesNotCompileFailsCompileGate() {
         DocTypePack pack = packWithColumnKinds("text", null);
 

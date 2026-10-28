@@ -57,7 +57,45 @@ final class SchemaPathQuote {
         if (!sawIdentifier) {
             return false;
         }
+        if (isNumericPageText(segments)) {
+            return false;
+        }
         return sawIndex || sawSnake || segments.length >= 3;
+    }
+
+    /**
+     * Page figures and section numbers such as {@code Rs.4.50}, {@code Sec.3.2},
+     * and {@code v1.2.3}: a short or version-like token followed only by numeric
+     * tails. Indexed schema paths such as {@code assets.0} keep a longer field
+     * name, so they stay paths.
+     */
+    private static boolean isNumericPageText(String[] segments) {
+        if (segments.length < 2) {
+            return false;
+        }
+        for (int i = 1; i < segments.length; i++) {
+            if (!isIndex(segments[i])) {
+                return false;
+            }
+        }
+        String first = segments[0];
+        if (first.indexOf('_') >= 0) {
+            return false;
+        }
+        if (containsDigit(first)) {
+            return true;
+        }
+        return first.length() <= 3;
+    }
+
+    private static boolean containsDigit(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c >= '0' && c <= '9') {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean usableLayoutQuote(String matchingText) {

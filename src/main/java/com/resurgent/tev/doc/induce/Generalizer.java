@@ -141,7 +141,12 @@ public final class Generalizer {
                 decisions.add(note(rawKey, "dropped", "entity_token", "Key is an entity or value token."));
                 continue;
             }
-            String labelKey = entityFilter.rewriteKey(rawKey);
+            // Nested Shape 1 leftovers keep their dotted keys so quality gates
+            // can reject an unpublished one-column row array instead of flattening
+            // it into a root scalar.
+            String labelKey = rawKey.indexOf('.') >= 0
+                    ? rawKey
+                    : entityFilter.rewriteKey(rawKey);
             if (labelKey.isEmpty()) {
                 dropped.add(rawKey + ": key is only entity/value tokens");
                 decisions.add(note(rawKey, "dropped", "entity_token", "Key is only entity or value tokens."));

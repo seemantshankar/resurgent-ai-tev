@@ -61,7 +61,13 @@ final class NestedScheduleNormalizer {
             boolean alreadyTable = existingTables.contains(parent);
             List<MinedColumn> columns = columnsOf(entry.getValue());
             if (!alreadyTable && columns.size() < 2) {
-                continue;
+                if (inferKeyColumn(columns) == null) {
+                    if (decisions != null) {
+                        decisions.add(Generalizer.note(parent, "rejected", "unsupported_shape",
+                                "Nested row array has no usable key_column."));
+                    }
+                    continue;
+                }
             }
             dropKeys.add(parent);
             for (MinedField child : entry.getValue()) {

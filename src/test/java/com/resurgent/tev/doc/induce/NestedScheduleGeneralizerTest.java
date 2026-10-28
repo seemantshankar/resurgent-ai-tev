@@ -193,6 +193,66 @@ class NestedScheduleGeneralizerTest {
                 .doesNotContain("line_items.description", "line_items.amount");
     }
 
+    @Test
+    void oneColumnTextNestedRowBecomesTable() {
+        PackMiningClient.MiningResult mined = new PackMiningClient.MiningResult(
+                "demo.schedule",
+                "legal",
+                List.of("Site Schedule"),
+                List.of(
+                        field("grantor", "identity > Legal Name", "identity", "text",
+                                List.of("Grantor")),
+                        field("line_items", "economic > Project Cost > Line Item", "economic",
+                                "list", List.of("Line Items")),
+                        field("line_items.description",
+                                "economic > Project Cost > Line Item > Description",
+                                "economic", "text", List.of("Description"))));
+
+        Generalizer.Result result = generalizer.generalize(
+                mined, 1, Generalizer.Config.defaults(Set.of()));
+
+        assertThat(result.tables()).hasSize(1);
+        Map<String, Object> table = result.tables().getFirst();
+        assertThat(table.get("name")).isEqualTo("line_items");
+        assertThat(table.get("key_column")).isEqualTo("description");
+        assertThat(result.packFields()).extracting(PackField::key)
+                .containsExactly("grantor")
+                .doesNotContain("line_items.description");
+    }
+
+    @Test
+    void oneColumnQuantityNestedRowStaysUnrewritten() {
+        PackMiningClient.MiningResult mined = new PackMiningClient.MiningResult(
+                "demo.schedule",
+                "legal",
+                List.of("Site Schedule"),
+                List.of(
+                        field("grantor", "identity > Legal Name", "identity", "text",
+                                List.of("Grantor")),
+                        field("line_items", "economic > Project Cost > Line Item", "economic",
+                                "list", List.of("Line Items")),
+                        field("line_items.amount",
+                                "economic > Project Cost > Line Item > Amount",
+                                "economic", "quantity", List.of("Amount"))));
+
+        Generalizer.Result result = generalizer.generalize(
+                mined, 1, Generalizer.Config.defaults(Set.of()));
+
+        assertThat(result.tables()).isEmpty();
+        assertThat(result.packFields()).extracting(PackField::key)
+                .contains("grantor", "line_items.amount");
+
+        PackQualityGates.GateReport report = PackQualityGates.evaluate(
+                packOf(result),
+                new PackQualityGates.CoverageProbe(Map.of("d1", Set.of("grantor"))),
+                0.6,
+                Set.of(),
+                List.of("d1"));
+        assertThat(report.gate("nested_schedule_shape").value().passed()).isFalse();
+        assertThat(report.rejectReasons()).anyMatch(reason ->
+                reason.contains("line_items.amount") && reason.contains("nested"));
+    }
+
     private static PackMiningClient.MiningResult nestedLineItems() {
         return new PackMiningClient.MiningResult(
                 "demo.schedule",
