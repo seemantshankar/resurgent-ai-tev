@@ -347,16 +347,24 @@ final class LayoutExtractBridge {
             return;
         }
         Label label = match(left, labels);
+        String fieldKey;
+        ValueKind kind;
         if (label == null) {
-            return;
+            fieldKey = LabeledLineFieldKeys.fromLabel(left);
+            if (fieldKey == null) {
+                return;
+            }
+            kind = ValueKind.TEXT;
+        } else {
+            fieldKey = label.key();
+            kind = label.kind();
         }
         for (FactCandidate existing : facts) {
-            if (existing.key().equals(label.key())) {
+            if (existing.key().equals(fieldKey)) {
                 return;
             }
         }
-        ValueKind kind = label.kind();
-        FactCandidate candidate = new FactCandidate(label.key(), kind)
+        FactCandidate candidate = new FactCandidate(fieldKey, kind)
                 .valueText(value)
                 .confidence(0.9)
                 .extractionMethod("deterministic");

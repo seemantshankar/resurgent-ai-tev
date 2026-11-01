@@ -151,8 +151,23 @@ public final class PackPathBinder {
                 }
             }
             if (candidate == null) {
-                unbind(facts, row.factId(), row.ontologyPath(), row.pathRoot(), "no_pack_field");
-                unbound++;
+                if (!"deterministic".equals(row.extractionMethod())) {
+                    unbind(facts, row.factId(), row.ontologyPath(), row.pathRoot(),
+                            "no_pack_field");
+                    unbound++;
+                    continue;
+                }
+                LabeledLineBinder.Result labeled = LabeledLineBinder.bind(
+                        facts, catalog, mandateId, pack, living, row);
+                if (labeled.bound()) {
+                    bound++;
+                    if (labeled.livingPath() != null) {
+                        living = living.withLeaf(labeled.livingPath(),
+                                labeled.aliasHint() == null ? row.fieldKey() : labeled.aliasHint());
+                    }
+                } else {
+                    unbound++;
+                }
                 continue;
             }
             Resolved resolved = resolveShared(candidate, living);
