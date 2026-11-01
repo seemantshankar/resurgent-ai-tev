@@ -31,16 +31,20 @@ final class LabeledLineFieldKeys {
         if (filter.isEntityToken(trimmed)) {
             return null;
         }
-        String key = filter.toLabelKey(trimmed);
-        if (key.isEmpty()) {
-            key = filter.rewriteKey(trimmed);
-        }
-        if (key.isEmpty() || filter.isEntityToken(key.replace('_', ' '))) {
-            return null;
-        }
-        var spine = SpineCatalog.matchLabel(trimmed);
+        // Exact spine match first: a short generic word (e.g. a bare "Project")
+        // must never resolve via the miner's loose "longest contained label"
+        // fallback, which would misfile it under an unrelated, longer financial
+        // head such as "Project Cost" (ADR 0036, issue #205).
+        var spine = SpineCatalog.matchLabelExact(trimmed);
         if (spine.isPresent()) {
             return snake(spine.get().leafName());
+        }
+        String key = filter.strip(trimmed);
+        if (key.isEmpty()) {
+            return null;
+        }
+        if (filter.isEntityToken(key.replace('_', ' '))) {
+            return null;
         }
         return key.toLowerCase(Locale.ROOT);
     }
