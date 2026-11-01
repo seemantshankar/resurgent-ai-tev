@@ -178,6 +178,14 @@ _Avoid_: category, file role, title match, heading match
 One data point taken from a supporting document (a net-worth figure, a quotation total, a tariff), stored with its normalised value, the exact source words, and its page and position, and tagged with the entity it is about and, where relevant, the site.
 _Avoid_: field, extracted value, data point (alone)
 
+**Labeled line**:
+A value-bearing line on a document's pages — a label with a value, a label beside its value in two columns, or a figure among words — whose verbatim quote is layout text on that page. It is a fact whether or not the document-type pack already names a schema field key for that label.
+_Avoid_: discovery extract, extra field, unmatched label, page furniture, running header, schedule line, clause, stated claim
+
+**Stated claim**:
+A measure, date, place, status, or category that a sentence asserts, other than a sentence clause reading keeps. One sentence may assert several, and each one is a fact whose verbatim quote is that sentence.
+_Avoid_: labeled line, schedule line, clause, evaluative word, the entity the sentence is about
+
 **Verbatim quote (fact evidence)**:
 The exact words from **layout text** on the cited page that support a fact — the phrase or figure as it appears on the page (or a contiguous substring that layout resolution can find). Stored in evidence and provenance for citation and geometry. Not a JSON schema path, not an extract **schema field key**, and not the normalised value unless that form appears on the page.
 _Avoid_: matching_text (alone), field path, ontology path
@@ -271,7 +279,7 @@ A source pair the system deliberately did not compare — an ambiguous financial
 _Avoid_: missed conflict, ignored pair
 
 **Fact binding**:
-How a document fact got its place on the shared nomenclature (the same heads the financial model binds cells to): the pack's own wording is only a candidate, resolved by the shared label and alias rules, or — for a label none of them names — by one system judgement restricted to the paths of the living master set. It ends **bound** with that path, or **unbound** with the reason it stayed out, and a written note of how it was placed (a model-placed note names the page the label was read on — the pipeline's own provenance, never the model's prose). Unbound is a successful result, not an error: the fact is still retrievable, and the system never asks a person to place it. The document-side unbound reasons are `no_pack_field` (the pack names no field for it), `no_model` (no document model was configured for the run), `model_declined` (the model left that label unplaced), and `model_path_refused` (the path it named is not of the living master set) — enumerated in code and pinned by a unit test, never by a database CHECK.
+How a document fact got its place on the shared nomenclature, the same heads the financial model binds cells to. An existing head wins. A real value with no head is given a new head on this mandate's living master — a group and a measure, such as `Environment > BOD` — and bound there. It is not filed under a financial head that does not mean it. A label that is not a real value stays unbound and retrievable, and the system never asks a person to place it.
 _Avoid_: pack path as truth, analyst mapping, unmapped parking lot
 
 **Page triage**:
@@ -284,11 +292,11 @@ _Avoid_: silent cloud fallback, global-only residency toggle
 
 **Schedule line**:
 One structured table row or cell read from a supporting document or screenshot — a land parcel in a lease or sale deed, a monthly generation or loss row in a PVsyst report, a rated facility or debt tranche in a credit rating report or debt structuring document, a delinquency or account row in a CIBIL or credit bureau screenshot, a monthly balance or transaction row in a bank statement, a qualification or career row in a resume or promoter profile, an equipment row in a DPR or quotation, or a statement line for a financial year — kept distinct from totals and tagged with its own row identifier, entity, site, and period so it binds and compares under its branch of the shared nomenclature.
-_Avoid_: financial-statement-only tables, headline-only summary, rolling detail lines into parent totals
+_Avoid_: financial-statement-only tables, headline-only summary, rolling detail lines into parent totals, a single label-value pair, a two-column identity list
 
 **Autonomous pack induction**:
-How the system learns a document type pack on the fly whenever an unfamiliar document or screenshot arrives, whether a single instance or a batch. It learns the pack from the contents the pages state — generic labels for the fields, schedules, clauses, and passages, never client names or amounts — researches that kind of document's public structure, and publishes or widens the pack so extraction proceeds without a person writing it.
-_Avoid_: manual pack authoring, failing on unknown document types, dropping single-document domain fields as one-offs, a pack induced from the title
+How the system learns a document type pack from the contents the pages state — generic labels for the fields, schedules, clauses, and passages, never client names or amounts — including from a single document. An unfamiliar document starts a pack. A labeled line or stated claim that binds on a spine path adds an optional leaf, published before that run ends, so the next document of that type loads it.
+_Avoid_: manual pack authoring, failing on unknown document types, dropping single-document domain fields as one-offs, a pack induced from the title, a seed file as the completeness contract
 
 **Induction decision**:
 The recorded record of why a candidate document field, table, clause type, or checklist item was promoted, rewritten, downgraded, or dropped during automatic learning, together with the web-research rationale, documents, similarity evidence, and quality gates that supported or rejected it.
