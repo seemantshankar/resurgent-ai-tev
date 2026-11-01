@@ -42,6 +42,19 @@ final class LayoutExtractBridge {
     private static final Pattern TRAILING_COPULA = Pattern.compile(
             "(?i)\\s+\\b(is|are|was|were|be)\\b\\s*$");
 
+    /** MCA Central Registration Centre certificate wording ({@code The … of the company is …}). */
+    private static final Pattern MCA_COMPANY_FIELD = Pattern.compile(
+            "(?i)^The\\s+(.+?)\\s+of\\s+the\\s+company\\s+is\\s+(.+?)\\*?\\s*$");
+
+    private static final Pattern MCA_CERTIFY_NAME = Pattern.compile(
+            "(?i)^I\\s+hereby\\s+certify\\s+that\\s+(.+?)\\s+is\\s+incorporated\\s+on\\b");
+
+    private static final Pattern MCA_LIABILITY = Pattern.compile(
+            "(?i)\\b(Company limited by (?:shares|guarantee)\\b.*)$");
+
+    private static final Pattern MCA_PLACE_OF_ISSUE = Pattern.compile(
+            "(?i)Given\\s+under\\s+my\\s+hand\\s+at\\s+([A-Za-z]+)\\b");
+
     private LayoutExtractBridge() {}
 
     /** Copies layout into parse pages when this version has none yet. */
@@ -406,6 +419,7 @@ final class LayoutExtractBridge {
         }
         joinContinuedSentences(blocks, facts, citations);
         storeUnexplainedFigures(blocks, facts, citations);
+        readMcaIncorporationCertificate(blocks, labels, facts, citations);
         Set<String> consumed = quotesOf(facts);
         Set<String> repeated = new HashSet<>();
         for (BlockLine line : blocks) {
@@ -485,6 +499,119 @@ final class LayoutExtractBridge {
         }
         return new LocalReading(new ExtractResult(labeled.extractorId(), labeled.payload(),
                 facts, citations, labeled.stats()), List.copyOf(unread));
+    }
+
+    /**
+     * MCA {@code Certificate of Incorporation} prose ({@code The … of the company is …}),
+     * the certify-that name sentence, registered office, place of issue, and liability.
+     */
+    private static void readMcaIncorporationCertificate(List<BlockLine> blocks, List<Label> labels,
+            List<FactCandidate> facts, List<Citation> citations) {
+        if (!looksLikeMcaCertificate(blocks)) {
+            return;
+        }
+        for (BlockLine line : blocks) {
+            String text = oneLine(line.text());
+            Matcher mca = MCA_COMPANY_FIELD.matcher(text);
+            if (mca.matches()) {
+                addLabeledFact(mca.group(1).trim(), stripTrailingStar(mca.group(2).trim()),
+                        line.text().trim(), line.page(), labels, facts, citations);
+                continue;
+            }
+            Matcher certify = MCA_CERTIFY_NAME.matcher(text);
+            if (certify.find()) {
+                String name = certify.group(1).trim();
+                if (!name.isBlank()) {
+                    addLabeledFact("Company Name", name, line.text().trim(), line.page(),
+                            labels, facts, citations);
+                }
+            }
+            Matcher liability = MCA_LIABILITY.matcher(text);
+            if (liability.find()) {
+                addLabeledFact("Liability Type", liability.group(1).trim(), line.text().trim(),
+                        line.page(), labels, facts, citations);
+            }
+            Matcher place = MCA_PLACE_OF_ISSUE.matcher(text);
+            if (place.find()) {
+                addLabeledFact("Place of Issue", place.group(1).trim(), line.text().trim(),
+                        line.page(), labels, facts, citations);
+            }
+        }
+        for (int i = 0; i < blocks.size(); i++) {
+            String folded = norm(blocks.get(i).text());
+            if (folded.contains("mailing address") && i + 2 < blocks.size()
+                    && !hasKey(facts, "registered_office")) {
+                String address = blocks.get(i + 2).text().trim();
+                if (!address.isBlank() && !norm(address).contains("disclaimer")) {
+                    addLabeledFact("Registered Office", address, address, blocks.get(i + 2).page(),
+                            labels, facts, citations);
+                }
+            }
+        }
+    }
+
+    private static boolean looksLikeMcaCertificate(List<BlockLine> blocks) {
+        for (BlockLine line : blocks) {
+            String folded = norm(line.text());
+            if (folded.contains("certificate of incorporation")) {
+                return true;
+            }
+            if (MCA_COMPANY_FIELD.matcher(oneLine(line.text())).matches()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void addLabeledFact(String labelText, String value, String quote, int page,
+            List<Label> labels, List<FactCandidate> facts, List<Citation> citations) {
+        if (labelText == null || labelText.isBlank() || value == null || value.isBlank()) {
+            return;
+        }
+        Label label = match(labelText, labels);
+        String fieldKey;
+        ValueKind kind;
+        if (label != null) {
+            fieldKey = label.key();
+            kind = label.kind();
+        } else {
+            fieldKey = LabeledLineFieldKeys.fromLabel(labelText);
+            if (fieldKey == null) {
+                return;
+            }
+            kind = ValueKind.TEXT;
+        }
+        if (hasKey(facts, fieldKey)) {
+            return;
+        }
+        FactCandidate candidate = new FactCandidate(fieldKey, kind)
+                .valueText(value)
+                .confidence(0.9)
+                .extractionMethod("deterministic");
+        if (page >= 1 && quote != null && !quote.isBlank()) {
+            Citation citation = Citation.of(page, quote);
+            candidate.addCitation(citation);
+            citations.add(citation);
+        }
+        facts.add(candidate);
+    }
+
+    private static boolean hasKey(List<FactCandidate> facts, String key) {
+        return facts.stream().anyMatch(f -> key.equals(f.key()));
+    }
+
+    private static String oneLine(String text) {
+        if (text == null) {
+            return "";
+        }
+        return text.trim().replace('\n', ' ').replaceAll("\\s+", " ");
+    }
+
+    private static String stripTrailingStar(String value) {
+        if (value.endsWith("*")) {
+            return value.substring(0, value.length() - 1).trim();
+        }
+        return value;
     }
 
     /** Longest pack label that opens the line; the remainder is the value. */
