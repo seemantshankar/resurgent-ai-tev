@@ -173,6 +173,12 @@ public final class PackPathBinder {
                     unbound++;
                     continue;
                 }
+                if (LabeledLineBinder.isUnexplainedFigure(row)) {
+                    unbind(facts, row.factId(), row.ontologyPath(), row.pathRoot(),
+                            "unexplained_figure");
+                    unbound++;
+                    continue;
+                }
                 LabeledLineBinder.Result labeled = LabeledLineBinder.bind(
                         facts, catalog, mandateId, pack, living, row);
                 if (labeled.bound()) {
