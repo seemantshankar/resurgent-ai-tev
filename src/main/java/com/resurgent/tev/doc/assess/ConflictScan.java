@@ -10,12 +10,16 @@ import com.resurgent.tev.doc.db.FmConflictSources;
 import com.resurgent.tev.doc.extract.MoneyNormalizer;
 import com.resurgent.tev.doc.extract.RateNormalizer;
 import com.resurgent.tev.doc.llm.DocLlmClient;
+import com.resurgent.tev.doc.pack.DocTypePack;
+import com.resurgent.tev.doc.pack.PackField;
+import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.parser.classify.KindTokens;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -59,6 +63,9 @@ public final class ConflictScan {
      */
     private static final Set<String> PERIOD_FIELD_KEYS = Set.of(
             "as_of_date", "as_on", "financial_year", "financial_years", "period");
+
+    /** Unambiguous seed-pack field key → ontology path (document-level facts only). */
+    private static volatile Map<String, String> canonicalPathByFieldKey;
 
     private ConflictScan() {}
 
@@ -394,7 +401,7 @@ public final class ConflictScan {
                 + " vs FM " + modelPeriod + " (" + comparison.detail() + ")";
     }
 
-    /** Facts grouped by data-point identity: pack field key, else ontology path, per line. */
+    /** Facts grouped by data-point identity: bound ontology path, else field key, per line. */
     private static Map<String, List<ConflictFactRow>> groups(List<ConflictFactRow> facts) {
         Map<String, List<ConflictFactRow>> groups = new LinkedHashMap<>();
         for (ConflictFactRow fact : facts) {
@@ -408,18 +415,85 @@ public final class ConflictScan {
     }
 
     /**
-     * The data point a fact states: its pack field key when bound by key, else its
-     * ontology path; a row fact keeps its line key. A fact with neither is never
-     * compared — free text alone is not a data point.
+     * The data point a fact states for doc-doc grouping (#205): when bind settled on a
+     * path, that path is the identity (two pack field keys on one path are one data
+     * point); otherwise the pack field key, else an unsettled ontology path. A row fact
+     * keeps its line key. A fact with neither is never compared — free text alone is
+     * not a data point.
      */
     private static String identityOf(ConflictFactRow fact) {
-        String base = fact.fieldKey() != null ? "field:" + fact.fieldKey()
-                : fact.ontologyPath() != null ? "path:" + fact.ontologyPath()
-                        : null;
+        String base = compareBoundPath(fact);
         if (base == null) {
             return null;
         }
         return base + (fact.lineKey() != null ? "|line:" + fact.lineKey() : "");
+    }
+
+    /**
+     * Doc-doc and doc-FM comparisons share the bound ontology path when bind settled
+     * ({@code scanFm} already keys FM cells by {@code ontologyPath}). Two schema
+     * field keys on one path are one data point; a shared seed-pack field key on a
+     * document-level fact maps to that pack path so a report restatement and an
+     * agreement field compare together (#205).
+     */
+    static String compareBoundPath(ConflictFactRow fact) {
+        if (fact.lineKey() == null || fact.lineKey().isBlank()) {
+            String canonical = canonicalPathForFieldKey(fact.fieldKey());
+            if (canonical != null) {
+                return "path:" + canonical;
+            }
+        }
+        if ("bound".equals(fact.nomenclatureStatus())
+                && fact.ontologyPath() != null && !fact.ontologyPath().isBlank()) {
+            return "path:" + fact.ontologyPath();
+        }
+        if (fact.fieldKey() != null && !fact.fieldKey().isBlank()) {
+            return "field:" + fact.fieldKey();
+        }
+        if (fact.ontologyPath() != null && !fact.ontologyPath().isBlank()) {
+            return "path:" + fact.ontologyPath();
+        }
+        return null;
+    }
+
+    private static String canonicalPathForFieldKey(String fieldKey) {
+        if (fieldKey == null || fieldKey.isBlank()) {
+            return null;
+        }
+        Map<String, String> cached = canonicalPathByFieldKey;
+        if (cached == null) {
+            cached = buildCanonicalPathByFieldKey();
+            canonicalPathByFieldKey = cached;
+        }
+        return cached.get(fieldKey.toLowerCase(Locale.ROOT));
+    }
+
+    private static Map<String, String> buildCanonicalPathByFieldKey() {
+        Map<String, String> paths = new LinkedHashMap<>();
+        Set<String> ambiguous = new HashSet<>();
+        try {
+            for (DocTypePack pack : PackLoader.loadSeedPacks()) {
+                for (PackField field : pack.fields()) {
+                    String key = field.key().toLowerCase(Locale.ROOT);
+                    String path = field.path();
+                    if (path == null || path.isBlank()) {
+                        continue;
+                    }
+                    String existing = paths.get(key);
+                    if (existing == null) {
+                        paths.put(key, path);
+                    } else if (!existing.equals(path)) {
+                        ambiguous.add(key);
+                    }
+                }
+            }
+        } catch (PackLoader.PackValidationException e) {
+            return Map.of();
+        }
+        for (String key : ambiguous) {
+            paths.remove(key);
+        }
+        return Map.copyOf(paths);
     }
 
     /** The stated period of each document version, from its period-role or period-keyed facts. */
