@@ -105,7 +105,7 @@ tables:
         value_kind: text
         prompt_hint: "Shareholder category (promoter, public, etc.) when stated"
       - key: holding_percent
-        value_kind: quantity
+        value_kind: percent
         prompt_hint: "Percentage holding for this row"
       - key: shares
         value_kind: quantity

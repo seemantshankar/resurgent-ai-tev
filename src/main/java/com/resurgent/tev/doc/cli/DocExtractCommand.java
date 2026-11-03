@@ -69,17 +69,18 @@ public final class DocExtractCommand implements Callable<Integer> {
                     : BlobStore.besideDatabase(db);
             boolean fanOut = com.resurgent.tev.doc.extract.DocExtractRunner.shouldFanOut(pack, pages);
             com.resurgent.tev.doc.extract.DocExtractRunner.Result result;
+            com.resurgent.tev.doc.extract.DocExtractRunner.FileExtractResult fileResult = null;
             if (fanOut) {
-                var file = com.resurgent.tev.doc.extract.DocExtractRunner.runAllDocuments(
+                fileResult = com.resurgent.tev.doc.extract.DocExtractRunner.runAllDocuments(
                         mandateId, documentVersionId, db, blobs, extractor, tier, noParse,
                         !noAutoInduce, platform);
-                for (var block : file.documents()) {
-                    printDocumentBlock(out, block, file.parseTier());
+                for (var block : fileResult.documents()) {
+                    printDocumentBlock(out, block, fileResult.parseTier());
                     if (!"success".equals(block.status())) {
                         err.println("warning: extract " + block.status() + ": " + block.message());
                     }
                 }
-                result = file.toAggregateResult();
+                result = fileResult.toAggregateResult();
             } else {
                 result = com.resurgent.tev.doc.extract.DocExtractRunner.run(
                         mandateId, documentVersionId, db, blobs, pack, extractor, pages, tier,
@@ -97,7 +98,7 @@ public final class DocExtractCommand implements Callable<Integer> {
                 }
             }
             int exit = exitCode(result.status());
-            if (exit == 0) {
+            if (shouldReassess(exit, fanOut, fileResult, result.status())) {
                 // Processing new documents ends by re-running the assessment (M3-01).
                 reassess(mandateId, db, platform, out, err);
             }
@@ -163,5 +164,19 @@ public final class DocExtractCommand implements Callable<Integer> {
      */
     static int exitCode(String status) {
         return "failed".equals(status) ? 1 : 0;
+    }
+
+    private static boolean shouldReassess(int exit,
+            boolean fanOut,
+            com.resurgent.tev.doc.extract.DocExtractRunner.FileExtractResult fileResult,
+            String status) {
+        if (exit == 0) {
+            return true;
+        }
+        if (fanOut && fileResult != null) {
+            return fileResult.documents().stream()
+                    .anyMatch(block -> !"failed".equals(block.status()));
+        }
+        return !"failed".equals(status);
     }
 }

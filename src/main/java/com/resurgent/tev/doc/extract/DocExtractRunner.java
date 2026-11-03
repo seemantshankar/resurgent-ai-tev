@@ -128,6 +128,7 @@ public final class DocExtractRunner {
                         docs.findVersion(fileVersionId).orElseThrow().documentId(), fileVersionId));
             }
             List<DocTypePack> packs = loadAllPacks(db, platform, mandateId);
+            boolean firstDocument = true;
             for (DocumentRepository.FileMemberDocument member : members) {
                 String code = docs.findClassificationCode(member.classificationVersionId())
                         .orElse(null);
@@ -140,6 +141,10 @@ public final class DocExtractRunner {
                 ExtractService.ExtractOutcome outcome = service.read(
                         db, member.documentId(), mandateId, pack, context.client(),
                         context.client().id(), context.options());
+                if (!firstDocument && context.options() != null) {
+                    context.options().remove(LlamaExtractAdapter.KEY_PARSE_CREDITS);
+                }
+                firstDocument = false;
                 if (autoInduce && !"failed".equals(outcome.status())) {
                     com.resurgent.tev.doc.bind.DocBindRunner.run(
                             mandateId, outcome.parseRunId(), db, pack.code(), platform);

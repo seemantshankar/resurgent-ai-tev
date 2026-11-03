@@ -526,9 +526,14 @@ public final class DocumentRepository {
                 }
             }
         }
+        long fileDocumentId = findVersion(fileVersionId)
+                .map(DocumentVersionRow::documentId)
+                .orElse(-1L);
         List<FileMemberDocument> members = new ArrayList<>();
         for (Long documentId : documentIds) {
-            long classificationVersion = currentVersionId(documentId).orElse(fileVersionId);
+            long classificationVersion = documentId == fileDocumentId
+                    ? fileVersionId
+                    : currentVersionId(documentId).orElse(fileVersionId);
             members.add(new FileMemberDocument(documentId, classificationVersion));
         }
         return members;

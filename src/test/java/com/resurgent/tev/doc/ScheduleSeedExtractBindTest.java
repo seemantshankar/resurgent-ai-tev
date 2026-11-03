@@ -249,19 +249,25 @@ class ScheduleSeedExtractBindTest {
                 """), pack("financials.audited_summary"), """
                 {"assignments": [
                   {"key": "shareholding.holding_percent|promoter alpha",
-                   "path": "Shareholding > Promoter",
+                   "path": "Shareholding % > Promoter",
                    "reasoning": "promoter row is its own holder"},
                   {"key": "shareholding.holding_percent|public",
-                   "path": "Shareholding > Public",
+                   "path": "Shareholding % > Public",
                    "reasoning": "public float is its own row"}]}
                 """);
 
         List<FactRow> facts = facts();
         FactRow promoter = cell(facts, audited, "shareholding.holding_percent", "Promoter Alpha");
+        FactRow publicRow = cell(facts, audited, "shareholding.holding_percent", "Public");
         assertThat(promoter.lineKey()).isEqualTo("Promoter Alpha");
         assertThat(promoter.subjectEntity()).isEqualTo("Promoter Alpha");
+        assertThat(promoter.valueNumber()).isEqualTo(0.625);
         assertThat(promoter.valueText()).contains("62.5");
-        assertThat(promoter.ontologyPath()).contains("Shareholding");
+        assertThat(promoter.ontologyPath()).isEqualTo("identity > Shareholding % > Promoter");
+        assertThat(promoter.nomenclatureStatus()).isEqualTo("bound");
+        assertThat(publicRow.valueNumber()).isEqualTo(0.375);
+        assertThat(publicRow.ontologyPath()).isEqualTo("identity > Shareholding % > Public");
+        assertThat(publicRow.nomenclatureStatus()).isEqualTo("bound");
     }
 
     @Test

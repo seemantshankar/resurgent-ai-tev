@@ -73,19 +73,11 @@ final class FileDocuments {
             documentIds.put(work, siblingId);
         }
         if (inducible(untyped)) {
-            if (!works.isEmpty()) {
-                Work target = works.get(works.size() - 1);
-                target.pages.addAll(untyped);
-                Long documentId = documentIds.get(target);
-                if (documentId != null) {
-                    docs.replaceMemberPages(documentId, pageIds(target));
-                }
-            } else {
-                Work unknown = new Work(ClassifyResult.unknown(
-                        List.of("contents fit no known document type"), "deterministic"));
-                unknown.pages.addAll(untyped);
-                insertWork(connection, docs, version, mandateId, industryTag, packs, classifier,
-                        logicalName, rawMetadata, unknown);
+            Work target = works.get(works.size() - 1);
+            target.pages.addAll(untyped);
+            Long documentId = documentIds.get(target);
+            if (documentId != null) {
+                docs.replaceMemberPages(documentId, pageIds(target));
             }
         }
         return Optional.of(works.get(0).result);
