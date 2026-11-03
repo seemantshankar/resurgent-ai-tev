@@ -55,6 +55,9 @@ final class LayoutExtractBridge {
     private static final Pattern MCA_PLACE_OF_ISSUE = Pattern.compile(
             "(?i)Given\\s+under\\s+my\\s+hand\\s+at\\s+([A-Za-z]+)\\b");
 
+    private static final Pattern PLACEHOLDER_VALUE = Pattern.compile(
+            "(?i)^(?:n/?a|nil|none|tbd|pending|-+|—+)$");
+
     private LayoutExtractBridge() {}
 
     /** Copies layout into parse pages when this version has none yet. */
@@ -184,6 +187,7 @@ final class LayoutExtractBridge {
     private static void readTextLines(List<BlockLine> blocks, Set<Integer> gridPages,
             List<TableSpec> tables, List<Label> labels, DocTypePack pack,
             List<FactCandidate> facts, List<Citation> citations) {
+        blocks = coalesceContinuedLabelLines(blocks);
         List<List<Cell>> pipe = new ArrayList<>();
         int pipePage = 1;
         for (BlockLine line : blocks) {
@@ -358,7 +362,11 @@ final class LayoutExtractBridge {
             value = valueOrLine;
             quote = valueOrLine;
         }
-        if (left.isBlank() || value.isBlank()) {
+        if (left.isBlank()) {
+            return;
+        }
+        if (value.isBlank() || placeholderValue(value)) {
+            storeNotAValue(left, value, quote, page, labels, pack, facts, citations, twoColumnRow);
             return;
         }
         Label label = match(left, labels);
@@ -377,7 +385,10 @@ final class LayoutExtractBridge {
                 return;
             }
             fieldKey = LabeledLineFieldKeys.fromLabel(left);
-            if (fieldKey == null) {
+            if (fieldKey == null || PageFurniture.fieldKey(fieldKey)) {
+                return;
+            }
+            if (!PageFurniture.publishableExtra(fieldKey, left, value)) {
                 return;
             }
             kind = ValueKind.TEXT;
@@ -403,6 +414,81 @@ final class LayoutExtractBridge {
     }
 
     /**
+     * A value line that continues the previous {@code label: value} on the page,
+     * such as a registered office split across lines (#205).
+     */
+    private static List<BlockLine> coalesceContinuedLabelLines(List<BlockLine> blocks) {
+        List<BlockLine> merged = new ArrayList<>();
+        for (int i = 0; i < blocks.size(); i++) {
+            BlockLine line = blocks.get(i);
+            String text = line.text();
+            int colon = text.indexOf(':');
+            if (colon > 2 && colon < 50) {
+                String left = text.substring(0, colon).trim();
+                if (addressStyleLabel(left)) {
+                    StringBuilder combined = new StringBuilder(text);
+                    while (i + 1 < blocks.size()
+                            && continuesAddressLine(blocks.get(i + 1).text())) {
+                        i++;
+                        combined.append(' ').append(blocks.get(i).text().trim());
+                    }
+                    merged.add(new BlockLine(line.page(), combined.toString()));
+                } else {
+                    merged.add(line);
+                }
+            } else {
+                merged.add(line);
+            }
+        }
+        return merged;
+    }
+
+    private static boolean addressStyleLabel(String left) {
+        String folded = norm(left);
+        return folded.contains("office") || folded.contains("address")
+                || folded.contains("location") || folded.contains("mailing");
+    }
+
+    private static boolean continuesAddressLine(String line) {
+        if (line == null || line.isBlank() || PageFurniture.line(line)) {
+            return false;
+        }
+        String trimmed = line.trim();
+        int colon = trimmed.indexOf(':');
+        if (colon > 2 && colon < 50) {
+            return false;
+        }
+        if (isFigure(trimmed)) {
+            return false;
+        }
+        if (Character.isDigit(trimmed.charAt(0)) || trimmed.contains(",")
+                || Character.isLowerCase(trimmed.charAt(0))) {
+            return true;
+        }
+        return !hasDigit(trimmed);
+    }
+
+    private static boolean hasDigit(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            if (Character.isDigit(text.charAt(i))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean placeholderValue(String value) {
+        return value != null && PLACEHOLDER_VALUE.matcher(value.trim()).matches();
+    }
+
+    private static void storeNotAValue(String left, String value, String quote, int page,
+            List<Label> labels, DocTypePack pack, List<FactCandidate> facts,
+            List<Citation> citations, boolean twoColumnRow) {
+        addLabeledFact(left, value == null ? "" : value.trim(), quote, page, labels, pack,
+                facts, citations, twoColumnRow, true);
+    }
+
+    /**
      * Key-value lines the label pass left behind, including a line with no colon.
      * A fact already stored skips only that field; the rest of the page is still read.
      */
@@ -417,6 +503,7 @@ final class LayoutExtractBridge {
                 blocks.add(line);
             }
         }
+        blocks = coalesceContinuedLabelLines(blocks);
         joinContinuedSentences(blocks, facts, citations);
         storeUnexplainedFigures(blocks, facts, citations);
         readMcaIncorporationCertificate(blocks, labels, facts, citations);
@@ -565,7 +652,20 @@ final class LayoutExtractBridge {
 
     private static void addLabeledFact(String labelText, String value, String quote, int page,
             List<Label> labels, List<FactCandidate> facts, List<Citation> citations) {
-        if (labelText == null || labelText.isBlank() || value == null || value.isBlank()) {
+        addLabeledFact(labelText, value, quote, page, labels, null, facts, citations, true,
+                false);
+    }
+
+    private static void addLabeledFact(String labelText, String value, String quote, int page,
+            List<Label> labels, DocTypePack pack, List<FactCandidate> facts,
+            List<Citation> citations, boolean twoColumnRow, boolean notARealValue) {
+        if (labelText == null || labelText.isBlank() || value == null) {
+            return;
+        }
+        if (!notARealValue && value.isBlank()) {
+            return;
+        }
+        if (notARealValue && PageFurniture.line(labelText)) {
             return;
         }
         Label label = match(labelText, labels);
@@ -575,8 +675,18 @@ final class LayoutExtractBridge {
             fieldKey = label.key();
             kind = label.kind();
         } else {
+            if (notARealValue && !twoColumnRow) {
+                return;
+            }
+            if (!notARealValue && (!twoColumnRow || ownedByAnotherPack(labelText, pack))) {
+                return;
+            }
             fieldKey = LabeledLineFieldKeys.fromLabel(labelText);
-            if (fieldKey == null) {
+            if (fieldKey == null || PageFurniture.fieldKey(fieldKey)) {
+                return;
+            }
+            if (!notARealValue
+                    && !PageFurniture.publishableExtra(fieldKey, labelText, value)) {
                 return;
             }
             kind = ValueKind.TEXT;
@@ -943,6 +1053,9 @@ final class LayoutExtractBridge {
      * already names it.
      */
     private static boolean ownedByAnotherPack(String left, DocTypePack pack) {
+        if (pack == null) {
+            return false;
+        }
         String n = norm(left);
         if (n.isEmpty()) {
             return false;

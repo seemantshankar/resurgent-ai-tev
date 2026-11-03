@@ -113,6 +113,84 @@ class LabeledLineExtractBindTest {
     }
 
     @Test
+    void registeredOfficeContinuationIsOneValue() throws Exception {
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
+            DocumentRepository docs = new DocumentRepository(db.connection());
+            long versionId = docs.versionHolding(documentId);
+            try (var ps = db.connection().prepareStatement(
+                    "UPDATE document_version SET page_count = 2 WHERE document_version_id = ?")) {
+                ps.setLong(1, versionId);
+                ps.executeUpdate();
+            }
+            long pageId = docs.insertPage(versionId, 2, 600, 800, null);
+            docs.insertBlock(pageId, 0, "paragraph", null, null, null, null,
+                    "Registered Office : 123 Main Street", "Registered Office : 123 Main Street",
+                    0, "test");
+            docs.insertBlock(pageId, 1, "paragraph", null, null, null, null,
+                    "Jaipur, Rajasthan 302001", "Jaipur, Rajasthan 302001", 1, "test");
+            try (var ps = db.connection().prepareStatement(
+                    "INSERT INTO document_page (document_id, page_id) VALUES (?, ?)")) {
+                ps.setLong(1, documentId);
+                ps.setLong(2, pageId);
+                ps.executeUpdate();
+            }
+        }
+
+        ExtractService.ExtractOutcome extract = new ExtractService().read(
+                dbPath, documentId, MANDATE, thinCertificate, new SilentCloud(), "test");
+        PackPathBinder.BindOutcome bind = new PackPathBinder().bind(
+                dbPath, extract.parseRunId(), MANDATE, thinCertificate, null);
+        assertThat(bind.bound()).isGreaterThanOrEqualTo(1);
+
+        FactRow office = byKey(factsOf(documentId), "registered_office");
+        assertThat(office.valueText()).contains("Jaipur");
+        assertThat(office.valueText()).contains("123 Main Street");
+    }
+
+    @Test
+    void blankLabeledValueIsStoredUnboundWithQuote() throws Exception {
+        Path blankDb = tempDir.resolve("blank-label.db");
+        long blankDocId;
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(blankDb)) {
+            WorkspaceRepository repo = new WorkspaceRepository(db.connection());
+            DocumentRepository docs = new DocumentRepository(db.connection());
+            long sourceId = repo.insertSourceFile(MANDATE, "blank.pdf", "hash2", "pdf",
+                    "2026-01-01T00:00:00Z", "0.1.0", null);
+            blankDocId = docs.insertDocument(MANDATE, "Blank", "certificate", thinCertificate.code());
+            long versionId = docs.insertDocumentVersion(blankDocId, "v1", "blank.pdf", "hash2",
+                    ".pdf", "certificate", 1, false, sourceId, null);
+            long pageId = docs.insertPage(versionId, 1, 600, 800, null);
+            docs.insertBlock(pageId, 0, "paragraph", null, null, null, null,
+                    "Nominee director :", "Nominee director :", 0, "test");
+            try (var ps = db.connection().prepareStatement(
+                    "INSERT INTO document_page (document_id, page_id) VALUES (?, ?)")) {
+                ps.setLong(1, blankDocId);
+                ps.setLong(2, pageId);
+                ps.executeUpdate();
+            }
+            new MandatePolicyRepository(db.connection()).upsert(MANDATE, DataResidency.LOCAL_ONLY);
+        }
+
+        ExtractService.ExtractOutcome extract = new ExtractService().read(
+                blankDb, blankDocId, MANDATE, thinCertificate, new SilentCloud(), "test");
+        assertThat(extract.status()).isEqualTo("success");
+        new PackPathBinder().bind(blankDb, extract.parseRunId(), MANDATE, thinCertificate, null);
+
+        try (WorkspaceDatabase db = WorkspaceDatabase.open(blankDb)) {
+            List<FactRow> facts = new FactRepository(db.connection())
+                    .query(FactQuery.forMandate(MANDATE).withDocument(blankDocId));
+            FactRow blank = facts.stream()
+                    .filter(f -> "nominee_director".equals(f.fieldKey()))
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(blank.valueText()).isBlank();
+            assertThat(blank.nomenclatureStatus()).isEqualTo("unbound");
+            assertThat(blank.unboundReason()).isEqualTo("not_a_value");
+            assertThat(blank.evidence().get(0).verbatim()).isEqualTo("Nominee director :");
+        }
+    }
+
+    @Test
     void twoColumnIdentityPairUsesValueQuote() throws Exception {
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
             DocumentRepository docs = new DocumentRepository(db.connection());
