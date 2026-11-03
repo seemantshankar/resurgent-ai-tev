@@ -79,6 +79,12 @@ class ScheduleSeedExtractBindTest {
         JsonNode headline = columns(pack("financials.audited_summary"), "headline_figures");
         assertThat(headline.path("financial_year").path("period").asBoolean()).isTrue();
         assertThat(headline.path("revenue").path("line_key").asBoolean(false)).isFalse();
+
+        JsonNode shareholding = columns(pack("financials.audited_summary"), "shareholding");
+        assertThat(shareholding.path("holder").path("line_key").asBoolean()).isTrue();
+        assertThat(shareholding.path("holder").path("entity").asBoolean()).isTrue();
+        assertThat(shareholding.path("holding_percent").path("line_key").asBoolean(false))
+                .isFalse();
     }
 
     @Test
@@ -218,6 +224,44 @@ class ScheduleSeedExtractBindTest {
                 .isEqualTo("economic > Promoter Net Worth > Liability > Term Loan");
         assertThat(land.nomenclatureStatus()).isEqualTo("bound");
         assertThat(assetsTotal.ontologyPath()).isNotEqualTo(land.ontologyPath());
+    }
+
+    @Test
+    void auditedSummaryShareholdingScheduleExtractsWithLineKey() throws Exception {
+        long audited = ingest("audited-notes.pdf", "Audited Financials - ABC", "audited_financials",
+                "Audited Financial Summary", "ABC Pvt Ltd", "Notes to accounts",
+                "Shareholding pattern", "Promoter Alpha 62.5%", "Public 37.5%");
+        bind(extract(audited, "financials.audited_summary", """
+                {
+                  "doc_type_code": "financials.audited_summary",
+                  "fields": {
+                    "subject_name": {"value": "ABC Pvt Ltd", "quote": "ABC Pvt Ltd", "page": 1}
+                  },
+                  "tables": {
+                    "shareholding": [
+                      {"holder": "Promoter Alpha", "category": "Promoter",
+                       "holding_percent": {"value": "62.5%", "quote": "Promoter Alpha 62.5%", "page": 1}},
+                      {"holder": "Public", "category": "Public",
+                       "holding_percent": {"value": "37.5%", "quote": "Public 37.5%", "page": 1}}
+                    ]
+                  }
+                }
+                """), pack("financials.audited_summary"), """
+                {"assignments": [
+                  {"key": "shareholding.holding_percent|promoter alpha",
+                   "path": "Shareholding > Promoter",
+                   "reasoning": "promoter row is its own holder"},
+                  {"key": "shareholding.holding_percent|public",
+                   "path": "Shareholding > Public",
+                   "reasoning": "public float is its own row"}]}
+                """);
+
+        List<FactRow> facts = facts();
+        FactRow promoter = cell(facts, audited, "shareholding.holding_percent", "Promoter Alpha");
+        assertThat(promoter.lineKey()).isEqualTo("Promoter Alpha");
+        assertThat(promoter.subjectEntity()).isEqualTo("Promoter Alpha");
+        assertThat(promoter.valueText()).contains("62.5");
+        assertThat(promoter.ontologyPath()).contains("Shareholding");
     }
 
     @Test

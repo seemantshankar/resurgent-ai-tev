@@ -1,15 +1,18 @@
 package com.resurgent.tev.doc.extract;
 
+import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.MandatePolicyRepository;
 import com.resurgent.tev.doc.ingest.BlobStore;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.doc.residency.DataResidency;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * CLI facade for extract. Resolves pack + extractor and delegates to {@link ExtractService}.
@@ -77,6 +80,89 @@ public final class DocExtractRunner {
     public static Result run(long mandateId, long documentVersionId, Path db, BlobStore blobs,
             String packCode, String extractorId, String pages, String tier, boolean noParse,
             boolean autoInduce, Path platform) throws Exception {
+        if (shouldFanOut(packCode, pages)) {
+            return runAllDocuments(mandateId, documentVersionId, db, blobs, extractorId, tier,
+                    noParse, autoInduce, platform).toAggregateResult();
+        }
+        return runSingleVersion(mandateId, documentVersionId, db, blobs, packCode, extractorId,
+                pages, tier, noParse, autoInduce, platform);
+    }
+
+    /**
+     * True when extract should fan out to every document on the named file version
+     * (no {@code --pack} and no {@code --pages}).
+     */
+    public static boolean shouldFanOut(String packCode, String pages) {
+        boolean noPack = packCode == null || packCode.isBlank();
+        boolean noPages = pages == null || pages.isBlank();
+        return noPack && noPages;
+    }
+
+    /**
+     * Extracts every logical document whose pages live on the file version, binding
+     * after each successful pass.
+     */
+    public static FileExtractResult runAllDocuments(long mandateId, long fileVersionId, Path db,
+            BlobStore blobs, String extractorId, String tier, boolean noParse, boolean autoInduce,
+            Path platform) throws Exception {
+        com.resurgent.tev.doc.platform.PlatformRegistry.recordIfNamed(platform, db, mandateId);
+        if (autoInduce) {
+            String classified = classifiedPackCode(db, fileVersionId);
+            if (classified == null || classified.isBlank() || "unknown".equalsIgnoreCase(classified)) {
+                com.resurgent.tev.doc.classify.DocClassifyRunner.run(
+                        mandateId, fileVersionId, db, blobs, null, "general", true, true,
+                        platform);
+            }
+        }
+        ExtractContext context = prepareContext(db, mandateId, fileVersionId, extractorId, tier,
+                noParse, platform, null);
+        ExtractService service = new ExtractService();
+        List<DocumentBlock> blocks = new ArrayList<>();
+        try (com.resurgent.tev.parser.db.WorkspaceDatabase workspace =
+                com.resurgent.tev.parser.db.WorkspaceDatabase.open(db)) {
+            DocumentRepository docs = new DocumentRepository(workspace.connection());
+            List<DocumentRepository.FileMemberDocument> members =
+                    docs.documentsOnFile(fileVersionId);
+            if (members.isEmpty()) {
+                members = List.of(new DocumentRepository.FileMemberDocument(
+                        docs.findVersion(fileVersionId).orElseThrow().documentId(), fileVersionId));
+            }
+            List<DocTypePack> packs = loadAllPacks(db, platform, mandateId);
+            for (DocumentRepository.FileMemberDocument member : members) {
+                String code = docs.findClassificationCode(member.classificationVersionId())
+                        .orElse(null);
+                if (code == null || code.isBlank() || "unknown".equalsIgnoreCase(code)) {
+                    throw new IllegalArgumentException("--pack is required (classify version "
+                            + member.classificationVersionId() + " first)");
+                }
+                DocTypePack pack = resolvePackFromCode(packs, code);
+                List<Integer> pageList = docs.pageIndexesOf(member.documentId());
+                ExtractService.ExtractOutcome outcome = service.read(
+                        db, member.documentId(), mandateId, pack, context.client(),
+                        context.client().id(), context.options());
+                if (autoInduce && !"failed".equals(outcome.status())) {
+                    com.resurgent.tev.doc.bind.DocBindRunner.run(
+                            mandateId, outcome.parseRunId(), db, pack.code(), platform);
+                }
+                blocks.add(new DocumentBlock(
+                        member.documentId(),
+                        pack.identity(),
+                        context.client().id(),
+                        pageList,
+                        outcome.factsTotal(),
+                        outcome.fieldsMissing(),
+                        outcome.fieldsAmbiguous(),
+                        outcome.parseRunId(),
+                        outcome.status(),
+                        outcome.message()));
+            }
+        }
+        return new FileExtractResult(blocks, context.effectiveTier().wireName());
+    }
+
+    private static Result runSingleVersion(long mandateId, long documentVersionId, Path db,
+            BlobStore blobs, String packCode, String extractorId, String pages, String tier,
+            boolean noParse, boolean autoInduce, Path platform) throws Exception {
         com.resurgent.tev.doc.platform.PlatformRegistry.recordIfNamed(platform, db, mandateId);
         if (autoInduce && (packCode == null || packCode.isBlank())) {
             String classified = classifiedPackCode(db, documentVersionId);
@@ -87,31 +173,59 @@ public final class DocExtractRunner {
             }
         }
         DocTypePack pack = resolvePack(db, documentVersionId, packCode, platform, mandateId);
-        ExtractClient client = resolveClient(extractorId,
-                com.resurgent.tev.doc.platform.SpendCeiling.forbidsCloud(db, mandateId));
+        ExtractContext context = prepareContext(db, mandateId, documentVersionId, extractorId,
+                tier, noParse, platform, packCode);
         PageSelection pageSelection = PageSelection.parseOptional(pages);
         List<Integer> pageIndices = pageSelection == null ? null : pageSelection.indices();
 
+        ExtractService service = new ExtractService();
+        ExtractService.ExtractOutcome outcome = service.extract(
+                db, documentVersionId, mandateId, pack, context.client(), context.client().id(),
+                null, context.options(), pageIndices);
+        if (autoInduce && !"failed".equals(outcome.status())) {
+            com.resurgent.tev.doc.bind.DocBindRunner.run(
+                    mandateId, outcome.parseRunId(), db, pack.code(), platform);
+        }
+        return new Result(
+                pack.identity(),
+                context.client().id(),
+                outcome.factsTotal(),
+                outcome.fieldsMissing(),
+                outcome.fieldsAmbiguous(),
+                outcome.parseRunId(),
+                context.effectiveTier().wireName(),
+                outcome.status(),
+                outcome.message());
+    }
+
+    private record ExtractContext(ExtractClient client, ParseTier effectiveTier,
+            Map<String, String> options) {}
+
+    private static ExtractContext prepareContext(Path db, long mandateId, long documentVersionId,
+            String extractorId, String tier, boolean noParse, Path platform, String packCode)
+            throws Exception {
+        ExtractClient client = resolveClient(extractorId,
+                com.resurgent.tev.doc.platform.SpendCeiling.forbidsCloud(db, mandateId));
         ParseTier override = tier == null || tier.isBlank() ? null : ParseTier.fromWire(tier);
         boolean localOnly = localOnly(db, mandateId);
-        double estimate = com.resurgent.tev.doc.platform.SpendCeiling.estimateUsd(
-                1, override);
+        double estimate = com.resurgent.tev.doc.platform.SpendCeiling.estimateUsd(1, override);
         boolean ceilingBlocks = com.resurgent.tev.doc.platform.SpendCeiling.blocks(
                 db, mandateId, platform, estimate);
-        // local_only and zero mandate ceiling select DocLlmExtractClient in resolveClient
-        // so the pipeline continues offline (#192, ADR 0033); do not fail-fast here.
         if (ceilingBlocks && client instanceof LlamaExtractAdapter) {
             client = new DocLlmExtractClient();
         }
-        ParseTier effectiveTier;
         Map<String, String> options = null;
-        if (client instanceof LlamaExtractAdapter && !noParse && !localOnly
-                && LlamaParseClient.hasApiKey()) {
+        ParseTier effectiveTier;
+        boolean mayParse = !noParse && !localOnly && !ceilingBlocks
+                && LlamaParseClient.hasApiKey()
+                && !(client instanceof FixtureExtractClient);
+        if (mayParse) {
             ParseService.ParseOutcome parsed = ParseService.parse(
-                    db, documentVersionId, override, new LlamaParseClient(), blobs,
+                    db, documentVersionId, override, new LlamaParseClient(), BlobStore.besideDatabase(db),
                     System.getenv(), platform);
             effectiveTier = parsed.tier();
-            if (parsed.jobId() != null && parsed.fullCloudJob()) {
+            if (client instanceof LlamaExtractAdapter && parsed.jobId() != null
+                    && parsed.fullCloudJob()) {
                 options = new LinkedHashMap<>();
                 options.put(LlamaExtractAdapter.KEY_PARSE_JOB_ID, parsed.jobId());
                 options.put(LlamaExtractAdapter.KEY_PARSE_TIER, parsed.tier().wireName());
@@ -121,7 +235,7 @@ public final class DocExtractRunner {
                 }
                 options.put(LlamaExtractAdapter.KEY_PARSE_LATENCY_MS,
                         String.valueOf(parsed.latencyMs()));
-            } else {
+            } else if (client instanceof LlamaExtractAdapter) {
                 client = new DocLlmExtractClient();
             }
         } else {
@@ -131,7 +245,6 @@ public final class DocExtractRunner {
                 client = new DocLlmExtractClient();
             }
         }
-
         if (platform != null) {
             if (options == null) {
                 options = new LinkedHashMap<>();
@@ -139,25 +252,7 @@ public final class DocExtractRunner {
             options.put(com.resurgent.tev.doc.platform.SpendCeiling.PLATFORM_OPTION,
                     platform.toAbsolutePath().normalize().toString());
         }
-        ExtractService service = new ExtractService();
-        ExtractService.ExtractOutcome outcome = service.extract(
-                db, documentVersionId, mandateId, pack, client, client.id(), null, options,
-                pageIndices);
-        if (autoInduce && !"failed".equals(outcome.status())) {
-            com.resurgent.tev.doc.bind.DocBindRunner.run(
-                    mandateId, outcome.parseRunId(), db, pack.code(), platform);
-        }
-        int ambiguous = outcome.fieldsAmbiguous();
-        return new Result(
-                pack.identity(),
-                client.id(),
-                outcome.factsTotal(),
-                outcome.fieldsMissing(),
-                ambiguous,
-                outcome.parseRunId(),
-                effectiveTier.wireName(),
-                outcome.status(),
-                outcome.message());
+        return new ExtractContext(client, effectiveTier, options);
     }
 
     /**
@@ -185,6 +280,10 @@ public final class DocExtractRunner {
                         + documentVersionId + " first)");
             }
         }
+        return resolvePackFromCode(packs, code);
+    }
+
+    private static DocTypePack resolvePackFromCode(List<DocTypePack> packs, String code) {
         for (DocTypePack pack : packs) {
             if (com.resurgent.tev.doc.pack.PackCodes.same(pack.code(), code)) {
                 return pack;
@@ -204,7 +303,7 @@ public final class DocExtractRunner {
     public static String classifiedPackCode(Path db, long documentVersionId) throws Exception {
         try (com.resurgent.tev.parser.db.WorkspaceDatabase workspace =
                 com.resurgent.tev.parser.db.WorkspaceDatabase.open(db)) {
-            return new com.resurgent.tev.doc.db.DocumentRepository(workspace.connection())
+            return new DocumentRepository(workspace.connection())
                     .findClassificationCode(documentVersionId)
                     .orElse(null);
         }
@@ -259,5 +358,62 @@ public final class DocExtractRunner {
             String parseTier,
             String status,
             String message) {
+    }
+
+    /** One document's extract within a file-level fan-out. */
+    public record DocumentBlock(
+            long documentId,
+            String packIdentity,
+            String extractorId,
+            List<Integer> pages,
+            int factsWritten,
+            int missingRequired,
+            int ambiguousCount,
+            long parseRunId,
+            String status,
+            String message) {
+    }
+
+    /** Outcome of extracting every document on one file version. */
+    public record FileExtractResult(List<DocumentBlock> documents, String parseTier) {
+
+        /** Backward-compatible aggregate for callers of {@link #run}. */
+        public Result toAggregateResult() {
+            if (documents.isEmpty()) {
+                throw new IllegalStateException("no documents extracted");
+            }
+            int facts = 0;
+            int missing = 0;
+            int ambiguous = 0;
+            String status = "success";
+            String message = "ok";
+            for (DocumentBlock block : documents) {
+                facts += block.factsWritten();
+                missing += block.missingRequired();
+                ambiguous += block.ambiguousCount();
+                if ("failed".equals(block.status())) {
+                    status = "failed";
+                    message = block.message();
+                } else if ("partial".equals(block.status()) && !"failed".equals(status)) {
+                    status = "partial";
+                    message = block.message();
+                }
+            }
+            DocumentBlock last = documents.get(documents.size() - 1);
+            String packs = documents.stream()
+                    .map(DocumentBlock::packIdentity)
+                    .distinct()
+                    .collect(Collectors.joining(", "));
+            return new Result(
+                    documents.size() == 1 ? last.packIdentity() : packs,
+                    last.extractorId(),
+                    facts,
+                    missing,
+                    ambiguous,
+                    last.parseRunId(),
+                    parseTier,
+                    status,
+                    message);
+        }
     }
 }

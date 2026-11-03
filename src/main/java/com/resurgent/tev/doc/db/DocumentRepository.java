@@ -483,6 +483,66 @@ public final class DocumentRepository {
         }
     }
 
+    /**
+     * Current version pointer for a logical document, when set.
+     *
+     * @throws SQLException if the lookup fails
+     */
+    public Optional<Long> currentVersionId(long documentId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT current_version_id FROM document WHERE document_id = ?")) {
+            ps.setLong(1, documentId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return Optional.empty();
+                }
+                long raw = rs.getLong(1);
+                return rs.wasNull() ? Optional.empty() : Optional.of(raw);
+            }
+        }
+    }
+
+    /**
+     * Logical documents whose member pages are stored on this file version, ordered
+     * by each document's first page in the file.
+     *
+     * @param fileVersionId ingested file {@code document_version_id}
+     * @return members with the version id used for pack classification
+     * @throws SQLException if the lookup fails
+     */
+    public List<FileMemberDocument> documentsOnFile(long fileVersionId) throws SQLException {
+        List<Long> documentIds = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT dp.document_id, MIN(p.page_index) AS first_page"
+                        + " FROM document_page dp"
+                        + " JOIN page p ON p.page_id = dp.page_id"
+                        + " WHERE p.document_version_id = ?"
+                        + " GROUP BY dp.document_id"
+                        + " ORDER BY first_page, dp.document_id")) {
+            ps.setLong(1, fileVersionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    documentIds.add(rs.getLong(1));
+                }
+            }
+        }
+        List<FileMemberDocument> members = new ArrayList<>();
+        for (Long documentId : documentIds) {
+            long classificationVersion = currentVersionId(documentId).orElse(fileVersionId);
+            members.add(new FileMemberDocument(documentId, classificationVersion));
+        }
+        return members;
+    }
+
+    /**
+     * One logical document whose pages live on a shared file version.
+     *
+     * @param documentId logical document
+     * @param classificationVersionId version whose {@code doc_classification} row
+     *     supplies the pack code for extract
+     */
+    public record FileMemberDocument(long documentId, long classificationVersionId) {}
+
     public Optional<Long> findPageId(long documentVersionId, int pageIndex) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT page_id FROM page WHERE document_version_id = ? AND page_index = ?")) {
@@ -672,10 +732,26 @@ public final class DocumentRepository {
      */
     public long insertTableCell(long tableGridId, int rowIndex, int colIndex, String textRaw,
             Double x0, Double y0, Double x1, Double y1, boolean isHeader) throws SQLException {
+        return insertTableCell(tableGridId, rowIndex, colIndex, textRaw, x0, y0, x1, y1,
+                isHeader, 1);
+    }
+
+    /**
+     * Inserts a table cell. {@code colSpan} is how many columns the text covers
+     * when a printed cell is merged; the covered columns are stored empty so
+     * later rows keep the same indexes.
+     *
+     * @param colSpan columns covered by this cell, at least one
+     * @return the generated cell ID
+     * @throws SQLException if the insert fails or yields no generated key
+     */
+    public long insertTableCell(long tableGridId, int rowIndex, int colIndex, String textRaw,
+            Double x0, Double y0, Double x1, Double y1, boolean isHeader, int colSpan)
+            throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO table_cell (table_grid_id, row_index, col_index, text_raw,"
                         + " bbox_x0, bbox_y0, bbox_x1, bbox_y1, row_span, col_span, is_header)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?)",
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, tableGridId);
             ps.setInt(2, rowIndex);
@@ -685,7 +761,8 @@ public final class DocumentRepository {
             setDouble(ps, 6, y0);
             setDouble(ps, 7, x1);
             setDouble(ps, 8, y1);
-            ps.setInt(9, isHeader ? 1 : 0);
+            ps.setInt(9, Math.max(1, colSpan));
+            ps.setInt(10, isHeader ? 1 : 0);
             ps.executeUpdate();
             return generatedId(ps);
         }

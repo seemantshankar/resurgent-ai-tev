@@ -1,5 +1,5 @@
 code: financials.audited_summary
-version: 1.0.0
+version: 1.1.0
 family: financials
 file_role: audited_financials
 industry_tags: [general]
@@ -92,6 +92,25 @@ tables:
       - key: total_borrowings
         value_kind: money
         prompt_hint: "Total borrowings for this financial year row (not section subtotals)"
+  - name: shareholding
+    path: identity > Shareholding %
+    path_root: identity
+    key_column: holder
+    entity_key: holder
+    fields:
+      - key: holder
+        value_kind: text
+        prompt_hint: "Shareholder or holder name on this row"
+      - key: category
+        value_kind: text
+        prompt_hint: "Shareholder category (promoter, public, etc.) when stated"
+      - key: holding_percent
+        value_kind: quantity
+        prompt_hint: "Percentage holding for this row"
+      - key: shares
+        value_kind: quantity
+        required: false
+        prompt_hint: "Number of shares when stated"
 checklist: []
 document_date:
   kind: report

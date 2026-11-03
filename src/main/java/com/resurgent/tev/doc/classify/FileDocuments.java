@@ -56,6 +56,7 @@ final class FileDocuments {
         removeSiblingWorks(connection, version.documentId(), version.documentVersionId());
         String logicalName = logicalName(connection, version.documentId());
         String rawMetadata = rawMetadata(connection, version.documentVersionId());
+        java.util.Map<Work, Long> documentIds = new java.util.LinkedHashMap<>();
         boolean first = true;
         for (Work work : works) {
             if (first) {
@@ -63,18 +64,29 @@ final class FileDocuments {
                         version.fileName(), industryTag, packs, work);
                 docs.replaceMemberPages(version.documentId(), pageIds(work));
                 docs.setCurrentVersion(version.documentId(), version.documentVersionId());
+                documentIds.put(work, version.documentId());
                 first = false;
                 continue;
             }
-            insertWork(connection, docs, version, mandateId, industryTag, packs, classifier,
-                    logicalName, rawMetadata, work);
+            long siblingId = insertWork(connection, docs, version, mandateId, industryTag, packs,
+                    classifier, logicalName, rawMetadata, work);
+            documentIds.put(work, siblingId);
         }
         if (inducible(untyped)) {
-            Work unknown = new Work(ClassifyResult.unknown(
-                    List.of("contents fit no known document type"), "deterministic"));
-            unknown.pages.addAll(untyped);
-            insertWork(connection, docs, version, mandateId, industryTag, packs, classifier,
-                    logicalName, rawMetadata, unknown);
+            if (!works.isEmpty()) {
+                Work target = works.get(works.size() - 1);
+                target.pages.addAll(untyped);
+                Long documentId = documentIds.get(target);
+                if (documentId != null) {
+                    docs.replaceMemberPages(documentId, pageIds(target));
+                }
+            } else {
+                Work unknown = new Work(ClassifyResult.unknown(
+                        List.of("contents fit no known document type"), "deterministic"));
+                unknown.pages.addAll(untyped);
+                insertWork(connection, docs, version, mandateId, industryTag, packs, classifier,
+                        logicalName, rawMetadata, unknown);
+            }
         }
         return Optional.of(works.get(0).result);
     }
@@ -319,7 +331,7 @@ final class FileDocuments {
                 versionId, fileRole, fileName, work.text(), industryTag, packs, true), work.result);
     }
 
-    private static void insertWork(Connection connection, DocumentRepository docs,
+    private static long insertWork(Connection connection, DocumentRepository docs,
             DocumentRepository.DocumentVersionRow file, long mandateId, String industryTag,
             List<DocTypePack> packs, DocTypeClassifier classifier, String fileName,
             String rawMetadata, Work work) throws SQLException {
@@ -339,6 +351,7 @@ final class FileDocuments {
         docs.setCurrentVersion(documentId, versionId);
         record(classifier, connection, versionId, role, file.fileName(), industryTag, packs, work);
         docs.replaceMemberPages(documentId, pageIds(work));
+        return documentId;
     }
 
     private static DocTypePack packFor(List<DocTypePack> packs, String code) {
