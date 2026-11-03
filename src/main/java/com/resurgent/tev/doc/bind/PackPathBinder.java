@@ -71,8 +71,18 @@ public final class PackPathBinder {
      */
     public BindOutcome bind(Path dbPath, long parseRunId, long mandateId, DocTypePack pack,
             DocLlmClient client) throws Exception {
+        List<LabeledLinePackPublisher.Candidate> widenCandidates = new ArrayList<>();
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
-            return bind(db.connection(), parseRunId, mandateId, pack, client);
+            BindOutcome outcome = bind(db.connection(), parseRunId, mandateId, pack, client,
+                    widenCandidates);
+            LabeledLinePackPublisher.Outcome published = LabeledLinePackPublisher.publish(
+                    dbPath, mandateId, pack, parseRunId, widenCandidates);
+            if (published.published()) {
+                FactRepository facts = new FactRepository(db.connection());
+                facts.recordRunStat(parseRunId, "doc-bind", "pack_leaves_published",
+                        (double) published.addedKeys().size(), published.packIdentity());
+            }
+            return outcome;
         }
     }
 
@@ -89,6 +99,12 @@ public final class PackPathBinder {
      */
     public BindOutcome bind(Connection connection, long parseRunId, long mandateId,
             DocTypePack pack, DocLlmClient client) throws Exception {
+        return bind(connection, parseRunId, mandateId, pack, client, new ArrayList<>());
+    }
+
+    BindOutcome bind(Connection connection, long parseRunId, long mandateId,
+            DocTypePack pack, DocLlmClient client,
+            List<LabeledLinePackPublisher.Candidate> widenCandidates) throws Exception {
         FactRepository facts = new FactRepository(connection);
         WorkspaceRepository repo = new WorkspaceRepository(connection);
         NomenclatureCatalog catalog = new NomenclatureCatalog(repo);
@@ -151,8 +167,32 @@ public final class PackPathBinder {
                 }
             }
             if (candidate == null) {
-                unbind(facts, row.factId(), row.ontologyPath(), row.pathRoot(), "no_pack_field");
-                unbound++;
+                if (!"deterministic".equals(row.extractionMethod())) {
+                    unbind(facts, row.factId(), row.ontologyPath(), row.pathRoot(),
+                            "no_pack_field");
+                    unbound++;
+                    continue;
+                }
+                LabeledLineBinder.Result labeled = LabeledLineBinder.bind(
+                        facts, catalog, mandateId, pack, living, row);
+                if (labeled.bound()) {
+                    bound++;
+                    if (labeled.livingPath() != null) {
+                        living = living.withLeaf(labeled.livingPath(),
+                                labeled.aliasHint() == null ? row.fieldKey() : labeled.aliasHint());
+                    }
+                    if (field == null && labeled.livingPath() != null) {
+                        String root = defaultPackRoot(pack);
+                        String packPath = root + " > " + labeled.livingPath();
+                        List<String> synonyms = labeled.aliasHint() == null
+                                ? List.of()
+                                : List.of(labeled.aliasHint());
+                        widenCandidates.add(new LabeledLinePackPublisher.Candidate(
+                                row.fieldKey(), packPath, root, synonyms));
+                    }
+                } else {
+                    unbound++;
+                }
                 continue;
             }
             Resolved resolved = resolveShared(candidate, living);
@@ -161,6 +201,20 @@ public final class PackPathBinder {
                         resolved.pathRoot(), "bound", null, resolved.reason());
                 bound++;
                 continue;
+            }
+            if ("deterministic".equals(row.extractionMethod())
+                    && "identity".equalsIgnoreCase(candidateRoot)) {
+                LabeledLineBinder.Result identity = LabeledLineBinder.bind(
+                        facts, catalog, mandateId, pack, living, row);
+                if (identity.bound()) {
+                    bound++;
+                    if (identity.livingPath() != null) {
+                        living = living.withLeaf(identity.livingPath(),
+                                identity.aliasHint() == null ? row.fieldKey()
+                                        : identity.aliasHint());
+                    }
+                    continue;
+                }
             }
             unresolved.add(new Unresolved(row, candidate, candidateRoot));
         }
@@ -311,6 +365,16 @@ public final class PackPathBinder {
         }
 
         return new BindOutcome(parseRunId, bound, unbound, notApplicable, spine);
+    }
+
+    private static String defaultPackRoot(DocTypePack pack) {
+        if ("certificate".equalsIgnoreCase(pack.fileRole())) {
+            return "identity";
+        }
+        if ("report".equalsIgnoreCase(pack.fileRole())) {
+            return "technical";
+        }
+        return "regulatory";
     }
 
     private static void recordUsage(WorkspaceRepository repo, long parseRunId,

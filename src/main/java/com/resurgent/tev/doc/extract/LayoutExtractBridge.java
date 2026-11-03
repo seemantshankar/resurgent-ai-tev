@@ -6,12 +6,14 @@ import com.resurgent.tev.doc.db.CloudParsePageRepository;
 import com.resurgent.tev.doc.db.PassageRepository;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackField;
+import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.doc.pack.PackPassage;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -39,6 +41,19 @@ final class LayoutExtractBridge {
 
     private static final Pattern TRAILING_COPULA = Pattern.compile(
             "(?i)\\s+\\b(is|are|was|were|be)\\b\\s*$");
+
+    /** MCA Central Registration Centre certificate wording ({@code The … of the company is …}). */
+    private static final Pattern MCA_COMPANY_FIELD = Pattern.compile(
+            "(?i)^The\\s+(.+?)\\s+of\\s+the\\s+company\\s+is\\s+(.+?)\\*?\\s*$");
+
+    private static final Pattern MCA_CERTIFY_NAME = Pattern.compile(
+            "(?i)^I\\s+hereby\\s+certify\\s+that\\s+(.+?)\\s+is\\s+incorporated\\s+on\\b");
+
+    private static final Pattern MCA_LIABILITY = Pattern.compile(
+            "(?i)\\b(Company limited by (?:shares|guarantee)\\b.*)$");
+
+    private static final Pattern MCA_PLACE_OF_ISSUE = Pattern.compile(
+            "(?i)Given\\s+under\\s+my\\s+hand\\s+at\\s+([A-Za-z]+)\\b");
 
     private LayoutExtractBridge() {}
 
@@ -191,7 +206,7 @@ final class LayoutExtractBridge {
             if (gridPages.contains(line.page()) && line.text().contains("|")) {
                 continue;
             }
-            readScalar(line.text(), line.text(), line.page(), labels, pack, facts, citations);
+            readScalar(line.text(), line.text(), line.page(), labels, pack, facts, citations, true);
         }
         flushPipe(pipe, pipePage, tables, labels, pack, facts, citations);
     }
@@ -270,7 +285,7 @@ final class LayoutExtractBridge {
             }
             if (row.size() >= 2 && !row.get(0).text().isBlank() && !row.get(1).text().isBlank()) {
                 readScalar(row.get(0).text(), row.get(1).text(), page == 0 ? row.get(1).page() : page,
-                        labels, pack, facts, citations);
+                        labels, pack, facts, citations, row.size() == 2);
             }
         }
     }
@@ -326,7 +341,7 @@ final class LayoutExtractBridge {
 
     private static void readScalar(String labelText, String valueOrLine, int page,
             List<Label> labels, DocTypePack pack, List<FactCandidate> facts,
-            List<Citation> citations) {
+            List<Citation> citations, boolean twoColumnRow) {
         String left;
         String value;
         String quote;
@@ -347,16 +362,35 @@ final class LayoutExtractBridge {
             return;
         }
         Label label = match(left, labels);
+        String fieldKey;
+        ValueKind kind;
         if (label == null) {
-            return;
+            // A labeled line (ADR 0036) is a "label: value" text line, or a true
+            // two-column list with one identity pair per row. A wider row (3+
+            // cells) that missed its own pack's header match is an unmatched
+            // table, not a labeled line; that row is page furniture here,
+            // already handled (or rightly dropped) by the table reader. A label
+            // another known pack already names (a shared-page statement that
+            // belongs to a sibling document type, e.g. "Seller"/"Tariff" on an
+            // agreement) is not page furniture for THIS pack to widen either.
+            if (!twoColumnRow || ownedByAnotherPack(left, pack)) {
+                return;
+            }
+            fieldKey = LabeledLineFieldKeys.fromLabel(left);
+            if (fieldKey == null) {
+                return;
+            }
+            kind = ValueKind.TEXT;
+        } else {
+            fieldKey = label.key();
+            kind = label.kind();
         }
         for (FactCandidate existing : facts) {
-            if (existing.key().equals(label.key())) {
+            if (existing.key().equals(fieldKey)) {
                 return;
             }
         }
-        ValueKind kind = label.kind();
-        FactCandidate candidate = new FactCandidate(label.key(), kind)
+        FactCandidate candidate = new FactCandidate(fieldKey, kind)
                 .valueText(value)
                 .confidence(0.9)
                 .extractionMethod("deterministic");
@@ -385,6 +419,7 @@ final class LayoutExtractBridge {
         }
         joinContinuedSentences(blocks, facts, citations);
         storeUnexplainedFigures(blocks, facts, citations);
+        readMcaIncorporationCertificate(blocks, labels, facts, citations);
         Set<String> consumed = quotesOf(facts);
         Set<String> repeated = new HashSet<>();
         for (BlockLine line : blocks) {
@@ -464,6 +499,119 @@ final class LayoutExtractBridge {
         }
         return new LocalReading(new ExtractResult(labeled.extractorId(), labeled.payload(),
                 facts, citations, labeled.stats()), List.copyOf(unread));
+    }
+
+    /**
+     * MCA {@code Certificate of Incorporation} prose ({@code The … of the company is …}),
+     * the certify-that name sentence, registered office, place of issue, and liability.
+     */
+    private static void readMcaIncorporationCertificate(List<BlockLine> blocks, List<Label> labels,
+            List<FactCandidate> facts, List<Citation> citations) {
+        if (!looksLikeMcaCertificate(blocks)) {
+            return;
+        }
+        for (BlockLine line : blocks) {
+            String text = oneLine(line.text());
+            Matcher mca = MCA_COMPANY_FIELD.matcher(text);
+            if (mca.matches()) {
+                addLabeledFact(mca.group(1).trim(), stripTrailingStar(mca.group(2).trim()),
+                        line.text().trim(), line.page(), labels, facts, citations);
+                continue;
+            }
+            Matcher certify = MCA_CERTIFY_NAME.matcher(text);
+            if (certify.find()) {
+                String name = certify.group(1).trim();
+                if (!name.isBlank()) {
+                    addLabeledFact("Company Name", name, line.text().trim(), line.page(),
+                            labels, facts, citations);
+                }
+            }
+            Matcher liability = MCA_LIABILITY.matcher(text);
+            if (liability.find()) {
+                addLabeledFact("Liability Type", liability.group(1).trim(), line.text().trim(),
+                        line.page(), labels, facts, citations);
+            }
+            Matcher place = MCA_PLACE_OF_ISSUE.matcher(text);
+            if (place.find()) {
+                addLabeledFact("Place of Issue", place.group(1).trim(), line.text().trim(),
+                        line.page(), labels, facts, citations);
+            }
+        }
+        for (int i = 0; i < blocks.size(); i++) {
+            String folded = norm(blocks.get(i).text());
+            if (folded.contains("mailing address") && i + 2 < blocks.size()
+                    && !hasKey(facts, "registered_office")) {
+                String address = blocks.get(i + 2).text().trim();
+                if (!address.isBlank() && !norm(address).contains("disclaimer")) {
+                    addLabeledFact("Registered Office", address, address, blocks.get(i + 2).page(),
+                            labels, facts, citations);
+                }
+            }
+        }
+    }
+
+    private static boolean looksLikeMcaCertificate(List<BlockLine> blocks) {
+        for (BlockLine line : blocks) {
+            String folded = norm(line.text());
+            if (folded.contains("certificate of incorporation")) {
+                return true;
+            }
+            if (MCA_COMPANY_FIELD.matcher(oneLine(line.text())).matches()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void addLabeledFact(String labelText, String value, String quote, int page,
+            List<Label> labels, List<FactCandidate> facts, List<Citation> citations) {
+        if (labelText == null || labelText.isBlank() || value == null || value.isBlank()) {
+            return;
+        }
+        Label label = match(labelText, labels);
+        String fieldKey;
+        ValueKind kind;
+        if (label != null) {
+            fieldKey = label.key();
+            kind = label.kind();
+        } else {
+            fieldKey = LabeledLineFieldKeys.fromLabel(labelText);
+            if (fieldKey == null) {
+                return;
+            }
+            kind = ValueKind.TEXT;
+        }
+        if (hasKey(facts, fieldKey)) {
+            return;
+        }
+        FactCandidate candidate = new FactCandidate(fieldKey, kind)
+                .valueText(value)
+                .confidence(0.9)
+                .extractionMethod("deterministic");
+        if (page >= 1 && quote != null && !quote.isBlank()) {
+            Citation citation = Citation.of(page, quote);
+            candidate.addCitation(citation);
+            citations.add(citation);
+        }
+        facts.add(candidate);
+    }
+
+    private static boolean hasKey(List<FactCandidate> facts, String key) {
+        return facts.stream().anyMatch(f -> key.equals(f.key()));
+    }
+
+    private static String oneLine(String text) {
+        if (text == null) {
+            return "";
+        }
+        return text.trim().replace('\n', ' ').replaceAll("\\s+", " ");
+    }
+
+    private static String stripTrailingStar(String value) {
+        if (value.endsWith("*")) {
+            return value.substring(0, value.length() - 1).trim();
+        }
+        return value;
     }
 
     /** Longest pack label that opens the line; the remainder is the value. */
@@ -781,6 +929,53 @@ final class LayoutExtractBridge {
             }
         }
         return null;
+    }
+
+    /** Normalized label text -> seed pack codes that already name it. Built once. */
+    private static volatile Map<String, Set<String>> siblingPackLabels;
+
+    /**
+     * True when {@code left} is an existing field or synonym of a seed pack other
+     * than {@code pack} (a shared-page statement that belongs to a sibling
+     * document type, such as "Tariff" on an agreement read while extracting a
+     * project report). Such a line is not page furniture {@code pack} should
+     * widen itself with (ADR 0036, issue #205); it stays with the pack that
+     * already names it.
+     */
+    private static boolean ownedByAnotherPack(String left, DocTypePack pack) {
+        String n = norm(left);
+        if (n.isEmpty()) {
+            return false;
+        }
+        Set<String> owners = siblingPackLabels().get(n);
+        if (owners == null) {
+            return false;
+        }
+        for (String owner : owners) {
+            if (!owner.equalsIgnoreCase(pack.code())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Map<String, Set<String>> siblingPackLabels() {
+        Map<String, Set<String>> cached = siblingPackLabels;
+        if (cached != null) {
+            return cached;
+        }
+        Map<String, Set<String>> built = new HashMap<>();
+        try {
+            for (DocTypePack seed : PackLoader.loadSeedPacks()) {
+                for (Label label : labels(seed)) {
+                    built.computeIfAbsent(label.norm(), k -> new HashSet<>()).add(seed.code());
+                }
+            }
+        } catch (PackLoader.PackValidationException e) {
+            built = Map.of();
+        }
+        siblingPackLabels = built;
+        return built;
     }
 
     private static List<Label> labels(DocTypePack pack) {

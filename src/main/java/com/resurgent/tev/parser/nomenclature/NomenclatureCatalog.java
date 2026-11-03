@@ -81,6 +81,47 @@ public final class NomenclatureCatalog {
         }
     }
 
+    /**
+     * Creates a mandate-soft group and measure when the living master has no head yet
+     * (ADR 0036). The group is created with the first measure on this mandate.
+     */
+    public String putMandateHead(long mandateId, String groupName, String measureName,
+            List<String> aliases) {
+        Objects.requireNonNull(groupName, "groupName");
+        Objects.requireNonNull(measureName, "measureName");
+        OntologySlice current = sliceForMandate(mandateId);
+        String group = groupName.trim();
+        String measure = measureName.trim();
+        if (group.isEmpty() || measure.isEmpty()) {
+            throw new NomenclatureException("group and measure names are required");
+        }
+        String path = group + " > " + measure;
+        if (current.node(path).isPresent()) {
+            return path;
+        }
+        try {
+            inTransaction(() -> {
+                String now = Timestamps.now();
+                if (current.node(group).isEmpty()) {
+                    repo.insertNomenclatureNode(new NomenclatureNode(
+                            group, group, null, NomenclatureNode.LAYER_MANDATE_SOFT,
+                            false, false, null, mandateId), now);
+                }
+                ValidatedLeaf validated = validateNewLeaf(
+                        sliceForMandate(mandateId), mandateId, group, measure, aliases);
+                repo.insertNomenclatureNode(validated.node(), now);
+                for (NomenclatureAlias alias : validated.aliasRows()) {
+                    repo.insertNomenclatureAlias(
+                            alias, NomenclatureNode.LAYER_MANDATE_SOFT, null, mandateId, now);
+                }
+            });
+        } catch (SQLException e) {
+            throw new NomenclatureException(
+                    "failed to store mandate head '" + path + "' for mandate " + mandateId, e);
+        }
+        return path;
+    }
+
     private record ValidatedLeaf(String path, NomenclatureNode node, List<NomenclatureAlias> aliasRows) {}
 
     private static ValidatedLeaf validateNewLeaf(OntologySlice current, long mandateId,

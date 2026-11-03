@@ -299,6 +299,37 @@ public final class SpineCatalog {
         return matchLabel(pathOrLabel).map(SpineLeaf::path);
     }
 
+    /**
+     * Exact-only variant of {@link #matchLabel}: path, full label, or leaf-name
+     * equality, with no "longest contained label" fallback. A short generic word
+     * (such as a document title's bare "Project") must never resolve to a spine
+     * leaf merely because the leaf's own name happens to contain that word as one
+     * of several tokens (ADR 0036, issue #205).
+     */
+    public static Optional<SpineLeaf> matchLabelExact(String label) {
+        if (label == null || label.isBlank()) {
+            return Optional.empty();
+        }
+        String n = normalize(label);
+        for (SpineLeaf leaf : LEAVES) {
+            if (normalize(leaf.path()).equals(n)) {
+                return Optional.of(leaf);
+            }
+        }
+        SpineLeaf exact = BY_NORMALIZED_LABEL.get(n);
+        if (exact != null) {
+            return Optional.of(exact);
+        }
+        int sep = n.lastIndexOf(" > ");
+        if (sep >= 0) {
+            SpineLeaf segment = BY_NORMALIZED_LABEL.get(n.substring(sep + 3).trim());
+            if (segment != null) {
+                return Optional.of(segment);
+            }
+        }
+        return Optional.empty();
+    }
+
     /** Normalizes a label for matching: lower-case, strip punctuation, collapse spaces. */
     public static String normalize(String raw) {
         if (raw == null) {

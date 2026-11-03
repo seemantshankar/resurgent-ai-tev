@@ -17,11 +17,11 @@ import java.util.Map;
  * and adds newly discovered fields, tables, clauses, passages, and aliases.
  * New fields are optional until a later multi-document run says otherwise.
  */
-final class PackWidener {
+public final class PackWidener {
 
     private PackWidener() {}
 
-    static WidenResult widen(DocTypePack previous, DocTypePack incoming) {
+    public static WidenResult widen(DocTypePack previous, DocTypePack incoming) {
         List<Generalizer.DecisionNote> notes = new ArrayList<>();
         Map<String, PackField> fields = new LinkedHashMap<>();
         for (PackField field : previous.fields()) {
@@ -167,5 +167,5 @@ final class PackWidener {
         }
     }
 
-    record WidenResult(DocTypePack pack, List<Generalizer.DecisionNote> notes) {}
+    public record WidenResult(DocTypePack pack, List<Generalizer.DecisionNote> notes) {}
 }
