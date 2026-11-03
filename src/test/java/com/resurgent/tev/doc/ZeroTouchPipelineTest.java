@@ -9,6 +9,7 @@ import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.db.MandatePolicyRepository;
 import com.resurgent.tev.doc.db.MandateQaQueryRunner;
+import com.resurgent.tev.doc.classify.DocClassifyRunner;
 import com.resurgent.tev.doc.extract.DocExtractRunner;
 import com.resurgent.tev.doc.ingest.BlobStore;
 import com.resurgent.tev.doc.ingest.DocumentIngestService;
@@ -218,7 +219,13 @@ class ZeroTouchPipelineTest {
 
     private void finish(Workspace ws, List<Long> versions) throws Exception {
         for (long version : versions) {
-            DocExtractRunner.run(MANDATE, version, ws.db(), ws.blobs(), null, "fixture",
+            String pack = DocExtractRunner.classifiedPackCode(ws.db(), version);
+            if (pack == null || pack.isBlank() || "unknown".equalsIgnoreCase(pack)) {
+                DocClassifyRunner.run(MANDATE, version, ws.db(), ws.blobs(), null, "general",
+                        true, true);
+                pack = DocExtractRunner.classifiedPackCode(ws.db(), version);
+            }
+            DocExtractRunner.run(MANDATE, version, ws.db(), ws.blobs(), pack, "fixture",
                     null, null, true, true);
         }
         DocAssessRunner.run(MANDATE, ws.db());

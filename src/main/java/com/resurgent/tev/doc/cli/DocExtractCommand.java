@@ -67,21 +67,38 @@ public final class DocExtractCommand implements Callable<Integer> {
             BlobStore blobs = blobRoot != null
                     ? new BlobStore(blobRoot)
                     : BlobStore.besideDatabase(db);
-            var result = com.resurgent.tev.doc.extract.DocExtractRunner.run(
-                    mandateId, documentVersionId, db, blobs, pack, extractor, pages, tier,
-                    noParse, !noAutoInduce, platform);
-            out.printf("Extracted with pack %s via %s%n", result.packIdentity(), result.extractorId());
-            if (result.parseTier() != null) {
-                out.printf("parse tier: %s%n", result.parseTier());
-            }
-            out.printf("facts written: %d (missing required: %d, ambiguous: %d)%n",
-                    result.factsWritten(), result.missingRequired(), result.ambiguousCount());
-            out.printf("parse_run: %d%n", result.parseRunId());
-            if (!"success".equals(result.status())) {
-                err.println("warning: extract " + result.status() + ": " + result.message());
+            boolean fanOut = com.resurgent.tev.doc.extract.DocExtractRunner.shouldFanOut(pack, pages);
+            com.resurgent.tev.doc.extract.DocExtractRunner.Result result;
+            com.resurgent.tev.doc.extract.DocExtractRunner.FileExtractResult fileResult = null;
+            if (fanOut) {
+                fileResult = com.resurgent.tev.doc.extract.DocExtractRunner.runAllDocuments(
+                        mandateId, documentVersionId, db, blobs, extractor, tier, noParse,
+                        !noAutoInduce, platform);
+                for (var block : fileResult.documents()) {
+                    printDocumentBlock(out, block, fileResult.parseTier());
+                    if (!"success".equals(block.status())) {
+                        err.println("warning: extract " + block.status() + ": " + block.message());
+                    }
+                }
+                result = fileResult.toAggregateResult();
+            } else {
+                result = com.resurgent.tev.doc.extract.DocExtractRunner.run(
+                        mandateId, documentVersionId, db, blobs, pack, extractor, pages, tier,
+                        noParse, !noAutoInduce, platform);
+                out.printf("Extracted with pack %s via %s%n", result.packIdentity(),
+                        result.extractorId());
+                if (result.parseTier() != null) {
+                    out.printf("parse tier: %s%n", result.parseTier());
+                }
+                out.printf("facts written: %d (missing required: %d, ambiguous: %d)%n",
+                        result.factsWritten(), result.missingRequired(), result.ambiguousCount());
+                out.printf("parse_run: %d%n", result.parseRunId());
+                if (!"success".equals(result.status())) {
+                    err.println("warning: extract " + result.status() + ": " + result.message());
+                }
             }
             int exit = exitCode(result.status());
-            if (exit == 0) {
+            if (shouldReassess(exit, fanOut, fileResult, result.status())) {
                 // Processing new documents ends by re-running the assessment (M3-01).
                 reassess(mandateId, db, platform, out, err);
             }
@@ -93,6 +110,29 @@ public final class DocExtractCommand implements Callable<Integer> {
             err.println("extract failed: " + (e.getMessage() != null ? e.getMessage() : e));
             return 1;
         }
+    }
+
+    private static void printDocumentBlock(java.io.PrintWriter out,
+            com.resurgent.tev.doc.extract.DocExtractRunner.DocumentBlock block,
+            String parseTier) {
+        out.printf("document_id: %d%n", block.documentId());
+        out.printf("pack: %s%n", block.packIdentity());
+        out.printf("pages: %s%n", formatPages(block.pages()));
+        out.printf("facts written: %d (missing required: %d, ambiguous: %d)%n",
+                block.factsWritten(), block.missingRequired(), block.ambiguousCount());
+        out.printf("extractor: %s%n", block.extractorId());
+        if (parseTier != null) {
+            out.printf("parse tier: %s%n", parseTier);
+        }
+        out.printf("parse_run: %d%n", block.parseRunId());
+        out.println();
+    }
+
+    private static String formatPages(java.util.List<Integer> pages) {
+        if (pages == null || pages.isEmpty()) {
+            return "all";
+        }
+        return pages.stream().map(Object::toString).collect(java.util.stream.Collectors.joining(","));
     }
 
     /**
@@ -124,5 +164,19 @@ public final class DocExtractCommand implements Callable<Integer> {
      */
     static int exitCode(String status) {
         return "failed".equals(status) ? 1 : 0;
+    }
+
+    private static boolean shouldReassess(int exit,
+            boolean fanOut,
+            com.resurgent.tev.doc.extract.DocExtractRunner.FileExtractResult fileResult,
+            String status) {
+        if (exit == 0) {
+            return true;
+        }
+        if (fanOut && fileResult != null) {
+            return fileResult.documents().stream()
+                    .anyMatch(block -> !"failed".equals(block.status()));
+        }
+        return !"failed".equals(status);
     }
 }

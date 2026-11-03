@@ -295,8 +295,8 @@ One structured table row or cell read from a supporting document or screenshot �
 _Avoid_: financial-statement-only tables, headline-only summary, rolling detail lines into parent totals, a single label-value pair, a two-column identity list
 
 **Autonomous pack induction**:
-How the system learns a document type pack from the contents the pages state — generic labels for the fields, schedules, clauses, and passages, never client names or amounts — including from a single document. An unfamiliar document starts a pack. A labeled line or stated claim that binds on a spine path adds an optional leaf, published before that run ends, so the next document of that type loads it.
-_Avoid_: manual pack authoring, failing on unknown document types, dropping single-document domain fields as one-offs, a pack induced from the title, a seed file as the completeness contract
+How the system learns a document type pack from the contents the pages state — generic labels for the fields, schedules, clauses, and passages, never client names or amounts — including from a single document. An unfamiliar document starts a pack. A labeled line or stated claim that binds on a spine path adds an optional leaf, published before that run ends, so the next document of that type loads it. Repeating rows on a known type widen that pack’s `tables[]` (entity names as row values, not new scalar field keys); leftover pages on a file with a classified work stay on that work rather than spawning an unknown sibling ([ADR 0037](docs/adr/0037-residual-pages-stay-on-classified-work.md)).
+_Avoid_: manual pack authoring, failing on unknown document types, dropping single-document domain fields as one-offs, a pack induced from the title, a seed file as the completeness contract, minting unknown siblings for tail pages when a typed work already exists
 
 **Induction decision**:
 The recorded record of why a candidate document field, table, clause type, or checklist item was promoted, rewritten, downgraded, or dropped during automatic learning, together with the web-research rationale, documents, similarity evidence, and quality gates that supported or rejected it.

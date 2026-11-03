@@ -153,7 +153,7 @@ class ContentTypedDocumentTest {
     }
 
     @Test
-    void anUnknownKindBesideAKnownWorkIsInducedAndKept() throws Exception {
+    void anUnknownKindBesideAKnownWorkAttachesToTheClassifiedWork() throws Exception {
         Stored file = seed("Volume 2", "volume-2.pdf", "other", List.of(
                 List.of(
                         line("paragraph", "Project capacity: 25 MW"),
@@ -171,16 +171,10 @@ class ContentTypedDocumentTest {
 
         assertThat(typed.docTypeCode()).isEqualTo("report.dpr");
         List<Held> held = heldDocuments();
-        assertThat(held).extracting(Held::docTypeCode).contains("report.dpr");
-        Held induced = held.stream()
-                .filter(document -> document.docTypeCode() != null
-                        && document.docTypeCode().startsWith("induced."))
-                .findFirst().orElseThrow();
-        assertThat(induced.pages()).containsExactly(2);
-        assertThat(pagesOf(held, "report.dpr")).containsExactly(1, 3);
-        assertThat(held).hasSize(2);
-        assertThat(publishedPacks()).anyMatch(path -> path.getFileName().toString()
-                .startsWith(induced.docTypeCode()));
+        assertThat(held).hasSize(1);
+        assertThat(pagesOf(held, "report.dpr")).containsExactly(1, 2, 3);
+        assertThat(held).noneMatch(document -> document.docTypeCode() != null
+                && document.docTypeCode().startsWith("induced."));
     }
 
     @Test

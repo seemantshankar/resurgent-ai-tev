@@ -13,6 +13,7 @@ import com.resurgent.tev.doc.db.DocumentRepository.HeldDocument;
 import com.resurgent.tev.doc.db.FactRepository;
 import com.resurgent.tev.doc.db.MandateQaQueryRunner;
 import com.resurgent.tev.doc.db.ReportQuestionQueryRunner;
+import com.resurgent.tev.doc.extract.DocExtractRunner;
 import com.resurgent.tev.doc.extract.ExtractClient;
 import com.resurgent.tev.doc.extract.ExtractRequest;
 import com.resurgent.tev.doc.extract.ExtractResult;
@@ -417,6 +418,91 @@ class SeveralDocumentsInOneFileTest {
             assertThat(fact.fieldKey()).isEqualTo("gross_total");
             assertThat(fact.valueText()).contains("4,00,000");
         });
+    }
+
+    @Test
+    void inducibleTailPagesAttachToTheLastClassifiedWorkNotUnknownSibling() throws Exception {
+        Stored file = seed("Volume 2", "volume-2.pdf", "other", null, List.of(
+                reportPage(),
+                agreementPage(),
+                List.of(
+                        line("paragraph", "Shareholding pattern"),
+                        line("paragraph", "Promoter holding: 62.5%"),
+                        line("paragraph", "Public share: 37.5%"))));
+
+        type(file.versionId());
+
+        List<Held> held = heldDocuments();
+        assertThat(held).hasSize(2);
+        assertThat(pagesOf(held, "agreement.ppa")).containsExactly(2, 3);
+        assertThat(held).noneMatch(document -> "unknown".equalsIgnoreCase(document.docTypeCode()));
+    }
+
+    @Test
+    void extractOnFileVersionFansOutToEveryClassifiedDocument() throws Exception {
+        publishFactChecklist();
+        Stored file = seedExtractable("Volume 2", "volume-2.pdf", List.of(
+                reportPage(),
+                List.of(
+                        line("paragraph", "The seller is Helios Power Private Limited."),
+                        line("paragraph", "Seller: Helios Power Private Limited"),
+                        line("paragraph", "The buyer is the state distribution licensee."),
+                        line("paragraph", "Buyer: the state distribution licensee"),
+                        line("paragraph", "The tariff is Rs. 3.10 per kWh."),
+                        line("paragraph", "Tariff: Rs. 3.10 per kWh"),
+                        line("paragraph", "The term of the agreement is 25 years."))));
+
+        type(file.versionId());
+        List<Held> held = heldDocuments();
+        assertThat(held).hasSize(2);
+
+        DocExtractRunner.FileExtractResult outcome = DocExtractRunner.runAllDocuments(
+                MANDATE, file.versionId(), dbPath, blobs, "doc-llm-extract", null, true, false,
+                null);
+        assertThat(outcome.documents()).hasSize(2);
+        Held report = held.stream()
+                .filter(document -> "report.dpr".equals(document.docTypeCode()))
+                .findFirst().orElseThrow();
+        Held agreement = held.stream()
+                .filter(document -> "agreement.ppa".equals(document.docTypeCode()))
+                .findFirst().orElseThrow();
+
+        assertThat(outcome.documents()).anySatisfy(block -> {
+            assertThat(block.documentId()).isEqualTo(report.documentId());
+            assertThat(block.packIdentity()).startsWith("report.dpr@");
+            assertThat(block.pages()).containsExactly(1);
+        });
+        assertThat(outcome.documents()).anySatisfy(block -> {
+            assertThat(block.documentId()).isEqualTo(agreement.documentId());
+            assertThat(block.packIdentity()).startsWith("agreement.ppa@");
+            assertThat(block.pages()).containsExactly(2);
+        });
+
+        assertThat(factsOf(report.documentId())).anyMatch(fact -> "project_cost".equals(fact.fieldKey()));
+        assertThat(factsOf(agreement.documentId())).anyMatch(fact -> "tariff".equals(fact.fieldKey()));
+    }
+
+    @Test
+    void extractWithExplicitPackDoesNotFanOut() throws Exception {
+        publishFactChecklist();
+        Stored file = seedExtractable("Volume 2", "volume-2.pdf", List.of(
+                reportPage(),
+                agreementPage()));
+        type(file.versionId());
+        assertThat(heldDocuments()).hasSize(2);
+
+        DocExtractRunner.Result onlyReport = DocExtractRunner.run(
+                MANDATE, file.versionId(), dbPath, blobs, "report.dpr", "doc-llm-extract", null,
+                null, true, false);
+        assertThat(onlyReport.packIdentity()).startsWith("report.dpr@");
+        Held report = heldDocuments().stream()
+                .filter(document -> "report.dpr".equals(document.docTypeCode()))
+                .findFirst().orElseThrow();
+        Held agreement = heldDocuments().stream()
+                .filter(document -> "agreement.ppa".equals(document.docTypeCode()))
+                .findFirst().orElseThrow();
+        assertThat(factsOf(report.documentId())).isNotEmpty();
+        assertThat(factsOf(agreement.documentId())).isEmpty();
     }
 
     @Test

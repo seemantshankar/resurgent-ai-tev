@@ -73,6 +73,16 @@ public final class ExtractService {
     public ExtractOutcome read(Path dbPath, long documentId, long mandateId,
             DocTypePack pack, ExtractClient client, String extractorBundleVersion)
             throws Exception {
+        return read(dbPath, documentId, mandateId, pack, client, extractorBundleVersion, null);
+    }
+
+    /**
+     * Same as {@link #read(Path, long, long, DocTypePack, ExtractClient, String)} with
+     * optional adapter options (for example a reused LlamaParse job on the file version).
+     */
+    public ExtractOutcome read(Path dbPath, long documentId, long mandateId,
+            DocTypePack pack, ExtractClient client, String extractorBundleVersion,
+            Map<String, String> options) throws Exception {
         long versionId;
         List<Integer> pages;
         try (WorkspaceDatabase db = WorkspaceDatabase.open(dbPath)) {
@@ -81,7 +91,7 @@ public final class ExtractService {
             versionId = docs.versionHolding(documentId);
         }
         return extract(dbPath, versionId, mandateId, pack, client, extractorBundleVersion,
-                null, null, pages, documentId);
+                null, options, pages, documentId);
     }
 
     /**
