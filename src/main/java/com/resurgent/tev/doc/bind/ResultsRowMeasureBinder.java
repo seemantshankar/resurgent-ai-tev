@@ -11,6 +11,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -22,6 +23,9 @@ final class ResultsRowMeasureBinder {
 
     private static final Pattern PAREN_ACRONYM =
             Pattern.compile("\\(([A-Z]{2,12})\\)");
+
+    private static final Set<String> INITIAL_SKIP = Set.of(
+            "of", "the", "and", "a", "an", "for", "to", "in");
 
     private ResultsRowMeasureBinder() {}
 
@@ -95,17 +99,28 @@ final class ResultsRowMeasureBinder {
         if (paren.find()) {
             return paren.group(1);
         }
-        String folded = phrase.toLowerCase(Locale.ROOT);
-        if (folded.contains("biochemical oxygen") || folded.equals("bod")) {
-            return "BOD";
-        }
-        if (folded.contains("chemical oxygen") || folded.equals("cod")) {
-            return "COD";
-        }
         if (phrase.length() <= 5) {
             return phrase.toUpperCase(Locale.ROOT);
         }
+        String initials = initials(phrase);
+        if (initials.length() >= 2 && initials.length() <= 5) {
+            return initials;
+        }
         return title(phrase);
+    }
+
+    private static String initials(String phrase) {
+        StringBuilder out = new StringBuilder();
+        for (String part : phrase.trim().split("[^A-Za-z0-9]+")) {
+            if (part.isEmpty()) {
+                continue;
+            }
+            if (INITIAL_SKIP.contains(part.toLowerCase(Locale.ROOT))) {
+                continue;
+            }
+            out.append(Character.toUpperCase(part.charAt(0)));
+        }
+        return out.toString();
     }
 
     private static String title(String raw) {

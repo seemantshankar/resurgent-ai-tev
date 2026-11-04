@@ -18,6 +18,11 @@ import java.util.regex.Pattern;
  */
 final class StatedClaimReader {
 
+    /**
+     * Schema-open cloud extract. {@code fact.extraction_method} already allows
+     * {@code llm_open} (beside {@code llm_field}); stated claims are not pack-schema
+     * fills, so they use that token rather than a new CHECK value.
+     */
     static final String METHOD = "llm_open";
 
     private static final Pattern SENTENCE = Pattern.compile("[^.!?]+[.!?]?");
@@ -45,7 +50,12 @@ final class StatedClaimReader {
         ExtractRequest claimRequest = new ExtractRequest(
                 request.pageBundleDir(), request.originalFile(), request.pageIndices(),
                 request.langHint(), request.docTypeCode(), request.instructions(), options);
-        ExtractResult cloud = client.extractStatedClaims(claimRequest);
+        ExtractResult cloud;
+        try {
+            cloud = client.extractStatedClaims(claimRequest);
+        } catch (ExtractException e) {
+            return local;
+        }
         List<FactCandidate> claims = fromPayload(cloud.payload(), sentences, local.facts());
         if (claims.isEmpty()) {
             return local;

@@ -3,6 +3,8 @@ package com.resurgent.tev.doc.extract;
 import com.resurgent.tev.doc.db.DocumentRepository;
 import com.resurgent.tev.doc.db.MandatePolicyRepository;
 import com.resurgent.tev.doc.ingest.BlobStore;
+import com.resurgent.tev.doc.llm.DocLlmClient;
+import com.resurgent.tev.doc.llm.DocLlmEnvironment;
 import com.resurgent.tev.doc.pack.DocTypePack;
 import com.resurgent.tev.doc.pack.PackLoader;
 import com.resurgent.tev.doc.residency.DataResidency;
@@ -257,6 +259,8 @@ public final class DocExtractRunner {
             options.put(com.resurgent.tev.doc.platform.SpendCeiling.PLATFORM_OPTION,
                     platform.toAbsolutePath().normalize().toString());
         }
+        client = withStatedClaimLlm(client, db, mandateId, platform, estimate,
+                localOnly || ceilingBlocks);
         return new ExtractContext(client, effectiveTier, options);
     }
 
@@ -317,6 +321,15 @@ public final class DocExtractRunner {
     /** Resolves the extractor adapter for CLI commands (cloud allowed). */
     public static ExtractClient resolveExtractor(String extractorId) {
         return resolveClient(extractorId, false);
+    }
+
+    private static ExtractClient withStatedClaimLlm(ExtractClient client, Path db, long mandateId,
+            Path platform, double estimate, boolean blocked) {
+        if (blocked || !(client instanceof DocLlmExtractClient)) {
+            return client;
+        }
+        DocLlmClient llm = DocLlmEnvironment.clientOrNull(db, mandateId, platform, estimate);
+        return llm == null ? client : new DocLlmExtractClient(llm);
     }
 
     private static ExtractClient resolveClient(String extractorId, boolean cloudForbidden) {

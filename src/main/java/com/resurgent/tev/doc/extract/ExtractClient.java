@@ -26,11 +26,11 @@ public interface ExtractClient {
 
     /**
      * Names stated claims in unread sentences (ADR 0036). The payload is a JSON
-     * object {@code {"claims":[{"key","value","quote","kind"}]}}. Default is empty
-     * so schema-guided adapters stay unchanged until they implement this.
+     * object {@code {"claims":[{"key","value","quote","kind"}]}}. Adapters that
+     * do not name claims must throw so a silent empty default cannot hide a
+     * missing wire-up.
      */
-    default ExtractResult extractStatedClaims(ExtractRequest req) {
-        return new ExtractResult(id(), null, java.util.List.of(), java.util.List.of(),
-                ExtractStats.empty());
+    default ExtractResult extractStatedClaims(ExtractRequest req) throws ExtractException {
+        throw new ExtractException("stated-claim extract is unimplemented for " + id());
     }
 }

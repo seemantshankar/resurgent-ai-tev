@@ -217,6 +217,18 @@ public final class LlamaExtractAdapter implements ExtractClient {
     }
 
     @Override
+    public ExtractResult extractStatedClaims(ExtractRequest req) throws ExtractException {
+        String requested = req == null || req.options() == null
+                ? null : req.options().get(DataResidency.OPTION);
+        if (DataResidency.locked(residency, requested)) {
+            return new ExtractResult(id(), null, List.of(), List.of(), ExtractStats.empty());
+        }
+        return new DocLlmExtractClient(
+                com.resurgent.tev.doc.llm.DocLlmEnvironment.clientOrNull())
+                .extractStatedClaims(req);
+    }
+
+    @Override
     public ExtractResult extractFieldSchema(ExtractRequest req, JsonNode schema)
             throws ExtractException {
         Objects.requireNonNull(req, "req");
