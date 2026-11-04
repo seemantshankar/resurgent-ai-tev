@@ -35,6 +35,7 @@ class DocLlmExtractClientTest {
         assertThat(result.payload().path("claims").size()).isEqualTo(1);
         assertThat(result.payload().path("claims").get(0).path("key").asText())
                 .isEqualTo("place");
+        assertThat(result.stats().credits()).isEqualTo(0.002 / LlamaExtractAdapter.usdPerCredit());
     }
 
     private ExtractRequest request(String sentences) {

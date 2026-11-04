@@ -144,9 +144,13 @@ public final class PackPathBinder {
                         if (named.livingPath() != null) {
                             living = living.withLeaf(named.livingPath(),
                                     named.aliasHint() == null ? row.lineKey() : named.aliasHint());
+                            for (String extra : named.extraAliases()) {
+                                living = living.withLeaf(named.livingPath(), extra);
+                            }
                         }
                         if (named.leafKey() != null && !named.leafKey().isBlank()) {
-                            String root = "technical";
+                            String root = named.pathRoot() == null || named.pathRoot().isBlank()
+                                    ? "technical" : named.pathRoot();
                             widenCandidates.add(new LabeledLinePackPublisher.Candidate(
                                     named.leafKey(), root + " > " + named.livingPath(),
                                     root, named.aliasHint() == null

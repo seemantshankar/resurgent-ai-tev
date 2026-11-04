@@ -57,8 +57,11 @@ final class StatedClaimReader {
             return local;
         }
         List<FactCandidate> claims = fromPayload(cloud.payload(), sentences, local.facts());
+        ExtractStats stats = local.stats().plus(
+                cloud.stats() == null ? ExtractStats.empty() : cloud.stats());
         if (claims.isEmpty()) {
-            return local;
+            return new ExtractResult(local.extractorId(), local.payload(), local.facts(),
+                    local.citations(), stats);
         }
         List<FactCandidate> facts = new ArrayList<>(local.facts());
         List<Citation> citations = new ArrayList<>(local.citations());
@@ -69,8 +72,7 @@ final class StatedClaimReader {
         return new ExtractResult(
                 cloud.extractorId() != null ? cloud.extractorId() : local.extractorId(),
                 cloud.payload() != null ? cloud.payload() : local.payload(),
-                facts, citations,
-                cloud.stats() != null ? cloud.stats() : local.stats());
+                facts, citations, stats);
     }
 
     static List<String> unreadSentences(List<String> unread, Set<String> reserved) {

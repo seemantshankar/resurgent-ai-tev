@@ -130,6 +130,24 @@ class ResultsRowMeasureExtractBindTest {
     }
 
     @Test
+    void phrasesThatShareInitialsStayOnSeparateHeads() throws Exception {
+        long docId = addGridDocument("metals.pdf", List.of(
+                new String[] {"Parameter", "Result"},
+                new String[] {"Total Nitrogen", "1 mg/L"},
+                new String[] {"Total Nickel", "2 mg/L"}));
+        ExtractService.ExtractOutcome extract = new ExtractService().read(
+                dbPath, docId, MANDATE, pack, new SilentCloud(), "test");
+        new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, pack, null);
+        FactRow nitrogen = factsOf(docId).stream()
+                .filter(f -> "Total Nitrogen".equals(f.lineKey())).findFirst().orElseThrow();
+        FactRow nickel = factsOf(docId).stream()
+                .filter(f -> "Total Nickel".equals(f.lineKey())).findFirst().orElseThrow();
+        assertThat(nitrogen.ontologyPath()).contains("Total Nitrogen");
+        assertThat(nickel.ontologyPath()).contains("Total Nickel");
+        assertThat(nitrogen.ontologyPath()).isNotEqualTo(nickel.ontologyPath());
+    }
+
+    @Test
     void publishesOptionalLeafBeforeRunEnds() throws Exception {
         ExtractService.ExtractOutcome extract = read();
         new PackPathBinder().bind(dbPath, extract.parseRunId(), MANDATE, pack, null);

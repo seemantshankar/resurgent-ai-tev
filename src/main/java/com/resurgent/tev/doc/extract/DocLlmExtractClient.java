@@ -70,8 +70,11 @@ public final class DocLlmExtractClient implements ExtractClient {
             int prompt = completion.promptTokens() == null ? 0 : completion.promptTokens();
             int completionTokens = completion.completionTokens() == null
                     ? 0 : completion.completionTokens();
+            Double credits = completion.costUsd() == null
+                    ? null
+                    : completion.costUsd() / LlamaExtractAdapter.usdPerCredit();
             ExtractStats stats = new ExtractStats(1, 0, prompt, completionTokens,
-                    completion.costUsd(), completion.latencyMs());
+                    credits, completion.latencyMs());
             return new ExtractResult(ID, payload, java.util.List.of(), java.util.List.of(), stats);
         } catch (DocLlmException e) {
             throw new ExtractException("stated-claim reading failed: " + e.getMessage(), e);

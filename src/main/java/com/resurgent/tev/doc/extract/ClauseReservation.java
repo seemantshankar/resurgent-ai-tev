@@ -71,10 +71,11 @@ final class ClauseReservation {
 
     static void persist(Connection connection, long documentVersionId, long parseRunId,
             DocTypePack pack, Plan plan) throws SQLException {
-        if (plan == null || plan.reserved().isEmpty()) {
+        ClauseRepository clauses = new ClauseRepository(connection);
+        clauses.deleteClausesForVersion(documentVersionId);
+        if (plan == null || plan.reserved().isEmpty() || pack == null) {
             return;
         }
-        ClauseRepository clauses = new ClauseRepository(connection);
         for (Reserved item : plan.reserved()) {
             long typeId = clauses.upsertPackType(pack.code(), pack.version(), item.type());
             clauses.insertClause(new ClauseRepository.ClauseWrite(
