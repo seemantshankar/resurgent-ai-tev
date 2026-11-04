@@ -201,7 +201,7 @@ public final class AssessClausesRunner implements AssessStage {
      * The type an alias deterministically binds: a heading match wins over the head of
      * the body, and an ambiguous field (several types matching) is left to Pass B.
      */
-    static Optional<PackClauseType> aliasMatch(List<PackClauseType> types,
+    public static Optional<PackClauseType> aliasMatch(List<PackClauseType> types,
             ClauseSegmenter.Segment segment) {
         List<PackClauseType> headingHits = types.stream()
                 .filter(t -> anyAliasIn(t, segment.heading()))

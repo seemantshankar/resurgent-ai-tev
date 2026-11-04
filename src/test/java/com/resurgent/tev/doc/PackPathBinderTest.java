@@ -52,7 +52,7 @@ class PackPathBinderTest {
                 .valueText("Rs. 25,00,000").confidence(0.9).extractionMethod("llm_field"));
         // stray extra with no pack field
         client.facts.add(new FactCandidate("pan_number", ValueKind.TEXT)
-                .valueText("ABCDE1234F").confidence(0.8).extractionMethod("llm_open"));
+                .valueText("ABCDE1234F").confidence(0.8).extractionMethod("llm_field"));
 
         ExtractService.ExtractOutcome outcome = new ExtractService().extract(
                 dbPath, documentVersionId == 0 ? seedDocument() : documentVersionId,
