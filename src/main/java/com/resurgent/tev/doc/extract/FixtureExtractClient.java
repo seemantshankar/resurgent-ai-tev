@@ -82,6 +82,12 @@ public final class FixtureExtractClient implements ExtractClient {
     }
 
     @Override
+    public ExtractResult extractStatedClaims(ExtractRequest req) {
+        return new ExtractResult(ID, MAPPER.createObjectNode(), List.of(), List.of(),
+                ExtractStats.empty());
+    }
+
+    @Override
     public ExtractResult extractFieldSchema(ExtractRequest req, JsonNode schema) {
         long start = System.nanoTime();
         String code = req.docTypeCode() != null ? req.docTypeCode() : "unknown";

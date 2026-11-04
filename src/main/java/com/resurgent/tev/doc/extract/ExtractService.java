@@ -58,8 +58,10 @@ public final class ExtractService {
      * Reads one document on the file pages recorded for it. Labeled lines are taken
      * first; a second local pass then takes the lines and tables that pass missed.
      * A sentence or a table split by a page break stays one statement in that pass,
-     * and the fact cites each file page it was read from. A cloud model is asked
-     * only when residency allows it, and only for lines still unread.
+     * and the fact cites each file page it was read from. Clause sentences are
+     * reserved next. Unread sentences become stated claims when residency allows
+     * a cloud call. A cloud model is asked only when residency allows it, and only
+     * for lines still unread.
      *
      * @param dbPath workspace database
      * @param documentId document whose {@code document_page} rows are read
@@ -274,6 +276,13 @@ public final class ExtractService {
                 result = local.result();
             }
 
+            ClauseReservation.Plan clauses = ClauseReservation.plan(
+                    db.connection(), documentVersionId, pack);
+            if (!localOnly) {
+                result = StatedClaimReader.apply(client, request, result, local.unread(),
+                        clauses.coveredTexts());
+            }
+
             // Money context from the parsed pages (Excel treatment: figures stay
             // numbers; currency and scale come from what the document states).
             // No parse pages means no context and nothing invented.
@@ -315,6 +324,8 @@ public final class ExtractService {
                 repo.deleteStageStats(parseRunId, "doc-extract");
                 FactRepository.ReplaceStats stats =
                         facts.replaceFacts(parseRunId, documentVersionId, factDocumentId, writes);
+                ClauseReservation.persist(db.connection(), documentVersionId, parseRunId,
+                        pack, clauses);
                 if (!empty && stats.quotesMissing() > 0) {
                     status = "partial";
                     message = "quotes missing after fallback";

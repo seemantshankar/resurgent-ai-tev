@@ -23,4 +23,14 @@ public interface ExtractClient {
      * @throws ExtractException on timeout, HTTP failure, or malformed payload
      */
     ExtractResult extractFieldSchema(ExtractRequest req, JsonNode schema) throws ExtractException;
+
+    /**
+     * Names stated claims in unread sentences (ADR 0036). The payload is a JSON
+     * object {@code {"claims":[{"key","value","quote","kind"}]}}. Adapters that
+     * do not name claims must throw so a silent empty default cannot hide a
+     * missing wire-up.
+     */
+    default ExtractResult extractStatedClaims(ExtractRequest req) throws ExtractException {
+        throw new ExtractException("stated-claim extract is unimplemented for " + id());
+    }
 }

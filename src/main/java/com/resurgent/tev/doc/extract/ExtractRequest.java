@@ -29,6 +29,12 @@ public record ExtractRequest(
      */
     public static final String REMAINDER_LINES = "remainder_lines";
 
+    /**
+     * Option whose value is the unread sentences for stated-claim reading,
+     * joined by newlines. Present only on {@link ExtractClient#extractStatedClaims}.
+     */
+    public static final String STATED_CLAIM_SENTENCES = "stated_claim_sentences";
+
     public ExtractRequest {
         Objects.requireNonNull(pageBundleDir, "pageBundleDir");
         pageIndices = pageIndices == null ? List.of() : List.copyOf(pageIndices);

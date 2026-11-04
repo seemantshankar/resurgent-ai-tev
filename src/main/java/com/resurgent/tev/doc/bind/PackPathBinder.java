@@ -136,6 +136,29 @@ public final class PackPathBinder {
             ScheduleCells.TableRef schedule = ScheduleCells.owner(pack, row.fieldKey());
             if (schedule != null && row.lineKey() != null && !row.lineKey().isBlank()
                     && schedule.path() != null && !"null".equals(schedule.path())) {
+                if (ResultsRowMeasureBinder.isParameterKeyed(pack, schedule)) {
+                    ResultsRowMeasureBinder.Result named = ResultsRowMeasureBinder.bind(
+                            facts, catalog, mandateId, living, row, schedule);
+                    if (named.bound()) {
+                        bound++;
+                        if (named.livingPath() != null) {
+                            living = living.withLeaf(named.livingPath(),
+                                    named.aliasHint() == null ? row.lineKey() : named.aliasHint());
+                            for (String extra : named.extraAliases()) {
+                                living = living.withLeaf(named.livingPath(), extra);
+                            }
+                        }
+                        if (named.leafKey() != null && !named.leafKey().isBlank()) {
+                            String root = named.pathRoot() == null || named.pathRoot().isBlank()
+                                    ? "technical" : named.pathRoot();
+                            widenCandidates.add(new LabeledLinePackPublisher.Candidate(
+                                    named.leafKey(), root + " > " + named.livingPath(),
+                                    root, named.aliasHint() == null
+                                            ? List.of() : List.of(named.aliasHint())));
+                        }
+                        continue;
+                    }
+                }
                 // A schedule line is not the table itself. Binding it to the parent
                 // would roll every row up into one total (ADR 0027).
                 unresolved.add(new Unresolved(row, schedule.path(), schedule.pathRoot()));
@@ -167,7 +190,8 @@ public final class PackPathBinder {
                 }
             }
             if (candidate == null) {
-                if (!"deterministic".equals(row.extractionMethod())) {
+                if (!"deterministic".equals(row.extractionMethod())
+                        && !"llm_open".equals(row.extractionMethod())) {
                     unbind(facts, row.factId(), row.ontologyPath(), row.pathRoot(),
                             "no_pack_field");
                     unbound++;
